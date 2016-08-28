@@ -7,49 +7,70 @@ import "io"
 import "errors"
 
 // A multiplexer is responsible for taking a single data stream
-// a splitting it into multiple logical streams.  Once split,
+// and splitting it into multiple logical streams.  Once split,
 // these streams are referred to as "channels".  Channels represent
 // one side of a conversation between two entities.  Channels come
 // in two different flavors:
 //
-//      * Active - An active channel represnts a "live"/"active" conversation
-//        between two entities.
+//      * Active - An active channel represnts a "live" conversation
+//        between two entities.  Channels are full duplex, meaning that they
+//        have seaprate input and output streams.  The realationship between
+//        client and server is NOT specified at this layer, but it is generally
+//        perceived that a listening channel will spawn a "server" channel
+//        while client channels must be spawned adhoc via the connect command.
 //
 //      * Listening - A listening channel spawns active channels.
 //
 // Data flow:
 //
-//  ---> STREAM ---> PARSER ---> ROUTER ---- CHANNEL
+//  IN FLOW:
+//  ---> RAW IN STREAM ---> PARSER ---> ROUTER ----> *CHANNEL
 //
+//  OUT FLOW:
+//  ---> *CHANNEL ---> PARSER ----> *CHANNEL
+//
+// NOTE: Any reference to output refers to the OUT FLOW direction.
+//
+// Concurrency model:
+//
+//      * RAW IN STREAM  : SINGLE THREADED (No one but multiplexer should read from this)
+//      * RAW OUT STREAM : SINGLE THREADED (No one but multiplexer should write to this)
+//      * PARSER         : A single instance operating in its own routine (buffered output)
+//      * ROUTER         : A single instance operating in its own routine.(buffered input, output)
+//                         Eventually, it will be best to have many router instances that receive
+//                         data based on a consistent hash of the dst channel address.
+//      * CHANNEL        : Operates in its own routine (buffered input)
+//
+// Channel closing:
+//
+//      * Channel closing operates in the OUT direction and terminates
+//
+// Multiplex closing:
+//
+//      * Multiplex closing operates first in the OUT direction
 //
 // Example Client:
 //   m := NewMultiplexer(...)
 //
-//
 // Example:
 //
-
 // This is a poor error
 var CHANNEL_EXISTS_ERROR = errors.New("Channel exists!")
 
-// "ACTIVE" channels will grow downward.
-// TODO: figure out wraparound logic (though not necessary for now)
+// "ACTIVE" channels will tend to downward.
 var CHANNEL_ACTIVE_MAX_ID uint16 = 65535
 var CHANNEL_ACTIVE_MIN_ID uint16 = 256
 
-// "LISTENING" channels will be in the range [0,256)
-// Each listening channel can be thought of a separate
-// service endpoint.
+// "LISTENING" channels will be in the range [0,255]
 var CHANNEL_LISTEN_MIN_ID uint16 = 0
 var CHANNEL_LISTEN_MAX_ID uint16 = 255
 
-var CHANNEL_RECV_IN_BUFFER_SIZE uint = 1024
+var CHANNEL_BUF_IN_SIZE uint = 1024
 
-var ROUTER_RECV_IN_BUFFER_SIZE uint = 8192
-var ROUTER_RECV_OUT_BUFFER_SIZE uint =
+var ROUTER_BUF_IN_SIZE  uint = 8192
+var ROUTER_BUF_OUT_SIZE uint = 8192
 
-var PARSER_SEND_BUFFER_SIZE uint = 10240
-var PARSER_RECV_BUFFER_SIZE uint =
+var PARSER_BUF_OUT_SIZE uint = 1024
 
 var CONNECTION_MAX_CONNECT_RETRIES uint = 5
 
@@ -61,11 +82,12 @@ var CONNECTION_MAX_CONNECT_RETRIES uint = 5
 //
 type ChannelAddress struct { entityId uint32; channelId uint16 }
 
-// To close the channel, consumers simply need to return from the
-// handler.
+// The primary consumer abstraction. For listening channels, this function
+// will be cloned for each spawned channel.  Handlers, must therefore be,
+// thread-safe.  Consumers should take great care when closing over
+// external variables.
 //
-// Channels handlers must be thread-safe.  Consumers must take care
-// when closing over external variables.
+// To close a channel, consumers simply return from the function.
 //
 type ChannelHandler func(r io.Reader, w io.Writer) error
 
@@ -75,13 +97,42 @@ type ChannelHandler func(r io.Reader, w io.Writer) error
 //
 type StreamFactory func() ( io.ReadWriter, error )
 
+// The channel id pool is where ids will be generated. The pool will be
+// restricted to the range defined by:
+//
+//  [CHANNEL_ACTIVE_MIN_ID, CHANNEL_ACTIVE_MAX_ID]
+//
+type ChannelIdPool struct {
+    mutex sync.Mutex
+    pool []uint16 // we'll just always pull the first
+}
+
+func NewChannelIdPool() {
+    mutex := new(sync.Mutex)
+    pool  := make([]uint16, 32)
+}
+
+// Returns the next id in the channel pool.  Blocks
+// until one is available.
+func (self* ChannelIdPool) Take() (uint16) {
+    for {
+        mutex.
+    }
+
+    panic()
+}
+
+// Returns an id to the pool
+func (self* ChannelIdPool) Return(id uint16) {
+    return 0
+}
+
 // A channel represents one side of a connection within the multiplexer.
 //
-// Channels come in three different flavors.
+// Channels come in two flavors.
 //
-//  * Client
-//  * Server
-//  * Listening
+//  * Active
+//  * Listening (no remote)
 //
 type Channel struct {
 
