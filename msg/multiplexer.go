@@ -6,23 +6,74 @@ import "io"
 //import "log"
 import "errors"
 
+// A multiplexer is responsible for taking a single data stream
+// a splitting it into multiple logical streams.  Once split,
+// these streams are referred to as "channels".  Channels represent
+// one side of a conversation between two entities.  Channels come
+// in two different flavors:
+//
+//      * Active - An active channel represnts a "live"/"active" conversation
+//        between two entities.
+//
+//      * Listening - A listening channel spawns active channels.
+//
+// Data flow:
+//
+//  ---> STREAM ---> PARSER ---> ROUTER ---- CHANNEL
+//
+//
+// Example Client:
+//   m := NewMultiplexer(...)
+//
+//
+// Example:
+//
+
 // This is a poor error
 var CHANNEL_EXISTS_ERROR = errors.New("Channel exists!")
 
-// "ACTIVE" channels will grow downward
-var ACTIVE_CHANNEL_MAX_ID uint16 = 65535
-var ACTIVE_CHANNEL_MIN_ID uint16 = 256
+// "ACTIVE" channels will grow downward.
+// TODO: figure out wraparound logic (though not necessary for now)
+var CHANNEL_ACTIVE_MAX_ID uint16 = 65535
+var CHANNEL_ACTIVE_MIN_ID uint16 = 256
 
-// "LISTENING" channels will grow upward
-var LISTEN_CHANNEL_MIN_ID uint16 = 0
-var LISTEN_CHANNEL_MAX_ID uint16 = 255
+// "LISTENING" channels will be in the range [0,256)
+// Each listening channel can be thought of a separate
+// service endpoint.
+var CHANNEL_LISTEN_MIN_ID uint16 = 0
+var CHANNEL_LISTEN_MAX_ID uint16 = 255
 
-// A session is uniquely identified by the entity and the work queue
+var CHANNEL_RECV_IN_BUFFER_SIZE uint = 1024
+
+var ROUTER_RECV_IN_BUFFER_SIZE uint = 8192
+var ROUTER_RECV_OUT_BUFFER_SIZE uint =
+
+var PARSER_SEND_BUFFER_SIZE uint = 10240
+var PARSER_RECV_BUFFER_SIZE uint =
+
+var CONNECTION_MAX_CONNECT_RETRIES uint = 5
+
+// A channel is uniquely identified by the entity and the channel id
+//
+// This layer of abstraction does NOT implement any security concepts
+// (e.g. authentication/authorization), but simply manages the lifecyles
+// of channel streams.
+//
 type ChannelAddress struct { entityId uint32; channelId uint16 }
 
-// This is the primary consumer abstraction.  Both Clients and Servers
-// must implement this in order to spawn a session.
+// To close the channel, consumers simply need to return from the
+// handler.
+//
+// Channels handlers must be thread-safe.  Consumers must take care
+// when closing over external variables.
+//
 type ChannelHandler func(r io.Reader, w io.Writer) error
+
+// Stream factories are used to create the multiplexed streams.  In
+// the event of failure, this allows streams to be "recreated", without
+// leaking how the streams are generated.
+//
+type StreamFactory func() ( io.ReadWriter, error )
 
 // A channel represents one side of a connection within the multiplexer.
 //
@@ -76,17 +127,16 @@ func (self *Channel) Close() error {
 // only a client may initiate communication.  This must accept a request
 // before any activity is done.
 //
-//
-func SpawnServerChannel(m Multiplexer, l ChannelAddress, in chan Packet, out chan<- Packet, fn ChannelHandler) *ServerChannel {
+func SpawnServerChannel(l ChannelAddress, in chan Packet, out chan<- Packet, fn ChannelHandler) *ServerChannel {
     readerChan := make(chan Packet)
     writerChan := make(chan Packet)
 
-    reader := NewPacketReader(rea)
+    reader := NewPacketReader(readerChan)
+    writer := NewPacketWriter(writerChan,  )
 
     go func(in chan Packet, out chan<- Packet) {
         for {
             packet = <-Packet
-
         }
     }(l,r,in,out,fn)
 
@@ -94,58 +144,70 @@ func SpawnServerChannel(m Multiplexer, l ChannelAddress, in chan Packet, out cha
 }
 
 
-//type Channels struct {
-    //lock sync.RWMutex
-    //channels map[ChannelAddress]*Channel
-//}
+type Channels struct {
+    lock sync.RWMutex
+    channels map[ChannelAddress]*Channel
+}
 
-//func (s *channels) get(entityId uint32, channelId uint16) *Channel {
-    //s.lock.RLock(); defer s.lock.RUnlock()
-    //return s.channels[ChannelAddress{entityId, channelId}]
-//}
+func (s *channels) get(entityId uint32, channelId uint16) *Channel {
+    s.lock.RLock(); defer s.lock.RUnlock()
+    return s.channels[ChannelAddress{entityId, channelId}]
+}
 
-//func (s *channels) del(entityId uint32, channelId uint16) error {
-    //s.lock.Lock(); defer s.lock.Unlock()
+func (s *channels) del(entityId uint32, channelId uint16) error {
+    s.lock.Lock(); defer s.lock.Unlock()
 
-    //addr := ChannelAddress{entityId, channelId}
+    addr := ChannelAddress{entityId, channelId}
 
-    //ret := s.channels[addr]
-    //delete(s.channels, addr)
-    //return ret
-//}
+    ret := s.channels[addr]
+    delete(s.channels, addr)
+    return ret
+}
 
-//func (s *channels) add(c *Channel) error {
-    //s.lock.Lock(); defer s.lock.Unlock()
+func (s *channels) add(c *Channel) error {
+    s.lock.Lock(); defer s.lock.Unlock()
 
-    //ret := s.channels[c.local]
-    //if ret != nil {
-        //return CHANNEL_EXISTS_ERROR
-    //}
+    ret := s.channels[c.local]
+    if ret != nil {
+        return CHANNEL_EXISTS_ERROR
+    }
 
-    //s.channels[c.local] = c
-    //return nil;
-//}
+    s.channels[c.local] = c
+    return nil;
+}
 
-//func (s *Channels) list() map[ChannelAddress]*Channel {
-    //s.lock.RLock(); defer s.lock.RUnlock()
-    //return s.sessions // this assumes a copy by
-//}
+func (s *Channels) list() map[ChannelAddress]*Channel {
+    s.lock.RLock(); defer s.lock.RUnlock()
+    return s.sessions // this assumes a copy by
+}
 
-//// The "end of the line" for any bourne datagram.
-////
-//// This is the primary routing from an underlying stream to the higher
-//// level sessions (aka sessions)
-////
-//type Multiplexer struct {
-    //// all the active routines under this multiplexer
-    //workers sync.WaitGroup
+// The "end of the line" for any bourne datagram.
+//
+// This is the primary routing from an underlying stream to the higher
+// level sessions (aka sessions)
+//
+type Multiplexer struct {
+    // all the active routines under this multiplexer
+    workers sync.WaitGroup
 
-    //// the shared outgoing channel.  All multiplex sessions write to this channel
-    //outgoing chan Packet
+    // the shared outgoing channel.  All multiplex sessions write to this channel
+    outgoing chan Packet
 
-    //// the complete listing of sessions (both active and listening)
-    //sessions Channels
-//}
+    // the complete listing of sessions (both active and listening)
+    sessions Channels
+}
+
+func (self *Multiplexer) Connect(srcEntityId uint32, dstEntityId uint32, dstChannelId uint16, fn ChannelHandler) (error) {
+    return nil, nil
+}
+
+func (self *Multiplexer) Listen(srcEntityId uint32, srcChannelId uint16, fn ChannelHandler) (error) {
+    return nil, nil
+}
+
+func (self *Multiplexer) Close() (error) {
+    return nil
+}
 
 //// Creates a new multiplexer over the reader and writer
 ////
@@ -231,17 +293,6 @@ func SpawnServerChannel(m Multiplexer, l ChannelAddress, in chan Packet, out cha
     ////return nil
 ////}
 
-////func (self *Multiplexer) Spawn(srcEntityId uint32, srcChannelId uint32, dstEntityId uint32, dstChannelId uint32) (*Channel, error) {
-    ////return nil, nil
-////}
-
-////func (self *Multiplexer) Listen(srcEntityId uint32, srcChannelId uint32) (*MultiplexerListener, error) {
-    ////return nil, nil
-////}
-
-//func (self *Multiplexer) shutdown() (error) {
-    //return nil
-//}
 
 ////type PacketProcessor interface {
     ////Process(msg Packet) (bool, error)

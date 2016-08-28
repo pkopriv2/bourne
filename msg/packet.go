@@ -16,7 +16,9 @@ var PROTOCOL_VERSION uint16 = 0
 // Packets must be bounded so that no individual packet
 // can dominate the underlying io stream.
 //
-var PACKET_MAX_DATA_LEN int = 65536 // exclusive
+// Encoded as a uint16
+//
+var PACKET_MAX_DATA_LEN int = 65535
 
 // A packet is the basic data structure defining a simple
 // multiplexed data stream.
@@ -225,7 +227,7 @@ func (self *PacketWriter) Write(data []byte) (int, error) {
     for {
         // reset max to fit within our packet limits
         if max - min > self.maxDataLen {
-            max = min + self.maxDataLen
+            max = min + self.maxDataLen + 1
         }
 
         // go ahead and send the packet.
