@@ -1,7 +1,8 @@
 package msg
 
-//import "sync"
-//import "io"
+import "sync"
+//import "sync/atomic"
+import "io"
 //import "log"
 import "errors"
 
@@ -17,39 +18,81 @@ var LISTEN_CHANNEL_MIN_ID uint16 = 0
 var LISTEN_CHANNEL_MAX_ID uint16 = 255
 
 // A session is uniquely identified by the entity and the work queue
-//type ChannelAddress struct { entityId uint32; channelId uint16 }
+type ChannelAddress struct { entityId uint32; channelId uint16 }
 
-//type ChannelHandler func(r io.Reader, w io.Writer) error
+// This is the primary consumer abstraction.  Both Clients and Servers
+// must implement this in order to spawn a session.
+type ChannelHandler func(r io.Reader, w io.Writer) error
 
-//type Channel struct {
+// A channel represents one side of a connection within the multiplexer.
+//
+// Channels come in three different flavors.
+//
+//  * Client
+//  * Server
+//  * Listening
+//
+type Channel struct {
 
-    //// the local channel address
-    //local ChannelAddress
+    // the local channel address
+    local ChannelAddress
 
-    //// the remote channel address
-    //remote ChannelAddress
+    // the remote channel address. nil for a listener
+    remote *ChannelAddress
 
-    //// the incoming datagram stream
-    //in chan Packet
-//}
+    // the incoming packet stream
+    in chan Packet
 
-//func SpawnServerChannel(l ChannelAddress, r ChannelAddress, in chan Packet, out chan<- Packet, fn ChannelServerFn) *Channel {
-    //// start the left channel
-    //go func(in chan Packet, out chan<- Packet, fn ChannelServerFn) {
-        //for {
-        //}
-    //}(l,r,in,out,fn)
+    // the outgoing incoming stream
+    out chan Packet
 
-    //return &Channel { l, r, in }
-//}
+    // the channel's lock (internal only!)
+    mutex sync.RWMutex
 
-//func (self *Channel) Send(msg Packet) error {
-    //self.in<- msg
-//}
+    // a flag indicating that the channel is closed.
+    closed bool
 
-//func (self *Channel) Close() error {
-    //return nil
-//}
+    // used to wait on all routines to exit.
+    wait sync.WaitGroup
+}
+
+// Closes the channel.  Expect all further calls to fail.
+//
+func (self *Channel) Close() error {
+    self.mutex.Lock(); defer self.mutex.Unlock()
+
+    // close the inner channels.
+    close(self.in)
+    close(self.out)
+
+    // wait for the routine to close
+    wait.Done();
+
+    // mark the channel as closed
+    self.closed = true
+}
+
+// Spawns a server channel.  A server differs from a client channel in that
+// only a client may initiate communication.  This must accept a request
+// before any activity is done.
+//
+//
+func SpawnServerChannel(m Multiplexer, l ChannelAddress, in chan Packet, out chan<- Packet, fn ChannelHandler) *ServerChannel {
+    readerChan := make(chan Packet)
+    writerChan := make(chan Packet)
+
+    reader := NewPacketReader(rea)
+
+    go func(in chan Packet, out chan<- Packet) {
+        for {
+            packet = <-Packet
+
+        }
+    }(l,r,in,out,fn)
+
+    return &Channel { l, r, in }
+}
+
 
 //type Channels struct {
     //lock sync.RWMutex
