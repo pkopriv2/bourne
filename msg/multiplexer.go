@@ -3,18 +3,19 @@ package msg
 import "sync"
 //import "sync/atomic"
 import "io"
-//import "log"
+import "container/list"
+import "log"
 import "errors"
 
 // A multiplexer is responsible for taking a single data stream
 // and splitting it into multiple logical streams.  Once split,
-// these streams are referred to as "channels".  Channels represent
+// these streams are referred to as "channels".  A channel represents
 // one side of a conversation between two entities.  Channels come
 // in two different flavors:
 //
-//      * Active - An active channel represnts a "live" conversation
+//      * Active - An active channel represents a "live" conversation
 //        between two entities.  Channels are full duplex, meaning that they
-//        have seaprate input and output streams.  The realationship between
+//        have separate input and output streams.  The realationship between
 //        client and server is NOT specified at this layer, but it is generally
 //        perceived that a listening channel will spawn a "server" channel
 //        while client channels must be spawned adhoc via the connect command.
@@ -24,44 +25,49 @@ import "errors"
 // Data flow:
 //
 //  IN FLOW:
-//  ---> RAW IN STREAM ---> PARSER ---> ROUTER ----> *CHANNEL
+//  <DATA> ---> READER ---> DESERIALIZER ---> ROUTER ----> *CHANNEL
 //
 //  OUT FLOW:
-//  ---> *CHANNEL ---> PARSER ----> *CHANNEL
+//  <DATA> ---> *CHANNEL ---> SERIALIZER ----> WRITER
 //
 // NOTE: Any reference to output refers to the OUT FLOW direction.
 //
 // Concurrency model:
 //
-//      * RAW IN STREAM  : SINGLE THREADED (No one but multiplexer should read from this)
-//      * RAW OUT STREAM : SINGLE THREADED (No one but multiplexer should write to this)
-//      * PARSER         : A single instance operating in its own routine (buffered output)
-//      * ROUTER         : A single instance operating in its own routine.(buffered input, output)
-//                         Eventually, it will be best to have many router instances that receive
-//                         data based on a consistent hash of the dst channel address.
-//      * CHANNEL        : Operates in its own routine (buffered input)
+//      * READER       : SINGLE THREADED (No one but multiplexer should read from this)
+//      * WRITER       : SINGLE THREADED (No one but multiplexer should write to this)
+//      * SERIALIZER   : A single instance operating in its own routine (buffered output)
+//      * DESERIALIZER : A single instance operating in its own routine.(buffered input)
+//      * ROUTER       : A single instance operating in its own routine.(buffered input)
+//      * CHANNEL      : Operates in its own routine (buffered input)
 //
-// Channel closing:
+// Channel shutdown
 //
-//      * Channel closing operates in the OUT direction and terminates
+//      * Closes the Channel's send
 //
 // Multiplex closing:
 //
-//      * Multiplex closing operates first in the OUT direction
+//      * Closes the Reader
+//      * Closes all send channels in the IN direction
+//      * Closes all send channels in the OUT direction
+//      * Closes the Writer
 //
-// Example Client:
+// Examples:
 //   m := NewMultiplexer(...)
+//   s := m.connect(0,0)
 //
 // Example:
 //
-// This is a poor error
-var CHANNEL_EXISTS_ERROR = errors.New("Channel exists!")
+var CHANNEL_EXISTS_ERROR = errors.New("Channel exists")
+var CHANNEL_CLOSED_ERROR = errors.New("Channel closed")
 
-// "ACTIVE" channels will tend to downward.
-var CHANNEL_ACTIVE_MAX_ID uint16 = 65535
-var CHANNEL_ACTIVE_MIN_ID uint16 = 256
+// "ACTIVE" channel id pool.
+var ID_POOL_MAX_ID uint16    = 65535 // exclusive
+var ID_POOL_MIN_ID uint16    = 256   // exclusive
+var ID_POOL_EXP_INC uint16   = 10
+var ID_POOL_CAP_ERROR  error = errors.New("Pool has reached capacity!")
 
-// "LISTENING" channels will be in the range [0,255]
+// "LISTENING" channels MUST be in the range [0,255]
 var CHANNEL_LISTEN_MIN_ID uint16 = 0
 var CHANNEL_LISTEN_MAX_ID uint16 = 255
 
@@ -72,9 +78,10 @@ var ROUTER_BUF_OUT_SIZE uint = 8192
 
 var PARSER_BUF_OUT_SIZE uint = 1024
 
-var CONNECTION_MAX_CONNECT_RETRIES uint = 5
+var STREAM_MAX_RECONNECTS uint = 5
 
-// A channel is uniquely identified by the entity and the channel id
+// Within a single multiplexer, a channel is uniquely identified by the
+// entity and the channel id
 //
 // This layer of abstraction does NOT implement any security concepts
 // (e.g. authentication/authorization), but simply manages the lifecyles
@@ -82,140 +89,233 @@ var CONNECTION_MAX_CONNECT_RETRIES uint = 5
 //
 type ChannelAddress struct { entityId uint32; channelId uint16 }
 
-// The primary consumer abstraction. For listening channels, this function
-// will be cloned for each spawned channel.  Handlers, must therefore be,
-// thread-safe.  Consumers should take great care when closing over
-// external variables.
-//
-// To close a channel, consumers simply return from the function.
-//
-type ChannelHandler func(r io.Reader, w io.Writer) error
-
-// Stream factories are used to create the multiplexed streams.  In
+// Stream factories are used to create the underlying streams.  In
 // the event of failure, this allows streams to be "recreated", without
-// leaking how the streams are generated.
+// leaking how the streams are generated.  The intent is to create a
+// highly resilient multiplexer.
 //
-type StreamFactory func() ( io.ReadWriter, error )
+// Consumers MUST NOT interfere with stream lifecycle.  Rather, they
+// should manage the lifecycle of the multiplexer.
+//
+type StreamFactory func(entityId uint32) ( *io.ReadWriter, error )
 
-// The channel id pool is where ids will be generated. The pool will be
+// A memory efficient pool of available ids. The pool will be
 // restricted to the range defined by:
 //
-//  [CHANNEL_ACTIVE_MIN_ID, CHANNEL_ACTIVE_MAX_ID]
+//  [ID_POOL_MIN_ID, ID_POOL_MAX_ID]
 //
-type ChannelIdPool struct {
-    mutex sync.Mutex
-    pool []uint16 // we'll just always pull the first
+// By convention, the pool will grow downward, meaning higher ids are
+// favored.  Unlike a sync.Pool, this class does not automatically
+// clean up the available pool.  This is to prevent leaving ids
+// unavailable in the event of a deallocation.
+//
+// This pool does NOT track ownership, which allows someone to return
+// an id they did take themselves.  In that event, the same id may be
+// given out at the same time, which breaks an invariant of the
+// multiplexer.
+//
+// *This object is thread-safe*
+//
+type IdPool struct {
+    mutex *sync.Mutex
+    avail *list.List
+    next uint16 // used as a low watermark
 }
 
-func NewChannelIdPool() {
+// Creates a new id pool.  The pool is initialized with
+// ID_POOL_EXP_INC values.  Each time the pool's values
+// are exhausted, it is automatically and safely expanded.
+//
+func NewIdPool() *IdPool {
     mutex := new(sync.Mutex)
-    pool  := make([]uint16, 32)
+    avail := list.New()
+
+    pool := &IdPool{ mutex, avail, ID_POOL_MAX_ID }
+    pool.expand(ID_POOL_EXP_INC)
+    return pool
 }
 
-// Returns the next id in the channel pool.  Blocks
-// until one is available.
-func (self* ChannelIdPool) Take() (uint16) {
-    for {
-        mutex.
+// WARNING: Not thread-safe.  Internal use only!
+//
+// Expands the available ids by numItems or until
+// it has reached maximum capacity.
+//
+func (self* IdPool) expand(numItems uint16) error {
+    log.Printf("Attemping to expand id pool [%v] by [%v] items\n", self.next, numItems)
+
+    i, prev := self.next, self.next
+    for ; i > prev - numItems && i >= ID_POOL_MIN_ID; i-- {
+        self.avail.PushBack(i)
     }
 
-    panic()
+    // if we didn't move i, the pool is full.
+    if i == prev {
+        return ID_POOL_CAP_ERROR
+    }
+
+    // move the watermark
+    self.next = i
+    return nil
 }
 
-// Returns an id to the pool
-func (self* ChannelIdPool) Return(id uint16) {
-    return 0
+// Takes an available id from the pool.  If one can't be taken
+// a non-nil error is returned.
+//
+// In the event of a non-nil error, the consumer MUST not use the
+// returned value.
+//
+func (self* IdPool) Take() (uint16, error) {
+    self.mutex.Lock(); defer self.mutex.Unlock()
+
+    // see if anything is available
+    if item := self.avail.Front(); item != nil {
+        return self.avail.Remove(item).(uint16), nil
+    }
+
+    // try to expand the pool
+    if err := self.expand(ID_POOL_EXP_INC); err != nil {
+        return 0, err
+    }
+
+    // okay, the pool has been expanded
+    return self.avail.Remove(self.avail.Front()).(uint16), nil
+}
+
+// Returns an id to the pool.
+//
+// **WARNING:**
+//
+//  Only ids that have been loaned out should be returned to the
+//  pool.
+//
+func (self* IdPool) Return(id uint16) {
+    if id < self.next {
+        panic("Returned an invalid id!")
+    }
+
+    self.mutex.Lock(); defer self.mutex.Unlock()
+    self.avail.PushFront(id)
 }
 
 // A channel represents one side of a connection within the multiplexer.
 //
-// Channels come in two flavors.
-//
-//  * Active
-//  * Listening (no remote)
+// *This object is thread safe.*
 //
 type Channel struct {
+
+    // IMMUTABLE FIELDS:
 
     // the local channel address
     local ChannelAddress
 
-    // the remote channel address. nil for a listener
-    remote *ChannelAddress
+    // the remote channel address
+    remote ChannelAddress
 
-    // the incoming packet stream
-    in chan Packet
-
-    // the outgoing incoming stream
-    out chan Packet
-
-    // the channel's lock (internal only!)
-    mutex sync.RWMutex
+    // MUTABLE FIELDS:
 
     // a flag indicating that the channel is closed.
     closed bool
 
-    // used to wait on all routines to exit.
-    wait sync.WaitGroup
+    // the channel's lock (internal only!)
+    mutex sync.RWMutex
+
+    // the stream reader
+    reader io.Reader
+
+    // the stream writer
+    writer io.Writer
+
+    // the "input" channel (owned by this channel)
+    in chan Packet
 }
 
-// Closes the channel.  Expect all further calls to fail.
+// Creates and returns a new channel.
+//
+func NewChannel(l ChannelAddress, r ChannelAddress, out chan Packet) *Channel {
+    in := make(chan Packet, CHANNEL_BUF_IN_SIZE)
+
+    reader := NewPacketReader(in)
+    writer := NewPacketWriter(out, l.entityId, l.channelId, r.entityId, r.channelId)
+    mutex  := *new(sync.RWMutex)
+
+    return &Channel { l, r, false, mutex, reader, writer, in }
+}
+
+// Returns the underlying reader.  Consumers are NOT expected
+// to manage the lifecycle of the reader, but rather the channel
+// itself.
+//
+func (self *Channel) Reader() io.Reader {
+    return self.reader
+}
+
+// Returns the underlying writer.  Consumers are NOT expected
+// to manage the lifecycle of the writer, but rather the channel
+// itself.
+//
+func (self *Channel) Writer() io.Writer {
+    return self.writer
+}
+
+// Returns the underlying writer.  Consumers are NOT expected
+// to manage the lifecycle of the writer, but rather the channel
+// itself.
+//
+func (self *Channel) Send(p *Packet) error {
+    self.mutex.RLock(); defer self.mutex.RUnlock()
+    if self.closed {
+        return CHANNEL_CLOSED_ERROR
+    }
+
+    self.in <- *p
+    return nil
+}
+
+// Closes the channel.  Returns an error the if the
+// channel is already closed.
 //
 func (self *Channel) Close() error {
     self.mutex.Lock(); defer self.mutex.Unlock()
+    if self.closed {
+        return CHANNEL_CLOSED_ERROR
+    }
 
-    // close the inner channels.
+    // close the streams
+    // self.reader.Close()
+    // self.writer.Close()
+
+    // closes the reader input channel
     close(self.in)
-    close(self.out)
 
-    // wait for the routine to close
-    wait.Done();
+    // cleanup the streams
+    self.reader = nil
+    self.writer = nil
 
     // mark the channel as closed
     self.closed = true
+    return nil
 }
 
-// Spawns a server channel.  A server differs from a client channel in that
-// only a client may initiate communication.  This must accept a request
-// before any activity is done.
-//
-func SpawnServerChannel(l ChannelAddress, in chan Packet, out chan<- Packet, fn ChannelHandler) *ServerChannel {
-    readerChan := make(chan Packet)
-    writerChan := make(chan Packet)
-
-    reader := NewPacketReader(readerChan)
-    writer := NewPacketWriter(writerChan,  )
-
-    go func(in chan Packet, out chan<- Packet) {
-        for {
-            packet = <-Packet
-        }
-    }(l,r,in,out,fn)
-
-    return &Channel { l, r, in }
-}
-
-
-type Channels struct {
+type ChannelCache struct {
     lock sync.RWMutex
     channels map[ChannelAddress]*Channel
 }
 
-func (s *channels) get(entityId uint32, channelId uint16) *Channel {
+func (s *ChannelCache) Get(addr ChannelAddress) *Channel {
     s.lock.RLock(); defer s.lock.RUnlock()
-    return s.channels[ChannelAddress{entityId, channelId}]
+    return s.channels[addr]
 }
 
-func (s *channels) del(entityId uint32, channelId uint16) error {
+func (s *ChannelCache) Del(addr ChannelAddress) error {
     s.lock.Lock(); defer s.lock.Unlock()
 
-    addr := ChannelAddress{entityId, channelId}
-
-    ret := s.channels[addr]
-    delete(s.channels, addr)
-    return ret
+    return nil
+    // ret := s.channels[addr]
+    // delete(s.channels, addr)
+    // return ret
 }
 
-func (s *channels) add(c *Channel) error {
+func (s *ChannelCache) Add(c *Channel) error {
     s.lock.Lock(); defer s.lock.Unlock()
 
     ret := s.channels[c.local]
@@ -227,25 +327,32 @@ func (s *channels) add(c *Channel) error {
     return nil;
 }
 
-func (s *Channels) list() map[ChannelAddress]*Channel {
-    s.lock.RLock(); defer s.lock.RUnlock()
-    return s.sessions // this assumes a copy by
-}
+// func (s *ChannelCache) list() map[ChannelAddress]*Channel {
+    // s.lock.RLock(); defer s.lock.RUnlock()
+    // return s.channels // this assumes a copy by
+// }
 
-// The "end of the line" for any bourne datagram.
+// The "end of the line" for any bourne packet.
 //
 // This is the primary routing from an underlying stream to the higher
 // level sessions (aka sessions)
 //
 type Multiplexer struct {
+
+    // a multiplexer must be bound to a specific entity
+    entityId uint32
+
     // all the active routines under this multiplexer
     workers sync.WaitGroup
 
     // the shared outgoing channel.  All multiplex sessions write to this channel
-    outgoing chan Packet
+    out chan Packet
 
     // the complete listing of sessions (both active and listening)
-    sessions Channels
+    channels ChannelCache
+
+    //
+
 }
 
 func (self *Multiplexer) Connect(srcEntityId uint32, dstEntityId uint32, dstChannelId uint16, fn ChannelHandler) (error) {
@@ -279,7 +386,7 @@ func (self *Multiplexer) Close() (error) {
     //outgoing := make(chan Packet)
 
     //// initialize the channel map
-    //var sessions Channels
+    //var sessions ChannelCache
 
     ////// create the writer routine
     ////go func(outgoing chan Packet) {
@@ -322,21 +429,21 @@ func (self *Multiplexer) Close() (error) {
 //func msgReader(reader *io.Reader, writer *io.Writer) {
 
 //}
-////func handleIncoming(sessionsChannels *ChannelLocks, listeningChannels *ChannelLocks, msg *Packet) (error) {
+////func handleIncoming(sessionsChannelCache *ChannelLocks, listeningChannelCache *ChannelLocks, msg *Packet) (error) {
     ////id := ChannelId{msg.dstEntityId, msg.dstChannelId}
 
     ////// see if an active channel should handle this message
-    ////activeChannels.RLock(); defer activeChannels.RUnlock()
-    ////if c := activeChannels.data[id]; c != nil {
+    ////activeChannelCache.RLock(); defer activeChannelCache.RUnlock()
+    ////if c := activeChannelCache.data[id]; c != nil {
         ////log.Printf("There is an active channel: ", c)
         ////return;
     ////}
 
     ////// we still have to unlock
-    ////activeChannels.RUnlock();
+    ////activeChannelCache.RUnlock();
 
-    ////listeningChannels.RLock(); defer listeningChannels.RUnlock()
-    ////if c := listeningChannels.data[id]; c != nil {
+    ////listeningChannelCache.RLock(); defer listeningChannelCache.RUnlock()
+    ////if c := listeningChannelCache.data[id]; c != nil {
         ////log.Printf("There is an listening channel: ", c)
     ////}
     ////// no active channel.  see if a channel was listening.
