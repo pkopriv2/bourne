@@ -74,13 +74,18 @@ var ID_POOL_CAP_ERROR  error = errors.New("Pool has reached capacity!")
 var CHANNEL_LISTEN_MIN_ID uint16 = 0
 var CHANNEL_LISTEN_MAX_ID uint16 = 255
 
+// Each channel is able to buffer up to a certain number
+// of packets on its incoming stream.
 var CHANNEL_BUF_IN_SIZE uint = 1024
 
+// The router will have the largest input buffer as it
+// is paramount to not stop reading from the network
 var ROUTER_BUF_IN_SIZE  uint = 8192
-var ROUTER_BUF_OUT_SIZE uint = 8192
 
-var PARSER_BUF_OUT_SIZE uint = 1024
+// the parser output buffer is shared amonst all channels
+var PARSER_BUF_OUT_SIZE uint = 8192
 
+// In order to build a highly resilient multiplexer
 var STREAM_MAX_RECONNECTS uint = 5
 
 // Within a single multiplexer, a channel is uniquely identified by the
@@ -91,17 +96,6 @@ var STREAM_MAX_RECONNECTS uint = 5
 // of channel streams.
 //
 type ChannelAddress struct { entityId uint32; channelId uint16 }
-
-//
-//
-type PacketProcessor interface {
-
-    //
-    Send(p *Packet) error
-
-    //
-    Close() error
-}
 
 // Stream factories are used to create the underlying streams.  In
 // the event of failure, this allows streams to be "recreated", without
@@ -229,6 +223,9 @@ type Channel struct {
     // the stream->packet writer
     writer io.Writer
 
+    // // the id pool which owns this channel's identifier
+    // pool *IdPool
+
     // the buffered "input" channel (owned by this channel)
     buf chan Packet
 
@@ -237,6 +234,7 @@ type Channel struct {
 
     // a flag indicating that the channel is closed. (atomic bool)
     closed uint32
+
 }
 
 // Creates and returns a new channel.
@@ -254,16 +252,20 @@ func NewChannel(l ChannelAddress, r ChannelAddress, out chan Packet) *Channel {
 
     c := &Channel { l, r, reader, writer, buf, *new(sync.WaitGroup), 0}
     go func(c *Channel) {
-        c.worker.Add(1)
+        c.worker.Add(1); defer c.worker.Done()
         for {
             if c.isClosed() {
-                defer close(c.buf)
-                defer close(syn)
+                close(syn)
                 return
             }
-            syn<-(<-c.buf)
+
+            p, ok := <-c.buf
+            if ! ok {
+                continue
+            }
+
+            syn<-p
         }
-        c.worker.Done()
     }(c)
 
     return c
@@ -316,118 +318,116 @@ func (self *Channel) Close() error {
         return CHANNEL_CLOSED_ERROR
     }
 
+    close(self.buf)
     self.reader = nil
     self.writer = nil
     self.worker.Wait()
     return nil
 }
 
-// // The second stage in the processing pipeline.
-// //
-// type ChannelRouter struct {
+// The second stage in the processing pipeline.
 //
-    // // the pool of ids (no need to take locks on this structure.)
-    // pool IdPool
+type ChannelRouter struct {
+
+    // the pool of ids (no need to take locks on this structure.)
+    pool *IdPool
+
+    // channels map
+    channels map[ChannelAddress]*Channel
+
+    // the input chan
+    buf chan Packet
+
+    // the output chan
+    out chan Packet
+
+    // the channel's lock (internal only!)
+    lock sync.RWMutex
+
+    // worker wait group. used during cleanup
+    worker sync.WaitGroup
+
+    // a flag indicating that the channel is closed.
+    closed bool
+}
+
+// Creates and returns a new channel.
 //
-    // // the channel's lock (internal only!)
-    // lock sync.RWlock
+func NewChannelRouter(out chan Packet) *ChannelRouter {
+
+    // buffered input chan
+    buf := make(chan Packet, ROUTER_BUF_IN_SIZE)
+
+    // create the router
+    router := &ChannelRouter {
+        pool     : NewIdPool(),
+        channels : make(map[ChannelAddress]*Channel),
+        buf      : buf,
+        out      : out}
+
+    // create the worker
+    go func(router *ChannelRouter) {
+        router.worker.Add(1); defer router.worker.Done()
+        for {
+            router.lock.RLock();
+            if router.closed {
+                router.lock.RUnlock()
+                return
+            }
+
+            packet, ok := <- router.buf
+            if ! ok {
+                router.lock.RUnlock()
+                continue
+            }
+
+            // grab the channel and release the lock
+            channel := router.channels[ChannelAddress{packet.dstEntityId, packet.dstChannelId}]
+            router.lock.RUnlock()
+
+            if channel == nil {
+                out <- *NewErrorPacket(&packet, CONNECTION_REFUSED_ERROR)
+                continue
+            }
+
+            channel.Send(&packet)
+        }
+    }(router)
+
+    return router
+}
+
+// Closes the channel.  Returns an error the if the
+// channel is already closed.
 //
-    // // channels map
-    // channels map[ChannelAddress]*Channel
+func (self *ChannelRouter) Close() error {
+    self.lock.Lock(); defer self.lock.Unlock()
+
+    close(self.buf)
+    self.closed = false
+    self.worker.Wait()
+    return nil
+}
+
+// Sends a packet to the channel stream.
 //
-    // // the input channel
-    // buf chan Packet
-//
-    // // wait
-    // worker sync.WaitGroup
-//
-    // // a flag indicating that the channel is closed.
-    // closed bool
-//
-// }
-//
-// // Creates and returns a new channel.
-// //
-// func NewChannelRouter(out chan Packet) *Channel {
-    // router : = &ChannelRouter { l, r, *make(chan Packet, CHANNEL_BUF_IN_SIZE), *new(sync.WaitGroup), 0}
-//
-    // go func(c *ChannelRouter) {
-        // c.worker.Add(1)
-//
-        // in := make(chan Packet)
-        // reader := NewPacketReader(c.in)
-        // writer := NewPacketWriter(out, l.entityId, l.channelId, r.entityId, r.channelId)
-//
-        // for {
-            // if c.isClosed() {
-                // defer close(c.in)
-                // defer close(in)
-                // return
-            // }
-//
-            // in <- c.in
-        // }
-//
-        // c.worker.Done()
-    // }(c)
-//
-    // return c
-// }
-//
-// // Closes the channel.  Returns an error the if the
-// // channel is already closed.
-// //
-// func (self *ChannelRouter) Close() error {
-    // self.lock.Lock(); defer self.lock.Unlock()
-    // // set closed flag
-//
-    // self.closed = false
-    // self.worker.Wait()
-    // return nil
-// }
-//
-// // Sends a packet to the channel stream.
-// //
-// func (self *ChannelRouter) Send(p *Packet) error {
-    // self.lock.RLock(); defer self.lock.RUnlock()
-    // if self.closed {
-        // return CHANNEL_CLOSED_ERROR
-    // }
-//
-    // self.buf <- *p
-    // return nil
+func (self *ChannelRouter) Send(p *Packet) error {
+    self.lock.RLock(); defer self.lock.RUnlock()
+
+    if self.closed {
+        return CHANNEL_CLOSED_ERROR
+    }
+
+    self.buf <- *p
+    return nil
+}
+
+// func (self *ChannelRouter) SpawnChannel(l ChannelAddress, r ChannelAddress) *Channel  {
+    // s.lock.Lock(); defer s.lock.Unlock()
+    // if(self.pool.Take())
+    // channels[l] = NewChannel(l, r, make(chan Packet, CHANNEL_BUF_IN_SIZE))
 // }
 
-//
-// func (self *ChannelRouter) Start() error {
-    // self.lock.RLock(); defer self.lock.RUnlock()
-    // if self.closed {
-        // return CHANNEL_CLOSED_ERROR
-    // }
-//
-    // go func(router *ChannelRouter) {
-        // for {
-            // router.lock.RLock(); defer router.lock.RUnlock()
-            // if router.closed {
-                // break
-            // }
-//
-            // p, ok := <-router.in
-            // if ! ok {
-                // router.Close()
-            // }
-//
-            // channel := router.channels[ChannelAddress{p.dstEntityId, p.dstChannelId}]
-            // if channel == nil {
-                // router.out <- NewErrorPacket(p, CONNECTION_REFUSED_ERROR)
-            // }
-//
-            // channel.Send(p)
-        // }
-    // }(self)
-//
-    // return nil
-// }
 //
 // type PacketParser struct {
 //
