@@ -52,6 +52,11 @@ type Packet struct {
     data []uint8
 }
 
+func NewErrorPacket(p *Packet, err error) *Packet {
+    // return &Packet{PROTOCOL_VERSION}
+    return nil
+}
+
 // Writes a packet to an io stream.  If successful,
 // nil is returned.  Blocks if the writer blocks
 //

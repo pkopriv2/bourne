@@ -3,8 +3,10 @@ package msg
 import "testing"
 //import "bytes"
 //import "bufio"
+import "io"
 import "fmt"
-// import "time"
+import "time"
+import "sync"
 
 //import "github.com/pkopriv2/bourne/msg"
 
@@ -42,6 +44,41 @@ func TestIdPool(*testing.T) {
     fmt.Printf("take: %v\n", val)
     val, _ = pool.Take()
     fmt.Printf("take: %v\n", val)
+}
+
+func TestChannel(*testing.T) {
+
+    out := make(chan Packet)
+
+    l := ChannelAddress{0,0}
+    r := ChannelAddress{1,1}
+
+    channel := NewChannel(l, r, out)
+
+    wait := new(sync.WaitGroup)
+    go func(channel *Channel) {
+        wait.Add(1)
+        for i := 0; ; i++ {
+            if err := channel.Send(&Packet { 0,1,2,3,4,5, []byte{byte(i)}}); err != nil {
+                fmt.Printf("%v\n", err)
+                break;
+            }
+
+            time.Sleep(time.Millisecond * 10)
+        }
+        wait.Done()
+    }(channel)
+
+    for i := 0; i<10; i++{
+        // reader := channel.Reader();
+        buf := make([]byte, 7)
+        io.ReadFull(channel, buf)
+        fmt.Printf("%v\n", buf)
+        time.Sleep(time.Second)
+    }
+
+    channel.Close();
+    wait.Wait()
 }
 
 
