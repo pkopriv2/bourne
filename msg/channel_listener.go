@@ -9,7 +9,7 @@ import (
 //
 // *This object is thread safe.*
 //
-type ListenerChannel struct {
+type ChannelListener struct {
 
 	// the local channel address
 	local ChannelAddress
@@ -35,13 +35,13 @@ type ListenerChannel struct {
 
 // Creates and returns a new listening channel.
 //
-func NewListeningChannel(local ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) *ListenerChannel {
+func NewChannelListener(local ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) *ChannelListener {
 
 	// buffered input chan
 	in := make(chan Packet, CHANNEL_BUF_IN_SIZE)
 
 	// create the channel
-	channel := &ListenerChannel{
+	channel := &ChannelListener{
 		local: local,
 		cache: cache,
 		ids:   ids,
@@ -55,7 +55,7 @@ func NewListeningChannel(local ChannelAddress, cache *ChannelCache, ids *IdPool,
 	return channel
 }
 
-func (self *ListenerChannel) Accept() (Channel, error) {
+func (self *ChannelListener) Accept() (Channel, error) {
 	for {
 		packet, ok := <-self.in
 		if !ok {
@@ -68,7 +68,7 @@ func (self *ListenerChannel) Accept() (Channel, error) {
 	}
 }
 
-func (self *ListenerChannel) tryAccept(p *Packet) (Channel, error) {
+func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	if self.closed {
@@ -100,7 +100,7 @@ func (self *ListenerChannel) tryAccept(p *Packet) (Channel, error) {
 
 // Sends a packet to the channel stream.
 //
-func (self *ListenerChannel) Send(p *Packet) error {
+func (self *ChannelListener) Send(p *Packet) error {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	if self.closed {
@@ -114,7 +114,7 @@ func (self *ListenerChannel) Send(p *Packet) error {
 // Closes the channel.  Returns an error the if the
 // channel is already closed.
 //
-func (self *ListenerChannel) Close() error {
+func (self *ChannelListener) Close() error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if self.closed {

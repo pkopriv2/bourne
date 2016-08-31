@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// The IdPool is restricted to the range [256, 65535].
+// The pool of ids is restricted to the range [256, 65535].
 var ID_POOL_MAX_ID uint16 = 65535 // exclusive
 var ID_POOL_MIN_ID uint16 = 256   // exclusive
 

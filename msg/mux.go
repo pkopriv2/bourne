@@ -24,10 +24,10 @@ import "log"
 // Data flow:
 //
 //  IN FLOW:
-//  <DATA> ---> READER ---> DESERIALIZER ---> ROUTER ----> *CHANNEL
+//  <DATA> ---> PARSER_IN ---> ROUTER ----> *CHANNEL
 //
 //  OUT FLOW:
-//  <DATA> ---> *CHANNEL ---> SERIALIZER ----> WRITER
+//  <DATA> ---> *CHANNEL ---> PARSER_OUT ----> <DATA>
 //
 // NOTE: Any reference to output refers to the OUT FLOW direction.
 //
@@ -103,12 +103,9 @@ type Mux struct {
 func NewMux(reader io.Reader, writer io.Writer) *Mux {
 	// create the channels
 	parserOut := make(chan Packet, 1024)
-
-	//
-	routerIn := make(chan Packet, 1024)
+	routerIn  := make(chan Packet, 1024)
 
 	mux := &Mux{pool: NewIdPool(), channels: NewChannelCache()}
-
 
 	// start the reader thread
 	mux.workers.Add(1)
@@ -149,7 +146,10 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 
 	// TODO: we eventually want to scale this to many router routines.
 	// TODO: in order to do that and still accomplish in-order processing,
-	// TODO: we need to apply a "consistent" hashing algorithm
+	// TODO: we need to apply a "consistent" hashing to the destination
+	// TODO: address.  Another alternative is to throw in-order processing
+	// TODO: out the window and let any active channels reconcile the ordering.
+	// TODO: a very simple integer heap would work nicely.
 	mux.workers.Add(1)
 	go func(mux *Mux, prev chan Packet, err chan Packet) {
 		defer mux.workers.Done()
@@ -172,8 +172,8 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 			}
 		}
 	}(mux, routerIn, parserOut)
-	return nil
 
+	return mux
 }
 
 func (m *Mux) Connect(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16) (error, Channel){
