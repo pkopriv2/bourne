@@ -59,6 +59,7 @@ func NewActiveChannel(l ChannelAddress, r ChannelAddress, cache *ChannelCache, i
 		reader: reader,
 		writer: writer}
 
+	// TODO: IMPLEMENT RESILIENCY CHECKS.  POTENTIAL OUT OF ORDER PROCESSING, ETC....
 	// start routing to the channel
 	// cache.Add(channel)
 
@@ -66,10 +67,16 @@ func NewActiveChannel(l ChannelAddress, r ChannelAddress, cache *ChannelCache, i
 	return channel
 }
 
-// Reads data from the channel.  Blocks if data isn't available.
+// Returns the local address of this channel
 //
 func (self *ActiveChannel) LocalAddr() ChannelAddress {
 	return self.local
+}
+
+// Returns the remote address of this channel
+//
+func (self *ActiveChannel) RemoteAddr() ChannelAddress {
+	return self.remote
 }
 
 // Reads data from the channel.  Blocks if data isn't available.
@@ -98,7 +105,7 @@ func (self *ActiveChannel) Write(data []byte) (int, error) {
 
 // Sends a packet to the channel stream.
 //
-func (self *ActiveChannel) SendIn(p *Packet) error {
+func (self *ActiveChannel) Send(p *Packet) error {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	if self.closed {
@@ -106,10 +113,6 @@ func (self *ActiveChannel) SendIn(p *Packet) error {
 	}
 
 	self.in <- *p
-	return nil
-}
-
-func (a *ActiveChannel) SendOut(p *Packet) error {
 	return nil
 }
 
