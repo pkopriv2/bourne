@@ -10,6 +10,7 @@ import (
 // *This object is thread safe.*
 //
 type ActiveChannel struct {
+
 	// the local channel address
 	local ChannelAddress
 
@@ -17,7 +18,7 @@ type ActiveChannel struct {
 	remote ChannelAddress
 
 	// the cache tracking this channel
-	cache *RoutingTable
+	cache *ChannelCache
 
 	// the pool of ids.
 	ids *IdPool
@@ -40,7 +41,7 @@ type ActiveChannel struct {
 
 // Creates and returns a new channel.  This has the side effect of
 //
-func NewActiveChannel(l ChannelAddress, r ChannelAddress, cache *RoutingTable, ids *IdPool, out chan Packet) *ActiveChannel {
+func NewActiveChannel(l ChannelAddress, r ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) *ActiveChannel {
 	// buffered input chan
 	in := make(chan Packet, CHANNEL_BUF_IN_SIZE)
 
@@ -105,6 +106,10 @@ func (self *ActiveChannel) SendIn(p *Packet) error {
 	}
 
 	self.in <- *p
+	return nil
+}
+
+func (a *ActiveChannel) SendOut(p *Packet) error {
 	return nil
 }
 

@@ -1,7 +1,9 @@
 package msg
-// import "sync"
+
+import "sync"
 import "io"
-// import "log"
+import "log"
+
 // import "errors"
 
 // A multiplexer is responsible for taking a single data stream
@@ -50,7 +52,7 @@ import "io"
 //      * Closes the Writer
 //
 // Examples:
-//   m := NewMultiplexer(...)
+//   m := NewMux(...)
 //   s := m.connect(0,0)
 //
 // Example:
@@ -60,17 +62,12 @@ import "io"
 // of packets on its incoming stream.
 var CHANNEL_BUF_IN_SIZE uint = 1024
 
-// The router will have the largest input buffer as it
-// is paramount to not stop reading from the network
-var ROUTER_BUF_IN_SIZE  uint = 8192
-
 // the parser output buffer is shared amonst all channels
-var PARSER_BUF_OUT_SIZE uint = 8192
+// var PARSER_BUF_OUT_SIZE uint = 8192
 
 // In order to build a highly resilient multiplexer we will
 // impement reconnect logic.
 var STREAM_MAX_RECONNECTS uint = 5
-
 
 // Stream factories are used to create the underlying streams.  In
 // the event of failure, this allows streams to be "recreated", without
@@ -82,145 +79,111 @@ var STREAM_MAX_RECONNECTS uint = 5
 //
 // TODO: Figure out how to initialize streams.
 //
-type StreamFactory func(entityId uint32) ( *io.ReadWriter, error )
+type StreamFactory func(entityId uint32) (*io.ReadWriter, error)
+
+//
+type Mux struct {
+
+	// pool of available ids
+	pool *IdPool
+
+	// the complete listing of sessions (both active and listening)
+	channels *ChannelCache
+
+	// a flag
+	closed bool
+
+	// the lock on the multiplexer
+	lock sync.RWMutex
+
+	// all the active routines under this multiplexer
+	workers sync.WaitGroup
+}
+
+func NewMux(reader io.Reader, writer io.Writer) *Mux {
+	// create the channels
+	parserOut := make(chan Packet, 1024)
+
+	//
+	routerIn := make(chan Packet, 1024)
+
+	mux := &Mux{pool: NewIdPool(), channels: NewChannelCache()}
 
 
-//
-// // The "end of the line" for any bourne packet.
-// //
-// // This is the primary routing from an underlying stream to the higher
-// // level sessions (aka sessions)
-// //
-// type Multiplexer struct {
-//
-    // // a multiplexer must be bound to a specific entity
-    // entityId uint32
-//
-    // // a flag
-    // closed bool
-//
-    // // the lock on the multiplexer
-    // lock sync.RWlock
-//
-    // // all the active routines under this multiplexer
-    // workers sync.WaitGroup
-//
-    // // the shared outgoing channel.  All multiplex sessions write to this channel
-    // out chan Packet
-//
-    // // the complete listing of sessions (both active and listening)
-    // channels *ChannelCache
-//
-    // // pool of available ids
-    // pool *IdPool
-//
-// }
-//
-// func (self *Multiplexer) Start() () {
-    // return nil, nil
-// }
-//
-// func (self *Multiplexer) Connect(dstEntityId uint32, dstChannelId uint16) error {
-    // return nil
-// }
-//
-// func (self *Multiplexer) Listen(srcEntityId uint32, srcChannelId uint16) error {
-    // return nil, nil
-// }
-//
-// func (self *Multiplexer) Close() (error) {
-    // return nil
-// }
-//
-// //// Creates a new multiplexer over the reader and writer
-// ////
-// //// NOTE: the reader and writer must be exclusive to this
-// //// multiplexer.  We cannot allow interleaving of messages
-// //// on the underlying stream.
-// ////
-// //// TODO: accept a connection factory so that we can make
-// //// a highly reliable multiplexer that can reconnect automatically
-// //// if any errors occur on the underlying stream
-// ////
-// //func NewMultiplexer(r io.Reader, w io.Writer) *Multiplexer {
-//
-    // //// initialize the wait group
-    // //workers := sync.WaitGroup{}
-//
-    // //// create the shared write channel.
-    // //outgoing := make(chan Packet)
-//
-    // //// initialize the channel map
-    // //var sessions ChannelCache
-//
-    // ////// create the writer routine
-    // ////go func(outgoing chan Packet) {
-        // ////log.Println("Starting the writer routine")
-        // ////workers.Add(1)
-//
-        // ////for {
-            // ////msg := <-outgoing
-            // ////msg.write(w)
-        // ////}
-//
-        // ////workers.Done()
-    // ////}(outgoing)
-//
-    // ////// create the reader routine.
-    // ////go func() {
-        // ////log.Println("Starting the reader routine")
-        // ////workers.Add(1)
-//
-        // ////for {
-            // ////msg, err := readPacket(r)
-            // ////if err != nil {
-                // ////log.Printf("Error reading from stream [%v]\n", err)
-                // ////continue
-            // ////}
-//
-            // ////if err := handleIncoming(&sessions, &listening, msg); err != nil {
-                // ////log.Printf("Error handling message [%v]\n", err)
-                // ////continue
-            // ////}
-        // ////}
-//
-        // ////workers.Done()
-    // ////}()
-//
-    // //// okay, the multiplexer is ready to go.
-    // //return &Multiplexer { workers, outgoing, sessions }
-// //}
-//
-// //func msgReader(reader *io.Reader, writer *io.Writer) {
-//
-// //}
-// ////func handleIncoming(sessionsChannelCache *ChannelLocks, listeningChannelCache *ChannelLocks, msg *Packet) (error) {
-    // ////id := ChannelId{msg.dstEntityId, msg.dstChannelId}
-//
-    // ////// see if an active channel should handle this message
-    // ////activeChannelCache.RLock(); defer activeChannelCache.RUnlock()
-    // ////if c := activeChannelCache.data[id]; c != nil {
-        // ////log.Printf("There is an active channel: ", c)
-        // ////return;
-    // ////}
-//
-    // ////// we still have to unlock
-    // ////activeChannelCache.RUnlock();
-//
-    // ////listeningChannelCache.RLock(); defer listeningChannelCache.RUnlock()
-    // ////if c := listeningChannelCache.data[id]; c != nil {
-        // ////log.Printf("There is an listening channel: ", c)
-    // ////}
-    // ////// no active channel.  see if a channel was listening.
-//
-    // ////return nil
-// ////}
-//
-//
-// ////type PacketProcessor interface {
-    // ////Process(msg Packet) (bool, error)
-// ////}
-//
-// ////type PacketProcesorChain struct {
-    // ////next *PacketProcessor
-// ////}
+	// start the reader thread
+	mux.workers.Add(1)
+	go func(mux *Mux, r io.Reader, next chan Packet) {
+		defer mux.workers.Done()
+		for {
+
+			packet, err := ReadPacket(r)
+			if err != nil {
+				log.Printf("Error parsing packet")
+				continue
+			}
+
+			// send the packet.  may block
+			next <- *packet
+		}
+	}(mux, reader, routerIn)
+
+	// start the writer thread
+	mux.workers.Add(1)
+	go func(mux *Mux, prev chan Packet, w io.Writer) {
+		defer mux.workers.Done()
+		for {
+			packet, ok := <-prev
+			if !ok {
+				return // someone closed the chan
+			}
+
+			if err := WritePacket(w, &packet); err != nil {
+				// TODO: Handle connection errors
+				log.Printf("Error writing packet [%v]\n", err)
+				continue
+			}
+		}
+	}(mux, parserOut, writer)
+
+	// start the packet router thread
+
+	// TODO: we eventually want to scale this to many router routines.
+	// TODO: in order to do that and still accomplish in-order processing,
+	// TODO: we need to apply a "consistent" hashing algorithm
+	mux.workers.Add(1)
+	go func(mux *Mux, prev chan Packet, err chan Packet) {
+		defer mux.workers.Done()
+
+		for {
+			p, ok := <-prev
+			if !ok {
+				// todo...return error packet!
+				continue
+			}
+
+			channel := mux.channels.Get(ChannelAddress{p.dstEntityId, p.dstChannelId})
+			if channel == nil  {
+				continue
+			}
+
+			if err := channel.Send(&p); err != nil {
+				// todo...return error packet!
+				continue
+			}
+		}
+	}(mux, routerIn, parserOut)
+	return nil
+
+}
+
+func (m *Mux) Connect(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16) (error, Channel){
+	return nil, nil
+}
+
+func (m *Mux) Listen(srcEntityId uint32, srcChannelId uint16) (error, Listener) {
+	return nil, nil
+}
+
+func (m *Mux) Close() error {
+	return nil
+}

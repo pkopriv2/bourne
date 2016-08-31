@@ -40,6 +40,7 @@ type Channel interface {
 	RemoteAddr() ChannelAddress
 }
 
+
 // Listeners await channel requests and spawn new channels.
 // Consumers should take care to hand the received channel
 // to a separate thread as quickly as possible, as this

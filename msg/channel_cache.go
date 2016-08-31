@@ -8,26 +8,26 @@ import (
 //
 // *This object is thread-safe.*
 //
-type RoutingTable struct {
+type ChannelCache struct {
 
 	// the map locl (pool is thread safe already)
 	lock *sync.RWMutex
 
 	// channels map
-	channels map[ChannelAddress]PacketProcessor
+	channels map[ChannelAddress]ChannelBase
 }
 
-func NewRoutingTable() *RoutingTable {
-	return &RoutingTable{lock: new(sync.RWMutex)}
+func NewChannelCache() *ChannelCache {
+	return &ChannelCache{lock: new(sync.RWMutex)}
 }
 
-func (self *RoutingTable) Get(addr ChannelAddress) PacketProcessor {
+func (self *ChannelCache) Get(addr ChannelAddress) ChannelBase {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	return self.channels[addr]
 }
 
-func (self *RoutingTable) Add(addr ChannelAddress, p PacketProcessor) error {
+func (self *ChannelCache) Add(addr ChannelAddress, p ChannelBase) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
@@ -40,7 +40,7 @@ func (self *RoutingTable) Add(addr ChannelAddress, p PacketProcessor) error {
 	return nil
 }
 
-func (self *RoutingTable) Remove(addr ChannelAddress) error {
+func (self *ChannelCache) Remove(addr ChannelAddress) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
