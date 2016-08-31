@@ -23,9 +23,14 @@ var PACKET_MAX_DATA_LEN int = 65535
 // A packet is the basic data structure defining a simple
 // multiplexed data stream.
 //
-// As constructed, this assumes the following of the underlying stream:
+// Currently the packet requires a reliable, in-order transport,
+// similar to TCP.  However, because packets are routed beyond
+// a two point tcp session, reliability must be guaranteed by this
+// protocol.
 //
-//   -> reliable, in-order delivery (e.g. TCP)
+//
+// in order to guarantee reliability, we need to implement control
+// structures.  each side of a
 //
 //
 type Packet struct {
@@ -36,6 +41,11 @@ type Packet struct {
 	// every packet must identify its source
 	srcEntityId  uint32
 	srcChannelId uint16
+
+	// // in order to guarantee reliability, we need to implement control
+	// // structures.  each side of a
+	// seq uint32
+	// ack uint32
 
 	// every packet must identify its destination
 	dstEntityId  uint32
@@ -52,6 +62,11 @@ type Packet struct {
 }
 
 func NewErrorPacket(p *Packet, err error) *Packet {
+	// return &Packet{PROTOCOL_VERSION}
+	return nil
+}
+
+func NewRedirectPacket(p *Packet, eId uint32, cId uint32) *Packet {
 	// return &Packet{PROTOCOL_VERSION}
 	return nil
 }

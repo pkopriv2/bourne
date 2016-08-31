@@ -58,9 +58,6 @@ import "log"
 // Example:
 //
 
-// Each channel is able to buffer up to a certain number
-// of packets on its incoming stream.
-var CHANNEL_BUF_IN_SIZE uint = 1024
 
 // the parser output buffer is shared amonst all channels
 // var PARSER_BUF_OUT_SIZE uint = 8192
@@ -84,8 +81,8 @@ type StreamFactory func(entityId uint32) (*io.ReadWriter, error)
 //
 type Mux struct {
 
-	// pool of available ids
-	pool *IdPool
+	// ids of available ids
+	ids *IdPool
 
 	// the complete listing of sessions (both active and listening)
 	channels *ChannelCache
@@ -96,16 +93,18 @@ type Mux struct {
 	// the lock on the multiplexer
 	lock sync.RWMutex
 
+	// the shared output channel.
+	out chan Packet
+
 	// all the active routines under this multiplexer
 	workers sync.WaitGroup
 }
 
 func NewMux(reader io.Reader, writer io.Writer) *Mux {
-	// create the channels
 	parserOut := make(chan Packet, 1024)
 	routerIn  := make(chan Packet, 1024)
 
-	mux := &Mux{pool: NewIdPool(), channels: NewChannelCache()}
+	mux := &Mux{ids: NewIdPool(), channels: NewChannelCache()}
 
 	// start the reader thread
 	mux.workers.Add(1)
@@ -119,7 +118,6 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 				continue
 			}
 
-			// send the packet.  may block
 			next <- *packet
 		}
 	}(mux, reader, routerIn)
@@ -130,8 +128,8 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 		defer mux.workers.Done()
 		for {
 			packet, ok := <-prev
-			if !ok {
-				return // someone closed the chan
+			if ! ok {
+				log.Println("Channel closed.  Stopping writer thread")
 			}
 
 			if err := WritePacket(w, &packet); err != nil {
@@ -156,7 +154,8 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 
 		for {
 			p, ok := <-prev
-			if !ok {
+			if ! ok {
+				log.Println("Channel closed.  Stopping router thread")
 				// todo...return error packet!
 				continue
 			}
@@ -176,12 +175,12 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 	return mux
 }
 
-func (m *Mux) Connect(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16) (error, Channel){
-	return nil, nil
+func (m *Mux) Connect(srcEntityId uint32, dstEntityId uint32, dstChannelId uint16) (Channel, error) {
+	return NewActiveChannel(srcEntityId, ChannelAddress{dstEntityId, dstChannelId}, m.channels, m.ids, m.out)
 }
 
-func (m *Mux) Listen(srcEntityId uint32, srcChannelId uint16) (error, Listener) {
-	return nil, nil
+func (m *Mux) Listen(srcEntityId uint32, srcChannelId uint16) (Listener, error) {
+	return NewChannelListener(&ChannelAddress{srcEntityId, srcChannelId}, m.channels, m.ids, m.out)
 }
 
 func (m *Mux) Close() error {

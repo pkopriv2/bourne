@@ -59,5 +59,5 @@ type Listener interface {
 	// is available.  Returns a non-nil error if the
 	// listener has been closed.
 	//
-	Accept() (*Channel, error)
+	Accept() (Channel, error)
 }

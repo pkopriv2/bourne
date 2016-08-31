@@ -42,6 +42,7 @@ func TestSerialization(*testing.T) {
 
 //for {
 //buf := make([]byte, 7)
+
 //reader.Read(buf)
 //fmt.Printf("%v\n", buf)
 

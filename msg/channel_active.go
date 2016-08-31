@@ -5,11 +5,15 @@ import (
 	"sync"
 )
 
+// Each channel is able to buffer up to a certain number
+// of packets on its incoming stream.
+var CHANNEL_ACTIVE_BUF_SIZE uint = 1024
+
 // An active channel represents one side of a conversation between two entities
 //
 // *This object is thread safe.*
 //
-type ActiveChannel struct {
+type ChannelActive struct {
 
 	// the local channel address
 	local ChannelAddress
@@ -39,18 +43,27 @@ type ActiveChannel struct {
 	lock sync.RWMutex
 }
 
-// Creates and returns a new channel.  This has the side effect of
+// Creates and returns a new channel.  This method has no side-effects.
 //
-func NewActiveChannel(l ChannelAddress, r ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) *ActiveChannel {
-	// buffered input chan
-	in := make(chan Packet, CHANNEL_BUF_IN_SIZE)
+func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) (*ChannelActive, error) {
+	// generate a new id.
+	channelId, err := ids.Take()
+	if err != nil {
+		return nil, CHANNEL_REFUSED_ERROR
+	}
+
+	// derive a new local address
+	l := ChannelAddress{srcEntityId, channelId}
+
+	// buffered input chan (for now just passing right to consumer.)
+	in := make(chan Packet, CHANNEL_ACTIVE_BUF_SIZE)
 
 	// io abstractions
 	reader := NewPacketReader(in)
 	writer := NewPacketWriter(out, l.entityId, l.channelId, r.entityId, r.channelId)
 
 	// create the router
-	channel := &ActiveChannel{
+	channel := &ChannelActive{
 		local:  l,
 		remote: r,
 		cache:  cache,
@@ -59,29 +72,30 @@ func NewActiveChannel(l ChannelAddress, r ChannelAddress, cache *ChannelCache, i
 		reader: reader,
 		writer: writer}
 
-	// TODO: IMPLEMENT RESILIENCY CHECKS.  POTENTIAL OUT OF ORDER PROCESSING, ETC....
-	// start routing to the channel
-	// cache.Add(channel)
+	// add it to the channel pool (i.e. make it available for routing)
+	if err := cache.Add(l, channel); err != nil {
+		return nil, err
+	}
 
 	// finally, return it.
-	return channel
+	return channel, nil
 }
 
 // Returns the local address of this channel
 //
-func (self *ActiveChannel) LocalAddr() ChannelAddress {
+func (self *ChannelActive) LocalAddr() ChannelAddress {
 	return self.local
 }
 
 // Returns the remote address of this channel
 //
-func (self *ActiveChannel) RemoteAddr() ChannelAddress {
+func (self *ChannelActive) RemoteAddr() ChannelAddress {
 	return self.remote
 }
 
 // Reads data from the channel.  Blocks if data isn't available.
 //
-func (self *ActiveChannel) Read(buf []byte) (int, error) {
+func (self *ChannelActive) Read(buf []byte) (int, error) {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	if self.closed {
@@ -93,7 +107,7 @@ func (self *ActiveChannel) Read(buf []byte) (int, error) {
 
 // Writes data to the channel.  Blocks if the underlying buffer is full.
 //
-func (self *ActiveChannel) Write(data []byte) (int, error) {
+func (self *ChannelActive) Write(data []byte) (int, error) {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	if self.closed {
@@ -105,7 +119,7 @@ func (self *ActiveChannel) Write(data []byte) (int, error) {
 
 // Sends a packet to the channel stream.
 //
-func (self *ActiveChannel) Send(p *Packet) error {
+func (self *ChannelActive) Send(p *Packet) error {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	if self.closed {
@@ -119,7 +133,7 @@ func (self *ActiveChannel) Send(p *Packet) error {
 // Closes the channel.  Returns an error if the
 // channel is already closed.
 //
-func (self *ActiveChannel) Close() error {
+func (self *ChannelActive) Close() error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if self.closed {
