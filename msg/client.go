@@ -1,20 +1,23 @@
 package msg
 
 import (
-    "errors"
-    "io"
+	"errors"
+	"io"
 )
 
 // Error types
-var CHANNEL_EXISTS_ERROR  = errors.New("CHAN:EXISTS")
+var CHANNEL_EXISTS_ERROR = errors.New("CHAN:EXISTS")
 var CHANNEL_UNKNOWN_ERROR = errors.New("CHAN:UNKNONW")
-var CHANNEL_CLOSED_ERROR  = errors.New("CHAN:CLOSED")
+var CHANNEL_CLOSED_ERROR = errors.New("CHAN:CLOSED")
 var CHANNEL_REFUSED_ERROR = errors.New("CHAN:REFUSED")
 
 // A channel address is the tuple necessary to uniquely identify
 // a channel within a shared stream.
 //
-type ChannelAddress struct { entityId uint32; channelId uint16 }
+type ChannelAddress struct {
+	entityId  uint32
+	channelId uint16
+}
 
 // A channel represents one side of an active conversation between two
 // entities.
@@ -22,19 +25,19 @@ type ChannelAddress struct { entityId uint32; channelId uint16 }
 // *Implementations must be thread-safe*
 //
 type Channel interface {
-    io.Closer
-    io.Reader
-    io.Writer
+	io.Closer
+	io.Reader
+	io.Writer
 
-    // Returns the local address of the channel.
-    // never nil or zero value.
-    //
-    LocalAddr() ChannelAddress
+	// Returns the local address of the channel.
+	// never nil or zero value.
+	//
+	LocalAddr() ChannelAddress
 
-    // Returns the local address of the channel.
-    // never nil or zero value.
-    //
-    RemoteAddr() ChannelAddress
+	// Returns the local address of the channel.
+	// never nil or zero value.
+	//
+	RemoteAddr() ChannelAddress
 }
 
 // Listeners await channel requests and spawn new channels.
@@ -49,33 +52,11 @@ type Channel interface {
 // listener can be shared amongst many threads.
 //
 type Listener interface {
-    io.Closer
+	io.Closer
 
-    // Accepts a channel request.  Blocks until one
-    // is available.  Returns a non-nil error if the
-    // listener has been closed.
-    //
-    Accept() (*Channel, error)
-}
-
-// ** INTERNAL ONLY **
-//
-// The base channel abstraction.  This represents the shared interface
-// between active and listening channels.
-//
-// Implementations must be *thread-safe*
-//
-type RoutableChannel interface {
-    io.Closer
-
-    // Returns the local address of the channel.
-    // never nil or zero value.
-    //
-    LocalAddr() ChannelAddress
-
-    // Sends a packet the channel.  Each implementation
-    // should attempt to implement this in a NON-BLOCKING
-    // fashion. However, may block if necessary.
-    //
-    Send(p *Packet) error
+	// Accepts a channel request.  Blocks until one
+	// is available.  Returns a non-nil error if the
+	// listener has been closed.
+	//
+	Accept() (*Channel, error)
 }

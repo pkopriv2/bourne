@@ -1,11 +1,8 @@
 package msg
-
-import "sync"
-import "sync/atomic"
+// import "sync"
 import "io"
-import "container/list"
-import "log"
-import "errors"
+// import "log"
+// import "errors"
 
 // A multiplexer is responsible for taking a single data stream
 // and splitting it into multiple logical streams.  Once split,

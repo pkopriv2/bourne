@@ -1,16 +1,20 @@
 package msg
 
 import (
-    "errors"
-    "sync"
-    "container/list"
-    "log"
+	"container/list"
+	"errors"
+	"log"
+	"sync"
 )
 
-// "ACTIVE" id pool.
+// The IdPool is restricted to the range [256, 65535].
 var ID_POOL_MAX_ID uint16 = 65535 // exclusive
 var ID_POOL_MIN_ID uint16 = 256   // exclusive
+
+// Each time the pool is expanded, it grows by this amount.
 var ID_POOL_EXP_INC uint16 = 10
+
+// To be returned if there are no more ids available.
 var ID_POOL_CAP_ERROR error = errors.New("Pool has reached capacity!")
 
 // A memory efficient pool of available ids. The pool will be
@@ -30,9 +34,9 @@ var ID_POOL_CAP_ERROR error = errors.New("Pool has reached capacity!")
 // *This object is thread-safe*
 //
 type IdPool struct {
-    lock  *sync.Mutex
-    avail *list.List
-    next  uint16 // used as a low watermark
+	lock  *sync.Mutex
+	avail *list.List
+	next  uint16 // used as a low watermark
 }
 
 // Creates a new id pool.  The pool is initialized with
@@ -40,12 +44,12 @@ type IdPool struct {
 // are exhausted, it is automatically and safely expanded.
 //
 func NewIdPool() *IdPool {
-    lock := new(sync.Mutex)
-    avail := list.New()
+	lock := new(sync.Mutex)
+	avail := list.New()
 
-    pool := &IdPool{lock, avail, ID_POOL_MAX_ID }
-    pool.expand(ID_POOL_EXP_INC)
-    return pool
+	pool := &IdPool{lock, avail, ID_POOL_MAX_ID}
+	pool.expand(ID_POOL_EXP_INC)
+	return pool
 }
 
 // WARNING: Not thread-safe.  Internal use only!
@@ -53,22 +57,22 @@ func NewIdPool() *IdPool {
 // Expands the available ids by numItems or until
 // it has reached maximum capacity.
 //
-func (self*IdPool) expand(numItems uint16) error {
-    log.Printf("Attemping to expand id pool [%v] by [%v] items\n", self.next, numItems)
+func (self *IdPool) expand(numItems uint16) error {
+	log.Printf("Attemping to expand id pool [%v] by [%v] items\n", self.next, numItems)
 
-    i, prev := self.next, self.next
-    for ; i > prev - numItems && i >= ID_POOL_MIN_ID; i-- {
-        self.avail.PushBack(i)
-    }
+	i, prev := self.next, self.next
+	for ; i > prev-numItems && i >= ID_POOL_MIN_ID; i-- {
+		self.avail.PushBack(i)
+	}
 
-    // if we didn't move i, the pool is full.
-    if i == prev {
-        return ID_POOL_CAP_ERROR
-    }
+	// if we didn't move i, the pool is full.
+	if i == prev {
+		return ID_POOL_CAP_ERROR
+	}
 
-    // move the watermark
-    self.next = i
-    return nil
+	// move the watermark
+	self.next = i
+	return nil
 }
 
 // Takes an available id from the pool.  If one can't be taken
@@ -77,23 +81,23 @@ func (self*IdPool) expand(numItems uint16) error {
 // In the event of a non-nil error, the consumer MUST not use the
 // returned value.
 //
-func (self*IdPool) Take() (uint16, error) {
-    self.lock.Lock(); defer self.lock.Unlock()
+func (self *IdPool) Take() (uint16, error) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
 
-    // see if anything is available
-    if item := self.avail.Front(); item != nil {
-        return self.avail.Remove(item).(uint16), nil
-    }
+	// see if anything is available
+	if item := self.avail.Front(); item != nil {
+		return self.avail.Remove(item).(uint16), nil
+	}
 
-    // try to expand the pool
-    if err := self.expand(ID_POOL_EXP_INC); err != nil {
-        return 0, err
-    }
+	// try to expand the pool
+	if err := self.expand(ID_POOL_EXP_INC); err != nil {
+		return 0, err
+	}
 
-    // okay, the pool has been expanded
-    return self.avail.Remove(self.avail.Front()).(uint16), nil
+	// okay, the pool has been expanded
+	return self.avail.Remove(self.avail.Front()).(uint16), nil
 }
-
 
 // Returns an id to the pool.
 //
@@ -102,11 +106,12 @@ func (self*IdPool) Take() (uint16, error) {
 //  Only ids that have been loaned out should be returned to the
 //  pool.
 //
-func (self*IdPool) Return(id uint16) {
-    self.lock.Lock(); defer self.lock.Unlock()
-    if id < self.next {
-        panic("Returned an invalid id!")
-    }
+func (self *IdPool) Return(id uint16) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	if id < self.next {
+		panic("Returned an invalid id!")
+	}
 
-    self.avail.PushFront(id)
+	self.avail.PushFront(id)
 }
