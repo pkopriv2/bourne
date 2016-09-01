@@ -110,7 +110,7 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 	writer := NewPacketWriter(writerIn)
 
 	// internal abstractions
-	var readerIn = make(chan Packet, CHANNEL_ACTIVE_BUF_SIZE)
+	var readerIn = make(chan Packet, CHANNEL_RECV_BUF_SIZE)
 	var writerOut = out
 
 	// create the router
@@ -144,8 +144,8 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 				c.writerOut<-Packet{}
 			}
 
-			// HANDLE: SYN FLAG (updates the internal recvSeq counter)
-			if p.ctrls&SYN_FLAG > 0 {
+			// HANDLE: SEQ_FLAG (updates the internal recvSeq counter)
+			if p.ctrls&SEQ_FLAG > 0 {
 				var recvSeq = c.recvSeq
 
 				// HANDLE: packet in the past (we should just drop it?)

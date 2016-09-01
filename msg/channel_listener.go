@@ -65,7 +65,7 @@ func NewChannelListener(local *ChannelAddress, cache *ChannelCache, ids *IdPool,
 	}
 
 	// buffered input chan
-	in := make(chan Packet, CHANNEL_ACTIVE_BUF_SIZE)
+	in := make(chan Packet, CHANNEL_RECV_BUF_SIZE)
 
 	// create the channel
 	channel := &ChannelListener{

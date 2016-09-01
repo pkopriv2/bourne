@@ -22,19 +22,14 @@ var PROTOCOL_VERSION uint16 = 0
 var PACKET_MAX_DATA_LEN int = 65535
 
 // control flags
-var SYN_FLAG uint8 = 0x0001
-var ACK_FLAG uint8 = 0x0002
-var FIN_FLAG uint8 = 0x0003
-var ERR_FLAG uint8 = 0x0004
+var SEQ_FLAG uint8 = 1    // tells the recipient what sequence the message has
+var ACK_FLAG uint8 = 2    // tells the recipient what sequence has been received by the sender.
+var FIN_FLAG uint8 = 4    // tells the recipient to stop receiving data.
+var FRC_FLAG uint8 = 8    // asks the recipient for an ACK
+var ERR_FLAG uint8 = 128  // tells the recipient an unrecoverable error has occurred.
 
 // A packet is the basic data structure defining a simple
 // multiplexed data stream.
-//
-// Currently the packet requires a reliable, in-order transport,
-// similar to TCP.  However, because packets are routed beyond
-// a two point tcp session, reliability must be guaranteed by this
-// protocol.
-//
 //
 type Packet struct {
 
