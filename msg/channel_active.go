@@ -7,8 +7,8 @@ import (
 )
 
 var CHANNEL_RESEND_BUF_SIZE uint = 1024
-var CHANNEL_RECV_BUF_SIZE uint   = 1024
-var CHANNEL_SEND_BUF_SIZE uint   = 1024
+var CHANNEL_RECV_BUF_SIZE uint = 1024
+var CHANNEL_SEND_BUF_SIZE uint = 1024
 
 // An active channel represents one side of a conversation between two entities.
 //
@@ -56,28 +56,25 @@ type ChannelActive struct {
 	// the pool of ids. (used during initalization and closing)
 	ids *IdPool
 
-	// the packet->[]byte reader
-	reader io.Reader
+	// The receiver channels internal ---> receiver --> consumer
+	receiverIn  chan Packet
+	receiverOut chan Packet
+	receiverRaw io.Reader // consumer reader
 
-	// the []byte->[]byte writer
-	writer io.Writer
-
-	// The reader channels internal ---> reader --> consumer
-	readerIn  chan Packet
-	readerOut chan Packet
-
-	// The writer channels consumer ---> writer --> internal
-	writerIn  chan []byte
-	writerOut chan Packet
+	// The sender channels consumer ---> sender --> internal
+	senderRaw io.Writer // consumer writer
+	senderIn  chan []byte
+	senderOut chan Packet
 
 	// the maximum packet sequence that has been sent vs acked. (updated via atomic swap)
-	sendSeq uint32
-	sendAck uint32
-	sendMem [1024]Packet // len(sendMem) > sendSeq - sendAck
+	sendSeq     uint32
+	sendAck     uint32
+	sendMem     [1024]Packet // len(sendMem) > sendSeq - sendAck
+	sendTimeout uint         // amount in millis until a channel is considered irrecoverable.
 
 	// the maximum *valid* packet sequence that has been received. (updated via atomic swap)
-	recvSeq uint32
-	recvDropped uint32 // track how often packages are dropped.
+	recvSeq     uint32
+	recvDropped uint32 // track how often packets are dropped.
 
 	// the workers wait
 	workers sync.WaitGroup
@@ -101,60 +98,71 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 	// derive a new local address
 	l := ChannelAddress{srcEntityId, channelId}
 
-	// consumer reader abstractions
-	readerOut := make(chan Packet)
-	reader := NewPacketReader(readerOut)
+	// consumer receiver abstractions
+	receiverOut := make(chan Packet)
+	receiver := NewPacketReader(receiverOut)
 
-	// consumer writer abstractions
-	writerIn := make(chan []byte)
-	writer := NewPacketWriter(writerIn)
+	// consumer sender abstractions
+	senderIn := make(chan []byte)
+	sender := NewPacketWriter(senderIn)
 
 	// internal abstractions
-	var readerIn = make(chan Packet, CHANNEL_RECV_BUF_SIZE)
-	var writerOut = out
+	var receiverIn = make(chan Packet, CHANNEL_RECV_BUF_SIZE)
+	var senderOut = out
 
 	// create the router
 	c := &ChannelActive{
-		local:     l,
-		remote:    r,
-		cache:     cache,
-		ids:       ids,
-		reader:    reader,
-		writer:    writer,
-		readerIn:  readerIn,
-		readerOut: readerOut,
-		writerIn:  writerIn,
-		writerOut: writerOut,
-		sendSeq: 0,
-		sendAck: 0,
-		recvSeq: 0}
+		local:       l,
+		remote:      r,
+		cache:       cache,
+		ids:         ids,
+		receiverIn:  receiverIn,
+		receiverOut: receiverOut,
+		receiverRaw: receiver,
+		senderRaw:   sender,
+		senderIn:    senderIn,
+		senderOut:   senderOut,
+		sendSeq:     0,
+		sendAck:     0,
+		recvSeq:     0}
 
-	// kick off the reader
+	// kick off the receiver
 	c.workers.Add(1)
 	go func(c *ChannelActive) {
 		defer c.workers.Done()
 		for {
-			p, ok := <-c.readerIn
+			p, ok := <-c.receiverIn
 			if !ok {
 				return // channel closed
 			}
 
-			// HANDLE: FIN FLAG (close shop)
-			if p.ctrls&FIN_FLAG > 0 {
-				c.writerOut<-Packet{}
+			// HANDLE: FRC FLAG (respond with ack)
+			if p.ctrls&FRC_FLAG > 0 {
+				// respond with ACK message
+				// c.senderOut<-Packet{}
 			}
 
-			// HANDLE: SEQ_FLAG (updates the internal recvSeq counter)
-			if p.ctrls&SEQ_FLAG > 0 {
-				var recvSeq = c.recvSeq
+			// HANDLE: FIN FLAG (close shop)
+			if p.ctrls&FIN_FLAG > 0 {
+				// respond with ACK,FIN message
+				// c.senderOut<-Packet{}
+			}
 
-				// HANDLE: packet in the past (we should just drop it?)
+			// HANDLE: ACK FLAG (updates send ack)
+			if p.ctrls&ACK_FLAG > 0 {
+				if p.ack > c.sendAck {
+					atomic.SwapUint32(&c.sendAck, p.ack)
+				}
+			}
+
+			// HANDLE: SEQ_FLAG (signifies that data is coming!)
+			if p.ctrls&SEQ_FLAG > 0 {
+				// Per channel laws, drop any packet not at proper sequence
+				var recvSeq = c.recvSeq
 				if p.seq <= recvSeq {
 					continue
 				}
 
-				// HANDLE: packet in the future
-				// Okay,
 				if p.seq > recvSeq+1 {
 					continue
 				}
@@ -162,22 +170,15 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 				atomic.SwapUint32(&c.recvSeq, recvSeq+1)
 			}
 
-			// HANDLE: ACK FLAG (updates the internal ack counter)
-			if p.ctrls&ACK_FLAG > 0 {
-				if p.ack > c.sendAck {
-					atomic.SwapUint32(&c.sendAck, p.ack)
-				}
-			}
-
 			// send it on.
-			c.readerOut <- p
+			c.receiverOut <- p
 		}
 	}(c)
 
-	// kick off the writer
+	// kick off the sender
 	go func(c *ChannelActive) {
 		for {
-			// bytes, ok := <-writerIn
+			// bytes, ok := <-senderIn
 			// if ! ok {
 			// return // channel closed
 			// }
@@ -187,7 +188,7 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 	// kick off the heartbeat thread
 	go func(c *ChannelActive) {
 		for {
-			// p := <-readerIn
+			// p := <-receiverIn
 		}
 	}(c)
 
@@ -221,7 +222,7 @@ func (self *ChannelActive) Read(buf []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return self.reader.Read(buf)
+	return self.receiverRaw.Read(buf)
 }
 
 // Writes data to the channel.  Blocks if the underlying buffer is full.
@@ -233,7 +234,7 @@ func (self *ChannelActive) Write(data []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return self.writer.Write(data)
+	return self.senderRaw.Write(data)
 }
 
 // Sends a packet to the channel stream.
@@ -245,7 +246,7 @@ func (self *ChannelActive) Send(p *Packet) error {
 		return CHANNEL_CLOSED_ERROR
 	}
 
-	self.readerIn <- *p
+	self.receiverIn <- *p
 	return nil
 }
 
@@ -266,9 +267,9 @@ func (self *ChannelActive) Close() error {
 	self.ids.Return(self.local.channelId)
 
 	// close all 'owned' io objects
-	close(self.readerIn)
-	close(self.readerOut)
-	close(self.writerIn)
+	close(self.receiverIn)
+	close(self.receiverOut)
+	close(self.senderIn)
 
 	// finally, wait for the workers to be done.
 	self.workers.Wait()
