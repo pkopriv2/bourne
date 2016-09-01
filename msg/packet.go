@@ -37,21 +37,17 @@ type Packet struct {
 	protocolVersion uint16
 
 	// every packet must identify its source
-	srcEntityId  uint32
+	srcEntityId  uint32 // TODO: move to UTF-8 String
 	srcChannelId uint16
 
 	// every packet must identify its destination
-	dstEntityId  uint32
+	dstEntityId  uint32 // TODO: move to UTF-8 String
 	dstChannelId uint16
 
-	// control flags (used to control channel state)
-	// [OPEN CLOSE ERROR etc..]
-	//
-	// TODO: research all the necessary control flags
+	// control flags
 	ctrls uint8
 
-	// in order to guarantee reliability, we need to implement control
-	// structures.  each side of a
+	// reliability flags
 	seq uint32
 	ack uint32
 
@@ -59,22 +55,13 @@ type Packet struct {
 	data []uint8
 }
 
-
-func NewErrorPacket(p *Packet, err error) *Packet {
-	// return &Packet{PROTOCOL_VERSION}
-	return nil
-}
-
-func NewRedirectPacket(p *Packet, eId uint32, cId uint32) *Packet {
-	// return &Packet{PROTOCOL_VERSION}
+func NewReturnPacket(p *Packet, ctrls uint8, data []byte) *Packet {
 	return nil
 }
 
 // Writes a packet to an io stream.  If successful,
 // nil is returned.  Blocks if the writer blocks
 //
-// IMPORTANT: It is expected that the input writer is NOT
-// being shared amongst many threads.
 func WritePacket(w io.Writer, m *Packet) error {
 
 	// TODO:
@@ -121,8 +108,6 @@ func WritePacket(w io.Writer, m *Packet) error {
 // Reads a packet from an io stream.  Any issues with the
 // stream encoding will result in (nil, err) being returned.
 //
-// IMPORTANT: It is expected that the input reader is NOT
-// being shared amongst many threads.
 func ReadPacket(r io.Reader) (*Packet, error) {
 	// read all the header bytes
 	headerBuf := make([]byte, 16)
@@ -176,6 +161,9 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 		return nil, err
 	}
 	if err := binary.Read(headerReader, binary.BigEndian, &dstChannelId); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(headerReader, binary.BigEndian, &ctrls); err != nil {
 		return nil, err
 	}
 	if err := binary.Read(headerReader, binary.BigEndian, &seq); err != nil {

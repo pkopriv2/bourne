@@ -107,7 +107,7 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 
 	// ensure this packet is at the right destination. if not, return it!
 	if p.dstEntityId != self.local.entityId || p.dstChannelId != self.local.channelId {
-		self.out <- *NewErrorPacket(p, CHANNEL_REFUSED_ERROR)
+		self.out <- *NewReturnPacket(p, ERR_FLAG, []uint8(CHANNEL_REFUSED_ERROR.Error()))
 		return nil, nil
 	}
 
