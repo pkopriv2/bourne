@@ -3,13 +3,42 @@ package msg
 import (
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
-// Each channel is able to buffer up to a certain number
-// of packets on its incoming stream.
-var CHANNEL_ACTIVE_BUF_SIZE uint = 1024
+var CHANNEL_RESEND_BUF_SIZE uint = 1024
+var CHANNEL_RECV_BUF_SIZE uint   = 1024
+var CHANNEL_SEND_BUF_SIZE uint   = 1024
 
-// An active channel represents one side of a conversation between two entities
+// An active channel represents one side of a conversation between two entities.
+//
+// The majority of packet stream logic is handled here. The fundamental laws of
+// channels are as follows:
+//
+//   * A channel reprents a full-duplex stream abstraction.  In other words,
+//     there are independent input and output streams.  Read again: INDEPENDENT!
+//
+//   * A channel may be thought of as two output streams.  One output on each
+//     side of the conversation.
+//
+//   * Senders are responsible for the reliability of their streams.
+//
+//   * Each sender must never forget a message until it has been acknowledged.
+//
+//   * In the event that its "memory" is exhausted, a sender can force an acknowledgement
+//     from a receiver.  The receiver MUST respond.  The sender will resume transmission
+//     from the point.
+//
+//   * A receiver will only accept a packet if its sequence is exactly ONE greater
+//     than the last value seen.  All packets are dropped that do not meet this
+//     criteria. (WE WILL TRACK DROPPED PACKETS AND MAKE A MORE INFORMED DECISION)
+//
+//  Similar to TCP, this protocol ensures reliable, in-order delivery of data.
+//  However, unlike TCP, this does attempt to solve the following problems:
+//
+//     * Flow control (we don't care if we overwhelm a recipient.  we will inherit aspects of this from TCP)
+//     * Congestion control (we don't care if a network is overwhelmed)
+//     * Message integrity (we won't do any integrity checking)
 //
 // *This object is thread safe.*
 //
@@ -21,22 +50,39 @@ type ChannelActive struct {
 	// the remote channel address
 	remote ChannelAddress
 
-	// the cache tracking this channel
+	// the cache tracking this channel (used during initalization and closing)
 	cache *ChannelCache
 
-	// the pool of ids.
+	// the pool of ids. (used during initalization and closing)
 	ids *IdPool
 
-	// the packet->stream reader
+	// the packet->[]byte reader
 	reader io.Reader
 
-	// the stream->packet writer
+	// the []byte->[]byte writer
 	writer io.Writer
 
-	// the buffered "input" channel (owned by this channel)
-	in chan Packet
+	// The reader channels internal ---> reader --> consumer
+	readerIn  chan Packet
+	readerOut chan Packet
 
-	// a flag indicating that the channel is closed. (atomic bool)
+	// The writer channels consumer ---> writer --> internal
+	writerIn  chan []byte
+	writerOut chan Packet
+
+	// the maximum packet sequence that has been sent vs acked. (updated via atomic swap)
+	sendSeq uint32
+	sendAck uint32
+	sendMem [1024]Packet // len(sendMem) > sendSeq - sendAck
+
+	// the maximum *valid* packet sequence that has been received. (updated via atomic swap)
+	recvSeq uint32
+	recvDropped uint32 // track how often packages are dropped.
+
+	// the workers wait
+	workers sync.WaitGroup
+
+	// a flag indicating that the channel is closed. (synchronized on lock)
 	closed bool
 
 	// the channel's lock
@@ -46,7 +92,7 @@ type ChannelActive struct {
 // Creates and returns a new channel.  This method has no side-effects.
 //
 func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) (*ChannelActive, error) {
-	// generate a new id.
+	// generate a new local channel id.
 	channelId, err := ids.Take()
 	if err != nil {
 		return nil, CHANNEL_REFUSED_ERROR
@@ -55,30 +101,103 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 	// derive a new local address
 	l := ChannelAddress{srcEntityId, channelId}
 
-	// buffered input chan (for now just passing right to consumer.)
-	in := make(chan Packet, CHANNEL_ACTIVE_BUF_SIZE)
+	// consumer reader abstractions
+	readerOut := make(chan Packet)
+	reader := NewPacketReader(readerOut)
 
-	// io abstractions
-	reader := NewPacketReader(in)
-	writer := NewPacketWriter(out, l.entityId, l.channelId, r.entityId, r.channelId)
+	// consumer writer abstractions
+	writerIn := make(chan []byte)
+	writer := NewPacketWriter(writerIn)
+
+	// internal abstractions
+	var readerIn = make(chan Packet, CHANNEL_ACTIVE_BUF_SIZE)
+	var writerOut = out
 
 	// create the router
-	channel := &ChannelActive{
-		local:  l,
-		remote: r,
-		cache:  cache,
-		ids:    ids,
-		in:     out,
-		reader: reader,
-		writer: writer}
+	c := &ChannelActive{
+		local:     l,
+		remote:    r,
+		cache:     cache,
+		ids:       ids,
+		reader:    reader,
+		writer:    writer,
+		readerIn:  readerIn,
+		readerOut: readerOut,
+		writerIn:  writerIn,
+		writerOut: writerOut,
+		sendSeq: 0,
+		sendAck: 0,
+		recvSeq: 0}
+
+	// kick off the reader
+	c.workers.Add(1)
+	go func(c *ChannelActive) {
+		defer c.workers.Done()
+		for {
+			p, ok := <-c.readerIn
+			if !ok {
+				return // channel closed
+			}
+
+			// HANDLE: FIN FLAG (close shop)
+			if p.ctrls&FIN_FLAG > 0 {
+				c.writerOut<-Packet{}
+			}
+
+			// HANDLE: SYN FLAG (updates the internal recvSeq counter)
+			if p.ctrls&SYN_FLAG > 0 {
+				var recvSeq = c.recvSeq
+
+				// HANDLE: packet in the past (we should just drop it?)
+				if p.seq <= recvSeq {
+					continue
+				}
+
+				// HANDLE: packet in the future
+				// Okay,
+				if p.seq > recvSeq+1 {
+					continue
+				}
+
+				atomic.SwapUint32(&c.recvSeq, recvSeq+1)
+			}
+
+			// HANDLE: ACK FLAG (updates the internal ack counter)
+			if p.ctrls&ACK_FLAG > 0 {
+				if p.ack > c.sendAck {
+					atomic.SwapUint32(&c.sendAck, p.ack)
+				}
+			}
+
+			// send it on.
+			c.readerOut <- p
+		}
+	}(c)
+
+	// kick off the writer
+	go func(c *ChannelActive) {
+		for {
+			// bytes, ok := <-writerIn
+			// if ! ok {
+			// return // channel closed
+			// }
+		}
+	}(c)
+
+	// kick off the heartbeat thread
+	go func(c *ChannelActive) {
+		for {
+			// p := <-readerIn
+		}
+	}(c)
 
 	// add it to the channel pool (i.e. make it available for routing)
-	if err := cache.Add(l, channel); err != nil {
+	if err := cache.Add(l, c); err != nil {
 		return nil, err
 	}
 
 	// finally, return it.
-	return channel, nil
+	return c, nil
 }
 
 // Returns the local address of this channel
@@ -126,7 +245,7 @@ func (self *ChannelActive) Send(p *Packet) error {
 		return CHANNEL_CLOSED_ERROR
 	}
 
-	self.in <- *p
+	self.readerIn <- *p
 	return nil
 }
 
@@ -147,11 +266,12 @@ func (self *ChannelActive) Close() error {
 	self.ids.Return(self.local.channelId)
 
 	// close all 'owned' io objects
-	close(self.in)
+	close(self.readerIn)
+	close(self.readerOut)
+	close(self.writerIn)
 
-	self.reader = nil
-	self.writer = nil
+	// finally, wait for the workers to be done.
+	self.workers.Wait()
 	self.closed = true
-
 	return nil
 }

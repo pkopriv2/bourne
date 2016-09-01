@@ -4,6 +4,7 @@ import "io"
 import "bytes"
 import "encoding/binary"
 
+
 // The current protocol version. This defines the basis
 // for determining compatibility between changes.
 //
@@ -20,6 +21,12 @@ var PROTOCOL_VERSION uint16 = 0
 //
 var PACKET_MAX_DATA_LEN int = 65535
 
+// control flags
+var SYN_FLAG uint8 = 0x0001
+var ACK_FLAG uint8 = 0x0002
+var FIN_FLAG uint8 = 0x0003
+var ERR_FLAG uint8 = 0x0004
+
 // A packet is the basic data structure defining a simple
 // multiplexed data stream.
 //
@@ -27,10 +34,6 @@ var PACKET_MAX_DATA_LEN int = 65535
 // similar to TCP.  However, because packets are routed beyond
 // a two point tcp session, reliability must be guaranteed by this
 // protocol.
-//
-//
-// in order to guarantee reliability, we need to implement control
-// structures.  each side of a
 //
 //
 type Packet struct {
@@ -42,11 +45,6 @@ type Packet struct {
 	srcEntityId  uint32
 	srcChannelId uint16
 
-	// // in order to guarantee reliability, we need to implement control
-	// // structures.  each side of a
-	// seq uint32
-	// ack uint32
-
 	// every packet must identify its destination
 	dstEntityId  uint32
 	dstChannelId uint16
@@ -55,11 +53,17 @@ type Packet struct {
 	// [OPEN CLOSE ERROR etc..]
 	//
 	// TODO: research all the necessary control flags
-	ctrls uint16
+	ctrls uint8
+
+	// in order to guarantee reliability, we need to implement control
+	// structures.  each side of a
+	seq uint32
+	ack uint32
 
 	// the raw data (to be interpreted by the consumer)
 	data []uint8
 }
+
 
 func NewErrorPacket(p *Packet, err error) *Packet {
 	// return &Packet{PROTOCOL_VERSION}
@@ -98,6 +102,12 @@ func WritePacket(w io.Writer, m *Packet) error {
 		return err
 	}
 	if err := binary.Write(w, binary.BigEndian, &m.ctrls); err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.BigEndian, &m.seq); err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.BigEndian, &m.ack); err != nil {
 		return err
 	}
 
@@ -154,7 +164,9 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	var srcChannelId uint16
 	var dstEntityId uint32
 	var dstChannelId uint16
-	var ctrls uint16
+	var ctrls uint8
+	var seq uint32
+	var ack uint32
 
 	if err := binary.Read(headerReader, binary.BigEndian, &protocolVersion); err != nil {
 		return nil, err
@@ -171,11 +183,14 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	if err := binary.Read(headerReader, binary.BigEndian, &dstChannelId); err != nil {
 		return nil, err
 	}
-	if err := binary.Read(headerReader, binary.BigEndian, &ctrls); err != nil {
+	if err := binary.Read(headerReader, binary.BigEndian, &seq); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(headerReader, binary.BigEndian, &ack); err != nil {
 		return nil, err
 	}
 
-	return &Packet{protocolVersion, srcEntityId, srcChannelId, dstEntityId, dstChannelId, ctrls, data}, nil
+	return &Packet{protocolVersion, srcEntityId, srcChannelId, dstEntityId, dstChannelId, ctrls, seq, ack, data}, nil
 }
 
 type PacketReader struct {
@@ -216,19 +231,13 @@ func (self *PacketReader) Read(buf []byte) (int, error) {
 }
 
 type PacketWriter struct {
-	out chan<- Packet
-
-	srcEntityId  uint32
-	srcChannelId uint16
-
-	dstEntityId  uint32
-	dstChannelId uint16
+	out chan<- []byte
 
 	maxDataLen int
 }
 
-func NewPacketWriter(out chan<- Packet, srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16) *PacketWriter {
-	return &PacketWriter{out, srcEntityId, srcChannelId, dstEntityId, dstChannelId, PACKET_MAX_DATA_LEN}
+func NewPacketWriter(out chan<- []byte) *PacketWriter {
+	return &PacketWriter{out, PACKET_MAX_DATA_LEN}
 }
 
 func (self *PacketWriter) Write(data []byte) (int, error) {
@@ -249,8 +258,8 @@ func (self *PacketWriter) Write(data []byte) (int, error) {
 			max = min + self.maxDataLen + 1
 		}
 
-		// go ahead and send the packet.
-		self.out <- Packet{PROTOCOL_VERSION, self.srcEntityId, self.srcChannelId, self.dstEntityId, self.dstChannelId, 0, data[min:max]}
+		// go ahead and send the array.
+		self.out <- data[min:max]
 		if max >= end {
 			break
 		}
