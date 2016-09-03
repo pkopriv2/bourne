@@ -4,7 +4,6 @@ import "io"
 import "bytes"
 import "encoding/binary"
 
-
 // The current protocol version. This defines the basis
 // for determining compatibility between changes.
 //
@@ -26,7 +25,7 @@ var SEQ_FLAG uint8 = 1    // tells the recipient what sequence the message has
 var ACK_FLAG uint8 = 2    // tells the recipient what sequence has been received by the sender.
 var FIN_FLAG uint8 = 4    // tells the recipient to stop receiving data.
 var FRC_FLAG uint8 = 8    // asks the recipient for an ACK
-var ERR_FLAG uint8 = 128  // tells the recipient an unrecoverable error has occurred.
+var ERR_FLAG uint8 = 128  // tells the recipient an unrecoverable error has occurred. (no acking)
 
 // A packet is the basic data structure defining a simple
 // multiplexed data stream.
@@ -55,8 +54,17 @@ type Packet struct {
 	data []uint8
 }
 
-func NewReturnPacket(p *Packet, ctrls uint8, data []byte) *Packet {
-	return nil
+func NewReturnPacket(p *Packet, entityId uint32, channelId uint16, ctrls uint8, seq uint32, ack uint32, data []byte) *Packet {
+	return &Packet{
+		protocolVersion: PROTOCOL_VERSION,
+		srcEntityId : entityId,
+		srcChannelId: channelId,
+		dstEntityId: p.srcEntityId,
+		dstChannelId: p.srcChannelId,
+		ctrls: ctrls,
+		seq: seq,
+		ack: ack,
+		data: data}
 }
 
 // Writes a packet to an io stream.  If successful,

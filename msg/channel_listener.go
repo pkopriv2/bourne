@@ -9,7 +9,7 @@ import (
 var CHANNEL_LISTEN_MAX_ID uint16    = 255
 var CHANNEL_LISTEN_MIN_ID uint16    = 0
 
-// Each listener can buffer
+// Each listener can buffer n packets
 var CHANNEL_LISTEN_BUF_SIZE uint    = 1024
 
 //
@@ -65,7 +65,7 @@ func NewChannelListener(local *ChannelAddress, cache *ChannelCache, ids *IdPool,
 	}
 
 	// buffered input chan
-	in := make(chan Packet, CHANNEL_RECV_BUF_SIZE)
+	in := make(chan Packet, CHANNEL_LISTEN_BUF_SIZE)
 
 	// create the channel
 	channel := &ChannelListener{
@@ -107,7 +107,7 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 
 	// ensure this packet is at the right destination. if not, return it!
 	if p.dstEntityId != self.local.entityId || p.dstChannelId != self.local.channelId {
-		self.out <- *NewReturnPacket(p, ERR_FLAG, []uint8(CHANNEL_REFUSED_ERROR.Error()))
+		// self.out <- *NewReturnPacket(p, ERR_FLAG, []uint8(CHANNEL_REFUSED_ERROR.Error()))
 		return nil, nil
 	}
 

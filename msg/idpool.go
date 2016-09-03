@@ -29,7 +29,7 @@ var ID_POOL_CAP_ERROR error = errors.New("Pool has reached capacity!")
 //
 // This pool does NOT track ownership, which allows someone to return
 // an id they did take themselves.  In that event, the same id may be
-// given out at the same time.
+// given out at the same time.  SO, DON'T DO IT!
 //
 // *This object is thread-safe*
 //
