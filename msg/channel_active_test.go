@@ -1,83 +1,95 @@
 package msg
 
-import "testing"
+import (
+	"sync"
+	"testing"
+	"time"
+	"io"
 
-//import "bytes"
-//import "bufio"
-// import "io"
-import "fmt"
+	"github.com/stretchr/testify/assert"
+)
 
-// import "time"
-// import "sync"
 
-import "github.com/stretchr/testify/assert"
+func TestRingBuffer_init(t *testing.T) {
+	buf := NewRingBuffer(8)
 
-//import "github.com/pkopriv2/bourne/msg"
-
-func TestActiveChannel(t *testing.T) {
-
-	assert.Equal(t, 123, 123, "they should be equal")
-	fmt.Println("hello")
+	assert.Equal(t, []byte{}, buf.Data())
+	assert.Equal(t, uint32(0), buf.WritePos())
+	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
-// func TestRoundUp_small(t *testing.T) {
-	// assert.Equal(t, uint32(1), roundUp(1))
-	// assert.Equal(t, uint32(2), roundUp(2))
-	// assert.Equal(t, uint32(4), roundUp(3))
-	// assert.Equal(t, uint32(4), roundUp(4))
-	// assert.Equal(t, uint32(8), roundUp(5))
-// }
-//
-// func TestSendBuffer_init(t *testing.T) {
-	// buf := NewSendBuffer(8)
-//
-	// assert.Equal(t, []byte{}, buf.Data())
-	// assert.Equal(t, uint32(0), buf.SeqPos())
-	// assert.Equal(t, uint32(0), buf.AckPos())
-// }
-//
-// func TestSendBuffer_AddOne(t *testing.T) {
-	// buf := NewSendBuffer(8)
-	// assert.Equal(t, uint32(1), buf.Add([]byte{1}))
-	// assert.Equal(t, []byte{1}, buf.Data())
-	// assert.Equal(t, uint32(1), buf.SeqPos())
-	// assert.Equal(t, uint32(0), buf.AckPos())
-// }
-//
-// func TestSendBuffer_AddOne_AckOne(t *testing.T) {
-	// buf := NewSendBuffer(8)
-	// assert.Equal(t, uint32(1), buf.Add([]byte{1}))
-	// assert.Equal(t, nil, buf.Ack(uint32(1)))
-//
-	// assert.Equal(t, uint32(1), buf.SeqPos())
-	// assert.Equal(t, uint32(1), buf.AckPos())
-// }
-//
-// func TestSendBuffer_invalidAck(t *testing.T) {
-	// buf := NewSendBuffer(4)
-	// assert.Equal(t, uint32(1), buf.Add([]byte{1}))
-	// assert.Equal(t, nil, buf.Ack(uint32(1)))
-	// assert.Equal(t, ERR_CHANNEL_INVALID_ACK, buf.Ack(uint32(1)))
-// }
-
-func TestSendBuffer_wrap(t *testing.T) {
-	buf := NewSendBuffer(4)
-
-	assert.Equal(t, uint32(4), buf.Add([]byte{1,2,3,4}))
-	assert.Equal(t, []byte{4,1,2,3}, buf.data)
-	assert.Equal(t, []byte{1,2,3,4}, buf.Data())
-	assert.Equal(t, uint32(4), buf.SeqPos())
-	assert.Equal(t, uint32(0), buf.AckPos())
-
+func TestRingBuffer_TryWrite_One(t *testing.T) {
+	buf := NewRingBuffer(4)
+	assert.Equal(t, uint32(1), buf.tryWrite([]byte{1}))
+	assert.Equal(t, []byte{1}, buf.Data())
+	assert.Equal(t, uint32(1), buf.WritePos())
+	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
+func TestRingBuffer_TryWrite_ToCapacity(t *testing.T) {
+	buf := NewRingBuffer(4)
 
-//
-// func TestSendBuffer_addNoWrap(t *testing.T) {
-// buf := NewSendBuffer(8)
-// buf.Add([]byte{1,2})
-//
-// assert.Equal(t, 2, buf.Seq())
-// assert.Equal(t, 0, buf.Ack())
-// assert.Equal(t, []byte{1,2}, buf.Data())
-// }
+	assert.Equal(t, uint32(4), buf.tryWrite([]byte{1, 2, 3, 4}))
+	assert.Equal(t, []byte{1, 2, 3, 4}, buf.Data())
+	assert.Equal(t, uint32(4), buf.WritePos())
+	assert.Equal(t, uint32(0), buf.ReadPos())
+}
+
+func TestRingBuffer_TryWrite_BeyondCapacity(t *testing.T) {
+	buf := NewRingBuffer(4)
+
+	assert.Equal(t, uint32(3), buf.tryWrite([]byte{1, 2, 3}))
+	assert.Equal(t, []byte{1, 2, 3}, buf.Data())
+	assert.Equal(t, uint32(3), buf.WritePos())
+	assert.Equal(t, uint32(0), buf.ReadPos())
+
+	assert.Equal(t, uint32(1), buf.tryWrite([]byte{4, 5, 6}))
+	assert.Equal(t, []byte{1, 2, 3, 4}, buf.Data())
+	assert.Equal(t, uint32(4), buf.WritePos())
+	assert.Equal(t, uint32(0), buf.ReadPos())
+}
+
+func TestRingBuffer_Write_LessThanCapacity(t *testing.T) {
+	buf := NewRingBuffer(4)
+
+	num, err := buf.Write([]byte{1})
+	assert.Equal(t, 1, num)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, []byte{1}, buf.Data())
+	assert.Equal(t, uint32(1), buf.WritePos())
+	assert.Equal(t, uint32(0), buf.ReadPos())
+}
+
+func TestRingBuffer_Write_EqualToCapacity(t *testing.T) {
+	buf := NewRingBuffer(4)
+
+	num, err := buf.Write([]byte{1, 2, 3, 4})
+	assert.Equal(t, 4, num)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, []byte{1, 2, 3, 4}, buf.Data())
+	assert.Equal(t, uint32(4), buf.WritePos())
+	assert.Equal(t, uint32(0), buf.ReadPos())
+}
+
+func TestRingBuffer_Write_GreaterCapacity(t *testing.T) {
+	buf := NewRingBuffer(4)
+	var writeEnd time.Time
+
+	wait := new(sync.WaitGroup)
+	wait.Add(1)
+	go func() {
+		buf.Write([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9})
+		writeEnd = time.Now()
+		wait.Done()
+	}()
+
+	time.Sleep(100)
+	readBeg := time.Now()
+
+	readBuf := make([]byte, 9)
+	io.ReadFull(buf, readBuf)
+
+	wait.Wait()
+	assert.True(t, writeEnd.After(readBeg))
+	assert.Equal(t, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}, readBuf)
+}

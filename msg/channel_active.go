@@ -3,15 +3,26 @@ package msg
 import (
 	"errors"
 	"sync"
-
-	"github.com/Workiva/go-datastructures/queue"
+	"time"
 )
 
-var CHANNEL_RECV_BUF_IN_SIZE uint64 = 1024   // 1024 packet channel
-var CHANNEL_RECV_BUF_OUT_SIZE uint64 = 32768 // 32k byte channel
-var CHANNEL_SEND_BUF_SIZE uint64 = 32768
+// Defines how many packets will be buffered on receiving
+var CHANNEL_RECV_IN_SIZE uint32 = 1024
 
-var ERR_CHANNEL_INVALID_ACK = errors.New("ACK:INVALID")
+// Defines how many bytes will be buffered prior to being consumed
+var CHANNEL_RECV_OUT_SIZE uint32 = 32768
+
+// Defines how many bytes will be buffered by consumer.
+var CHANNEL_SEND_IN_SIZE uint32 = 32768
+
+// Defines how many bytes are recalled before an ack is required.
+var CHANNEL_SEND_BUF_SIZE uint32 = 524288 //  512K
+
+// Defines how long to wait after each RingBuffer#tryWrite
+var RINGBUF_WAIT = 10 * time.Millisecond
+
+// returned when an an attempt to move the read position to an invalid value
+var ERR_RINGBUF_READ_INVALID = errors.New("RINGBUF:READ_POSITION_INVALID")
 
 // An active channel represents one side of a conversation between two entities.
 //
@@ -33,7 +44,7 @@ var ERR_CHANNEL_INVALID_ACK = errors.New("ACK:INVALID")
 //     from the point.
 //
 //   * A receiver will only accept a data from a packet if its sequence is exactly ONE
-//     greater than the last value seen.  All packets are dropped that do not meet this
+//     greater than the write value seen.  All packets are dropped that do not meet this
 //     criteria. (WE WILL TRACK DROPPED PACKETS AND MAKE A MORE INFORMED DECISION LATER)
 //
 //  Similar to TCP, this protocol ensures reliable, in-order delivery of data.
@@ -66,13 +77,14 @@ type ChannelActive struct {
 	// the pool of ids. (used during initalization and closing)
 	ids *IdPool
 
-	// The recv channels internal ---> recv --> consumer
+	// receive buffers
 	recvIn  chan Packet
-	recvOut *queue.RingBuffer // T: byte
-	recvSeq uint32            // the maximum *valid* byte sequence that has been received. (updated via atomic swap)
+	recvOut *RingBuffer
+	recvSeq uint32 // maximum seq position that has been received
 
-	// The send channels consumer ---> send --> internal
-	sendIn  *SendBuffer
+	// send buffers
+	sendIn  *RingBuffer
+	sendBuf *RingBuffer
 	sendOut chan Packet
 
 	// the workers wait
@@ -91,109 +103,73 @@ type ChannelActive struct {
 //   * Adds an entry to the channel cache (making it *routable*)
 //
 func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) (*ChannelActive, error) {
-	return nil, nil
 	// generate a new local channel id.
-	// channelId, err := ids.Take()
-	// if err != nil {
-	// return nil, err
-	// }
+	channelId, err := ids.Take()
+	if err != nil {
+		return nil, err
+	}
 
 	// derive a new local address
-	// l := ChannelAddress{srcEntityId, channelId}
+	l := ChannelAddress{srcEntityId, channelId}
 
 	// receive queues
-	// var recvIn = queue.NewRingBuffer(CHANNEL_RECV_BUF_IN_SIZE)
-	// var recvOut = queue.NewRingBuffer(CHANNEL_RECV_BUF_OUT_SIZE)
-	//
-	// // send queues
-	// var sendIn = queue.NewRingBuffer(CHANNEL_SEND_BUF_SIZE)
-	// var sendOut = out
-	//
-	// // create the router
-	// c := &ChannelActive{
-	// local:   l,
-	// remote:  r,
-	// cache:   cache,
-	// ids:     ids,
-	// recvIn:  recvIn,
-	// recvOut: recvOut,
-	// sendIn:  sendIn,
-	// sendOut: sendOut,
-	// sendSeq: 0,
-	// sendAck: 0,
-	// recvSeq: 0}
-	//
-	// // kick off the recv
-	// c.workers.Add(1)
-	// go func(c *ChannelActive) {
-	// defer c.workers.Done()
-	// for {
-	// p, ok := <-c.recvIn
-	// if !ok {
-	// return // channel closed
-	// }
-	//
-	// // HANDLE: FRC FLAG (respond with ack)
-	// if p.ctrls&FRC_FLAG > 0 {
-	// // respond with ACK message
-	// // c.sendOut<-Packet{}
-	// }
-	//
-	// // HANDLE: FIN FLAG (close shop)
-	// if p.ctrls&FIN_FLAG > 0 {
-	// // respond with ACK,FIN message
-	// // c.sendOut<-Packet{}
-	// }
-	//
-	// // HANDLE: ACK FLAG (updates send ack)
-	// if p.ctrls&ACK_FLAG > 0 {
-	// if p.ack == c.sendAck {
-	// // retransmit from ack.
-	// }
-	//
-	// if p.ack > c.sendAck {
-	// atomic.SwapUint32(&c.sendAck, p.ack)
-	// }
-	// }
-	//
-	// // HANDLE: SEQ_FLAG (signifies that data is coming!)
-	// if p.ctrls&SEQ_FLAG > 0 {
-	// // Per channel laws, drop any packet not at proper sequence
-	// var recvSeq = c.recvSeq
-	// if p.seq <= recvSeq {
-	// continue
-	// }
-	//
-	// if p.seq > recvSeq+1 {
-	// continue
-	// }
-	//
-	// atomic.SwapUint32(&c.recvSeq, recvSeq+1)
-	// }
-	//
-	// // send it on.
-	// c.recvOut <- p
-	// }
-	// }(c)
-	//
-	// // kick off the send
-	// go func(c *ChannelActive) {
-	// for {
-	// // bytes, ok := <-sendIn
-	// // if ! ok {
-	// // return // channel closed
-	// // }
-	// }
-	// }(c)
-	//
-	//
-	// // add it to the channel pool (i.e. make it available for routing)
-	// if err := cache.Add(l, c); err != nil {
-	// return nil, err
-	// }
-	//
-	// // finally, return it.
-	// return c, nil
+	recvIn := make(chan Packet, CHANNEL_RECV_IN_SIZE)
+	recvOut := NewRingBuffer(CHANNEL_RECV_OUT_SIZE)
+
+	// send queues
+	sendIn := NewRingBuffer(CHANNEL_RECV_OUT_SIZE)
+	sendBuf := NewRingBuffer(CHANNEL_SEND_BUF_SIZE)
+	sendOut := out
+
+	// create the channel
+	c := &ChannelActive{
+		local:   l,
+		remote:  r,
+		cache:   cache,
+		ids:     ids,
+		recvIn:  recvIn,
+		recvOut: recvOut,
+		sendIn:  sendIn,
+		sendBuf: sendBuf,
+		sendOut: sendOut}
+
+	// kick off the recv
+	c.workers.Add(1)
+	go func(c *ChannelActive) {
+		defer c.workers.Done()
+		for {
+			p, ok := <-c.recvIn
+			if !ok {
+				return // channel closed
+			}
+
+			// HANDLE: ACK FLAG (updates send ack)
+			if p.ctrls&ACK_FLAG > 0 {
+			}
+
+			// HANDLE: SEQ_FLAG (signifies that data is coming!)
+			if p.ctrls&SEQ_FLAG > 0 {
+			}
+		}
+	}(c)
+
+	// kick off the send
+	go func(c *ChannelActive) {
+		for {
+			// bytes, ok := <-sendIn
+			// if ! ok {
+			// return // channel closed
+			// }
+		}
+	}(c)
+
+	// add it to the channel pool (i.e. make it available for routing)
+	if err := cache.Add(l, c); err != nil {
+		return nil, err
+	}
+
+	// finally, return it.
+	return c, nil
 }
 
 // Returns the local address of this channel
@@ -217,7 +193,7 @@ func (self *ChannelActive) Read(buf []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return 0, nil
+	return self.recvOut.Read(buf)
 }
 
 // Writes data to the channel.  Blocks if the underlying buffer is full.
@@ -229,7 +205,7 @@ func (self *ChannelActive) Write(data []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return 0, nil
+	return self.sendIn.Write(data)
 }
 
 // Sends a packet to the channel stream.
@@ -272,118 +248,164 @@ func (self *ChannelActive) Close() error {
 	return nil
 }
 
-// A mostly non-blocking thread-safe wrapping buffer
-// This differs from a buffer
-type SendBuffer struct {
+// A very simple circular buffer designed to buffer bytes.
+// This implementation differs from most others in the following
+// ways:
+//    * The value of the buffer may be safely accessed without
+//      side effects.  See: #Data()
+//    * Values may be dropped.
+//
+// This object is thread-safe.
+//
+type RingBuffer struct {
 	data []byte
 	lock sync.RWMutex // just using simple, coarse lock
-	seq  uint32
-	ack  uint32
+
+	write uint32 // the write position in the buffer (writes start here)
+	read  uint32 // the read position in the buffer (reads start here)
 }
 
-func NewSendBuffer(size uint32) *SendBuffer {
-	// size = roundUp(size)
-	return &SendBuffer{data: make([]byte, size)}
+// Returns a new send buffer with a capacity of (size-1)
+//
+func NewRingBuffer(size uint32) *RingBuffer {
+	return &RingBuffer{data: make([]byte, size)}
 }
 
-// Retrieves the position of the seq of the queue
-func (s *SendBuffer) SeqPos() uint32 {
+func (s *RingBuffer) WritePos() uint32 {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.seq
+	return s.write
 }
 
-// Retrieves the position of the ack of the queue
-func (s *SendBuffer) AckPos() uint32 {
+func (s *RingBuffer) ReadPos() uint32 {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.ack
+	return s.read
 }
 
-// Retrieves all the data currently in the queue.  This copies the data
-// in order to not affect
-func (s *SendBuffer) Data() []byte {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
+// Moves the read position to the specified position.  Must be
+// a valid position.
+//
+func (s *RingBuffer) SetReadPos(pos uint32) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
-	// returns nil if empty
-	len := s.seq - s.ack
-	if len == 0 {
-		return []byte{}
+	if pos > s.write || pos < s.read {
+		return ERR_RINGBUF_READ_INVALID
 	}
 
-	ret := make([]byte, len)
+	s.read = pos
+	return nil
+}
+
+// Retrieves all the data currently in the buffer.  The returned
+// data is copied and changes to it do NOT affect the underlying
+// buffer.  Moreover, this has no effect on the write or read positions.
+func (s *RingBuffer) Data() []byte {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
 
 	// grab their positions
-	ackPos := s.ack
-	seqPos := s.seq
-	bufLen := uint32(cap(s.data))
+	r := s.read
+	w := s.write
 
-	// just start copying until we get to seq
-	var i uint32 = 0
-	for ; i < len; i++ {
-		pos := (ackPos + 1 + i) % bufLen
+	len := uint32(len(s.data))
+	ret := make([]byte, w-r)
 
-		ret[i] = s.data[pos]
-		if pos == seqPos {
-			break
-		}
+	// just start copying until we get to write
+	for i := uint32(0); r+i < w; i++ {
+		ret[i] = s.data[(r+i)%len]
 	}
 
 	return ret
 }
 
-// Rather than copy a byte at a time, which is very lock intensive,
-// we'll just add entire slices.  This function has no side effects
-// if it is NOT successful.
+// Reads as many bytes to the given buffer as possible,
+// returning the number of bytes that were successfully
+// added.  Blocks if NO bytes are available.
 //
+func (s *RingBuffer) Read(in []byte) (n int, err error) {
+
+	for {
+		read := s.tryRead(in)
+		if read > 0 {
+			// can technically overflow int bounds on 32-bit systems.
+			return int(read), nil
+		}
+
+		// sleep so as not to overwhelm cpu
+		time.Sleep(RINGBUF_WAIT)
+	}
+
+	panic("Not accessible")
+}
+
+// Adds as many bytes to the given buffer as possible,
+// returning the number of bytes that were successfully
+// added.  This has the side effect of moving the read
+// position.
 //
-func (s *SendBuffer) Add(val []byte) uint32 {
+func (s *RingBuffer) tryRead(in []byte) uint32 {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	// get the new seq
+	// get the new write
+	inLen := uint32(len(in))
+	bufLen := uint32(len(s.data))
+
+	// grab current positions
+	r := s.read
+	w := s.write
+
+	var i uint32 = 0
+	for ; i < inLen && r+i < w; i++ {
+		in[i] = s.data[(r+i)%bufLen]
+	}
+
+	s.read = r + i
+	return i
+}
+
+// Writes the value to the buffer, blocking until it has completed.
+//
+func (s *RingBuffer) Write(val []byte) (n int, err error) {
+	valLen := uint32(len(val))
+
+	for {
+		val = val[s.tryWrite(val):]
+		if len(val) == 0 {
+			break
+		}
+
+		// sleep so as not to overwhelm cpu
+		time.Sleep(RINGBUF_WAIT)
+	}
+
+	return int(valLen), nil
+}
+
+// Adds as many bytes to the underlying buffer as possible,
+// returning the number of bytes that were successfully
+// added.
+//
+func (s *RingBuffer) tryWrite(val []byte) uint32 {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	// get the new write
 	valLen := uint32(len(val))
 	bufLen := uint32(len(s.data))
 
 	// grab current positions
-	ack := s.ack % bufLen
-	seq := s.seq % bufLen
+	r := s.read
+	w := s.write
 
-	// just copy til we can't copy anymore.
+	// just write until we can't write anymore.
 	var i uint32 = 0
-	var pos uint32
-	for ; i < valLen; i++ {
-		pos = (seq + 1 + i)%bufLen
-		s.data[pos] = val[i]
-		if pos == ack {
-			break
-		}
+	for ; i < valLen && w+i < r+bufLen; i++ {
+		s.data[(w+i)%bufLen] = val[i]
 	}
 
-	s.seq = s.seq + i
+	s.write = s.write + i
 	return i
-}
-
-func (s *SendBuffer) Ack(num uint32) error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.ack+num > s.seq {
-		return ERR_CHANNEL_INVALID_ACK
-	}
-
-	s.ack = s.ack + num
-	return nil
-}
-
-func roundUp(v uint32) uint32 {
-	v--
-	v |= v >> 1
-	v |= v >> 2
-	v |= v >> 4
-	v |= v >> 8
-	v |= v >> 16
-	v++
-	return v
 }
