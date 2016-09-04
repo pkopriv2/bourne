@@ -5,6 +5,7 @@ import (
 	"sync"
 	// "sync/atomic"
 	"time"
+	"log"
 	// "unsafe"
 )
 
@@ -18,7 +19,7 @@ import (
 var CHANNEL_RECV_IN_SIZE uint32 = 1024
 
 // Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
-var CHANNEL_RECV_OUT_SIZE uint32 = 1 << 20 // 1MB
+var CHANNEL_RECV_BUF_SIZE uint32 = 1 << 20 // 1MB
 
 // Defines how many bytes will be buffered by consumer.
 var CHANNEL_SEND_IN_SIZE uint32 = 32768
@@ -30,13 +31,16 @@ var CHANNEL_SEND_BUF_SIZE uint32 = 1 << 19 //  512K
 var CHANNEL_STATE_WAIT = 50 * time.Millisecond
 
 // The amount of time to wait for an ack update.
-var CHANNEL_ACK_TIMEOUT = 5 * time.Second
+var CHANNEL_ACK_RECV_TIMEOUT = 2 * time.Second
+
+// The amount of time to send an ack.
+var CHANNEL_ACK_SEND_TIMEOUT = 1 * time.Second
 
 // Defines how long to wait after each RingBuffer#tryWrite
 var RINGBUF_WAIT = 10 * time.Millisecond
 
 // returned when an an attempt to move the read position to an invalid value
-var ERR_RINGBUF_READ_INVALID = errors.New("RINGBUF:READ_POSITION_INVALID")
+var ERR_RINGBUF_ACK_INVALID = errors.New("RINGBUF:READ_POSITION_INVALID")
 
 var (
 	CHANNEL_EMPTY_BYTE = []byte{}
@@ -57,7 +61,7 @@ var (
 type ChannelState uint64
 
 type ack struct {
-	val uint32
+	val  uint32
 	time time.Time
 }
 
@@ -116,10 +120,10 @@ type ChannelActive struct {
 
 	// receive buffers
 	recvIn  chan Packet
-	recvBuf *BufferedLog
+	recvBuf *AckLog
 
 	// send buffers
-	sendBuf *BufferedLog
+	sendBuf *AckLog
 	sendOut chan Packet
 
 	// the state of the channel.  (updated via atomic swaps)
@@ -152,10 +156,10 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 
 	// receive queues
 	recvIn := make(chan Packet, CHANNEL_RECV_IN_SIZE)
-	recvOut := NewBufferedLog(CHANNEL_RECV_OUT_SIZE)
+	recvOut := NewAckLog(CHANNEL_RECV_BUF_SIZE)
 
 	// send queues
-	sendBuf := NewBufferedLog(CHANNEL_SEND_BUF_SIZE)
+	sendBuf := NewAckLog(CHANNEL_SEND_BUF_SIZE)
 	sendOut := out
 
 	// create the channel
@@ -174,8 +178,12 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 	go func(c *ChannelActive) {
 		defer c.workers.Done()
 
+		// last ack sent
+		lastAck := time.Now()
+
 		// the packet buffer (initialized here so we don't continually recreate memory.)
 		tmpBuf := make([]byte, PACKET_MAX_DATA_LEN)
+
 		for {
 			// // evaluate channel state on every iteration
 			// // Anytime we are not in a valid "OPENED" state, give control to the receiver.
@@ -200,7 +208,7 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 			flags := PACKET_FLAG_ACK
 
 			// see if we should be sending a data packet.
-			num, seq := c.sendBuf.TryReadPending(tmpBuf)
+			num, seq := c.sendBuf.TryRead(tmpBuf)
 
 			// build the packet data.
 			data := tmpBuf[:num]
@@ -208,12 +216,15 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 				flags |= PACKET_FLAG_SEQ
 			}
 
-			// if no data, we're only going to be sending an ack, so wait a little bit.
-			// so as not to constantly be sending empty packets
 			if num == 0 {
-				time.Sleep(CHANNEL_STATE_WAIT)
+				if time.Since(lastAck) < CHANNEL_ACK_SEND_TIMEOUT {
+					time.Sleep(CHANNEL_STATE_WAIT)
+					continue
+				}
 			}
 
+			// reset the last ack sent time.
+			lastAck = time.Now()
 
 			// okay, send the packet
 			c.sendOut <- *c.newSendPacket(flags, seq, c.recvBuf.WritePos(), data)
@@ -224,7 +235,38 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 	c.workers.Add(1)
 	go func(c *ChannelActive) {
 		defer c.workers.Done()
+
+		lastAck := time.Now()
+
 		for {
+			//
+			select {
+			case p, ok := <-recvIn :
+				// Handle: channel closed
+				if ! ok {
+					return
+				}
+
+				// Handle: ack flag
+				if p.ctrls&PACKET_FLAG_ACK > 0 {
+					c.sendBuf.Ack(p.ack)
+					lastAck = time.Now()
+				}
+
+				// Handle: seq flag
+				if p.ctrls&PACKET_FLAG_SEQ > 0 {
+					if p.seq < c.recvBuf.WritePos() {
+						break
+					}
+				}
+
+			default:
+				// if we haven't received an ack for a while, an error has occurred.  start retransmitting
+				if time.Since(lastAck) >= CHANNEL_ACK_RECV_TIMEOUT {
+					log.Printf("Rolling back: %+v\n", c.sendBuf.RollBack())
+					lastAck = time.Now()
+				}
+			}
 		}
 	}(c)
 
@@ -318,77 +360,76 @@ func (self *ChannelActive) Close() error {
 	return nil
 }
 
-// A very simple circular buffer designed to buffer bytes.
-// This implementation differs from most others in the following
-// ways:
-//    * The value of the buffer may be safely accessed without
-//      side effects.  See: #Data()
-//    * Values may be dropped.
+// A single consumer stream that tracks acknowledgements.
 //
-// This object is thread-safe.
-//
-// TODO: Handle integer overflow
-//
-type BufferedLog struct {
+type AckLog struct {
 	data []byte
 	lock sync.RWMutex // just using simple, coarse lock
 
-	write       uint32
-	readCommit  uint32
-	readPending uint32
+	write uint32
+	ack   uint32
+	cur   uint32
 }
 
 // Returns a new send buffer with a capacity of (size-1)
 //
-func NewBufferedLog(size uint32) *BufferedLog {
-	return &BufferedLog{data: make([]byte, size)}
+func NewAckLog(size uint32) *AckLog {
+	return &AckLog{data: make([]byte, size)}
 }
 
-func (s *BufferedLog) WritePos() uint32 {
+func (s *AckLog) WritePos() uint32 {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	return s.write
 }
 
-func (s *BufferedLog) ReadPos() uint32 {
+func (s *AckLog) CurPos() uint32 {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.readCommit
+	return s.cur
 }
 
-// Resets the pending reads to the last committed read.
-//
-func (s *BufferedLog) RollBack() error {
+func (s *AckLog) AckPos() uint32 {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.ack
+}
+
+func (s *AckLog) RollBack() uint32 {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	s.readPending = s.readCommit
-	return nil
+	s.cur = s.ack
+	return s.cur
 }
 
-// Commits the log
+// Moves the ack position to the value specified.
 //
-func (s *BufferedLog) Commit(pos uint32) error {
+func (s *AckLog) Ack(pos uint32) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	if pos > s.write || pos < s.readCommit {
-		return ERR_RINGBUF_READ_INVALID
+	if pos > s.write {
+		return ERR_RINGBUF_ACK_INVALID
 	}
 
-	s.readCommit = pos
+	if pos < s.ack {
+		return nil
+	}
+
+	s.ack = pos
 	return nil
 }
 
 // Retrieves all the uncommited data currently in the buffer.  The returned
 // data is copied and changes to it do NOT affect the underlying
 // buffer.  Moreover, this has no effect on the write or read positions.
-func (s *BufferedLog) Data() []byte {
+func (s *AckLog) Data() []byte {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 
 	// grab their positions
-	r := s.readCommit
+	r := s.ack
 	w := s.write
 
 	len := uint32(len(s.data))
@@ -402,14 +443,37 @@ func (s *BufferedLog) Data() []byte {
 	return ret
 }
 
+// Reads from the buffer from the current positon.
+//
+func (s *AckLog) TryRead(in []byte) (uint32, uint32) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	// get the new write
+	inLen := uint32(len(in))
+	bufLen := uint32(len(s.data))
+
+	// grab current positions
+	r := s.cur
+	w := s.write
+
+	var i uint32 = 0
+	for ; i < inLen && r+i < w; i++ {
+		in[i] = s.data[(r+i)%bufLen]
+	}
+
+	s.cur = r + i
+	return i, s.cur
+}
+
 // Reads as many bytes to the given buffer as possible,
 // returning the number of bytes that were successfully
 // added.  Blocks if NO bytes are available.
 //
-func (s *BufferedLog) Read(in []byte) (n int, err error) {
+func (s *AckLog) Read(in []byte) (n int, err error) {
 
 	for {
-		read := s.TryReadCommit(in)
+		read := s.TryReadAck(in)
 		if read > 0 {
 			return int(read), nil
 		}
@@ -421,32 +485,9 @@ func (s *BufferedLog) Read(in []byte) (n int, err error) {
 	panic("Not accessible")
 }
 
-// Reads from the buffer, but DOES NOT move the read pointer.
-//
-func (s *BufferedLog) TryReadPending(in []byte) (uint32, uint32) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	// get the new write
-	inLen := uint32(len(in))
-	bufLen := uint32(len(s.data))
-
-	// grab current positions
-	r := s.readPending
-	w := s.write
-
-	var i uint32 = 0
-	for ; i < inLen && r+i < w; i++ {
-		in[i] = s.data[(r+i)%bufLen]
-	}
-
-	s.readPending = r + i
-	return i, s.readPending
-}
-
 // Reads as many bytes from the underlying buffer as possible,
 //
-func (s *BufferedLog) TryReadCommit(in []byte) uint32 {
+func (s *AckLog) TryReadAck(in []byte) uint32 {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -455,7 +496,7 @@ func (s *BufferedLog) TryReadCommit(in []byte) uint32 {
 	bufLen := uint32(len(s.data))
 
 	// grab current positions
-	r := s.readCommit
+	r := s.ack
 	w := s.write
 
 	var i uint32 = 0
@@ -463,14 +504,14 @@ func (s *BufferedLog) TryReadCommit(in []byte) uint32 {
 		in[i] = s.data[(r+i)%bufLen]
 	}
 
-	s.readPending = r + i
-	s.readCommit = s.readPending
+	s.cur = r + i
+	s.ack = s.cur
 	return i
 }
 
 // Writes the value to the buffer, blocking until it has completed.
 //
-func (s *BufferedLog) Write(val []byte) (n int, err error) {
+func (s *AckLog) Write(val []byte) (n int, err error) {
 	valLen := uint32(len(val))
 
 	for {
@@ -491,7 +532,7 @@ func (s *BufferedLog) Write(val []byte) (n int, err error) {
 // added.  Unlike io.Writer#Write(...) this method may
 // return fewer bytes than intended.
 //
-func (s *BufferedLog) TryWrite(val []byte) uint32 {
+func (s *AckLog) TryWrite(val []byte) uint32 {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -500,7 +541,7 @@ func (s *BufferedLog) TryWrite(val []byte) uint32 {
 	bufLen := uint32(len(s.data))
 
 	// grab current positions
-	r := s.readCommit
+	r := s.ack
 	w := s.write
 
 	// just write until we can't write anymore.

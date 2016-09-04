@@ -18,7 +18,7 @@ type ChannelCache struct {
 }
 
 func NewChannelCache() *ChannelCache {
-	return &ChannelCache{lock: new(sync.RWMutex)}
+	return &ChannelCache{lock: new(sync.RWMutex), channels: make(map[ChannelAddress]ChannelBase) }
 }
 
 func (self *ChannelCache) Get(addr ChannelAddress) ChannelBase {
