@@ -1,56 +1,55 @@
 package msg
 
 import (
+	"io"
 	"sync"
 	"testing"
 	"time"
-	"io"
 
 	"github.com/stretchr/testify/assert"
 )
 
-
-func TestRingBuffer_init(t *testing.T) {
-	buf := NewRingBuffer(8)
+func TestLogBuffer_init(t *testing.T) {
+	buf := NewBufferedLog(8)
 
 	assert.Equal(t, []byte{}, buf.Data())
 	assert.Equal(t, uint32(0), buf.WritePos())
 	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
-func TestRingBuffer_TryWrite_One(t *testing.T) {
-	buf := NewRingBuffer(4)
-	assert.Equal(t, uint32(1), buf.tryWrite([]byte{1}))
+func TestLogBuffer_TryWrite_One(t *testing.T) {
+	buf := NewBufferedLog(4)
+	assert.Equal(t, uint32(1), buf.TryWrite([]byte{1}))
 	assert.Equal(t, []byte{1}, buf.Data())
 	assert.Equal(t, uint32(1), buf.WritePos())
 	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
-func TestRingBuffer_TryWrite_ToCapacity(t *testing.T) {
-	buf := NewRingBuffer(4)
+func TestLogBuffer_TryWrite_ToCapacity(t *testing.T) {
+	buf := NewBufferedLog(4)
 
-	assert.Equal(t, uint32(4), buf.tryWrite([]byte{1, 2, 3, 4}))
+	assert.Equal(t, uint32(4), buf.TryWrite([]byte{1, 2, 3, 4}))
 	assert.Equal(t, []byte{1, 2, 3, 4}, buf.Data())
 	assert.Equal(t, uint32(4), buf.WritePos())
 	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
-func TestRingBuffer_TryWrite_BeyondCapacity(t *testing.T) {
-	buf := NewRingBuffer(4)
+func TestLogBuffer_TryWrite_BeyondCapacity(t *testing.T) {
+	buf := NewBufferedLog(4)
 
-	assert.Equal(t, uint32(3), buf.tryWrite([]byte{1, 2, 3}))
-	assert.Equal(t, []byte{1, 2, 3}, buf.Data())
-	assert.Equal(t, uint32(3), buf.WritePos())
+	assert.Equal(t, uint32(4), buf.TryWrite([]byte{1, 2, 3, 4}))
+	assert.Equal(t, []byte{1, 2, 3, 4}, buf.Data())
+	assert.Equal(t, uint32(4), buf.WritePos())
 	assert.Equal(t, uint32(0), buf.ReadPos())
 
-	assert.Equal(t, uint32(1), buf.tryWrite([]byte{4, 5, 6}))
+	assert.Equal(t, uint32(0), buf.TryWrite([]byte{4, 5, 6}))
 	assert.Equal(t, []byte{1, 2, 3, 4}, buf.Data())
 	assert.Equal(t, uint32(4), buf.WritePos())
 	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
-func TestRingBuffer_Write_LessThanCapacity(t *testing.T) {
-	buf := NewRingBuffer(4)
+func TestLogBuffer_Write_LessThanCapacity(t *testing.T) {
+	buf := NewBufferedLog(4)
 
 	num, err := buf.Write([]byte{1})
 	assert.Equal(t, 1, num)
@@ -60,8 +59,8 @@ func TestRingBuffer_Write_LessThanCapacity(t *testing.T) {
 	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
-func TestRingBuffer_Write_EqualToCapacity(t *testing.T) {
-	buf := NewRingBuffer(4)
+func TestLogBuffer_Write_EqualToCapacity(t *testing.T) {
+	buf := NewBufferedLog(4)
 
 	num, err := buf.Write([]byte{1, 2, 3, 4})
 	assert.Equal(t, 4, num)
@@ -71,8 +70,8 @@ func TestRingBuffer_Write_EqualToCapacity(t *testing.T) {
 	assert.Equal(t, uint32(0), buf.ReadPos())
 }
 
-func TestRingBuffer_Write_GreaterCapacity(t *testing.T) {
-	buf := NewRingBuffer(4)
+func TestLogBuffer_Write_GreaterCapacity(t *testing.T) {
+	buf := NewBufferedLog(4)
 	var writeEnd time.Time
 
 	wait := new(sync.WaitGroup)
@@ -93,3 +92,14 @@ func TestRingBuffer_Write_GreaterCapacity(t *testing.T) {
 	assert.True(t, writeEnd.After(readBeg))
 	assert.Equal(t, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}, readBuf)
 }
+
+func TestActiveChannel_simple(t *testing.T) {
+
+}
+
+
+
+
+
+
+

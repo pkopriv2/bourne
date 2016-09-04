@@ -3,26 +3,63 @@ package msg
 import (
 	"errors"
 	"sync"
+	// "sync/atomic"
 	"time"
+	// "unsafe"
 )
+
+// Much of this was inspired by the following papers:
+//
+// https://tools.ietf.org/html/rfc793
+// http://www.ietf.org/proceedings/44/I-D/draft-ietf-sigtran-reliable-udp-00.txt
+//
 
 // Defines how many packets will be buffered on receiving
 var CHANNEL_RECV_IN_SIZE uint32 = 1024
 
-// Defines how many bytes will be buffered prior to being consumed
-var CHANNEL_RECV_OUT_SIZE uint32 = 32768
+// Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
+var CHANNEL_RECV_OUT_SIZE uint32 = 1 << 20 // 1MB
 
 // Defines how many bytes will be buffered by consumer.
 var CHANNEL_SEND_IN_SIZE uint32 = 32768
 
 // Defines how many bytes are recalled before an ack is required.
-var CHANNEL_SEND_BUF_SIZE uint32 = 524288 //  512K
+var CHANNEL_SEND_BUF_SIZE uint32 = 1 << 19 //  512K
+
+// Defines how long to wait while channel is transitioning.
+var CHANNEL_STATE_WAIT = 50 * time.Millisecond
+
+// The amount of time to wait for an ack update.
+var CHANNEL_ACK_TIMEOUT = 5 * time.Second
 
 // Defines how long to wait after each RingBuffer#tryWrite
 var RINGBUF_WAIT = 10 * time.Millisecond
 
 // returned when an an attempt to move the read position to an invalid value
 var ERR_RINGBUF_READ_INVALID = errors.New("RINGBUF:READ_POSITION_INVALID")
+
+var (
+	CHANNEL_EMPTY_BYTE = []byte{}
+)
+
+//
+// const CHANNEL_RECV_IN_SIZE uint32 = 1024
+
+// CHANNEL_STATES
+var (
+	CHANNEL_CLOSED               uint64 = 0
+	CHANNEL_OPENED               uint64 = 1
+	CHANNEL_OPENING_SEQ_SENT     uint64 = 2
+	CHANNEL_OPENING_SEQ_RECEIVED uint64 = 3
+	CHANNEL_ERR                  uint64 = 255
+)
+
+type ChannelState uint64
+
+type ack struct {
+	val uint32
+	time time.Time
+}
 
 // An active channel represents one side of a conversation between two entities.
 //
@@ -79,13 +116,14 @@ type ChannelActive struct {
 
 	// receive buffers
 	recvIn  chan Packet
-	recvOut *RingBuffer
-	recvSeq uint32 // maximum seq position that has been received
+	recvBuf *BufferedLog
 
 	// send buffers
-	sendIn  *RingBuffer
-	sendBuf *RingBuffer
+	sendBuf *BufferedLog
 	sendOut chan Packet
+
+	// the state of the channel.  (updated via atomic swaps)
+	state *ChannelState
 
 	// the workers wait
 	workers sync.WaitGroup
@@ -114,11 +152,10 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 
 	// receive queues
 	recvIn := make(chan Packet, CHANNEL_RECV_IN_SIZE)
-	recvOut := NewRingBuffer(CHANNEL_RECV_OUT_SIZE)
+	recvOut := NewBufferedLog(CHANNEL_RECV_OUT_SIZE)
 
 	// send queues
-	sendIn := NewRingBuffer(CHANNEL_RECV_OUT_SIZE)
-	sendBuf := NewRingBuffer(CHANNEL_SEND_BUF_SIZE)
+	sendBuf := NewBufferedLog(CHANNEL_SEND_BUF_SIZE)
 	sendOut := out
 
 	// create the channel
@@ -128,38 +165,66 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 		cache:   cache,
 		ids:     ids,
 		recvIn:  recvIn,
-		recvOut: recvOut,
-		sendIn:  sendIn,
+		recvBuf: recvOut,
 		sendBuf: sendBuf,
 		sendOut: sendOut}
+
+	// kick off the send
+	c.workers.Add(1)
+	go func(c *ChannelActive) {
+		defer c.workers.Done()
+
+		// the packet buffer (initialized here so we don't continually recreate memory.)
+		tmpBuf := make([]byte, PACKET_MAX_DATA_LEN)
+		for {
+			// // evaluate channel state on every iteration
+			// // Anytime we are not in a valid "OPENED" state, give control to the receiver.
+			// switch atomic.LoadUint64(&c.state) {
+			// case CHANNEL_OPENING_SEQ_RECEIVED :
+			// time.Sleep(CHANNEL_STATE_WAIT)
+			// continue
+			// case CHANNEL_OPENING_SEQ_SENT :
+			// time.Sleep(CHANNEL_STATE_WAIT)
+			// continue
+			// case CHANNEL_OPENED :
+			// // normal state...continue
+			// break
+			// }
+
+			// eventually, we're going to want to *size* our packets according to
+			// what the receiver can receive at the time.  We'll do this by analyzing
+			// the difference between the send rate and the ack rate.  For now,
+			// we'll just
+
+			// start building the outgoing packet.
+			flags := PACKET_FLAG_ACK
+
+			// see if we should be sending a data packet.
+			num, seq := c.sendBuf.TryReadPending(tmpBuf)
+
+			// build the packet data.
+			data := tmpBuf[:num]
+			if num > 0 {
+				flags |= PACKET_FLAG_SEQ
+			}
+
+			// if no data, we're only going to be sending an ack, so wait a little bit.
+			// so as not to constantly be sending empty packets
+			if num == 0 {
+				time.Sleep(CHANNEL_STATE_WAIT)
+			}
+
+
+			// okay, send the packet
+			c.sendOut <- *c.newSendPacket(flags, seq, c.recvBuf.WritePos(), data)
+		}
+	}(c)
 
 	// kick off the recv
 	c.workers.Add(1)
 	go func(c *ChannelActive) {
 		defer c.workers.Done()
 		for {
-			p, ok := <-c.recvIn
-			if !ok {
-				return // channel closed
-			}
-
-			// HANDLE: ACK FLAG (updates send ack)
-			if p.ctrls&ACK_FLAG > 0 {
-			}
-
-			// HANDLE: SEQ_FLAG (signifies that data is coming!)
-			if p.ctrls&SEQ_FLAG > 0 {
-			}
-		}
-	}(c)
-
-	// kick off the send
-	go func(c *ChannelActive) {
-		for {
-			// bytes, ok := <-sendIn
-			// if ! ok {
-			// return // channel closed
-			// }
 		}
 	}(c)
 
@@ -170,6 +235,11 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 
 	// finally, return it.
 	return c, nil
+}
+
+// Generates a new
+func (self *ChannelActive) newSendPacket(ctrls uint8, seq uint32, ack uint32, data []byte) *Packet {
+	return &Packet{PROTOCOL_VERSION, self.local.entityId, self.local.channelId, self.remote.entityId, self.remote.channelId, ctrls, seq, ack, data}
 }
 
 // Returns the local address of this channel
@@ -193,7 +263,7 @@ func (self *ChannelActive) Read(buf []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return self.recvOut.Read(buf)
+	return self.recvBuf.Read(buf)
 }
 
 // Writes data to the channel.  Blocks if the underlying buffer is full.
@@ -205,7 +275,7 @@ func (self *ChannelActive) Write(data []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return self.sendIn.Write(data)
+	return self.sendBuf.Write(data)
 }
 
 // Sends a packet to the channel stream.
@@ -257,56 +327,68 @@ func (self *ChannelActive) Close() error {
 //
 // This object is thread-safe.
 //
-type RingBuffer struct {
+// TODO: Handle integer overflow
+//
+type BufferedLog struct {
 	data []byte
 	lock sync.RWMutex // just using simple, coarse lock
 
-	write uint32 // the write position in the buffer (writes start here)
-	read  uint32 // the read position in the buffer (reads start here)
+	write       uint32
+	readCommit  uint32
+	readPending uint32
 }
 
 // Returns a new send buffer with a capacity of (size-1)
 //
-func NewRingBuffer(size uint32) *RingBuffer {
-	return &RingBuffer{data: make([]byte, size)}
+func NewBufferedLog(size uint32) *BufferedLog {
+	return &BufferedLog{data: make([]byte, size)}
 }
 
-func (s *RingBuffer) WritePos() uint32 {
+func (s *BufferedLog) WritePos() uint32 {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	return s.write
 }
 
-func (s *RingBuffer) ReadPos() uint32 {
+func (s *BufferedLog) ReadPos() uint32 {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.read
+	return s.readCommit
 }
 
-// Moves the read position to the specified position.  Must be
-// a valid position.
+// Resets the pending reads to the last committed read.
 //
-func (s *RingBuffer) SetReadPos(pos uint32) error {
+func (s *BufferedLog) RollBack() error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	if pos > s.write || pos < s.read {
-		return ERR_RINGBUF_READ_INVALID
-	}
-
-	s.read = pos
+	s.readPending = s.readCommit
 	return nil
 }
 
-// Retrieves all the data currently in the buffer.  The returned
+// Commits the log
+//
+func (s *BufferedLog) Commit(pos uint32) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	if pos > s.write || pos < s.readCommit {
+		return ERR_RINGBUF_READ_INVALID
+	}
+
+	s.readCommit = pos
+	return nil
+}
+
+// Retrieves all the uncommited data currently in the buffer.  The returned
 // data is copied and changes to it do NOT affect the underlying
 // buffer.  Moreover, this has no effect on the write or read positions.
-func (s *RingBuffer) Data() []byte {
+func (s *BufferedLog) Data() []byte {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 
 	// grab their positions
-	r := s.read
+	r := s.readCommit
 	w := s.write
 
 	len := uint32(len(s.data))
@@ -324,12 +406,11 @@ func (s *RingBuffer) Data() []byte {
 // returning the number of bytes that were successfully
 // added.  Blocks if NO bytes are available.
 //
-func (s *RingBuffer) Read(in []byte) (n int, err error) {
+func (s *BufferedLog) Read(in []byte) (n int, err error) {
 
 	for {
-		read := s.tryRead(in)
+		read := s.TryReadCommit(in)
 		if read > 0 {
-			// can technically overflow int bounds on 32-bit systems.
 			return int(read), nil
 		}
 
@@ -340,12 +421,9 @@ func (s *RingBuffer) Read(in []byte) (n int, err error) {
 	panic("Not accessible")
 }
 
-// Adds as many bytes to the given buffer as possible,
-// returning the number of bytes that were successfully
-// added.  This has the side effect of moving the read
-// position.
+// Reads from the buffer, but DOES NOT move the read pointer.
 //
-func (s *RingBuffer) tryRead(in []byte) uint32 {
+func (s *BufferedLog) TryReadPending(in []byte) (uint32, uint32) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -354,7 +432,7 @@ func (s *RingBuffer) tryRead(in []byte) uint32 {
 	bufLen := uint32(len(s.data))
 
 	// grab current positions
-	r := s.read
+	r := s.readPending
 	w := s.write
 
 	var i uint32 = 0
@@ -362,17 +440,41 @@ func (s *RingBuffer) tryRead(in []byte) uint32 {
 		in[i] = s.data[(r+i)%bufLen]
 	}
 
-	s.read = r + i
+	s.readPending = r + i
+	return i, s.readPending
+}
+
+// Reads as many bytes from the underlying buffer as possible,
+//
+func (s *BufferedLog) TryReadCommit(in []byte) uint32 {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	// get the new write
+	inLen := uint32(len(in))
+	bufLen := uint32(len(s.data))
+
+	// grab current positions
+	r := s.readCommit
+	w := s.write
+
+	var i uint32 = 0
+	for ; i < inLen && r+i < w; i++ {
+		in[i] = s.data[(r+i)%bufLen]
+	}
+
+	s.readPending = r + i
+	s.readCommit = s.readPending
 	return i
 }
 
 // Writes the value to the buffer, blocking until it has completed.
 //
-func (s *RingBuffer) Write(val []byte) (n int, err error) {
+func (s *BufferedLog) Write(val []byte) (n int, err error) {
 	valLen := uint32(len(val))
 
 	for {
-		val = val[s.tryWrite(val):]
+		val = val[s.TryWrite(val):]
 		if len(val) == 0 {
 			break
 		}
@@ -386,9 +488,10 @@ func (s *RingBuffer) Write(val []byte) (n int, err error) {
 
 // Adds as many bytes to the underlying buffer as possible,
 // returning the number of bytes that were successfully
-// added.
+// added.  Unlike io.Writer#Write(...) this method may
+// return fewer bytes than intended.
 //
-func (s *RingBuffer) tryWrite(val []byte) uint32 {
+func (s *BufferedLog) TryWrite(val []byte) uint32 {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -397,7 +500,7 @@ func (s *RingBuffer) tryWrite(val []byte) uint32 {
 	bufLen := uint32(len(s.data))
 
 	// grab current positions
-	r := s.read
+	r := s.readCommit
 	w := s.write
 
 	// just write until we can't write anymore.
