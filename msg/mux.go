@@ -176,11 +176,13 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 }
 
 func (m *Mux) Connect(srcEntityId uint32, dstEntityId uint32, dstChannelId uint16) (Channel, error) {
-	return NewActiveChannel(srcEntityId, ChannelAddress{dstEntityId, dstChannelId}, m.channels, m.ids, m.out)
+	return nil, nil
+	// return NewActiveChannel(srcEntityId, ChannelAddress{dstEntityId, dstChannelId}, m.channels, m.ids, m.out)
 }
 
 func (m *Mux) Listen(srcEntityId uint32, srcChannelId uint16) (Listener, error) {
-	return NewChannelListener(&ChannelAddress{srcEntityId, srcChannelId}, m.channels, m.ids, m.out)
+	return nil, nil
+	// return NewChannelListener(&ChannelAddress{srcEntityId, srcChannelId}, m.channels, m.ids, m.out)
 }
 
 func (m *Mux) Close() error {

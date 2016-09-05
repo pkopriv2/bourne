@@ -111,11 +111,29 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 		return nil, nil
 	}
 
-	// pull the remote address from the packet.
+	// create the channel address
+	lChannelId, err := self.ids.Take()
+	if(err != nil) {
+		// TODO: return error packet.
+		// self.out<- NewReturnPacket
+		return nil, err
+	}
+
+	lAddr := ChannelAddress{p.dstEntityId, lChannelId}
 	rAddr := ChannelAddress{p.srcEntityId, p.srcChannelId}
 
-	// create and return the active channel (or else error)
-	return NewActiveChannel(self.local.entityId, rAddr, self.cache, self.ids, self.out)
+	// create and the active channel (or else error)
+	c, err := NewActiveChannel(lAddr, rAddr, self.cache, self.ids, self.out)
+	if err != nil {
+		return nil, err
+	}
+
+	// add it to the channel pool (i.e. make it available for routing)
+	if err := self.cache.Add(lAddr, c); err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 // Sends a packet to the channel stream.

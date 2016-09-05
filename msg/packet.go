@@ -4,6 +4,10 @@ import "io"
 import "bytes"
 import "encoding/binary"
 
+// TODO: Use VARINT encoding!  In addition to supporting 64bit numbers,
+// which means the seq and ack overflow no longer matter, we can also
+// efficiently store them!
+
 // The current protocol version. This defines the basis
 // for determining compatibility between changes.
 //
@@ -48,15 +52,16 @@ type Packet struct {
 	// control flags
 	ctrls uint8
 
-	// reliability flags
+	// control values
 	seq uint32
 	ack uint32
+	win uint32
 
 	// the raw data (to be interpreted by the consumer)
 	data []uint8
 }
 
-func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16, ctrls uint8, seq uint32, ack uint32, data []byte) *Packet {
+func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16, ctrls uint8, seq uint32, ack uint32, win uint32, data []byte) *Packet {
 	c := make([]byte, len(data))
 	copy(c, data)
 
@@ -69,11 +74,16 @@ func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstC
 		ctrls: ctrls,
 		seq: seq,
 		ack: ack,
+		win: win,
 		data: c}
 }
 
-func NewReturnPacket(p *Packet, ctrls uint8, seq uint32, ack uint32, data []byte) *Packet {
-	return NewPacket(p.dstEntityId, p.dstChannelId, p.srcEntityId, p.srcChannelId, ctrls, seq, ack, data)
+func NewReturnPacket(p *Packet, ctrls uint8, seq uint32, ack uint32, win uint32, data []byte) *Packet {
+	return NewPacket(p.dstEntityId, p.dstChannelId, p.srcEntityId, p.srcChannelId, ctrls, seq, ack, win, data)
+}
+
+func NewErrorPacket(p *Packet, errorMsg string) *Packet {
+	return NewReturnPacket(p, PACKET_FLAG_ERR, 0, 0, 0, []byte(errorMsg))
 }
 
 // Writes a packet to an io stream.  If successful,
@@ -109,6 +119,9 @@ func WritePacket(w io.Writer, m *Packet) error {
 	if err := binary.Write(w, binary.BigEndian, &m.ack); err != nil {
 		return err
 	}
+	if err := binary.Write(w, binary.BigEndian, &m.win); err != nil {
+		return err
+	}
 
 	// write the data values
 	dataLength := uint16(len(m.data))
@@ -127,7 +140,7 @@ func WritePacket(w io.Writer, m *Packet) error {
 //
 func ReadPacket(r io.Reader) (*Packet, error) {
 	// read all the header bytes
-	headerBuf := make([]byte, 16)
+	headerBuf := make([]byte, 27)
 	if _, err := io.ReadFull(r, headerBuf); err != nil {
 		return nil, err
 	}
@@ -164,6 +177,7 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	var ctrls uint8
 	var seq uint32
 	var ack uint32
+	var win uint32
 
 	if err := binary.Read(headerReader, binary.BigEndian, &protocolVersion); err != nil {
 		return nil, err
@@ -189,6 +203,9 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	if err := binary.Read(headerReader, binary.BigEndian, &ack); err != nil {
 		return nil, err
 	}
+	if err := binary.Read(headerReader, binary.BigEndian, &win); err != nil {
+		return nil, err
+	}
 
-	return &Packet{protocolVersion, srcEntityId, srcChannelId, dstEntityId, dstChannelId, ctrls, seq, ack, data}, nil
+	return &Packet{protocolVersion, srcEntityId, srcChannelId, dstEntityId, dstChannelId, ctrls, seq, ack, win, data}, nil
 }

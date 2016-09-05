@@ -139,20 +139,9 @@ type ChannelActive struct {
 	lock sync.RWMutex
 }
 
-// Creates and returns a new channel.  This method has the following side effects:
+// Creates and returns a new channel.
 //
-//   * Pulls an id from the id pool
-//   * Adds an entry to the channel cache (making it *routable*)
-//
-func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) (*ChannelActive, error) {
-	// generate a new local channel id.
-	channelId, err := ids.Take()
-	if err != nil {
-		return nil, err
-	}
-
-	// derive a new local address
-	l := ChannelAddress{srcEntityId, channelId}
+func NewActiveChannel(l ChannelAddress, r ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) (*ChannelActive, error) {
 
 	// receive queues
 	recvIn := make(chan Packet, CHANNEL_RECV_IN_SIZE)
@@ -185,24 +174,19 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 		tmpBuf := make([]byte, PACKET_MAX_DATA_LEN)
 
 		for {
-			// // evaluate channel state on every iteration
-			// // Anytime we are not in a valid "OPENED" state, give control to the receiver.
+			// evaluate channel state on every iteration
+			// Anytime we are not in a valid "OPENED" state, give control to the receiver.
 			// switch atomic.LoadUint64(&c.state) {
 			// case CHANNEL_OPENING_SEQ_RECEIVED :
-			// time.Sleep(CHANNEL_STATE_WAIT)
-			// continue
+				// time.Sleep(CHANNEL_STATE_WAIT)
+				// continue
 			// case CHANNEL_OPENING_SEQ_SENT :
-			// time.Sleep(CHANNEL_STATE_WAIT)
-			// continue
+				// time.Sleep(CHANNEL_STATE_WAIT)
+				// continue
 			// case CHANNEL_OPENED :
-			// // normal state...continue
-			// break
+				// // normal state...continue
+				// break
 			// }
-
-			// eventually, we're going to want to *size* our packets according to
-			// what the receiver can receive at the time.  We'll do this by analyzing
-			// the difference between the send rate and the ack rate.  For now,
-			// we'll just
 
 			// start building the outgoing packet.
 			flags := PACKET_FLAG_ACK
@@ -227,7 +211,10 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 			lastAck = time.Now()
 
 			// okay, send the packet
-			c.sendOut <- *c.newSendPacket(flags, seq, c.recvBuf.WritePos(), data)
+			p := *c.newSendPacket(flags, seq, c.recvBuf.WritePos(), 100, data)
+
+			log.Printf("[%v] Sending packet: %+v\n", c.local, p)
+			c.sendOut <- p
 		}
 	}(c)
 
@@ -239,13 +226,15 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 		lastAck := time.Now()
 
 		for {
-			//
 			select {
 			case p, ok := <-recvIn :
+
 				// Handle: channel closed
 				if ! ok {
 					return
 				}
+
+				log.Printf("[%v] Received packet: %+v\n", c.local, p)
 
 				// Handle: ack flag
 				if p.ctrls&PACKET_FLAG_ACK > 0 {
@@ -258,6 +247,8 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 					if p.seq < c.recvBuf.WritePos() {
 						break
 					}
+
+					c.recvBuf.Write(p.data)
 				}
 
 			default:
@@ -270,18 +261,13 @@ func NewActiveChannel(srcEntityId uint32, r ChannelAddress, cache *ChannelCache,
 		}
 	}(c)
 
-	// add it to the channel pool (i.e. make it available for routing)
-	if err := cache.Add(l, c); err != nil {
-		return nil, err
-	}
-
 	// finally, return it.
 	return c, nil
 }
 
 // Generates a new
-func (self *ChannelActive) newSendPacket(ctrls uint8, seq uint32, ack uint32, data []byte) *Packet {
-	return &Packet{PROTOCOL_VERSION, self.local.entityId, self.local.channelId, self.remote.entityId, self.remote.channelId, ctrls, seq, ack, data}
+func (self *ChannelActive) newSendPacket(ctrls uint8, seq uint32, ack uint32, win uint32, data []byte) *Packet {
+	return &Packet{PROTOCOL_VERSION, self.local.entityId, self.local.channelId, self.remote.entityId, self.remote.channelId, ctrls, seq, ack, win, data}
 }
 
 // Returns the local address of this channel
@@ -403,8 +389,6 @@ func (s *AckLog) RollBack() uint32 {
 	return s.cur
 }
 
-// Moves the ack position to the value specified.
-//
 func (s *AckLog) Ack(pos uint32) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()

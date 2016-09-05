@@ -11,7 +11,7 @@ func TestSerialization(*testing.T) {
 	buffer := bytes.NewBuffer(make([]byte, 0))
 	writer := bufio.NewWriter(buffer)
 
-	p1 := &Packet{0, 1, 2, 3, 4, 5, 0, 0, make([]byte, 20)}
+	p1 := &Packet{0, 1, 2, 3, 4, 5, 0, 0, 0, make([]byte, 20)}
 	WritePacket(writer, p1)
 	writer.Flush()
 
