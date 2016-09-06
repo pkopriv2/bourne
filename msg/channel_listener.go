@@ -122,18 +122,20 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 	lAddr := ChannelAddress{p.dstEntityId, lChannelId}
 	rAddr := ChannelAddress{p.srcEntityId, p.srcChannelId}
 
-	// create and the active channel (or else error)
-	c, err := NewActiveChannel(lAddr, rAddr, self.cache, self.ids, self.out)
-	if err != nil {
-		return nil, err
-	}
+	return NewChannelActive(lAddr, rAddr, self.out, func(opts *ChannelOptions) {
 
-	// add it to the channel pool (i.e. make it available for routing)
-	if err := self.cache.Add(lAddr, c); err != nil {
-		return nil, err
-	}
+		// make it routable
+		opts.OnInit = func(c *ChannelActive) error {
+			return self.cache.Add(lAddr, c)
+		}
 
-	return c, nil
+		// return the resources.
+		opts.OnClose = func(c *ChannelActive) error {
+			defer self.ids.Return(c.local.channelId)
+			defer self.cache.Remove(c.local)
+			return nil
+		}
+	});
 }
 
 // Sends a packet to the channel stream.

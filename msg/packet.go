@@ -5,7 +5,7 @@ import "bytes"
 import "encoding/binary"
 
 // TODO: Use VARINT encoding!  In addition to supporting 64bit numbers,
-// which means the seq and ack overflow no longer matter, we can also
+// which means the offset and start overflow no longer matter, we can also
 // efficiently store them!
 
 // The current protocol version. This defines the basis
@@ -27,10 +27,10 @@ const PACKET_MAX_DATA_LEN = 65535
 // control flags
 var (
 	PACKET_FLAG_NONE uint8 = 0
-	PACKET_FLAG_SEQ uint8 = 1
-	PACKET_FLAG_ACK uint8 = 2
-	PACKET_FLAG_FIN uint8 = 4
-	PACKET_FLAG_ERR uint8 = 128
+	PACKET_FLAG_DAT  uint8 = 1
+	PACKET_FLAG_ACK  uint8 = 2
+	PACKET_FLAG_FIN  uint8 = 4
+	PACKET_FLAG_ERR  uint8 = 128
 )
 
 // A packet is the basic data structure defining a simple
@@ -53,33 +53,33 @@ type Packet struct {
 	ctrls uint8
 
 	// control values
-	seq uint32
-	ack uint32
-	win uint32
+	offset   uint32   // position of data within stream
+	ack      uint32   // position of ack (i.e. start)
+	capacity uint32
 
 	// the raw data (to be interpreted by the consumer)
 	data []uint8
 }
 
-func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16, ctrls uint8, seq uint32, ack uint32, win uint32, data []byte) *Packet {
+func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16, ctrls uint8, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
 	c := make([]byte, len(data))
 	copy(c, data)
 
 	return &Packet{
 		protocolVersion: PROTOCOL_VERSION,
-		srcEntityId : srcEntityId,
-		srcChannelId: srcChannelId,
-		dstEntityId: dstEntityId,
-		dstChannelId: dstChannelId,
-		ctrls: ctrls,
-		seq: seq,
-		ack: ack,
-		win: win,
-		data: c}
+		srcEntityId:     srcEntityId,
+		srcChannelId:    srcChannelId,
+		dstEntityId:     dstEntityId,
+		dstChannelId:    dstChannelId,
+		ctrls:           ctrls,
+		offset:          offset,
+		ack:             ack,
+		capacity:        capacity,
+		data:            c}
 }
 
-func NewReturnPacket(p *Packet, ctrls uint8, seq uint32, ack uint32, win uint32, data []byte) *Packet {
-	return NewPacket(p.dstEntityId, p.dstChannelId, p.srcEntityId, p.srcChannelId, ctrls, seq, ack, win, data)
+func NewReturnPacket(p *Packet, ctrls uint8, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
+	return NewPacket(p.dstEntityId, p.dstChannelId, p.srcEntityId, p.srcChannelId, ctrls, offset, ack, capacity, data)
 }
 
 func NewErrorPacket(p *Packet, errorMsg string) *Packet {
@@ -113,13 +113,13 @@ func WritePacket(w io.Writer, m *Packet) error {
 	if err := binary.Write(w, binary.BigEndian, &m.ctrls); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.seq); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &m.offset); err != nil {
 		return err
 	}
 	if err := binary.Write(w, binary.BigEndian, &m.ack); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.win); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &m.capacity); err != nil {
 		return err
 	}
 
@@ -175,9 +175,9 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	var dstEntityId uint32
 	var dstChannelId uint16
 	var ctrls uint8
-	var seq uint32
+	var offset uint32
 	var ack uint32
-	var win uint32
+	var capacity uint32
 
 	if err := binary.Read(headerReader, binary.BigEndian, &protocolVersion); err != nil {
 		return nil, err
@@ -197,15 +197,15 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	if err := binary.Read(headerReader, binary.BigEndian, &ctrls); err != nil {
 		return nil, err
 	}
-	if err := binary.Read(headerReader, binary.BigEndian, &seq); err != nil {
+	if err := binary.Read(headerReader, binary.BigEndian, &offset); err != nil {
 		return nil, err
 	}
 	if err := binary.Read(headerReader, binary.BigEndian, &ack); err != nil {
 		return nil, err
 	}
-	if err := binary.Read(headerReader, binary.BigEndian, &win); err != nil {
+	if err := binary.Read(headerReader, binary.BigEndian, &capacity); err != nil {
 		return nil, err
 	}
 
-	return &Packet{protocolVersion, srcEntityId, srcChannelId, dstEntityId, dstChannelId, ctrls, seq, ack, win, data}, nil
+	return &Packet{protocolVersion, srcEntityId, srcChannelId, dstEntityId, dstChannelId, ctrls, offset, ack, capacity, data}, nil
 }
