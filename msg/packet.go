@@ -86,6 +86,10 @@ func NewErrorPacket(p *Packet, errorMsg string) *Packet {
 	return NewReturnPacket(p, PACKET_FLAG_ERR, 0, 0, 0, []byte(errorMsg))
 }
 
+func (p *Packet) HeaderString() string {
+	return ""
+}
+
 // Writes a packet to an io stream.  If successful,
 // nil is returned.  Blocks if the writer blocks
 //

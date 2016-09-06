@@ -6,6 +6,10 @@ import (
 )
 
 // Error types
+var (
+	ERR_CHANNEL_CLOSED = errors.New("CHAN:CLOSED")
+)
+
 var CHANNEL_EXISTS_ERROR = errors.New("CHAN:EXISTS")
 var CHANNEL_UNKNOWN_ERROR = errors.New("CHAN:UNKNONW")
 var CHANNEL_CLOSED_ERROR = errors.New("CHAN:CLOSED")

@@ -2,6 +2,9 @@ package msg
 
 import (
 	"errors"
+	"fmt"
+	// "fmt"
+	// "log"
 	"sync"
 	"time"
 )
@@ -17,15 +20,20 @@ var (
 
 const (
 	CHANNEL_DEFAULT_RECV_IN_SIZE  = 1024
-	CHANNEL_DEFAULT_RECV_LOG_SIZE = 1 << 20  // 1024K
-	CHANNEL_DEFAULT_SEND_LOG_SIZE = 1 << 18  // 256K
+	CHANNEL_DEFAULT_RECV_LOG_SIZE = 1 << 20 // 1024K
+	CHANNEL_DEFAULT_SEND_LOG_SIZE = 1 << 18 // 256K
 	CHANNEL_DEFAULT_SEND_WAIT     = 100 * time.Millisecond
 	CHANNEL_DEFAULT_RECV_WAIT     = 20 * time.Millisecond
-	CHANNEL_DEFAULT_ACK_TIMEOUT   = 1 * time.Second
+	CHANNEL_DEFAULT_ACK_TIMEOUT   = 5 * time.Second
 	DATALOG_LOCK_WAIT             = 5 * time.Millisecond
 )
 
 type ChannelOptions struct {
+	// Whether or not to enable debug loggin.
+	SendDebug bool
+
+	// Whether or not to enable debug loggin.
+	RecvDebug bool
 
 	// Defines how many packets will be buffered before blocking
 	RecvInSize uint
@@ -57,13 +65,14 @@ type ChannelOptions struct {
 	// to be called when the channel is
 	OnError func(*ChannelActive, error) error
 
-	// // to be called when the channel produces an outgoing packet.
-	// OnData func(*Packet) error
-
+	// to be called when the channel produces an outgoing packet. (may block)
+	OnData func(*Packet) error
 }
 
 func DefaultChannelOptions() *ChannelOptions {
 	return &ChannelOptions{
+		SendDebug: false,
+
 		RecvInSize:  CHANNEL_DEFAULT_RECV_IN_SIZE,
 		RecvLogSize: CHANNEL_DEFAULT_RECV_LOG_SIZE,
 		SendLogSize: CHANNEL_DEFAULT_SEND_LOG_SIZE,
@@ -74,7 +83,8 @@ func DefaultChannelOptions() *ChannelOptions {
 
 		OnInit:  func(c *ChannelActive) error { return nil },
 		OnClose: func(c *ChannelActive) error { return nil },
-		OnError: func(c *ChannelActive, error error) error { return nil }}
+		OnError: func(c *ChannelActive, error error) error { return nil },
+		OnData:  func(p *Packet) error { return nil }}
 }
 
 type ChannelConfig func(*ChannelOptions)
@@ -145,10 +155,10 @@ type ChannelActive struct {
 
 	// receive buffers
 	recvIn  chan Packet
-	recvLog *DataLog
+	recvLog *Stream
 
 	// send buffers
-	sendLog *DataLog
+	sendLog *Stream
 	sendOut chan Packet
 
 	// the state of the channel.  (updated via atomic swaps)
@@ -180,125 +190,40 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 		stats:   NewChannelStats(l),
 		options: options,
 		recvIn:  make(chan Packet, options.RecvInSize),
-		recvLog: NewDataLog(options.RecvLogSize),
-		sendLog: NewDataLog(options.SendLogSize),
+		recvLog: NewStream(options.RecvLogSize),
+		sendLog: NewStream(options.SendLogSize),
 		sendOut: out}
 
-	// kick off the send worker
+	// kick off the workers
 	c.workers.Add(1)
 	go func(c *ChannelActive) {
 		defer c.workers.Done()
-
-		// the packet buffer (initialized here so we don't continually recreate memory.)
-		tmpBuf := make([]byte, PACKET_MAX_DATA_LEN)
-
-		// track the last ack value
-		lastAckOffset := uint32(0)
-		for {
-			// evaluate channel state on every iteration
-			// Anytime we are not in a valid "OPENED" state, give control to the receiver.
-			// switch atomic.LoadUint64(&c.state) {
-			// case CHANNEL_OPENING_SEQ_RECEIVED :
-			// time.Sleep(CHANNEL_STATE_WAIT)
-			// continue
-			// case CHANNEL_OPENING_SEQ_SENT :
-			// time.Sleep(CHANNEL_STATE_WAIT)
-			// continue
-			// case CHANNEL_OPENED :
-			// // normal state...continue
-			// break
-			// }
-
-			// start building the outgoing packet.
-			flags := PACKET_FLAG_NONE
-
-			// see if we should be sending a data packet.
-			num, start := c.sendLog.TryRead(tmpBuf, false)
-
-			// build the packet data.
-			data := tmpBuf[:num]
-			if num > 0 {
-				flags = flags | PACKET_FLAG_DAT
-			}
-
-			// the sent ack is based on what's been received.
-			recv := c.recvLog.WritePos()
-			if recv.offset > lastAckOffset {
-				flags = flags | PACKET_FLAG_ACK
-				lastAckOffset = recv.offset
-			}
-
-			if flags == 0 {
-				time.Sleep(c.options.SendWait)
-				continue
-			}
-
-			c.stats.packetsSent.Inc(1)
-			c.sendOut <- *NewPacket(c.local.entityId, c.local.channelId, c.remote.entityId, c.remote.channelId, flags, start.offset, recv.offset, 100, data)
-		}
+		sendWorker(c)
 	}(c)
 
-	// kick off the recv
 	c.workers.Add(1)
 	go func(c *ChannelActive) {
 		defer c.workers.Done()
-
-		for {
-
-			select {
-			case p, ok := <-c.recvIn:
-				if !ok {
-					return
-				}
-
-				c.stats.packetsReceived.Inc(1)
-
-				// Handle: ack flag (move the log start position)
-				if p.ctrls&PACKET_FLAG_ACK > 0 {
-					if err := c.sendLog.Prune(p.ack); err != nil {
-						c.stats.packetsDropped.Inc(1)
-						break
-					}
-				}
-
-				// Handle: data flag (consume elements of the stream)
-				// TODO: REALLY NEED TO SUPPORT OUT OF ORDER (IE DROPPED PACKETS)
-				if p.ctrls&PACKET_FLAG_DAT > 0 {
-					write := c.recvLog.WritePos()
-					if p.offset > write.offset {
-						c.stats.bytesDropped.Inc(int64(len(p.data)))
-						c.stats.packetsDropped.Inc(1)
-						break
-					}
-
-					if write.offset > p.offset+uint32(len(p.data)) {
-						c.stats.bytesDropped.Inc(int64(len(p.data)))
-						c.stats.packetsDropped.Inc(1)
-						break
-					}
-
-					c.stats.bytesReceived.Inc(int64(len(p.data)))
-					c.recvLog.Write(p.data[write.offset-p.offset:])
-				}
-
-			default:
-				time.Sleep(c.options.RecvWait)
-				break
-			}
-
-			// if we haven't received a valid ack in a while, we need to begin retransmitting
-			start := c.sendLog.StartPos()
-			if time.Since(start.time) >= c.options.AckTimeout {
-				before, after := c.sendLog.ResetRead()
-				c.stats.numResets.Inc(1)
-				c.stats.bytesReset.Inc(int64(before.offset - after.offset))
-			}
-		}
+		recvWorker(c)
 	}(c)
 
 	// finally, return it.
 	return c, nil
 }
+
+// type Logger struct {
+// enabled bool
+// Channel owner
+// }
+//
+//
+// func (self *Logger) Log(format string, vals ...interface{}) {
+// if !self.enabled {
+// return
+// }
+//
+// log.Println(fmt.Sprintf("[%v] -- ", self.local) + fmt.Sprintf(format, vals...))
+// }
 
 // Returns the local address of this channel
 //
@@ -345,6 +270,7 @@ func (self *ChannelActive) Send(p *Packet) error {
 		return CHANNEL_CLOSED_ERROR
 	}
 
+	fmt.Println("Sending packet")
 	self.recvIn <- *p
 	return nil
 }
@@ -361,9 +287,7 @@ func (self *ChannelActive) Close() error {
 	self.options.OnClose(self)
 
 	// close all 'owned' io objects
-	// close(self.recvIn)
-	// close(self.recvOut)
-	// close(self.sendIn)
+	close(self.recvIn)
 
 	// finally, wait for the workers to be done.
 	self.workers.Wait()
@@ -371,177 +295,119 @@ func (self *ChannelActive) Close() error {
 	return nil
 }
 
-type Position struct {
-	offset uint32
-	time   time.Time
-}
+func sendWorker(c *ChannelActive) {
+	// the packet buffer (initialized here so we don't continually recreate memory.)
+	tmpBuf := make([]byte, PACKET_MAX_DATA_LEN)
 
-func NewPosition(offset uint32) Position {
-	return Position{offset, time.Now()}
-}
-
-// A simple bounded data log that tracks
-//
-type DataLog struct {
-	data []byte
-	lock sync.RWMutex // just using simple, coarse lock
-
-	start Position
-	read  Position
-	write Position
-}
-
-// Returns a new send buffer with a capacity of (size-1)
-//
-func NewDataLog(size uint) *DataLog {
-	return &DataLog{data: make([]byte, size)}
-}
-
-func (s *DataLog) WritePos() Position {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	return s.write
-}
-
-func (s *DataLog) ReadPos() Position {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	return s.read
-}
-
-func (s *DataLog) StartPos() Position {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	return s.start
-}
-
-func (s *DataLog) ResetRead() (Position, Position) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	before := s.read
-
-	s.start = NewPosition(before.offset)
-	s.read = s.start
-	return before, s.read
-}
-
-func (s *DataLog) Prune(pos uint32) error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if pos > s.write.offset {
-		return ERR_LOG_PRUNE_INVALID
-	}
-
-	if pos < s.start.offset {
-		return nil
-	}
-
-	s.start = NewPosition(pos)
-	return nil
-}
-
-func (s *DataLog) Data() []byte {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-
-	// grab their positions
-	r := s.read.offset
-	w := s.write.offset
-
-	len := uint32(len(s.data))
-	ret := make([]byte, w-r)
-
-	// just start copying until we get to write
-	for i := uint32(0); r+i < w; i++ {
-		ret[i] = s.data[(r+i)%len]
-	}
-
-	return ret
-}
-
-// Reads from the buffer from the current positon.
-//
-func (s *DataLog) TryRead(in []byte, prune bool) (uint32, Position) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	// get the new write
-	inLen := uint32(len(in))
-	bufLen := uint32(len(s.data))
-
-	// grab the current read offset.
-	start := s.read
-
-	// grab current positions
-	r := start.offset
-	w := s.write.offset
-
-	var i uint32 = 0
-	for ; i < inLen && r+i < w; i++ {
-		in[i] = s.data[(r+i)%bufLen]
-	}
-
-	s.read = NewPosition(r + i)
-
-	// are we moving the start position?
-	if prune {
-		s.start = s.read
-	}
-
-	return i, start
-}
-
-func (s *DataLog) TryWrite(val []byte) (uint32, Position) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	// get the new write
-	valLen := uint32(len(val))
-	bufLen := uint32(len(s.data))
-
-	// grab current positions
-	r := s.start.offset
-	w := s.write.offset
-
-	// just write until we can't write anymore.
-	var i uint32 = 0
-	for ; i < valLen && w+i < r+bufLen; i++ {
-		s.data[(w+i)%bufLen] = val[i]
-	}
-
-	// s.start = NewPosition(s.start.offset)
-	s.write = NewPosition(w + i)
-	return i, s.write
-}
-
-func (s *DataLog) Write(val []byte) (int, error) {
-	valLen := uint32(len(val))
-
+	// track the last ack value
+	lastAckOffset := uint32(0)
 	for {
-		num, _ := s.TryWrite(val)
+		// evaluate channel state on every iteration
+		// Anytime we are not in a valid "OPENED" state, give control to the receiver.
+		// switch atomic.LoadUint64(&c.state) {
+		// case CHANNEL_OPENING_SEQ_RECEIVED :
+		// time.Sleep(CHANNEL_STATE_WAIT)
+		// continue
+		// case CHANNEL_OPENING_SEQ_SENT :
+		// time.Sleep(CHANNEL_STATE_WAIT)
+		// continue
+		// case CHANNEL_OPENED :
+		// // normal state...continue
+		// break
+		// }
 
-		val = val[num:]
-		if len(val) == 0 {
-			break
+		// if we haven't received an ack in a while, start retransmitting
+		sendTail, _, _ := c.sendLog.Refs()
+		if time.Since(sendTail.time) >= c.options.AckTimeout {
+			before, after := c.sendLog.Reset()
+			fmt.Printf("RESET SEND LOG [%v, %v]\n", before.offset, after.offset)
 		}
 
-		time.Sleep(DATALOG_LOCK_WAIT)
-	}
+		// start building the outgoing packet.
+		flags := PACKET_FLAG_NONE
 
-	return int(valLen), nil
-}
+		// see if we should be sending a data packet.
+		sendStart, num := c.sendLog.TryRead(tmpBuf, false)
 
-func (s *DataLog) Read(in []byte) (n int, err error) {
-	for {
-		read, _ := s.TryRead(in, true)
-		if read > 0 {
-			return int(read), nil
+		// build the packet data.
+		data := tmpBuf[:num]
+		if num > 0 {
+			flags = flags | PACKET_FLAG_DAT
 		}
 
-		time.Sleep(DATALOG_LOCK_WAIT)
+		// the sent ack is based on what's been received.
+		_, _, recvHead := c.recvLog.Refs()
+		if recvHead.offset > lastAckOffset {
+			flags = flags | PACKET_FLAG_ACK
+			lastAckOffset = recvHead.offset
+		}
+
+		if flags == 0 {
+			time.Sleep(c.options.SendWait)
+			continue
+		}
+
+		c.stats.packetsSent.Inc(1)
+		c.sendOut <- *NewPacket(c.local.entityId, c.local.channelId, c.remote.entityId, c.remote.channelId, flags, sendStart.offset, recvHead.offset, 0, data)
+	}
+}
+
+func recvWorker(c *ChannelActive) {
+	defer panic("OH NO")
+
+	nextPacket := func() (*Packet, error) {
+		select {
+		case p, ok := <-c.recvIn:
+			if !ok {
+				return nil, ERR_CHANNEL_CLOSED
+			}
+
+			return &p, nil
+		default:
+			return nil, nil
+		}
 	}
 
-	panic("Not accessible")
+	for {
+		p, err := nextPacket()
+		if err != nil {
+			return
+		}
+
+		if p == nil {
+			time.Sleep(c.options.RecvWait)
+			continue
+		}
+
+		c.stats.packetsReceived.Inc(1)
+
+		// Handle: ack flag (move the log tail position)
+		if p.ctrls&PACKET_FLAG_ACK > 0 {
+			if err := c.sendLog.Commit(p.ack); err != nil {
+				c.stats.packetsDropped.Inc(1)
+				continue
+			}
+		}
+
+		// Handle: data flag (consume elements of the stream)
+		// TODO: REALLY NEED TO SUPPORT OUT OF ORDER (IE DROPPED PACKETS)
+		if p.ctrls&PACKET_FLAG_DAT > 0 {
+			_, _, head := c.recvLog.Refs()
+			if head.offset > p.offset+uint32(len(p.data)) {
+				c.stats.bytesDropped.Inc(int64(len(p.data)))
+				c.stats.packetsDropped.Inc(1)
+				continue
+			}
+
+			if p.offset > head.offset {
+				// fmt.Println("DROPPED PACKET.  FUTURE OFFSET")
+				c.stats.bytesDropped.Inc(int64(len(p.data)))
+				c.stats.packetsDropped.Inc(1)
+				continue
+			}
+
+			c.stats.bytesReceived.Inc(int64(len(p.data)))
+			c.recvLog.Write(p.data[head.offset-p.offset:])
+		}
+	}
 }
