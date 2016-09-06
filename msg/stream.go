@@ -5,6 +5,24 @@ import (
 	"time"
 )
 
+// TODO: DO SOMETHING ABOUT INTEGER OVERFLOW!!
+
+// Used to compare relative offsets.
+func OffsetComparator(a, b interface{}) int {
+	offsetA := a.(uint32)
+	offsetB := b.(uint32)
+
+	if offsetA > offsetB {
+		return 1
+	}
+
+	if offsetA == offsetB {
+		return 0
+	}
+
+	return -1
+}
+
 // A ref represents a position within a stream at
 // particular moment in time.
 //
@@ -16,6 +34,20 @@ type Ref struct {
 func NewRef(offset uint32) Ref {
 	return Ref{offset, time.Now()}
 }
+
+// // A segment of a stream.  Mostly used to facilitate
+// // in reconstructing a stream when segments have been
+// // received out of order.
+// //
+// type Segment struct {
+	// offset uint32
+	// data   []byte
+// }
+//
+// func NewSegment(offset uint32, data []byte) *Segment {
+	// return &Segment{offset, data}
+// }
+
 
 // A simple, infinite, reliable stream.
 //

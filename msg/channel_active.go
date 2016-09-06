@@ -7,6 +7,8 @@ import (
 	// "log"
 	"sync"
 	"time"
+
+	"github.com/emirpasic/gods/maps/treemap"
 )
 
 // Much of this was inspired by the following papers:
@@ -195,17 +197,9 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 		sendOut: out}
 
 	// kick off the workers
-	c.workers.Add(1)
-	go func(c *ChannelActive) {
-		defer c.workers.Done()
-		sendWorker(c)
-	}(c)
-
-	c.workers.Add(1)
-	go func(c *ChannelActive) {
-		defer c.workers.Done()
-		recvWorker(c)
-	}(c)
+	c.workers.Add(2)
+	go sendWorker(c)
+	go recvWorker(c)
 
 	// finally, return it.
 	return c, nil
@@ -296,6 +290,8 @@ func (self *ChannelActive) Close() error {
 }
 
 func sendWorker(c *ChannelActive) {
+	defer c.workers.Done()
+
 	// the packet buffer (initialized here so we don't continually recreate memory.)
 	tmpBuf := make([]byte, PACKET_MAX_DATA_LEN)
 
@@ -353,7 +349,7 @@ func sendWorker(c *ChannelActive) {
 }
 
 func recvWorker(c *ChannelActive) {
-	defer panic("OH NO")
+	defer c.workers.Done()
 
 	nextPacket := func() (*Packet, error) {
 		select {
@@ -368,6 +364,7 @@ func recvWorker(c *ChannelActive) {
 		}
 	}
 
+	pending := treemap.NewWith(OffsetComparator)
 	for {
 		p, err := nextPacket()
 		if err != nil {
@@ -390,24 +387,41 @@ func recvWorker(c *ChannelActive) {
 		}
 
 		// Handle: data flag (consume elements of the stream)
-		// TODO: REALLY NEED TO SUPPORT OUT OF ORDER (IE DROPPED PACKETS)
 		if p.ctrls&PACKET_FLAG_DAT > 0 {
 			_, _, head := c.recvLog.Refs()
 			if head.offset > p.offset+uint32(len(p.data)) {
-				c.stats.bytesDropped.Inc(int64(len(p.data)))
 				c.stats.packetsDropped.Inc(1)
 				continue
 			}
 
-			if p.offset > head.offset {
-				// fmt.Println("DROPPED PACKET.  FUTURE OFFSET")
-				c.stats.bytesDropped.Inc(int64(len(p.data)))
-				c.stats.packetsDropped.Inc(1)
+			pending.Put(p.offset, p.data)
+		}
+
+		// consume the pending items
+		for {
+			// see if there's any pending segments
+			k, v := pending.Min()
+			if k == nil || v == nil {
+				break
+			}
+
+			// grab the current recv offset.
+			_, _, head := c.recvLog.Refs()
+
+			// Handle: Future offset
+			offset, data := k.(uint32), v.([]byte)
+			if offset > head.offset {
+				break
+			}
+
+			// Handle: Past offset
+			pending.Remove(offset)
+			if head.offset > offset+uint32(len(data)) {
 				continue
 			}
 
-			c.stats.bytesReceived.Inc(int64(len(p.data)))
-			c.recvLog.Write(p.data[head.offset-p.offset:])
+			// Handle: Overlap with current offset
+			c.recvLog.Write(data[head.offset-offset:])
 		}
 	}
 }
