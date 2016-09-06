@@ -2,14 +2,8 @@ package msg
 
 import (
 	"errors"
-	"fmt"
 	"sync"
-	// "sync/atomic"
-	// "log"
 	"time"
-	// "unsafe"
-
-	"github.com/rcrowley/go-metrics"
 )
 
 // Much of this was inspired by the following papers:
@@ -18,17 +12,17 @@ import (
 // http://www.ietf.org/proceedings/44/I-D/draft-ietf-sigtran-reliable-udp-00.txt
 //
 var (
-	ERR_RINGBUF_ACK_INVALID = errors.New("RINGBUF:READ_POSITION_INVALID")
+	ERR_LOG_PRUNE_INVALID = errors.New("LOG:INVALID_PRUNE")
 )
 
 const (
 	CHANNEL_DEFAULT_RECV_IN_SIZE  = 1024
-	CHANNEL_DEFAULT_RECV_BUF_SIZE = 1 << 20 // 1MB
-	CHANNEL_DEFAULT_SEND_BUF_SIZE = 1 << 10  // 256K
+	CHANNEL_DEFAULT_RECV_LOG_SIZE = 1 << 20  // 1024K
+	CHANNEL_DEFAULT_SEND_LOG_SIZE = 1 << 18  // 256K
 	CHANNEL_DEFAULT_SEND_WAIT     = 100 * time.Millisecond
 	CHANNEL_DEFAULT_RECV_WAIT     = 20 * time.Millisecond
 	CHANNEL_DEFAULT_ACK_TIMEOUT   = 1 * time.Second
-	DATALOG_LOCK_WAIT             = 10 * time.Millisecond
+	DATALOG_LOCK_WAIT             = 5 * time.Millisecond
 )
 
 type ChannelOptions struct {
@@ -37,10 +31,10 @@ type ChannelOptions struct {
 	RecvInSize uint
 
 	// Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
-	RecvBufSize uint
+	RecvLogSize uint
 
 	// Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
-	SendBufSize uint
+	SendLogSize uint
 
 	// The duration to wait before trying to send data again (when none was available)
 	SendWait time.Duration
@@ -54,9 +48,6 @@ type ChannelOptions struct {
 	// The duration to wait on incremental writes to the log
 	LogWait time.Duration
 
-	// // to be called when the channel is closed (allows the release of external resources (ie ids, routing table))
-	// OnData func(*Packet) error
-
 	// to be called when the channel has been initialized, and is in the process of being started
 	OnInit func(*ChannelActive) error
 
@@ -65,13 +56,17 @@ type ChannelOptions struct {
 
 	// to be called when the channel is
 	OnError func(*ChannelActive, error) error
+
+	// // to be called when the channel produces an outgoing packet.
+	// OnData func(*Packet) error
+
 }
 
 func DefaultChannelOptions() *ChannelOptions {
 	return &ChannelOptions{
 		RecvInSize:  CHANNEL_DEFAULT_RECV_IN_SIZE,
-		RecvBufSize: CHANNEL_DEFAULT_RECV_BUF_SIZE,
-		SendBufSize: CHANNEL_DEFAULT_SEND_BUF_SIZE,
+		RecvLogSize: CHANNEL_DEFAULT_RECV_LOG_SIZE,
+		SendLogSize: CHANNEL_DEFAULT_SEND_LOG_SIZE,
 		SendWait:    CHANNEL_DEFAULT_SEND_WAIT,
 		RecvWait:    CHANNEL_DEFAULT_RECV_WAIT,
 		AckTimeout:  CHANNEL_DEFAULT_ACK_TIMEOUT,
@@ -142,26 +137,28 @@ type ChannelActive struct {
 	// the remote channel address
 	remote ChannelAddress
 
+	// channel options. (SHOULD NOT BE MUTATED)
+	options *ChannelOptions
+
+	// general channel statistics
+	stats *ChannelStats
+
 	// receive buffers
 	recvIn  chan Packet
-	recvBuf *DataLog
+	recvLog *DataLog
 
 	// send buffers
-	sendBuf *DataLog
+	sendLog *DataLog
 	sendOut chan Packet
 
 	// the state of the channel.  (updated via atomic swaps)
 	// state *ChannelState
-	options *ChannelOptions
 
 	// the workers wait
 	workers sync.WaitGroup
 
 	// a flag indicating that the channel is closed. (synchronized on lock)
 	closed bool
-
-	// general channel statistics
-	stats *ChannelStats
 
 	// the channel's lock
 	lock sync.RWMutex
@@ -183,8 +180,8 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 		stats:   NewChannelStats(l),
 		options: options,
 		recvIn:  make(chan Packet, options.RecvInSize),
-		recvBuf: NewDataLog(options.RecvBufSize),
-		sendBuf: NewDataLog(options.SendBufSize),
+		recvLog: NewDataLog(options.RecvLogSize),
+		sendLog: NewDataLog(options.SendLogSize),
 		sendOut: out}
 
 	// kick off the send worker
@@ -216,7 +213,7 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 			flags := PACKET_FLAG_NONE
 
 			// see if we should be sending a data packet.
-			num, start := c.sendBuf.TryRead(tmpBuf, false)
+			num, start := c.sendLog.TryRead(tmpBuf, false)
 
 			// build the packet data.
 			data := tmpBuf[:num]
@@ -225,7 +222,7 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 			}
 
 			// the sent ack is based on what's been received.
-			recv := c.recvBuf.WritePos()
+			recv := c.recvLog.WritePos()
 			if recv.offset > lastAckOffset {
 				flags = flags | PACKET_FLAG_ACK
 				lastAckOffset = recv.offset
@@ -258,7 +255,7 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 
 				// Handle: ack flag (move the log start position)
 				if p.ctrls&PACKET_FLAG_ACK > 0 {
-					if err := c.sendBuf.Prune(p.ack); err != nil {
+					if err := c.sendLog.Prune(p.ack); err != nil {
 						c.stats.packetsDropped.Inc(1)
 						break
 					}
@@ -267,7 +264,7 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 				// Handle: data flag (consume elements of the stream)
 				// TODO: REALLY NEED TO SUPPORT OUT OF ORDER (IE DROPPED PACKETS)
 				if p.ctrls&PACKET_FLAG_DAT > 0 {
-					write := c.recvBuf.WritePos()
+					write := c.recvLog.WritePos()
 					if p.offset > write.offset {
 						c.stats.bytesDropped.Inc(int64(len(p.data)))
 						c.stats.packetsDropped.Inc(1)
@@ -281,7 +278,7 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 					}
 
 					c.stats.bytesReceived.Inc(int64(len(p.data)))
-					c.recvBuf.Write(p.data[write.offset-p.offset:])
+					c.recvLog.Write(p.data[write.offset-p.offset:])
 				}
 
 			default:
@@ -290,9 +287,9 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 			}
 
 			// if we haven't received a valid ack in a while, we need to begin retransmitting
-			start := c.sendBuf.StartPos()
+			start := c.sendLog.StartPos()
 			if time.Since(start.time) >= c.options.AckTimeout {
-				before, after := c.sendBuf.ResetRead()
+				before, after := c.sendLog.ResetRead()
 				c.stats.numResets.Inc(1)
 				c.stats.bytesReset.Inc(int64(before.offset - after.offset))
 			}
@@ -301,11 +298,6 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, out chan Packet, opts 
 
 	// finally, return it.
 	return c, nil
-}
-
-// Generates a new
-func (self *ChannelActive) newSendPacket(ctrls uint8, offset uint32, ack uint32, win uint32, data []byte) *Packet {
-	return NewPacket(self.local.entityId, self.local.channelId, self.remote.entityId, self.remote.channelId, ctrls, offset, ack, win, data)
 }
 
 // Returns the local address of this channel
@@ -329,7 +321,7 @@ func (self *ChannelActive) Read(buf []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return self.recvBuf.Read(buf)
+	return self.recvLog.Read(buf)
 }
 
 // Writes data to the channel.  Blocks if the underlying buffer is full.
@@ -341,10 +333,10 @@ func (self *ChannelActive) Write(data []byte) (int, error) {
 		return 0, CHANNEL_CLOSED_ERROR
 	}
 
-	return self.sendBuf.Write(data)
+	return self.sendLog.Write(data)
 }
 
-// Sends a packet to the channel stream.
+// Sends a packet to the receive packet stream.
 //
 func (self *ChannelActive) Send(p *Packet) error {
 	self.lock.RLock()
@@ -357,8 +349,7 @@ func (self *ChannelActive) Send(p *Packet) error {
 	return nil
 }
 
-// Closes the channel.  Returns an error if the
-// channel is already closed.
+// Closes the channel.  Returns an error if the channel is already closed.
 //
 func (self *ChannelActive) Close() error {
 	self.lock.Lock()
@@ -366,6 +357,8 @@ func (self *ChannelActive) Close() error {
 	if self.closed {
 		return CHANNEL_CLOSED_ERROR
 	}
+
+	self.options.OnClose(self)
 
 	// close all 'owned' io objects
 	// close(self.recvIn)
@@ -376,46 +369,6 @@ func (self *ChannelActive) Close() error {
 	self.workers.Wait()
 	self.closed = true
 	return nil
-}
-
-type ChannelStats struct {
-	packetsSent     metrics.Counter
-	packetsDropped  metrics.Counter
-	packetsReceived metrics.Counter
-
-	bytesSent     metrics.Counter
-	bytesDropped  metrics.Counter
-	bytesReceived metrics.Counter
-	bytesReset    metrics.Counter
-
-	numResets metrics.Counter
-}
-
-func NewChannelMetricName(addr ChannelAddress, name string) string {
-	return fmt.Sprintf("-- %+v --: %s", addr, name)
-}
-
-func NewChannelStats(addr ChannelAddress) *ChannelStats {
-	r := metrics.DefaultRegistry
-
-	return &ChannelStats{
-		packetsSent: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.PacketsSent"), r),
-		packetsReceived: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.PacketsReceived"), r),
-		packetsDropped: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.PacketsDropped"), r),
-
-		bytesSent: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.BytesSent"), r),
-		bytesReceived: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.BytesReceived"), r),
-		bytesDropped: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.BytesDropped"), r),
-		bytesReset: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.BytesReset"), r),
-		numResets: metrics.NewRegisteredCounter(
-			NewChannelMetricName(addr, "channel.NumResets"), r)}
 }
 
 type Position struct {
@@ -478,7 +431,7 @@ func (s *DataLog) Prune(pos uint32) error {
 	defer s.lock.Unlock()
 
 	if pos > s.write.offset {
-		return ERR_RINGBUF_ACK_INVALID
+		return ERR_LOG_PRUNE_INVALID
 	}
 
 	if pos < s.start.offset {
