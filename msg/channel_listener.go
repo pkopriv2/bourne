@@ -122,11 +122,17 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 	lAddr := ChannelAddress{p.dstEntityId, lChannelId}
 	rAddr := ChannelAddress{p.srcEntityId, p.srcChannelId}
 
-	return NewChannelActive(lAddr, rAddr, self.out, func(opts *ChannelOptions) {
+	return NewChannelActive(lAddr, rAddr, func(opts *ChannelOptions) {
 
-		// make it routable
+		// make the channel routable.
 		opts.OnInit = func(c *ChannelActive) error {
-			return self.cache.Add(lAddr, c)
+			return self.cache.Add(c.local, c)
+		}
+
+		// route to the main output
+		opts.OnData = func(p *Packet) error {
+			self.out<-*p
+			return nil
 		}
 
 		// return the resources.

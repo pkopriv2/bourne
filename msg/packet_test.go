@@ -7,7 +7,7 @@ import "fmt"
 
 // import "time"
 
-func TestSerialization(*testing.T) {
+func TestPacket_Serialization(*testing.T) {
 	buffer := bytes.NewBuffer(make([]byte, 0))
 	writer := bufio.NewWriter(buffer)
 

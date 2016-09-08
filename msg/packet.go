@@ -1,7 +1,11 @@
 package msg
 
-import "io"
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+	"io"
+)
+
 import "encoding/binary"
 
 // TODO: Use VARINT encoding!  In addition to supporting 64bit numbers,
@@ -11,7 +15,7 @@ import "encoding/binary"
 // The current protocol version. This defines the basis
 // for determining compatibility between changes.
 //
-var PROTOCOL_VERSION uint16 = 0
+const ProtocolVersion = 0
 
 // The maximum data length of any packet.  One of the main
 // goals of this package is to provide multiplexing over
@@ -22,15 +26,18 @@ var PROTOCOL_VERSION uint16 = 0
 //
 // Encoded as a uint16
 //
-const PACKET_MAX_DATA_LEN = 65535
+const PacketMaxLength = 1 << 12
+
+//
+type PacketFlags uint8
 
 // control flags
-var (
-	PACKET_FLAG_NONE uint8 = 0
-	PACKET_FLAG_DAT  uint8 = 1
-	PACKET_FLAG_ACK  uint8 = 2
-	PACKET_FLAG_FIN  uint8 = 4
-	PACKET_FLAG_ERR  uint8 = 128
+const (
+	PacketFlagNone PacketFlags = 1 << iota
+	PacketFlagData
+	PacketFlagAck
+	PacketFlagFin
+	PacketFlagErr
 )
 
 // A packet is the basic data structure defining a simple
@@ -50,23 +57,23 @@ type Packet struct {
 	dstChannelId uint16
 
 	// control flags
-	ctrls uint8
+	ctrls PacketFlags
 
 	// control values
-	offset   uint32   // position of data within stream
-	ack      uint32   // position of ack (i.e. start)
+	offset   uint32 // position of data within stream
+	ack      uint32 // position of ack (i.e. start)
 	capacity uint32
 
 	// the raw data (to be interpreted by the consumer)
 	data []uint8
 }
 
-func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16, ctrls uint8, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
+func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16, ctrls PacketFlags, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
 	c := make([]byte, len(data))
 	copy(c, data)
 
 	return &Packet{
-		protocolVersion: PROTOCOL_VERSION,
+		protocolVersion: ProtocolVersion,
 		srcEntityId:     srcEntityId,
 		srcChannelId:    srcChannelId,
 		dstEntityId:     dstEntityId,
@@ -78,16 +85,20 @@ func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstC
 		data:            c}
 }
 
-func NewReturnPacket(p *Packet, ctrls uint8, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
+func NewReturnPacket(p *Packet, ctrls PacketFlags, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
 	return NewPacket(p.dstEntityId, p.dstChannelId, p.srcEntityId, p.srcChannelId, ctrls, offset, ack, capacity, data)
 }
 
 func NewErrorPacket(p *Packet, errorMsg string) *Packet {
-	return NewReturnPacket(p, PACKET_FLAG_ERR, 0, 0, 0, []byte(errorMsg))
+	return NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(errorMsg))
 }
 
-func (p *Packet) HeaderString() string {
-	return ""
+func (p *Packet) String() string {
+	var buffer bytes.Buffer
+	buffer.WriteString(fmt.Sprintf("[%v,%v]->[%v,%v]  ", p.srcEntityId, p.srcEntityId, p.dstEntityId, p.dstChannelId))
+	buffer.WriteString(fmt.Sprintf("Ack: [%v] [%v]  ", p.ack, p.ctrls&PacketFlagAck > 0))
+	buffer.WriteString(fmt.Sprintf("Offset: [%v] [%v]  ", p.offset, p.ctrls&PacketFlagData > 0))
+	return buffer.String()
 }
 
 // Writes a packet to an io stream.  If successful,
@@ -178,7 +189,7 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	var srcChannelId uint16
 	var dstEntityId uint32
 	var dstChannelId uint16
-	var ctrls uint8
+	var ctrls PacketFlags
 	var offset uint32
 	var ack uint32
 	var capacity uint32

@@ -7,18 +7,15 @@ import (
 )
 
 type ChannelStats struct {
-	// track packet stats
 	packetsSent     metrics.Counter
 	packetsDropped  metrics.Counter
 	packetsReceived metrics.Counter
 
-	// track byte states
 	bytesSent     metrics.Counter
 	bytesDropped  metrics.Counter
 	bytesReceived metrics.Counter
 	bytesReset    metrics.Counter
 
-	// track byte states
 	numResets metrics.Counter
 }
 

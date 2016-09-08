@@ -3,9 +3,10 @@ package msg
 import (
 	"sync"
 	"time"
+	"errors"
 )
 
-// TODO: DO SOMETHING ABOUT INTEGER OVERFLOW!!
+var ERR_LOG_PRUNE_INVALID = errors.New("LOG:INVALID_PRUNE")
 
 // Used to compare relative offsets.
 func OffsetComparator(a, b interface{}) int {
@@ -31,46 +32,51 @@ type Ref struct {
 	time   time.Time
 }
 
-func NewRef(offset uint32) Ref {
-	return Ref{offset, time.Now()}
+func NewRef(offset uint32) *Ref {
+	return &Ref{offset, time.Now()}
 }
 
-// // A segment of a stream.  Mostly used to facilitate
-// // in reconstructing a stream when segments have been
-// // received out of order.
-// //
+// // A segment represents
 // type Segment struct {
+	// time   time.Time
 	// offset uint32
-	// data   []byte
+	// length uint32
 // }
 //
-// func NewSegment(offset uint32, data []byte) *Segment {
-	// return &Segment{offset, data}
+// func NewRef(offset uint32) *Ref {
+	// return &Ref{offset, time.Now()}
 // }
 
-
-// A simple, infinite, reliable stream.
+// A simple, infinite, reliable stream.  This is the primary data structure
+// behind the channel send/receive logic.   The stream is essentially duplicated
+// between two locations.  This structure encapsulates that.  In other words,
+// this may be thought of a distributed stream.  The basic
 //
 type Stream struct {
 	data []byte
 	lock sync.RWMutex // just using simple, coarse lock
 
-	tail Ref
-	cur  Ref
-	head Ref
+	tail *Ref
+	cur  *Ref
+	head *Ref
 }
 
 func NewStream(size uint) *Stream {
-	return &Stream{data: make([]byte, size)}
+	ref := NewRef(0)
+	return &Stream{
+		data: make([]byte, size),
+		tail: ref,
+		cur: ref,
+		head: ref}
 }
 
-func (s *Stream) Refs() (Ref, Ref, Ref) {
+func (s *Stream) Refs() (*Ref, *Ref, *Ref) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	return s.tail, s.cur, s.head
 }
 
-func (s *Stream) Reset() (Ref, Ref) {
+func (s *Stream) Reset() (*Ref, *Ref) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -79,26 +85,29 @@ func (s *Stream) Reset() (Ref, Ref) {
 	// moves the read back to the start.
 	s.tail = NewRef(s.tail.offset)
 	s.cur = s.tail
-	return before, s.cur
+	return s.cur, before
 }
 
-func (s *Stream) Commit(pos uint32) error {
+func (s *Stream) Commit(pos uint32) (*Ref, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
 	if pos > s.head.offset {
-		return ERR_LOG_PRUNE_INVALID
+		return nil, ERR_LOG_PRUNE_INVALID
 	}
 
 	if pos < s.tail.offset {
-		return nil
+		return nil, nil
 	}
 
+	// committing just equates to moving the tail pointer
 	s.tail = NewRef(pos)
+
+	// there are
 	if pos > s.cur.offset {
 		s.cur = s.tail
 	}
-	return nil
+	return s.tail, nil
 }
 
 func (s *Stream) Data() []byte {
@@ -122,7 +131,7 @@ func (s *Stream) Data() []byte {
 
 // Reads from the buffer from the current positon.
 //
-func (s *Stream) TryRead(in []byte, prune bool) (Ref, uint32) {
+func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -152,7 +161,7 @@ func (s *Stream) TryRead(in []byte, prune bool) (Ref, uint32) {
 	return start, i
 }
 
-func (s *Stream) TryWrite(val []byte) (uint32, Ref) {
+func (s *Stream) TryWrite(val []byte) (uint32, *Ref) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 

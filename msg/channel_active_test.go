@@ -1,160 +1,251 @@
 package msg
 
 import (
-	"fmt"
-	"sync"
+	// "fmt"
+	// "sync"
+	// "fmt"
 	"testing"
 	"time"
+	// "time"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func TestActiveChannel_simple(t *testing.T) {
+func NewChannelPair(entityIdR uint32, channelIdR uint16, entityIdL uint32, channelIdL uint16) (*ChannelActive, *ChannelActive) {
+	r := ChannelAddress{entityIdR, channelIdR}
+	l := ChannelAddress{entityIdL, channelIdL}
 
-	l := ChannelAddress{0, 0}
-	r := ChannelAddress{1, 0}
+	outR := make(chan Packet, 1024)
+	outL := make(chan Packet, 1024)
 
-	out1 := make(chan Packet, 1024)
-	out2 := make(chan Packet, 1024)
+	var channelL, channelR *ChannelActive
+	channelR, _ = NewChannelActive(r, l, func(opts *ChannelOptions) {
+		opts.Debug = true
 
-	channel1, _ := NewChannelActive(l, r, out1)
-	channel2, _ := NewChannelActive(r, l, out2, func(opts *ChannelOptions) {
-		opts.SendDebug = true
+		opts.OnClose = func(c *ChannelActive) error {
+			close(outR)
+			return nil
+		}
+
+		opts.OnData = func(p *Packet) error {
+			outR <- *p
+			return nil
+		}
 	})
 
-	wait := new(sync.WaitGroup)
-	wait.Add(1)
+	channelL, _ = NewChannelActive(l, r, func(opts *ChannelOptions) {
+		opts.Debug = true
+		opts.OnClose = func(c *ChannelActive) error {
+			close(outL)
+			return nil
+		}
+		opts.OnData = func(p *Packet) error {
+			outL <- *p
+			return nil
+		}
+	})
+
 	go func() {
-		defer wait.Done()
-		// sent := 0
-		for i := 0; ; i++ {
+		for {
 			select {
-			case p, ok := <-out1:
+			case p, ok := <-outR:
 				if !ok {
 					return
 				}
 
-				// sent += len(p.data)
-				// if i%5 == 0 {
-					// fmt.Printf("-- TOTAL ROUTED ---: %+v KB \n", float64((sent * 1.0)) / float64((1 << 10)))
-				// }
-
-				if i%10 == 2 {
-					fmt.Printf("-- DROPPED PACKET ---: %+v\n", i)
-					break
+				channelR.Log("Routing packet: %v", &p)
+				if err := channelL.Send(&p); err != nil {
+					return
 				}
-
-				fmt.Printf("-- [ROUTE] CHAN1->CHAN2 ---: %v : offset: %+v\n", i, p.offset)
-				channel2.Send(&p)
-			case p, ok := <-out2:
+			case p, ok := <-outL:
 				if !ok {
 					return
 				}
 
-				// sent += len(p.data)
-				// if i%5 == 0 {
-					// fmt.Printf("-- TOTAL ROUTED ---: %+v KB \n", float64((sent * 1.0)) / float64((1 << 10)))
-				// }
-
-				if i%10 == 2 {
-					fmt.Printf("-- DROPPED PACKET ---: %+v\n", i)
-					break
+				channelL.Log("Routing packet: %v", &p)
+				if err := channelR.Send(&p); err != nil {
+					return
 				}
-
-				fmt.Printf("-- [ROUTE] CHAN2->CHAN1 ---: %v : offset: %+v\n", i, p.offset)
-				channel1.Send(&p)
+			default:
+				time.Sleep(5 * time.Millisecond)
 			}
 		}
 	}()
 
-	wait.Add(1)
-	go func() {
-		defer wait.Done()
-
-		for i := 0; ; {
-			buf := make([]byte, 1024)
-
-			num, err := channel1.Read(buf)
-			if err != nil {
-				fmt.Printf("Channel1 closed: %+v\n", err)
-				return
-			}
-
-			for _, val := range buf[:num] {
-				fmt.Printf("Channel1 read %+v:  %v\n", i, val)
-				i++
-			}
-		}
-	}()
-
-	wait.Add(1)
-	go func() {
-		defer wait.Done()
-		for i := 0; i < 100; i++ {
-
-			_, err := channel2.Write([]byte{byte(i)})
-			if err != nil {
-				fmt.Printf("Channel2 closed: %+v\n", err)
-				return
-			}
-
-			// fmt.Printf("Channel2 write %+v\n", []byte{byte(i)})
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
-
-	// go metrics.Log(metrics.DefaultRegistry, 1 * time.Second, log.New(os.Stderr, "metrics: ", log.Lmicroseconds))
-
-	fmt.Printf("Metrics: %+v", channel1.stats)
-	time.Sleep(5 * time.Second)
-	fmt.Println("sleeping")
-	time.Sleep(5 * time.Second)
-	fmt.Println("sleeping")
-
-	time.Sleep(1 * time.Second)
-	fmt.Println("sleeping")
-	close(out1)
-	close(out2)
-	wait.Wait()
-
+	return channelL, channelR
 }
 
-//
-// func TestActiveChannel_forceBuffer(t *testing.T) {
-// pool := NewIdPool()
-// cache := NewChannelCache()
-// out := make(chan Packet)
-//
-// r1 := ChannelAddress{1, 0}
-// channel1, _ := NewActiveChannel(1, r2, cache, pool, out)
-//
-// channel2, _ := NewActiveChannel(1, r2, cache, pool, out)
-// r2 := ChannelAddress{2, 0}
-// if err != nil {
-// panic("AA")
-// }
-//
-// wait := new(sync.WaitGroup)
-// wait.Add(1)
-// go func() {
-// defer wait.Done()
-// for {
-// _, ok := <-out
-// if !ok {
-// break
-// }
-//
-// // fmt.Printf("Received packet: %+v\n", p)
-// }
-// }()
-//
-// now := time.Now()
-// for i := 0; i<32000; i++ {
-// channel.Write([]byte{uint8(i)})
-// }
-// fmt.Printf("Took: [%+v]\n", time.Since(now))
-//
-// time.Sleep(5 * time.Second)
-// time.Sleep(5 * time.Second)
-// close(out)
-// wait.Wait()
-//
-// }
+func TestChannelActive_sendSinglePacket(t *testing.T) {
+	channelL, channelR := NewChannelPair(0, 0, 1, 1)
+	defer channelR.Close()
+	defer channelL.Close()
+
+	channelR.Write([]byte{1})
+
+	buf := make([]byte, 1024)
+
+	num, err := channelL.Read(buf)
+	if err != nil {
+		t.Fail()
+	}
+
+	assert.Equal(t, 1, num)
+	assert.Equal(t, []byte{1}, buf[:1])
+}
+
+func TestChannelActive_sendSingleStream(t *testing.T) {
+	channelL, channelR := NewChannelPair(0, 0, 1, 1)
+	defer channelR.Close()
+	defer channelL.Close()
+
+	go func() {
+		for i := 0; i < 255; i++ {
+			channelL.Write([]byte{uint8(i)})
+		}
+	}()
+
+	timer := time.NewTimer(time.Second * 10)
+
+	buf := make([]byte, 1024)
+	tot := 0
+	for {
+		select {
+		case <-timer.C:
+			t.Fail()
+			return
+		default:
+			break
+		}
+
+		num, err := channelR.Read(buf[tot:])
+		if err != nil {
+			t.Fail()
+			break
+		}
+
+		tot += num
+		if tot >= 255 {
+			break
+		}
+	}
+
+	assert.Equal(t, 255, tot)
+	for i := 0; i < 255; i++ {
+		assert.Equal(t, uint8(i), buf[i])
+	}
+}
+
+func TestChannelActive_sendDuplexStream(t *testing.T) {
+	channelL, channelR := NewChannelPair(0, 0, 1, 1)
+	defer channelR.Close()
+	defer channelL.Close()
+
+	go func() {
+		for i := 0; i < 255; i++ {
+			channelL.Write([]byte{uint8(i)})
+		}
+	}()
+
+	go func() {
+		for i := 0; i < 255; i++ {
+			channelR.Write([]byte{uint8(i)})
+		}
+	}()
+
+	timer := time.NewTimer(time.Second * 10)
+
+	bufR := make([]byte, 1024)
+	totR := 0
+	for {
+		select {
+		case <-timer.C:
+			t.Fail()
+			return
+		default:
+			break
+		}
+
+		num, err := channelR.Read(bufR[totR:])
+		if err != nil {
+			t.Fail()
+			break
+		}
+
+		totR += num
+		if totR >= 255 {
+			break
+		}
+	}
+
+	assert.Equal(t, 255, totR)
+	for i := 0; i < 255; i++ {
+		assert.Equal(t, uint8(i), bufR[i])
+	}
+
+	bufL := make([]byte, 1024)
+	totL := 0
+	for {
+		select {
+		case <-timer.C:
+			t.Fail()
+			return
+		default:
+			break
+		}
+
+		num, err := channelL.Read(bufL[totL:])
+		if err != nil {
+			t.Fail()
+			break
+		}
+
+		totL += num
+		if totL >= 255 {
+			break
+		}
+	}
+
+	assert.Equal(t, 255, totL)
+	for i := 0; i < 255; i++ {
+		assert.Equal(t, uint8(i), bufL[i])
+	}
+}
+
+func TestChannelActive_sendLargeStream(t *testing.T) {
+	channelL, channelR := NewChannelPair(0, 0, 1, 1)
+	defer channelR.Close()
+	defer channelL.Close()
+
+	go func() {
+		for i := 0; i < 1<<20; i++ {
+			channelL.Write([]byte{uint8(i)})
+		}
+	}()
+
+	timer := time.NewTimer(time.Second * 30)
+
+	buf := make([]byte, 1024)
+	tot := 0
+	for {
+		select {
+		case <-timer.C:
+			t.Fail()
+			return
+		default:
+			break
+		}
+
+		num, err := channelR.Read(buf)
+		if err != nil {
+			t.Fail()
+			break
+		}
+
+		tot += num
+		if tot >= 1 << 20 {
+			break
+		}
+	}
+
+	assert.Equal(t, 1 << 20, tot)
+}
