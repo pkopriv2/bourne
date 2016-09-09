@@ -10,8 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
-
-func NewChannelPair(entityIdR uint32, channelIdR uint16, entityIdL uint32, channelIdL uint16) (*ChannelActive, *ChannelActive) {
+func NewChannelPairWithRouter(entityIdR uint32, channelIdR uint16, entityIdL uint32, channelIdL uint16, router func(chan Packet, chan Packet, *ChannelActive, *ChannelActive)) (*ChannelActive, *ChannelActive) {
 	r := ChannelAddress{entityIdR, channelIdR}
 	l := ChannelAddress{entityIdL, channelIdL}
 
@@ -46,14 +45,20 @@ func NewChannelPair(entityIdR uint32, channelIdR uint16, entityIdL uint32, chann
 	})
 
 	go func() {
+		router(outL, outR, channelL, channelR)
+	}()
+
+	return channelL, channelR
+}
+
+func NewChannelPair(entityIdR uint32, channelIdR uint16, entityIdL uint32, channelIdL uint16) (*ChannelActive, *ChannelActive) {
+	return NewChannelPairWithRouter(entityIdR, channelIdR, entityIdL, channelIdL, func(outL chan Packet, outR chan Packet, channelL *ChannelActive, channelR *ChannelActive) {
 		for {
 			select {
 			case p, ok := <-outR:
 				if !ok {
 					return
 				}
-
-				channelR.Log("Routing packet: %v", &p)
 				if err := channelL.Send(&p); err != nil {
 					return
 				}
@@ -61,8 +66,6 @@ func NewChannelPair(entityIdR uint32, channelIdR uint16, entityIdL uint32, chann
 				if !ok {
 					return
 				}
-
-				channelL.Log("Routing packet: %v", &p)
 				if err := channelR.Send(&p); err != nil {
 					return
 				}
@@ -70,9 +73,7 @@ func NewChannelPair(entityIdR uint32, channelIdR uint16, entityIdL uint32, chann
 				time.Sleep(5 * time.Millisecond)
 			}
 		}
-	}()
-
-	return channelL, channelR
+	})
 }
 
 func TestChannelActive_sendSinglePacket(t *testing.T) {

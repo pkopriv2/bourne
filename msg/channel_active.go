@@ -18,162 +18,17 @@ import (
 // http://www.ietf.org/proceedings/44/I-D/draft-ietf-sigtran-reliable-udp-00.txt
 //
 var (
-	ErrChannelClosed          = errors.New("CHAN:CLOSED")
-	ErrChannelUnexpectedState = errors.New("CHAN:UNEXPECTED_STATE")
+	ErrChannelClosed = errors.New("CHAN:CLOSED")
 )
-
-// default channel options
-const (
-	ChannelStateWait              = 1 * time.Millisecond
-	CHANNEL_DEFAULT_RECV_IN_SIZE  = 1024
-	CHANNEL_DEFAULT_RECV_LOG_SIZE = 1 << 20 // 1024K
-	CHANNEL_DEFAULT_SEND_LOG_SIZE = 1 << 18 // 256K
-	CHANNEL_DEFAULT_SEND_WAIT     = 100 * time.Millisecond
-	CHANNEL_DEFAULT_RECV_WAIT     = 20 * time.Millisecond
-	CHANNEL_DEFAULT_ACK_TIMEOUT   = 1 * time.Second
-	CHANNEL_DEFAULT_WIN_TIMEOUT   = 2 * time.Second
-	DATALOG_LOCK_WAIT             = 5 * time.Millisecond
-)
-
-// function used to configure a channel. (accepted as part of construction)
-type ChannelConfig func(*ChannelOptions)
-
-// function called on channel state changes.
-type ChannelStateFn func(*ChannelActive) error
-
-// returns the default channel options struct
-func DefaultChannelOptions() *ChannelOptions {
-	return &ChannelOptions{
-		RecvInSize:  CHANNEL_DEFAULT_RECV_IN_SIZE,
-		RecvLogSize: CHANNEL_DEFAULT_RECV_LOG_SIZE,
-		SendLogSize: CHANNEL_DEFAULT_SEND_LOG_SIZE,
-		SendWait:    CHANNEL_DEFAULT_SEND_WAIT,
-		RecvWait:    CHANNEL_DEFAULT_RECV_WAIT,
-		AckTimeout:  CHANNEL_DEFAULT_ACK_TIMEOUT,
-		WinTimeout:  CHANNEL_DEFAULT_WIN_TIMEOUT,
-		LogWait:     DATALOG_LOCK_WAIT,
-
-		// handlers
-		OnInit:  func(c *ChannelActive) error { return nil },
-		OnOpen:  func(c *ChannelActive) error { return nil },
-		OnClose: func(c *ChannelActive) error { return nil },
-		OnError: func(c *ChannelActive) error { return nil },
-		OnData:  func(p *Packet) error { return nil }}
-}
-
-// options struct
-type ChannelOptions struct {
-
-	// Whether or not to enable debug logging.
-	Debug bool
-
-	// Defines how many packets will be buffered before blocking
-	RecvInSize uint
-
-	// Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
-	RecvLogSize uint
-
-	// Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
-	SendLogSize uint
-
-	// The duration to wait before trying to send data again (when none was available)
-	SendWait time.Duration
-
-	// The duration to wait before trying to fetch again (when none was avaiable)
-	RecvWait time.Duration
-
-	// The duration to wait for an ack before data is considered lost
-	AckTimeout time.Duration
-
-	// The duration to wait for an ack before data is considered lost
-	WinTimeout time.Duration
-
-	// The duration to wait on incremental writes to the log
-	LogWait time.Duration
-
-	// to be called when the channel has been initialized, and is in the process of being started
-	OnInit ChannelStateFn
-
-	// to be called when the channel has encountered an unrecoverable error
-	OnOpen ChannelStateFn
-
-	// to be called when the channel is closed (allows the release of external resources (ie ids, routing table))
-	OnClose ChannelStateFn
-
-	// to be called when the channel has encountered an unrecoverable error
-	OnError ChannelStateFn
-
-	// to be called when the channel produces an outgoing packet. (may block)
-	OnData func(*Packet) error
-}
-
-type ChannelState uint32
 
 // channel states
 const (
-	ChannelInit ChannelState = iota
+	ChannelInit State = iota
+	ChannelOpening
 	ChannelOpened
+	ChannelClosing
 	ChannelClosed
 )
-
-type ChannelStateMachine struct {
-	sync.RWMutex
-	cur ChannelState
-}
-
-func NewChannelStateMachine(init ChannelState) *ChannelStateMachine {
-	return &ChannelStateMachine{cur: init}
-}
-
-func (c *ChannelStateMachine) Get() ChannelState {
-	c.RLock()
-	defer c.RUnlock()
-	return c.cur
-}
-
-func (c *ChannelStateMachine) Synchronize(fn func(ChannelState)) {
-	c.RLock()
-	defer c.RUnlock()
-	fn(c.cur)
-}
-
-func (c *ChannelStateMachine) SynchronizeIf(expected ChannelState, fn func()) error {
-	c.RLock()
-	defer c.RUnlock()
-
-	if c.cur != expected {
-		return ErrChannelUnexpectedState
-	}
-
-	fn()
-	return nil
-}
-
-func (c *ChannelStateMachine) Transition(from ChannelState, fn func() ChannelState) error {
-	c.Lock()
-	defer c.Unlock()
-
-	if c.cur != from {
-		return ErrChannelUnexpectedState
-	}
-
-	c.cur = fn()
-	return nil
-}
-
-func (c *ChannelStateMachine) WaitUntil(terminalStates ...ChannelState) ChannelState {
-	// just spin, waiting for an appropriate state
-	for {
-		s := c.Get()
-		for _, t := range terminalStates {
-			if s == t {
-				return s
-			}
-		}
-
-		time.Sleep(ChannelStateWait)
-	}
-}
 
 // An active channel represents one side of a conversation between two entities.
 //
@@ -215,14 +70,14 @@ type ChannelActive struct {
 	// the remote channel address
 	remote ChannelAddress
 
-	// channel options. (SHOULD NOT BE MUTATED)
+	// channel options.
 	options *ChannelOptions
 
 	// general channel statistics
 	stats *ChannelStats
 
-	// the state of the channel. (used to enforce channel invariants.)
-	state *ChannelStateMachine
+	// the state of the channel.
+	state *StateMachine
 
 	// receive buffers
 	recvIn  chan Packet
@@ -233,10 +88,9 @@ type ChannelActive struct {
 	sendOut func(p *Packet) error
 
 	// event handlers
-	OnInit  ChannelStateFn
-	OnOpen  ChannelStateFn
-	OnClose ChannelStateFn
-	OnError ChannelStateFn
+	onInit  ChannelStateFn
+	onOpen  ChannelStateFn
+	onClose ChannelStateFn
 
 	// the workers wait
 	workers sync.WaitGroup
@@ -251,7 +105,7 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, opts ...ChannelConfig)
 		opt(options)
 	}
 
-	state := NewChannelStateMachine(ChannelInit)
+	state := NewStateMachine(ChannelInit)
 
 	// create the channel
 	c := &ChannelActive{
@@ -264,11 +118,15 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, opts ...ChannelConfig)
 		recvLog: NewStream(options.RecvLogSize),
 		sendLog: NewStream(options.SendLogSize),
 		sendOut: options.OnData,
-		OnInit:  options.OnInit,
-		OnError: options.OnError}
+		onInit:  options.OnInit,
+		onOpen: options.OnOpen,
+		onClose: options.OnClose}
 
-	// call the state fn. (no synchronization required)
-	c.OnInit(c)
+	// call the init function.
+	c.state.Transition(ChannelInit, func() State {
+		c.onInit(c)
+		return ChannelOpening
+	})
 
 	// kick off the workers
 	c.workers.Add(2)
@@ -277,15 +135,6 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, opts ...ChannelConfig)
 
 	// finally, return it.
 	return c, nil
-}
-
-// Logs a message, tagging it with the channel's local address.
-func (c *ChannelActive) Log(format string, vals ...interface{}) {
-	if !c.options.Debug {
-		return
-	}
-
-	log.Println(fmt.Sprintf("[%v] -- ", c.local) + fmt.Sprintf(format, vals...))
 }
 
 // Returns the local address of this channel
@@ -306,7 +155,7 @@ func (c *ChannelActive) Read(buf []byte) (int, error) {
 	var err error
 
 	num, err = 0, ErrChannelClosed
-	c.state.SynchronizeIf(ChannelOpened, func() {
+	c.state.ApplyIf(ChannelOpened, func() {
 		num, err = c.recvLog.Read(buf)
 	})
 
@@ -321,7 +170,7 @@ func (c *ChannelActive) Write(data []byte) (int, error) {
 	var err error
 
 	num, err = 0, ErrChannelClosed
-	c.state.SynchronizeIf(ChannelOpened, func() {
+	c.state.ApplyIf(ChannelOpened, func() {
 		num, err = c.sendLog.Write(data)
 	})
 
@@ -332,7 +181,7 @@ func (c *ChannelActive) Write(data []byte) (int, error) {
 func (c *ChannelActive) Send(p *Packet) error {
 	c.state.WaitUntil(ChannelOpened, ChannelClosed)
 
-	err := c.state.SynchronizeIf(ChannelOpened, func() {
+	err := c.state.ApplyIf(ChannelOpened, func() {
 		c.recvIn <- *p
 	})
 
@@ -346,9 +195,8 @@ func (c *ChannelActive) Send(p *Packet) error {
 
 // Closes the channel.  Returns an error if the channel is already closed.
 func (c *ChannelActive) Close() error {
-	err := c.state.Transition(ChannelOpened, func() ChannelState {
-		c.options.OnClose(c)
-		return ChannelClosed
+	err := c.state.Transition(ChannelOpened, func() State {
+		return ChannelClosing
 	})
 
 	// if error, we didn't transition.  stop now.
@@ -356,16 +204,70 @@ func (c *ChannelActive) Close() error {
 		return err
 	}
 
-	// close all 'owned' io objects
-	close(c.recvIn)
+	// give control to the workers.
+	c.state.WaitUntil(ChannelClosing, ChannelClosed)
+
+	// finally, shut it all down.
 	c.workers.Wait()
+	close(c.recvIn)
 	return nil
+}
+
+// Logs a message, tagging it with the channel's local address.
+func (c *ChannelActive) Log(format string, vals ...interface{}) {
+	if !c.options.Debug {
+		return
+	}
+
+	log.Println(fmt.Sprintf("[%v] -- ", c.local) + fmt.Sprintf(format, vals...))
+}
+
+func newPacket(c *ChannelActive, flags PacketFlags, offset uint32, ack uint32, data []byte) *Packet {
+	return NewPacket(c.local.entityId, c.local.channelId, c.remote.entityId, c.remote.channelId, flags, offset, ack, 0, data)
+}
+
+const (
+	ChannelOpeningInit State = iota
+	ChannelOffsetLSent
+	ChannelOffsetLAck
+	ChannelOffsetRSent
+	ChannelOffsetRAck
+)
+
+const (
+	ChannelCloseInit State = iota
+	ChannelCloseLSent
+	ChannelCloseLAck
+	ChannelCloseRSent
+	ChannelCloseRAck
+)
+
+// impements the standard opening sequence. (this is assumed to have complete control over the channel)
+func openWorker(c *ChannelActive, initiator bool) {
+	// state := NewStateMachine(ChannelOpeningInit)
+//
+	// if initiator {
+		// state.Transition(ChannelOpeningInit, func() State {
+			// c.sendOut(newPacket(c, PacketFlagData, 0, 0, []byte{}))
+			// return ChannelOffsetLSent
+		// })
+//
+		// state.Transition(ChannelOffsetLSent, func() State {
+			// p := <-c.recvIn
+			// if ! p.ctrls&PacketFlagAck >0 {
+			// }
+			// return ChannelOffsetLRecv
+		// })
+	// }
+}
+
+// impements the standard closing sequence. (this is assumed to have complete control over the channel)
+func closeWorker(c *ChannelActive, initiator bool) {
+	// state := NewStateMachine(Channel)
 }
 
 func sendWorker(c *ChannelActive) {
 	defer c.workers.Done()
-
-	// give exclusive access to receiver while waiting to open.
 
 	// initialize the timeout values
 	// timeout := c.options.AckTimeout
@@ -380,6 +282,7 @@ func sendWorker(c *ChannelActive) {
 	// the packet buffer (initialized here so we don't continually recreate memory.)
 	tmp := make([]byte, PacketMaxLength)
 	for {
+		// give exclusive access to recv while waiting to open.
 		state := c.state.WaitUntil(ChannelOpened, ChannelClosed)
 		if state != ChannelOpened {
 			return
@@ -442,7 +345,7 @@ func sendWorker(c *ChannelActive) {
 		}
 
 		// finally, send the packet.
-		err := c.state.SynchronizeIf(ChannelOpened, func() {
+		err := c.state.ApplyIf(ChannelOpened, func() {
 			c.sendOut(
 				NewPacket(
 					c.local.entityId,
@@ -457,7 +360,7 @@ func sendWorker(c *ChannelActive) {
 		})
 
 		if err != nil {
-			c.Log("Cannot send data.  Channel has been closed.")
+			c.Log("Closing send worker.")
 			return
 		}
 
@@ -468,37 +371,49 @@ func sendWorker(c *ChannelActive) {
 func recvWorker(c *ChannelActive) {
 	defer c.workers.Done()
 
-	nextPacket := func() (*Packet, error) {
-		select {
-		case p, ok := <-c.recvIn:
-			if !ok {
-				return nil, ErrChannelClosed
-			}
-
-			return &p, nil
-		default:
-			return nil, nil
-		}
-	}
-
 	// we'll use a simple sorted tree map to track out of order segments
 	pending := treemap.NewWith(OffsetComparator)
 	for {
+
+		// before we getting
 		switch c.state.Get() {
-		case ChannelInit:
-			c.state.Transition(ChannelInit, func() ChannelState {
+		case ChannelOpening:
+			if err := c.state.Transition(ChannelOpening, func() State {
+				openWorker(c, true)
 				return ChannelOpened
-			})
+			}); err != nil {
+				panic(err)
+			}
+
 			continue
-		case ChannelOpened:
-			break
+		case ChannelClosing:
+			if err := c.state.Transition(ChannelClosing, func() State {
+				closeWorker(c, true)
+				return ChannelClosed
+			}); err != nil {
+				panic(err)
+			}
+
+			continue
 		case ChannelClosed:
 			return
+		case ChannelOpened:
+			break
+		default:
+			panic("Invalid state.")
 		}
 
-		p, err := nextPacket()
-		if err != nil {
-			return
+		// grab the next packet
+		var p *Packet = nil
+		select {
+		case in, ok := <-c.recvIn:
+			if !ok {
+				return
+			}
+
+			p = &in
+		default:
+			break
 		}
 
 		if p == nil {
@@ -507,7 +422,7 @@ func recvWorker(c *ChannelActive) {
 		}
 
 		c.stats.packetsReceived.Inc(1)
-		// c.Log("Packet received: %v", p)
+		c.Log("Packet received: %v", p)
 
 		// Handle: ack flag
 		if p.ctrls&PacketFlagAck > 0 {
@@ -525,7 +440,7 @@ func recvWorker(c *ChannelActive) {
 
 			// Handle: Past segments.  Just drop
 			if head.offset > p.offset+uint32(len(p.data)) {
-				c.Log("Received past segment [%v, %v]", p.offset, p.offset+uint32(len(p.data)))
+				c.Log("Received past segment [%v, %v]", p.offset, len(p.data))
 				c.stats.packetsDropped.Inc(1)
 				continue
 			}
@@ -549,14 +464,15 @@ func recvWorker(c *ChannelActive) {
 				break
 			}
 
-			// Handle: Past offset
+			// No matter what, we're done with this segment.
 			pending.Remove(offset)
+
+			// Handle: Past offset
 			if head.offset > offset+uint32(len(data)) {
 				continue
 			}
 
 			// Handle: Write the valid elements of the segment.
-			// c.Log("Segment received: %v, %v", p, data)
 			c.recvLog.Write(data[head.offset-offset:])
 		}
 	}
