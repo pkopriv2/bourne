@@ -1,12 +1,18 @@
 package msg
 
 import (
+	"errors"
 	"sync"
 	"time"
-	"errors"
 )
 
-var ERR_LOG_PRUNE_INVALID = errors.New("LOG:INVALID_PRUNE")
+var (
+	ErrStreamInvalidCommit = errors.New("LOG:INVALID_PRUNE")
+)
+
+const (
+	StreamLockWait = 5 * time.Millisecond
+)
 
 // Used to compare relative offsets.
 func OffsetComparator(a, b interface{}) int {
@@ -36,16 +42,6 @@ func NewRef(offset uint32) *Ref {
 	return &Ref{offset, time.Now()}
 }
 
-// // A segment represents
-// type Segment struct {
-	// time   time.Time
-	// offset uint32
-	// length uint32
-// }
-//
-// func NewRef(offset uint32) *Ref {
-	// return &Ref{offset, time.Now()}
-// }
 
 // A simple, infinite, reliable stream.  This is the primary data structure
 // behind the channel send/receive logic.   The stream is essentially duplicated
@@ -66,7 +62,7 @@ func NewStream(size uint) *Stream {
 	return &Stream{
 		data: make([]byte, size),
 		tail: ref,
-		cur: ref,
+		cur:  ref,
 		head: ref}
 }
 
@@ -93,7 +89,7 @@ func (s *Stream) Commit(pos uint32) (*Ref, error) {
 	defer s.lock.Unlock()
 
 	if pos > s.head.offset {
-		return nil, ERR_LOG_PRUNE_INVALID
+		return nil, ErrStreamInvalidCommit
 	}
 
 	if pos < s.tail.offset {
@@ -103,7 +99,7 @@ func (s *Stream) Commit(pos uint32) (*Ref, error) {
 	// committing just equates to moving the tail pointer
 	s.tail = NewRef(pos)
 
-	// there are
+	// we may be committing beyond the current read pointer.  in that case, move it too
 	if pos > s.cur.offset {
 		s.cur = s.tail
 	}
@@ -194,7 +190,7 @@ func (s *Stream) Write(val []byte) (int, error) {
 			break
 		}
 
-		time.Sleep(DATALOG_LOCK_WAIT)
+		time.Sleep(StreamLockWait)
 	}
 
 	return int(valLen), nil
@@ -207,7 +203,7 @@ func (s *Stream) Read(in []byte) (n int, err error) {
 			return int(num), nil
 		}
 
-		time.Sleep(DATALOG_LOCK_WAIT)
+		time.Sleep(StreamLockWait)
 	}
 
 	panic("Not accessible")

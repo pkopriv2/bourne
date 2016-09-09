@@ -28,15 +28,18 @@ const ProtocolVersion = 0
 //
 const PacketMaxLength = 1 << 12
 
-//
+// Each packet will contain a sequence of control flags, indicating the nature
+// of the packet and how the receiver should handle it.
 type PacketFlags uint8
 
 // control flags
 const (
-	PacketFlagNone PacketFlags = 1 << iota
-	PacketFlagData
+	PacketFlagNone PacketFlags = 0
+	PacketFlagData PacketFlags = 1 << iota
 	PacketFlagAck
-	PacketFlagFin
+	PacketFlagOpen
+	PacketFlagClose
+	PacketFlagReset
 	PacketFlagErr
 )
 

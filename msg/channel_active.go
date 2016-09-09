@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	// "fmt"
-	// "log"
 	"sync"
 	"time"
+
+	"math/rand"
 
 	"github.com/emirpasic/gods/maps/treemap"
 )
@@ -18,12 +18,16 @@ import (
 // http://www.ietf.org/proceedings/44/I-D/draft-ietf-sigtran-reliable-udp-00.txt
 //
 var (
-	ErrChannelClosed = errors.New("CHAN:CLOSED")
+	ErrChannelClosed   = errors.New("CHAN:CLOSED")
+	ErrHandshakeFailed = errors.New("CHAN:HANDSHAKE")
+	ErrResponse        = errors.New("CHAN:BADRESPONSE")
+	ErrTimeout         = errors.New("CHAN:TIMEOUT")
 )
 
 // channel states
 const (
 	ChannelInit State = iota
+
 	ChannelOpening
 	ChannelOpened
 	ChannelClosing
@@ -119,14 +123,11 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, opts ...ChannelConfig)
 		sendLog: NewStream(options.SendLogSize),
 		sendOut: options.OnData,
 		onInit:  options.OnInit,
-		onOpen: options.OnOpen,
+		onOpen:  options.OnOpen,
 		onClose: options.OnClose}
 
 	// call the init function.
-	c.state.Transition(ChannelInit, func() State {
-		c.onInit(c)
-		return ChannelOpening
-	})
+	c.onInit(c)
 
 	// kick off the workers
 	c.workers.Add(2)
@@ -190,13 +191,13 @@ func (c *ChannelActive) Send(p *Packet) error {
 	} else {
 		return nil
 	}
-
 }
 
 // Closes the channel.  Returns an error if the channel is already closed.
 func (c *ChannelActive) Close() error {
 	err := c.state.Transition(ChannelOpened, func() State {
-		return ChannelClosing
+		closeInit(c)
+		return ChannelClosed
 	})
 
 	// if error, we didn't transition.  stop now.
@@ -204,13 +205,27 @@ func (c *ChannelActive) Close() error {
 		return err
 	}
 
-	// give control to the workers.
-	c.state.WaitUntil(ChannelClosing, ChannelClosed)
-
-	// finally, shut it all down.
+	// wait on the workers
 	c.workers.Wait()
-	close(c.recvIn)
 	return nil
+}
+
+// Starts the channel.
+func (c *ChannelActive) Start(p *Packet) {
+	c.state.Transition(ChannelInit, func() State {
+		var err error
+		if p == nil {
+			err = openInit(c)
+		} else {
+			err = openRecv(c, p)
+		}
+
+		if err != nil {
+			return ChannelClosed
+		} else {
+			return ChannelOpened
+		}
+	})
 }
 
 // Logs a message, tagging it with the channel's local address.
@@ -226,44 +241,91 @@ func newPacket(c *ChannelActive, flags PacketFlags, offset uint32, ack uint32, d
 	return NewPacket(c.local.entityId, c.local.channelId, c.remote.entityId, c.remote.channelId, flags, offset, ack, 0, data)
 }
 
-const (
-	ChannelOpeningInit State = iota
-	ChannelOffsetLSent
-	ChannelOffsetLAck
-	ChannelOffsetRSent
-	ChannelOffsetRAck
-)
-
-const (
-	ChannelCloseInit State = iota
-	ChannelCloseLSent
-	ChannelCloseLAck
-	ChannelCloseRSent
-	ChannelCloseRAck
-)
-
-// impements the standard opening sequence. (this is assumed to have complete control over the channel)
-func openWorker(c *ChannelActive, initiator bool) {
-	// state := NewStateMachine(ChannelOpeningInit)
-//
-	// if initiator {
-		// state.Transition(ChannelOpeningInit, func() State {
-			// c.sendOut(newPacket(c, PacketFlagData, 0, 0, []byte{}))
-			// return ChannelOffsetLSent
-		// })
-//
-		// state.Transition(ChannelOffsetLSent, func() State {
-			// p := <-c.recvIn
-			// if ! p.ctrls&PacketFlagAck >0 {
-			// }
-			// return ChannelOffsetLRecv
-		// })
-	// }
+func sendHeader(c *ChannelActive, flags PacketFlags, offset uint32, ack uint32) error {
+	return c.sendOut(newPacket(c, flags, offset, ack, []byte{}))
 }
 
-// impements the standard closing sequence. (this is assumed to have complete control over the channel)
-func closeWorker(c *ChannelActive, initiator bool) {
-	// state := NewStateMachine(Channel)
+func recvHeader(c *ChannelActive, timeout time.Duration) (*Packet, error) {
+	timer := time.NewTimer(timeout)
+
+	select {
+	case <-timer.C:
+		return nil, ErrTimeout
+	case p := <-c.recvIn:
+		return &p, nil
+	}
+}
+
+func openInit(c *ChannelActive) error {
+
+	var p *Packet
+	var err error
+
+	// generate a new offset for the handshake.
+	offset := rand.Uint32()
+
+	// Send: open
+	if err = sendHeader(c, PacketFlagOpen, offset, 0); err != nil {
+		return ErrHandshakeFailed
+	}
+
+	// Receive: open, ack
+	p, err = recvHeader(c, c.options.AckTimeout)
+	if err != nil || p == nil {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrHandshakeFailed
+	}
+
+	if p.ctrls != (PacketFlagOpen | PacketFlagAck) || p.ack != offset {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrHandshakeFailed
+	}
+
+	// Send: ack
+	if err = sendHeader(c, PacketFlagAck, 0, p.offset); err != nil {
+		return ErrHandshakeFailed
+	}
+
+	return nil
+}
+func openRecv(c *ChannelActive, p *Packet) error {
+	var err error
+
+	// Receive: open
+	p, err = recvHeader(c, c.options.AckTimeout)
+	if err != nil || p == nil {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrHandshakeFailed
+	}
+
+	if p.ctrls != PacketFlagOpen {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrHandshakeFailed
+	}
+
+	// Send: open,ack
+	offset := rand.Uint32()
+	if err := sendHeader(c, PacketFlagOpen|PacketFlagAck, offset, p.offset); err != nil {
+		return ErrHandshakeFailed
+	}
+
+	// Receive: Ack
+	p, err = recvHeader(c, c.options.AckTimeout)
+	if err != nil {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrHandshakeFailed
+	}
+
+	if p.ctrls != PacketFlagAck || p.ack != offset {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrHandshakeFailed
+	}
+
+	return nil
+}
+func closeInit(c *ChannelActive) {
+}
+func closeRecv(c *ChannelActive) {
 }
 
 func sendWorker(c *ChannelActive) {
@@ -287,6 +349,10 @@ func sendWorker(c *ChannelActive) {
 		if state != ChannelOpened {
 			return
 		}
+
+		// ** IMPORTANT ** Channel state can still change!  Need to lock
+		// at places that can have external side effects, or at least be
+		// able to detect state changes and handle appropriately.
 
 		// let's see if we need to retransmit
 		// sendTail, _, _ := c.sendLog.Refs()
@@ -346,17 +412,7 @@ func sendWorker(c *ChannelActive) {
 
 		// finally, send the packet.
 		err := c.state.ApplyIf(ChannelOpened, func() {
-			c.sendOut(
-				NewPacket(
-					c.local.entityId,
-					c.local.channelId,
-					c.remote.entityId,
-					c.remote.channelId,
-					flags,
-					sendStart.offset,
-					recvHead.offset,
-					0,
-					data))
+			c.sendOut(newPacket(c, flags, sendStart.offset, recvHead.offset, data))
 		})
 
 		if err != nil {
@@ -374,34 +430,16 @@ func recvWorker(c *ChannelActive) {
 	// we'll use a simple sorted tree map to track out of order segments
 	pending := treemap.NewWith(OffsetComparator)
 	for {
-
-		// before we getting
-		switch c.state.Get() {
-		case ChannelOpening:
-			if err := c.state.Transition(ChannelOpening, func() State {
-				openWorker(c, true)
-				return ChannelOpened
-			}); err != nil {
-				panic(err)
-			}
-
-			continue
-		case ChannelClosing:
-			if err := c.state.Transition(ChannelClosing, func() State {
-				closeWorker(c, true)
-				return ChannelClosed
-			}); err != nil {
-				panic(err)
-			}
-
-			continue
-		case ChannelClosed:
-			return
-		case ChannelOpened:
-			break
-		default:
-			panic("Invalid state.")
+		// block until we can do something useful!
+		state := c.state.WaitUntil(ChannelOpened, ChannelClosed)
+		if state == ChannelClosed {
+			close(c.recvIn)
+			return // nothing to do
 		}
+
+		// ** IMPORTANT ** Channel state can still change!  Need to lock
+		// at places that can have external side effects, or at least be
+		// able to detect state changes and handle appropriately.
 
 		// grab the next packet
 		var p *Packet = nil
