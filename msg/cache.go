@@ -14,20 +14,20 @@ type ChannelCache struct {
 	lock *sync.RWMutex
 
 	// channels map
-	channels map[ChannelAddress]ChannelBase
+	channels map[ChannelAddress]BaseChannel
 }
 
 func NewChannelCache() *ChannelCache {
-	return &ChannelCache{lock: new(sync.RWMutex), channels: make(map[ChannelAddress]ChannelBase) }
+	return &ChannelCache{lock: new(sync.RWMutex), channels: make(map[ChannelAddress]BaseChannel)}
 }
 
-func (self *ChannelCache) Get(addr ChannelAddress) ChannelBase {
+func (self *ChannelCache) Get(addr ChannelAddress) BaseChannel {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	return self.channels[addr]
 }
 
-func (self *ChannelCache) Add(addr ChannelAddress, p ChannelBase) error {
+func (self *ChannelCache) Add(addr ChannelAddress, p BaseChannel) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 

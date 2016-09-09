@@ -2,7 +2,7 @@ package msg
 
 import "io"
 
-type ChannelBase interface {
+type BaseChannel interface {
 	io.Closer
 
 	// Sends a packet the processors input channel.  Each implementation

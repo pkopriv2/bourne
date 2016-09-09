@@ -7,11 +7,11 @@ import (
 )
 
 var (
-	UnexpectedState = errors.New("STATE_MACHINE:UNEXPECTED_STATE")
+	ErrUnexpectedState = errors.New("STATE_MACHINE:UNEXPECTED_STATE")
 )
 
 const (
-	StateMachineWait = 5*time.Millisecond
+	StateMachineWait = 5 * time.Millisecond
 )
 
 type State uint32
@@ -36,7 +36,7 @@ func (c *StateMachine) ApplyIf(expected State, fn func()) error {
 	defer c.RUnlock()
 
 	if c.cur != expected {
-		return UnexpectedState
+		return ErrUnexpectedState
 	}
 
 	fn()
@@ -48,7 +48,7 @@ func (c *StateMachine) Transition(from State, fn func() State) error {
 	defer c.Unlock()
 
 	if c.cur != from {
-		return UnexpectedState
+		return ErrUnexpectedState
 	}
 
 	c.cur = fn()
