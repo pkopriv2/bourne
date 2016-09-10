@@ -221,7 +221,7 @@ func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, chann
 	out := make(chan Packet, 1024)
 
 	channel, _ := NewChannelActive(l, r, listener, func(opts *ChannelOptions) {
-		opts.AckTimeout = 100 * time.Millisecond
+		opts.AckTimeout = 500 * time.Millisecond
 		opts.Debug = true
 		opts.OnClose = func(c *ChannelActive) error {
 			close(out)

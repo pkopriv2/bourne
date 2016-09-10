@@ -199,11 +199,7 @@ func (c *ChannelActive) send(p *Packet) error {
 		c.recvIn <- *p
 	})
 
-	if err != nil {
-		return ErrChannelClosed
-	} else {
-		return nil
-	}
+	return err
 }
 
 // Logs a message, tagging it with the channel's local address.
@@ -238,11 +234,11 @@ func sendWorker(c *ChannelActive) {
 	defer c.workers.Done()
 
 	// initialize the timeout values
-	// timeout := c.options.AckTimeout
-	// timeoutCnt := 0
-	//
-	// // track last ack received
-	// recvack, _, _ := c.sendlog.refs()
+	timeout := c.options.AckTimeout
+	timeoutCnt := 0
+
+	// track last ack received
+	recvAck, _, _ := c.sendLog.Refs()
 
 	// track last ack sent
 	_, _, sendAck := c.recvLog.Refs()
@@ -261,35 +257,34 @@ func sendWorker(c *ChannelActive) {
 		// able to detect state changes and handle appropriately.
 
 		// let's see if we need to retransmit
-		// sendTail, _, _ := c.sendLog.Refs()
+		sendTail, sendCur, _ := c.sendLog.Refs()
 
-		// if we received an ack recently, reset the timeout counters
-		// if sendTail.offset > recvAck.offset {
-		// recvAck = sendTail
-		// timeoutCur = timeoutInit
-		// timeoutCnt = 0
-		// }
+		// if we received an ack recently, reset the timeout values
+		if sendTail.offset > recvAck.offset {
+			recvAck = sendTail
+			timeout = c.options.AckTimeout
+			timeoutCnt = 0
+		}
 
-		// // let's see if we're in a timeout senario.
-		// if time.Since(sendTail.time) >= timeoutCur {
-		// cur, prev := c.sendLog.Reset()
-		// c.Log("Ack timed out. Reset send log to [%v] from [%v]", cur.offset, prev.offset)
-		//
-		// timeoutCur *= 2
-		// c.Log("Increasing ack timeout to [%v]", timeoutCur)
-		//
-		// if timeoutCnt += 1; timeoutCnt > 3 {
-		// c.Log("Max timeouts reached")
-		// return
-		// }
-		// }
-		//
-		// // stop sending if we're timing out.
-		// if timeoutCnt > 0 {
-		// c.Log("Currently waiting for acks before sending data")
-		// time.Sleep(c.options.SendWait)
-		// continue
-		// }
+		// let's see if we're in a timeout senario.
+		if sendCur.offset > sendTail.offset && time.Since(sendTail.time) >= timeout {
+			cur, prev := c.sendLog.Reset()
+			c.log("Ack timed out. Reset send log to [%v] from [%v]", cur.offset, prev.offset)
+
+			timeout *= 2
+			c.log("Increasing ack timeout to [%v]", timeout)
+
+			if timeoutCnt++; timeoutCnt > 3 {
+				c.Close()
+				continue
+			}
+		}
+
+		// stop sending if we're timing out.
+		if timeoutCnt > 0 {
+			time.Sleep(c.options.SendWait)
+			continue
+		}
 
 		// start building the outgoing packet
 		flags := PacketFlagNone
