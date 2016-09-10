@@ -12,6 +12,7 @@ var (
 
 const (
 	StateMachineWait = 5 * time.Millisecond
+	// EmptyState State = 0
 )
 
 type State uint32
@@ -19,6 +20,10 @@ type State uint32
 type StateMachine struct {
 	sync.RWMutex
 	cur State
+}
+
+func To(s State) func() State {
+	return func() State {return s}
 }
 
 func NewStateMachine(init State) *StateMachine {
@@ -31,38 +36,35 @@ func (c *StateMachine) Get() State {
 	return c.cur
 }
 
-func (c *StateMachine) ApplyIf(expected State, fn func()) error {
+func (c *StateMachine) ApplyIf(state State, fn func()) (State, error) {
 	c.RLock()
 	defer c.RUnlock()
 
-	if c.cur != expected {
-		return ErrUnexpectedState
+	if c.cur&state == State(0) {
+		return c.cur, ErrUnexpectedState
 	}
 
 	fn()
-	return nil
+	return c.cur, nil
 }
 
-func (c *StateMachine) Transition(from State, fn func() State) error {
+func (c *StateMachine) Transition(from State, fn func() State) (State, error) {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.cur != from {
-		return ErrUnexpectedState
+	if c.cur&from == State(0) {
+		return c.cur, ErrUnexpectedState
 	}
 
 	c.cur = fn()
-	return nil
+	return c.cur, nil
 }
 
-func (c *StateMachine) WaitUntil(states ...State) State {
+func (c *StateMachine) WaitUntil(state State) State {
 	// just spin, waiting for an appropriate state
 	for {
-		s := c.Get()
-		for _, t := range states {
-			if s == t {
-				return s
-			}
+		if c.Get()&state != State(0) {
+			return c.Get() & state
 		}
 
 		time.Sleep(StateMachineWait)

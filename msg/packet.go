@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strings"
 )
 
 import "encoding/binary"
@@ -26,7 +27,7 @@ const ProtocolVersion = 0
 //
 // Encoded as a uint16
 //
-const PacketMaxLength = 1 << 12
+const PacketMaxLength = 1 << 15
 
 // Each packet will contain a sequence of control flags, indicating the nature
 // of the packet and how the receiver should handle it.
@@ -35,11 +36,10 @@ type PacketFlags uint8
 // control flags
 const (
 	PacketFlagNone PacketFlags = 0
-	PacketFlagData PacketFlags = 1 << iota
+	PacketFlagOpen PacketFlags = 1 << iota
+	PacketFlagData
 	PacketFlagAck
-	PacketFlagOpen
 	PacketFlagClose
-	PacketFlagReset
 	PacketFlagErr
 )
 
@@ -49,7 +49,7 @@ const (
 type Packet struct {
 
 	// necessary for backwards/forwards compatibility
-	protocolVersion uint16
+	version uint16
 
 	// every packet must identify its source
 	srcEntityId  uint32 // TODO: move to UTF-8 String
@@ -76,16 +76,16 @@ func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstC
 	copy(c, data)
 
 	return &Packet{
-		protocolVersion: ProtocolVersion,
-		srcEntityId:     srcEntityId,
-		srcChannelId:    srcChannelId,
-		dstEntityId:     dstEntityId,
-		dstChannelId:    dstChannelId,
-		ctrls:           ctrls,
-		offset:          offset,
-		ack:             ack,
-		capacity:        capacity,
-		data:            c}
+		version:      ProtocolVersion,
+		srcEntityId:  srcEntityId,
+		srcChannelId: srcChannelId,
+		dstEntityId:  dstEntityId,
+		dstChannelId: dstChannelId,
+		ctrls:        ctrls,
+		offset:       offset,
+		ack:          ack,
+		capacity:     capacity,
+		data:         c}
 }
 
 func NewReturnPacket(p *Packet, ctrls PacketFlags, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
@@ -99,6 +99,26 @@ func NewErrorPacket(p *Packet, errorMsg string) *Packet {
 func (p *Packet) String() string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fmt.Sprintf("[%v,%v]->[%v,%v]  ", p.srcEntityId, p.srcEntityId, p.dstEntityId, p.dstChannelId))
+
+	flags := make([]string, 0, 5)
+
+	if p.ctrls&PacketFlagOpen > 0 {
+		flags = append(flags, "Open")
+	}
+
+	if p.ctrls&PacketFlagData > 0 {
+		flags = append(flags, "Data")
+	}
+
+	if p.ctrls&PacketFlagAck > 0 {
+		flags = append(flags, "Ack")
+	}
+
+	if p.ctrls&PacketFlagClose > 0 {
+		flags = append(flags, "Close")
+	}
+
+	buffer.WriteString(fmt.Sprintf("Flags: [%v] ", strings.Join(flags, "|")))
 	buffer.WriteString(fmt.Sprintf("Ack: [%v] [%v]  ", p.ack, p.ctrls&PacketFlagAck > 0))
 	buffer.WriteString(fmt.Sprintf("Offset: [%v] [%v]  ", p.offset, p.ctrls&PacketFlagData > 0))
 	return buffer.String()
@@ -113,7 +133,7 @@ func WritePacket(w io.Writer, m *Packet) error {
 	//    * BETTER ERRORS
 	//    * VARINT ENCODING?
 	//    * LENGTH PREFIXING? DELIMITING?
-	if err := binary.Write(w, binary.BigEndian, &m.protocolVersion); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &m.version); err != nil {
 		return err
 	}
 	if err := binary.Write(w, binary.BigEndian, &m.srcEntityId); err != nil {
