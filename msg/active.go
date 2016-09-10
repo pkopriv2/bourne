@@ -97,8 +97,7 @@ type ChannelActive struct {
 	workers sync.WaitGroup
 }
 
-// Creates and returns a new channel.
-//
+// Creates and returns a new channel
 func NewChannelActive(l ChannelAddress, r ChannelAddress, listening bool, opts ...ChannelConfig) (*ChannelActive, error) {
 	// initialize the options.
 	options := DefaultChannelOptions()
@@ -174,20 +173,8 @@ func (c *ChannelActive) Write(data []byte) (int, error) {
 	return num, err
 }
 
-// Sends a packet to the receive packet stream.
-func (c *ChannelActive) Send(p *Packet) error {
-	_, err := c.state.ApplyIf(ChannelOpening|ChannelOpened|ChannelClosing, func() {
-		c.recvIn <- *p
-	})
-
-	if err != nil {
-		return ErrChannelClosed
-	} else {
-		return nil
-	}
-}
-
 // Closes the channel.  Returns an error if the channel is already closed.
+// TODO: Better close semantics.  (ie what happens to data in the out buffer, etc..)
 func (c *ChannelActive) Close() error {
 	c.state.WaitUntil(ChannelOpened | ChannelClosed)
 
@@ -204,8 +191,23 @@ func (c *ChannelActive) Close() error {
 	return nil
 }
 
+// ** INTERNAL ONLY METHODS **
+
+// Send pushes a message on the input channel.
+func (c *ChannelActive) send(p *Packet) error {
+	_, err := c.state.ApplyIf(ChannelOpening|ChannelOpened|ChannelClosing, func() {
+		c.recvIn <- *p
+	})
+
+	if err != nil {
+		return ErrChannelClosed
+	} else {
+		return nil
+	}
+}
+
 // Logs a message, tagging it with the channel's local address.
-func (c *ChannelActive) Log(format string, vals ...interface{}) {
+func (c *ChannelActive) log(format string, vals ...interface{}) {
 	if !c.options.Debug {
 		return
 	}
@@ -213,82 +215,6 @@ func (c *ChannelActive) Log(format string, vals ...interface{}) {
 	log.Println(fmt.Sprintf("[%v] -- ", c.local) + fmt.Sprintf(format, vals...))
 }
 
-func openInit(c *ChannelActive) error {
-
-	var p *Packet
-	var err error
-
-	// generate a new offset for the handshake.
-	offset := rand.Uint32()
-
-	// Send: open
-	if err = sendHeader(c, PacketFlagOpen, offset, 0); err != nil {
-		return ErrHandshakeFailed
-	}
-
-	// Receive: open, ack
-	p, err = recvOrTimeout(c, c.options.AckTimeout)
-	if err != nil || p == nil {
-		sendHeader(c, PacketFlagErr, 0, 0)
-		return ErrHandshakeFailed
-	}
-
-	if p.ctrls != (PacketFlagOpen|PacketFlagAck) || p.ack != offset {
-		sendHeader(c, PacketFlagErr, 0, 0)
-		return ErrHandshakeFailed
-	}
-
-	// Send: ack
-	if err = sendHeader(c, PacketFlagAck, 0, p.offset); err != nil {
-		return ErrHandshakeFailed
-	}
-
-	return nil
-}
-func openRecv(c *ChannelActive) error {
-	// Receive: open (wait indefinitely)
-	c.Log("Waiting for handshake request.")
-
-	in, ok := <-c.recvIn
-	if !ok {
-		c.Log("Channel closed while waiting for handshake request")
-		return ErrHandshakeFailed
-	}
-
-	var p = &in
-	c.Log("Received open request: %v", p)
-
-	if p.ctrls != PacketFlagOpen {
-		sendHeader(c, PacketFlagErr, 0, 0)
-		return ErrHandshakeFailed
-	}
-
-	// Send: open,ack
-	offset := rand.Uint32()
-	if err := sendHeader(c, PacketFlagOpen|PacketFlagAck, offset, p.offset); err != nil {
-		return ErrHandshakeFailed
-	}
-
-	// Receive: Ack
-	p, err := recvOrTimeout(c, c.options.AckTimeout)
-	if err != nil {
-		sendHeader(c, PacketFlagErr, 0, 0)
-		return ErrHandshakeFailed
-	}
-
-	if p.ctrls != PacketFlagAck || p.ack != offset {
-		sendHeader(c, PacketFlagErr, 0, 0)
-		return ErrHandshakeFailed
-	}
-
-	return nil
-}
-func closeInit(c *ChannelActive) error {
-	return nil
-}
-func closeRecv(c *ChannelActive, p *Packet) error {
-	return nil
-}
 
 func openWorker(c *ChannelActive, listening bool) {
 	defer c.workers.Done()
@@ -301,6 +227,7 @@ func openWorker(c *ChannelActive, listening bool) {
 	}
 
 	if err != nil {
+		c.log("Error opening channel: %v", err)
 		c.state.Transition(ChannelOpening, To(ChannelClosed))
 	} else {
 		c.state.Transition(ChannelOpening, To(ChannelOpened))
@@ -395,7 +322,7 @@ func sendWorker(c *ChannelActive) {
 		})
 
 		if err != nil {
-			c.Log("Closing send worker.")
+			c.log("Closing send worker.")
 			return
 		}
 
@@ -439,13 +366,13 @@ func recvWorker(c *ChannelActive) {
 		}
 
 		c.stats.packetsReceived.Inc(1)
-		c.Log("Packet received: %v", p)
+		c.log("Packet received: %v", p)
 
 		// Handle: ack flag
 		if p.ctrls&PacketFlagAck > 0 {
 			_, err := c.sendLog.Commit(p.ack)
 			if err != nil {
-				c.Log("Error committing ack [%v] : [%v]", p.ack, err)
+				c.log("Error committing ack [%v] : [%v]", p.ack, err)
 				c.stats.packetsDropped.Inc(1)
 				continue
 			}
@@ -457,7 +384,7 @@ func recvWorker(c *ChannelActive) {
 
 			// Handle: Past segments.  Just drop
 			if head.offset > p.offset+uint32(len(p.data)) {
-				c.Log("Received past segment [%v, %v]", p.offset, len(p.data))
+				c.log("Received past segment [%v, %v]", p.offset, len(p.data))
 				c.stats.packetsDropped.Inc(1)
 				continue
 			}
@@ -495,6 +422,84 @@ func recvWorker(c *ChannelActive) {
 	}
 }
 
+// Performs initiator  open handshake: send(open), recv(open,ack), send(ack)
+func openInit(c *ChannelActive) error {
+
+	var p *Packet
+	var err error
+
+	// generate a new offset for the handshake.
+	offset := rand.Uint32()
+
+	// Send: open
+	if err = sendHeader(c, PacketFlagOpen, offset, 0); err != nil {
+		return ErrHandshakeFailed
+	}
+
+	// Receive: open, ack
+	p, err = recvOrTimeout(c, c.options.AckTimeout)
+	if err != nil || p == nil {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrTimeout
+	}
+
+	if p.ctrls != (PacketFlagOpen|PacketFlagAck) || p.ack != offset {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrResponse
+	}
+
+	// Send: ack
+	if err = sendHeader(c, PacketFlagAck, 0, p.offset); err != nil {
+		return ErrHandshakeFailed
+	}
+
+	return nil
+}
+
+// Performs receiver (ie listener) open handshake: recv(open), send(open,ack), recv(ack)
+func openRecv(c *ChannelActive) error {
+	// Receive: open (wait indefinitely)
+	in, ok := <-c.recvIn
+	if !ok {
+		return ErrInvalidState
+	}
+
+	var p = &in
+
+	if p.ctrls != PacketFlagOpen {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrResponse
+	}
+
+	// Send: open,ack
+	offset := rand.Uint32()
+	if err := sendHeader(c, PacketFlagOpen|PacketFlagAck, offset, p.offset); err != nil {
+		return ErrHandshakeFailed
+	}
+
+	// Receive: Ack
+	p, err := recvOrTimeout(c, c.options.AckTimeout)
+	if err != nil {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrTimeout
+	}
+
+	if p.ctrls != PacketFlagAck || p.ack != offset {
+		sendHeader(c, PacketFlagErr, 0, 0)
+		return ErrResponse
+	}
+
+	return nil
+}
+
+func closeInit(c *ChannelActive) error {
+	return nil
+}
+
+func closeRecv(c *ChannelActive) error {
+	return nil
+}
+
 func newPacket(c *ChannelActive, flags PacketFlags, offset uint32, ack uint32, data []byte) *Packet {
 	return NewPacket(c.local.entityId, c.local.channelId, c.remote.entityId, c.remote.channelId, flags, offset, ack, 0, data)
 }
@@ -513,4 +518,3 @@ func recvOrTimeout(c *ChannelActive, timeout time.Duration) (*Packet, error) {
 		return &p, nil
 	}
 }
-

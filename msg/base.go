@@ -9,5 +9,5 @@ type BaseChannel interface {
 	// should attempt to implement this in a NON-BLOCKING
 	// fashion. However, may block if necessary.
 	//
-	Send(p *Packet) error
+	send(p *Packet) error
 }

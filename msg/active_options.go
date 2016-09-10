@@ -8,7 +8,7 @@ const (
 	ChannelDefaultSendLogSize = 1 << 18 // 256K
 	ChannelDefaultSendWait    = 100 * time.Millisecond
 	ChannelDefaultRecvWait    = 20 * time.Millisecond
-	ChannelDefaultAckTimeout  = 1 * time.Second
+	ChannelDefaultAckTimeout  = 5 * time.Second
 	ChannelDefaultWinTimeout  = 2 * time.Second
 )
 

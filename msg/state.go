@@ -12,7 +12,7 @@ var (
 
 const (
 	StateMachineWait = 5 * time.Millisecond
-	// EmptyState State = 0
+	EmptyState = 0
 )
 
 type State uint32
@@ -40,7 +40,7 @@ func (c *StateMachine) ApplyIf(state State, fn func()) (State, error) {
 	c.RLock()
 	defer c.RUnlock()
 
-	if c.cur&state == State(0) {
+	if c.cur&state == EmptyState {
 		return c.cur, ErrUnexpectedState
 	}
 
@@ -52,7 +52,7 @@ func (c *StateMachine) Transition(from State, fn func() State) (State, error) {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.cur&from == State(0) {
+	if c.cur&from == EmptyState {
 		return c.cur, ErrUnexpectedState
 	}
 
@@ -63,7 +63,7 @@ func (c *StateMachine) Transition(from State, fn func() State) (State, error) {
 func (c *StateMachine) WaitUntil(state State) State {
 	// just spin, waiting for an appropriate state
 	for {
-		if c.Get()&state != State(0) {
+		if c.Get()&state != EmptyState {
 			return c.Get() & state
 		}
 

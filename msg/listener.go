@@ -6,11 +6,11 @@ import (
 )
 
 // Listeners listen on the range [0,255]
-var CHANNEL_LISTEN_MAX_ID uint16    = 255
-var CHANNEL_LISTEN_MIN_ID uint16    = 0
+var CHANNEL_LISTEN_MAX_ID uint16 = 255
+var CHANNEL_LISTEN_MIN_ID uint16 = 0
 
 // Each listener can buffer n packets
-var CHANNEL_LISTEN_BUF_SIZE uint    = 1024
+var CHANNEL_LISTEN_BUF_SIZE uint = 1024
 
 //
 var CHANNEL_LISTEN_INV_ID_ERR error = errors.New("Invalid listener id.")
@@ -48,15 +48,15 @@ type ChannelListener struct {
 // packets routed to it.
 //
 func NewChannelListener(local *ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) (*ChannelListener, error) {
-	if local == nil  {
+	if local == nil {
 		panic("local address must not be nil")
 	}
 
-	if cache == nil  {
+	if cache == nil {
 		panic("Cache must not be nil")
 	}
 
-	if ids == nil  {
+	if ids == nil {
 		panic("Cache must not be nil")
 	}
 
@@ -113,7 +113,7 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 
 	// create the channel address
 	lChannelId, err := self.ids.Take()
-	if(err != nil) {
+	if err != nil {
 		// TODO: return error packet.
 		// self.out<- NewReturnPacket
 		return nil, err
@@ -131,7 +131,7 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 
 		// route to the main output
 		opts.OnData = func(p *Packet) error {
-			self.out<-*p
+			self.out <- *p
 			return nil
 		}
 
@@ -141,12 +141,12 @@ func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
 			defer self.cache.Remove(c.local)
 			return nil
 		}
-	});
+	})
 }
 
 // Sends a packet to the channel stream.
 //
-func (self *ChannelListener) Send(p *Packet) error {
+func (self *ChannelListener) send(p *Packet) error {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	if self.closed {

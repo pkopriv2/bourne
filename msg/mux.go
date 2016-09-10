@@ -58,7 +58,6 @@ import "log"
 // Example:
 //
 
-
 // the parser output buffer is shared amonst all channels
 // var PARSER_BUF_OUT_SIZE uint = 8192
 
@@ -102,7 +101,7 @@ type Mux struct {
 
 func NewMux(reader io.Reader, writer io.Writer) *Mux {
 	parserOut := make(chan Packet, 1024)
-	routerIn  := make(chan Packet, 1024)
+	routerIn := make(chan Packet, 1024)
 
 	mux := &Mux{ids: NewIdPool(), channels: NewChannelCache()}
 
@@ -128,7 +127,7 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 		defer mux.workers.Done()
 		for {
 			packet, ok := <-prev
-			if ! ok {
+			if !ok {
 				log.Println("Channel closed.  Stopping writer thread")
 			}
 
@@ -154,18 +153,18 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 
 		for {
 			p, ok := <-prev
-			if ! ok {
+			if !ok {
 				log.Println("Channel closed.  Stopping router thread")
 				// todo...return error packet!
 				continue
 			}
 
 			channel := mux.channels.Get(ChannelAddress{p.dstEntityId, p.dstChannelId})
-			if channel == nil  {
+			if channel == nil {
 				continue
 			}
 
-			if err := channel.Send(&p); err != nil {
+			if err := channel.send(&p); err != nil {
 				// todo...return error packet!
 				continue
 			}
