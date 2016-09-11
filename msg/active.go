@@ -30,7 +30,7 @@ const (
 	ChannelOpening AtomicState = 1 << iota
 	ChannelOpened
 	ChannelClosingStart
-	ChannelClosingPending
+	ChannelClosingCleanup
 	ChannelClosed
 )
 
@@ -56,7 +56,6 @@ const (
 //     * Flow/congestion control
 //     * Message integrity
 //
-//  Send Data Flow:
 //
 //     <consumer> ---> [ ring buffer ] ---> sender ---> out
 //
@@ -148,14 +147,14 @@ func (c *ChannelActive) Flush() error {
 	c.state.WaitUntil(ChannelOpened | ChannelClosed)
 
 	return c.state.If(ChannelOpened|ChannelClosed, func() {
-		c.flush(365*24*time.Hour)  // waits for one year
+		c.flush(365 * 24 * time.Hour) // waits for one year
 	})
 }
 
 func (c *ChannelActive) flush(timeout time.Duration) error {
-	c.state.WaitUntil(ChannelOpened | ChannelClosingPending | ChannelClosed)
+	c.state.WaitUntil(ChannelOpened | ChannelClosingCleanup | ChannelClosed)
 
-	return c.state.If(ChannelOpened|ChannelClosingPending, func() {
+	return c.state.If(ChannelOpened|ChannelClosingCleanup, func() {
 		tail, _, head := c.sendLog.Refs()
 
 		timer := time.NewTimer(timeout)
@@ -207,7 +206,7 @@ func (c *ChannelActive) Write(data []byte) (int, error) {
 // Closes the channel.  Returns an error if the channel is already closed.
 // TODO: Better close semantics.  (ie what happens to data in the out buffer, etc..)
 func (c *ChannelActive) Close() error {
-	c.state.WaitUntil(ChannelOpened | ChannelClosingStart | ChannelClosingPending  | ChannelClosed)
+	c.state.WaitUntil(ChannelOpened | ChannelClosed)
 
 	// Closing simply amounts to transitioning the state to closing
 	// and then waiting for everyone to finish.
@@ -227,7 +226,7 @@ func (c *ChannelActive) Close() error {
 
 // Send pushes a message on the input channel.  (used for internal routing.)
 func (c *ChannelActive) send(p *Packet) error {
-	if !c.state.Is(ChannelOpening | ChannelOpened | ChannelClosingStart | ChannelClosingPending ) {
+	if !c.state.Is(ChannelOpening | ChannelOpened | ChannelClosingStart | ChannelClosingCleanup) {
 		return ErrChannelClosed
 	}
 
@@ -267,7 +266,7 @@ func closeWorker(c *ChannelActive) {
 	defer c.workers.Done()
 
 	c.flush(c.options.CloseTimeout)
-	c.state.Transition(ChannelClosingPending, ChannelClosed, func() {
+	c.state.Transition(ChannelClosingCleanup, ChannelClosed, func() {
 		c.sendLog.Close()
 		c.recvLog.Close()
 		close(c.recvIn)
@@ -291,7 +290,7 @@ func sendWorker(c *ChannelActive) {
 	// the packet buffer (initialized here so we don't continually recreate memory.)
 	tmp := make([]byte, PacketMaxLength)
 	for {
-		state := c.state.WaitUntil(ChannelOpened | ChannelClosingStart | ChannelClosingPending | ChannelClosed)
+		state := c.state.WaitUntil(ChannelOpened | ChannelClosingCleanup | ChannelClosed)
 		if state == ChannelClosed {
 			return
 		}
@@ -360,11 +359,7 @@ func sendWorker(c *ChannelActive) {
 			continue
 		}
 
-		// finally, send the packet.
-		// c.log("Sending packet!")
-		// err := c.sendOut(newPacket(c, flags, sendStart.offset, recvHead.offset, data))
-		// c.log("DONE! Sending packet somewhere!")
-		err = c.state.If(ChannelOpened|ChannelClosingPending, func() {
+		err = c.state.If(ChannelOpened|ChannelClosingCleanup, func() {
 			c.sendOut(newPacket(c, flags, sendStart.offset, recvHead.offset, data))
 		})
 
@@ -378,24 +373,24 @@ func sendWorker(c *ChannelActive) {
 
 func recvWorker(c *ChannelActive) {
 	defer c.workers.Done()
-	defer c.log("Recv worker done")
+	defer c.log("Recv worker shutdown")
 
 	// we'll use a simple sorted tree map to track out of order segments
 	pending := treemap.NewWith(OffsetComparator)
 	for {
 		// block until we can do something useful!
-		state := c.state.WaitUntil(ChannelOpened | ChannelClosingStart | ChannelClosingPending | ChannelClosed)
+		state := c.state.WaitUntil(ChannelOpened | ChannelClosingStart | ChannelClosingCleanup | ChannelClosed)
 		switch state {
-		case ChannelOpened:
-			break
 		case ChannelClosingStart:
-			c.state.Transition(ChannelClosingStart, ChannelClosingPending, func() {
+			c.state.Transition(ChannelClosingStart, ChannelClosingCleanup, func() {
 				c.workers.Add(1)
 				go closeWorker(c)
 			})
 
 			continue
-		case ChannelClosingPending:
+		case ChannelOpened:
+			break
+		case ChannelClosingCleanup:
 			break
 		case ChannelClosed:
 			return
@@ -463,7 +458,7 @@ func recvWorker(c *ChannelActive) {
 			}
 
 			// Handle: Write the valid elements of the segment.
-			_,err := c.recvLog.Write(data[head.offset-offset:])
+			_, err := c.recvLog.Write(data[head.offset-offset:])
 			if err != nil {
 				c.log("Recv log closed.  Done.")
 				return

@@ -64,7 +64,7 @@ func TestChannelActive_sendSingleStream(t *testing.T) {
 	defer channelL.Close()
 
 	go func() {
-		for i := 0;; i++ {
+		for i := 0; i<255; i++ {
 			if _, err := channelL.Write([]byte{uint8(i)}); err != nil {
 				channelL.log("Error writing to channel: %v", err)
 				return
@@ -72,7 +72,7 @@ func TestChannelActive_sendSingleStream(t *testing.T) {
 		}
 	}()
 
-	timer := time.NewTimer(time.Second * 30)
+	timer := time.NewTimer(time.Second * 10)
 
 	buf := make([]byte, 1024)
 	tot := 0
@@ -92,13 +92,13 @@ func TestChannelActive_sendSingleStream(t *testing.T) {
 		}
 
 		tot += num
-		if tot >= 12 {
+		if tot >= 255 {
 			break
 		}
 	}
 
-	assert.Equal(t, 12, tot)
-	for i := 0; i < 12; i++ {
+	assert.Equal(t, 255, tot)
+	for i := 0; i < 255; i++ {
 		assert.Equal(t, uint8(i), buf[i])
 	}
 }
@@ -184,15 +184,20 @@ func TestChannelActive_sendLargeStream(t *testing.T) {
 	defer channelR.Close()
 	defer channelL.Close()
 
+	out := make([]byte, 1024)
+	for i := 0; i < 1024; i++ {
+		out[i] = byte(i)
+	}
+
 	go func() {
-		for i := 0; i < 1<<20; i++ {
-			channelL.Write([]byte{uint8(i)})
+		for i := 0; i < 1<<10; i++ {
+			channelL.Write(out)
 		}
 	}()
 
-	timer := time.NewTimer(time.Second * 30)
+	timer := time.NewTimer(time.Second * 45)
 
-	buf := make([]byte, 1024)
+	buf := make([]byte, 1<<14)
 	tot := 0
 	for {
 		select {
@@ -222,12 +227,17 @@ func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, chann
 	l := ChannelAddress{entityIdL, channelIdL}
 	r := ChannelAddress{entityIdR, channelIdR}
 
-	out := make(chan Packet, 1024)
+	out := make(chan Packet, 1<<10)
 
 	var channel *ChannelActive
 	channel, _ = NewChannelActive(l, r, listener, func(opts *ChannelOptions) {
 		opts.AckTimeout = 500 * time.Millisecond
 		opts.CloseTimeout =  500 * time.Millisecond
+		opts.SendWait = 10 * time.Millisecond
+		opts.RecvWait = 1 * time.Millisecond
+		opts.SendLogSize = 1<<20
+		opts.RecvLogSize = 1<<20
+		opts.RecvInSize = 1<<10
 		opts.Debug = true
 		opts.OnClose = func(c *ChannelActive) error {
 			close(out)

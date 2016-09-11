@@ -27,7 +27,7 @@ const ProtocolVersion = 0
 //
 // Encoded as a uint16
 //
-const PacketMaxLength = 1 << 15
+const PacketMaxLength = 1<<16 - 1
 
 // Each packet will contain a sequence of control flags, indicating the nature
 // of the packet and how the receiver should handle it.
@@ -63,9 +63,9 @@ type Packet struct {
 	ctrls PacketFlags
 
 	// control values
-	offset   uint32 // position of data within stream
-	ack      uint32 // position of ack (i.e. start)
-	capacity uint32
+	offset uint32 // position of data within stream
+	ack    uint32 // position of ack (i.e. start)
+	cap    uint32 // the capacity of the sender
 
 	// the raw data (to be interpreted by the consumer)
 	data []uint8
@@ -84,7 +84,7 @@ func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstC
 		ctrls:        ctrls,
 		offset:       offset,
 		ack:          ack,
-		capacity:     capacity,
+		cap:          capacity,
 		data:         c}
 }
 
@@ -111,7 +111,7 @@ func (p *Packet) String() string {
 	}
 
 	if p.ctrls&PacketFlagAck > 0 {
-		flags = append(flags, fmt.Sprintf("Ack(%v", p.ack))
+		flags = append(flags, fmt.Sprintf("Ack(%v)", p.ack))
 	}
 
 	if p.ctrls&PacketFlagClose > 0 {
@@ -155,7 +155,7 @@ func WritePacket(w io.Writer, m *Packet) error {
 	if err := binary.Write(w, binary.BigEndian, &m.ack); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.capacity); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &m.cap); err != nil {
 		return err
 	}
 
