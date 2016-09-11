@@ -3,13 +3,14 @@ package msg
 import "time"
 
 const (
-	ChannelDefaultRecvInSize  = 1024
-	ChannelDefaultRecvLogSize = 1 << 20 // 1024K
-	ChannelDefaultSendLogSize = 1 << 18 // 256K
-	ChannelDefaultSendWait    = 100 * time.Millisecond
-	ChannelDefaultRecvWait    = 20 * time.Millisecond
-	ChannelDefaultAckTimeout  = 5 * time.Second
-	ChannelDefaultWinTimeout  = 2 * time.Second
+	ChannelDefaultRecvInSize   = 1024
+	ChannelDefaultRecvLogSize  = 1 << 20 // 1024K
+	ChannelDefaultSendLogSize  = 1 << 18  // 256K
+	ChannelDefaultSendWait     = 100 * time.Millisecond
+	ChannelDefaultRecvWait     = 20 * time.Millisecond
+	ChannelDefaultAckTimeout   = 5 * time.Second
+	ChannelDefaultWinTimeout   = 2 * time.Second
+	ChannelDefaultCloseTimeout = 10 * time.Second
 )
 
 // function used to configure a channel. (accepted as part of construction)
@@ -28,6 +29,7 @@ func DefaultChannelOptions() *ChannelOptions {
 		RecvWait:    ChannelDefaultRecvWait,
 		AckTimeout:  ChannelDefaultAckTimeout,
 		WinTimeout:  ChannelDefaultWinTimeout,
+		CloseTimeout: ChannelDefaultCloseTimeout,
 
 		// handlers
 		OnInit:  func(c *ChannelActive) error { return nil },
@@ -62,6 +64,9 @@ type ChannelOptions struct {
 
 	// The duration to wait for an ack before data is considered lost
 	WinTimeout time.Duration
+
+	// The duration to wait before the close is aborted.  any pending data is considered lost.
+	CloseTimeout time.Duration
 
 	// to be called when the channel has been initialized, and is in the process of being started
 	OnInit ChannelStateFn

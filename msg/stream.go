@@ -42,7 +42,6 @@ func NewRef(offset uint32) *Ref {
 	return &Ref{offset, time.Now()}
 }
 
-
 // A simple, infinite, reliable stream.  This is the primary data structure
 // behind the channel send/receive logic.   The stream is essentially duplicated
 // between two locations.  This structure encapsulates that.  In other words,

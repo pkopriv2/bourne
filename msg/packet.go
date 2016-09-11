@@ -37,7 +37,7 @@ type PacketFlags uint8
 const (
 	PacketFlagNone PacketFlags = 0
 	PacketFlagOpen PacketFlags = 1 << iota
-	PacketFlagData
+	PacketFlagOffset
 	PacketFlagAck
 	PacketFlagClose
 	PacketFlagErr
@@ -106,7 +106,7 @@ func (p *Packet) String() string {
 		flags = append(flags, "Open")
 	}
 
-	if p.ctrls&PacketFlagData > 0 {
+	if p.ctrls&PacketFlagOffset > 0 {
 		flags = append(flags, fmt.Sprintf("Data(%v, %v)", p.offset, len(p.data)))
 	}
 

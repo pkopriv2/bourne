@@ -59,16 +59,20 @@ func TestChannelActive_sendSinglePacket(t *testing.T) {
 
 func TestChannelActive_sendSingleStream(t *testing.T) {
 	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
+	channelR.options.Debug = false
 	defer channelR.Close()
 	defer channelL.Close()
 
 	go func() {
-		for i := 0; i < 255; i++ {
-			channelL.Write([]byte{uint8(i)})
+		for i := 0;; i++ {
+			if _, err := channelL.Write([]byte{uint8(i)}); err != nil {
+				channelL.log("Error writing to channel: %v", err)
+				return
+			}
 		}
 	}()
 
-	timer := time.NewTimer(time.Second * 10)
+	timer := time.NewTimer(time.Second * 30)
 
 	buf := make([]byte, 1024)
 	tot := 0
@@ -88,13 +92,13 @@ func TestChannelActive_sendSingleStream(t *testing.T) {
 		}
 
 		tot += num
-		if tot >= 255 {
+		if tot >= 12 {
 			break
 		}
 	}
 
-	assert.Equal(t, 255, tot)
-	for i := 0; i < 255; i++ {
+	assert.Equal(t, 12, tot)
+	for i := 0; i < 12; i++ {
 		assert.Equal(t, uint8(i), buf[i])
 	}
 }
@@ -220,7 +224,8 @@ func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, chann
 
 	out := make(chan Packet, 1024)
 
-	channel, _ := NewChannelActive(l, r, listener, func(opts *ChannelOptions) {
+	var channel *ChannelActive
+	channel, _ = NewChannelActive(l, r, listener, func(opts *ChannelOptions) {
 		opts.AckTimeout = 500 * time.Millisecond
 		opts.Debug = true
 		opts.OnClose = func(c *ChannelActive) error {
@@ -257,6 +262,7 @@ func newTestChannelPair(entityIdL uint32, channelIdL uint16, entityIdR uint32, c
 				}
 				channelL.log("Routing packet: %v", &p)
 				if err := channelL.send(&p); err != nil {
+					// channelL.log("Couldn't receive: %v", &p)
 					return
 				}
 			case p, ok := <-outL:
@@ -265,10 +271,12 @@ func newTestChannelPair(entityIdL uint32, channelIdL uint16, entityIdR uint32, c
 				}
 				channelR.log("Routing packet: %v", &p)
 				if err := channelR.send(&p); err != nil {
+					// channelR.log("Couldn't receive : %v", &p)
 					return
 				}
 			default:
-				time.Sleep(5 * time.Millisecond)
+				break
+				// time.Sleep(5 * time.Millisecond)
 			}
 		}
 	})
