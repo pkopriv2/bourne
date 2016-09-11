@@ -227,6 +227,7 @@ func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, chann
 	var channel *ChannelActive
 	channel, _ = NewChannelActive(l, r, listener, func(opts *ChannelOptions) {
 		opts.AckTimeout = 500 * time.Millisecond
+		opts.CloseTimeout =  500 * time.Millisecond
 		opts.Debug = true
 		opts.OnClose = func(c *ChannelActive) error {
 			close(out)

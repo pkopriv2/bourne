@@ -7,7 +7,8 @@ import (
 )
 
 var (
-	ErrStreamInvalidCommit = errors.New("LOG:INVALID_PRUNE")
+	ErrStreamInvalidCommit = errors.New("STREAM:INVALID_COMMIT")
+	ErrStreamClosed = errors.New("STREAM:CLOSED")
 )
 
 const (
@@ -54,6 +55,8 @@ type Stream struct {
 	tail *Ref
 	cur  *Ref
 	head *Ref
+
+	closed bool
 }
 
 func NewStream(size uint) *Stream {
@@ -63,6 +66,12 @@ func NewStream(size uint) *Stream {
 		tail: ref,
 		cur:  ref,
 		head: ref}
+}
+
+func (s *Stream) Close() {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	s.closed = true
 }
 
 func (s *Stream) Refs() (*Ref, *Ref, *Ref) {
@@ -126,9 +135,13 @@ func (s *Stream) Data() []byte {
 
 // Reads from the buffer from the current positon.
 //
-func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32) {
+func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	if s.closed {
+		return nil, 0, ErrStreamClosed
+	}
 
 	// get the new write
 	inLen := uint32(len(in))
@@ -153,12 +166,16 @@ func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32) {
 		s.tail = s.cur
 	}
 
-	return start, i
+	return start, i, nil
 }
 
-func (s *Stream) TryWrite(val []byte) (uint32, *Ref) {
+func (s *Stream) TryWrite(val []byte) (uint32, *Ref, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	if s.closed {
+		return 0, nil, ErrStreamClosed
+	}
 
 	// get the new write
 	valLen := uint32(len(val))
@@ -175,14 +192,18 @@ func (s *Stream) TryWrite(val []byte) (uint32, *Ref) {
 	}
 
 	s.head = NewRef(w + i)
-	return i, s.head
+	return i, s.head, nil
 }
 
 func (s *Stream) Write(val []byte) (int, error) {
 	valLen := uint32(len(val))
 
 	for {
-		num, _ := s.TryWrite(val)
+
+		num, _, err := s.TryWrite(val)
+		if err != nil {
+			return 0, err
+		}
 
 		val = val[num:]
 		if len(val) == 0 {
@@ -195,9 +216,13 @@ func (s *Stream) Write(val []byte) (int, error) {
 	return int(valLen), nil
 }
 
-func (s *Stream) Read(in []byte) (n int, err error) {
+func (s *Stream) Read(in []byte) (int, error) {
 	for {
-		_, num := s.TryRead(in, true)
+		_, num, err := s.TryRead(in, true)
+		if err != nil {
+			return 0, err
+		}
+
 		if num > 0 {
 			return int(num), nil
 		}

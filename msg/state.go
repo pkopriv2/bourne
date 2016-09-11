@@ -2,56 +2,49 @@ package msg
 
 import (
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	StateMachineWait = 5 * time.Millisecond
-	EmptyState       = 0
+	AtomicStateMachineWait = 5 * time.Millisecond
+	EmptyAtomicState       = 0
+	TransAtomicState       = 1
 )
 
 type StateError struct {
-	expected State
-	actual   State
+	expected AtomicState
+	actual AtomicState
 }
 
-func NewStateError(e State, a State) *StateError {
+func NewStateError(e AtomicState, a AtomicState) *StateError {
 	return &StateError{e, a}
 }
 
 func (c *StateError) Error() string {
-	return fmt.Sprintf("Unexpected State.  Expected: [%b], Actual: [%b]", c.expected, c.actual)
+	return fmt.Sprintf("Unexpected AtomicState.  Expected: [%b] Actual: [%b]", c.expected, c.actual)
 }
 
-type State uint32
+type AtomicState uint32
 
-type StateMachine struct {
-	sync.RWMutex
-	cur State
+func NewAtomicState(state AtomicState) (*AtomicState) {
+	var ret *AtomicState
+
+	ret = &state
+	return ret
 }
 
-func To(s State) func() State {
-	return func() State { return s }
+func (s *AtomicState) Get() AtomicState {
+	return AtomicState(atomic.LoadUint32((*uint32)(s)))
 }
 
-func NewStateMachine(init State) *StateMachine {
-	return &StateMachine{cur: init}
+func (c *AtomicState) Is(state AtomicState) bool {
+	return c.Get()&state != EmptyAtomicState
 }
 
-func (c *StateMachine) Get() State {
-	c.RLock()
-	defer c.RUnlock()
-	return c.cur
-}
-
-func (c *StateMachine) Is(state State) bool {
-	return c.Get()&state != EmptyState
-}
-
-func (c *StateMachine) If(state State, fn func()) error {
+func (c *AtomicState) If(state AtomicState, fn func()) error {
 	cur := c.Get()
-	if cur&state == EmptyState {
+	if cur&state == EmptyAtomicState {
 		return NewStateError(state, cur)
 	}
 
@@ -59,25 +52,81 @@ func (c *StateMachine) If(state State, fn func()) error {
 	return nil
 }
 
-func (c *StateMachine) Transition(from State, fn func() State) error {
-	c.Lock()
-	defer c.Unlock()
-	if c.cur&from == EmptyState {
-		return NewStateError(from, c.cur)
+func (c *AtomicState) Transition(from AtomicState, to AtomicState, fns ...func()) error {
+	if ! atomic.CompareAndSwapUint32((*uint32)(c), (uint32)(from), (uint32)(to)) {
+		return NewStateError(from, c.Get())
 	}
 
-	c.cur = fn()
+	for _, fn := range fns {
+		fn()
+	}
+
 	return nil
 }
 
-func (c *StateMachine) WaitUntil(state State) State {
+func (c *AtomicState) WaitUntil(state AtomicState) AtomicState {
 	// just spin, waiting for an appropriate state
 	for {
 		cur := c.Get()
-		if cur&state != EmptyState {
+		if cur&state != EmptyAtomicState {
 			return cur
 		}
 
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+
+// type AtomicStateMachine struct {
+	// sync.RWMutex
+	// cur AtomicState
+// }
+//
+// func To(s AtomicState) func() AtomicState {
+	// return func() AtomicState { return s }
+// }
+//
+// func NewAtomicStateMachine(init AtomicState) *AtomicStateMachine {
+	// return &AtomicStateMachine{cur: init}
+// }
+//
+// func (c *AtomicStateMachine) Get() AtomicState {
+	// return c.cur
+// }
+//
+// func (c *AtomicStateMachine) Is(state AtomicState) bool {
+	// return c.Get()&state != EmptyAtomicState
+// }
+//
+// func (c *AtomicStateMachine) If(state AtomicState, fn func()) error {
+	// cur := c.Get()
+	// if cur&state == EmptyAtomicState {
+		// return NewStateError(state, cur)
+	// }
+//
+	// fn()
+	// return nil
+// }
+//
+// func (c *AtomicStateMachine) Transition(from AtomicState, fn func() AtomicState) error {
+	// c.Lock()
+	// defer c.Unlock()
+	// if c.cur&from == EmptyAtomicState {
+		// return NewStateError(from, c.cur)
+	// }
+//
+	// c.cur = fn()
+	// return nil
+// }
+//
+// func (c *AtomicStateMachine) WaitUntil(state AtomicState) AtomicState {
+	// // just spin, waiting for an appropriate state
+	// for {
+		// cur := c.Get()
+		// if cur&state != EmptyAtomicState {
+			// return cur
+		// }
+//
+		// time.Sleep(100 * time.Millisecond)
+	// }
+// }

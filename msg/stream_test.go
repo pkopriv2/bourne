@@ -18,7 +18,7 @@ func TestRLog_init(t *testing.T) {
 func TestRLog_TryWrite_One(t *testing.T) {
 	buf := NewStream(4)
 
-	num, _ := buf.TryWrite([]byte{1})
+	num, _, _ := buf.TryWrite([]byte{1})
 
 	assert.Equal(t, uint32(1), num)
 	assert.Equal(t, []byte{1}, buf.Data())
