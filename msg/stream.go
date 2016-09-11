@@ -56,7 +56,7 @@ type Stream struct {
 	cur  *Ref
 	head *Ref
 
-	closed bool
+	closed bool // no more io
 }
 
 func NewStream(size uint) *Stream {
@@ -68,33 +68,51 @@ func NewStream(size uint) *Stream {
 		head: ref}
 }
 
-func (s *Stream) Close() {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
+func (s *Stream) Close() error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.closed {
+		return ErrStreamClosed
+	}
 	s.closed = true
+	return nil
 }
 
-func (s *Stream) Refs() (*Ref, *Ref, *Ref) {
+func (s *Stream) Closed() bool {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return s.tail, s.cur, s.head
+	return s.closed
 }
 
-func (s *Stream) Reset() (*Ref, *Ref) {
+func (s *Stream) Refs() (*Ref, *Ref, *Ref, bool) {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.tail, s.cur, s.head, s.closed
+}
+
+func (s *Stream) Reset() (*Ref, *Ref, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	before := s.cur
+	if s.closed {
+		return nil, nil, ErrStreamClosed
+	}
+
+	prev := s.cur
 
 	// moves the read back to the start.
 	s.tail = NewRef(s.tail.offset)
 	s.cur = s.tail
-	return s.cur, before
+	return s.cur, prev, nil
 }
 
 func (s *Stream) Commit(pos uint32) (*Ref, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	if s.closed {
+		return nil, ErrStreamClosed
+	}
 
 	if pos > s.head.offset {
 		return nil, ErrStreamInvalidCommit

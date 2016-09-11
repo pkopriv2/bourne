@@ -9,6 +9,7 @@ import (
 const (
 	AtomicStateMachineWait = 5 * time.Millisecond
 	EmptyAtomicState       = 0
+	AnyAtomicState         = 1<<32
 	TransAtomicState       = 1
 )
 
@@ -52,16 +53,8 @@ func (c *AtomicState) If(state AtomicState, fn func()) error {
 	return nil
 }
 
-func (c *AtomicState) Transition(from AtomicState, to AtomicState, fns ...func()) error {
-	if ! atomic.CompareAndSwapUint32((*uint32)(c), (uint32)(from), (uint32)(to)) {
-		return NewStateError(from, c.Get())
-	}
-
-	for _, fn := range fns {
-		fn()
-	}
-
-	return nil
+func (c *AtomicState) Transition(from AtomicState, to AtomicState) bool {
+	return atomic.CompareAndSwapUint32((*uint32)(c), (uint32)(from), (uint32)(to))
 }
 
 func (c *AtomicState) WaitUntil(state AtomicState) AtomicState {
