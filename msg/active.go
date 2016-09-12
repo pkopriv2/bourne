@@ -89,11 +89,17 @@ const (
 //  thread7: (closing thread)
 //     * Performs the closing handshake and closes all resources.  This is a shortlived thread.
 //
-// Shutdown:
+// Channel Closing:
 //
 //   If initiated by consumer:
 //      1. Transition the state to Closing.
-//      2. Close thread is spawned (as initiator). Waits for all threads to die.
+//      2. Close thread is spawned (as initiator).
+//      3. Close reader/writer of recvlog, and reader/writer of sendlog.  (any pending reads/writes are aborted)
+//      4. Close sequence is initiated.
+
+//   If initiated by remote channel:
+//      1. Transition the state to Closing. (detected in recv thread)
+//      2. Close thread is spawned (as receiver).
 //      3. Close reader/writer of recvlog, and reader/writer of sendlog.  (any pending reads/writes are aborted)
 //      4. Close sequence is initiated.
 //
@@ -294,12 +300,20 @@ func openWorker(c *ChannelActive, listening bool) {
 func closeWorker(c *ChannelActive, initiator bool) {
 	defer c.workers.Done()
 
-	if err := c.sendLog.Close(); err != nil {
-		c.state.Transition(AnyAtomicState, ChannelError)
+	var err error
+	if initiator {
+		err = closeInit(c)
+	} else {
+		err = closeRecv(c)
 	}
 
-	if err := c.recvLog.Close(); err != nil {
+	c.sendLog.Close()
+	c.recvLog.Close()
+
+	if err != nil {
 		c.state.Transition(AnyAtomicState, ChannelError)
+	} else {
+		c.state.Transition(ChannelClosing, ChannelClosed)
 	}
 }
 
@@ -400,6 +414,7 @@ func sendWorker(c *ChannelActive) {
 			continue
 		}
 
+		// this can block indefinitely (What should we do???)
 		if err := c.sendOut(newPacket(c, flags, sendStart.offset, recvHead.offset, data)); err != nil {
 			c.state.Transition(AnyAtomicState, ChannelError)
 			return
@@ -446,11 +461,23 @@ func recvWorker(c *ChannelActive) {
 
 		c.stats.packetsReceived.Inc(1)
 
+		// Handle: close flag
+		if p.ctrls&PacketFlagClose > 0 {
+			if ! c.state.Transition(ChannelOpened, ChannelClosing) {
+				return
+			}
+
+			c.workers.Add(1)
+			go closeWorker(c, false)
+			return
+		}
+
 		// Handle: ack flag
 		if p.ctrls&PacketFlagAck > 0 {
 			_, err := c.sendLog.Commit(p.ack)
 			switch err {
 			case ErrStreamClosed:
+				c.log("Error committing ack. Send log closed.")
 				return
 			case ErrStreamInvalidCommit:
 				c.log("Error committing ack [%v] : [%v]", p.ack, err)
@@ -472,10 +499,7 @@ func recvWorker(c *ChannelActive) {
 			}
 
 			// Take a snapshot of the current receive stream offsets
-			_, _, head, closed := c.recvLog.Refs()
-			if closed {
-				return
-			}
+			_, _, head, _:= c.recvLog.Refs()
 
 			// Handle: Future offset
 			offset, data := k.(uint32), v.([]byte)
@@ -567,7 +591,37 @@ func openRecv(c *ChannelActive) error {
 	return nil
 }
 
+// Performs initiator  open handshake: send(close), recv(close, ack), send(ack)
 func closeInit(c *ChannelActive) error {
+//
+	// var p *Packet
+	// var err error
+//
+	// // generate a new offset for the handshake.
+	// offset := rand.Uint32()
+//
+	// // Send: open
+	// if err = sendHeader(c, PacketFlagClose, offset, 0); err != nil {
+		// return ErrHandshakeFailed
+	// }
+//
+	// // Receive: open, ack
+	// p, err = recvOrTimeout(c, c.options.AckTimeout)
+	// if err != nil || p == nil {
+		// sendHeader(c, PacketFlagErr, 0, 0)
+		// return ErrTimeout
+	// }
+//
+	// if p.ctrls != (PacketFlagOpen|PacketFlagAck) || p.ack != offset {
+		// sendHeader(c, PacketFlagErr, 0, 0)
+		// return ErrHandshakeFailed
+	// }
+//
+	// // Send: ack
+	// if err = sendHeader(c, PacketFlagAck, 0, p.offset); err != nil {
+		// return ErrHandshakeFailed
+	// }
+
 	return nil
 }
 
