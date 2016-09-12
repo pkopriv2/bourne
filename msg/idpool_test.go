@@ -23,7 +23,7 @@ func TestIdPool(*testing.T) {
         // }
     // }()
 
-    var val uint16
+    var val uint
     // var err error
     val, _ = pool.Take()
     fmt.Printf("take: %v\n", val)
