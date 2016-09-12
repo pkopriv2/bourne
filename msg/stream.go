@@ -122,7 +122,7 @@ func (s *Stream) Commit(pos uint32) (*Ref, error) {
 		return nil, ErrStreamInvalidCommit
 	}
 
-	if pos < s.tail.offset {
+	if pos <= s.tail.offset {
 		return nil, nil
 	}
 

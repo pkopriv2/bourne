@@ -102,6 +102,10 @@ func (p *Packet) String() string {
 
 	flags := make([]string, 0, 5)
 
+	if p.ctrls&PacketFlagErr > 0 {
+		flags = append(flags, fmt.Sprintf("Error(%v)", string(p.data)))
+	}
+
 	if p.ctrls&PacketFlagOpen > 0 {
 		flags = append(flags, fmt.Sprintf("Open(%v)", p.offset))
 	}
