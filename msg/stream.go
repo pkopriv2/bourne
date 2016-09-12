@@ -8,7 +8,7 @@ import (
 
 var (
 	ErrStreamInvalidCommit = errors.New("STREAM:INVALID_COMMIT")
-	ErrStreamClosed = errors.New("STREAM:CLOSED")
+	ErrStreamClosed        = errors.New("STREAM:CLOSED")
 )
 
 const (
@@ -44,9 +44,13 @@ func NewRef(offset uint32) *Ref {
 }
 
 // A simple, infinite, reliable stream.  This is the primary data structure
-// behind the channel send/receive logic.   The stream is essentially duplicated
-// between two locations.  This structure encapsulates that.  In other words,
-// this may be thought of a distributed stream.  The basic
+// behind the channel send/receive logic.  A stream is just a circular buffer
+// with three offsets instead of two:
+//
+//  * Head: Where the next write occurs.
+//  * Cur:  Where the next read occurs.  In the case of a distributed stream,
+//          this represents un-verified sends.
+//  * Tail: What can be forgotten.  (ie has been verified)
 //
 type Stream struct {
 	data []byte
@@ -84,7 +88,7 @@ func (s *Stream) Closed() bool {
 	return s.closed
 }
 
-func (s *Stream) Refs() (*Ref, *Ref, *Ref, bool) {
+func (s *Stream) Snapshot() (*Ref, *Ref, *Ref, bool) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	return s.tail, s.cur, s.head, s.closed

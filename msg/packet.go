@@ -103,7 +103,7 @@ func (p *Packet) String() string {
 	flags := make([]string, 0, 5)
 
 	if p.ctrls&PacketFlagOpen > 0 {
-		flags = append(flags, "Open")
+		flags = append(flags, fmt.Sprintf("Open(%v)", p.offset))
 	}
 
 	if p.ctrls&PacketFlagOffset > 0 {
@@ -115,7 +115,7 @@ func (p *Packet) String() string {
 	}
 
 	if p.ctrls&PacketFlagClose > 0 {
-		flags = append(flags, "Close")
+		flags = append(flags, fmt.Sprintf("Close(%v)", p.offset))
 	}
 
 	buffer.WriteString(fmt.Sprintf("Flags: [%v] ", strings.Join(flags, "|")))
