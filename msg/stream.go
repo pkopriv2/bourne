@@ -141,7 +141,7 @@ func (s *Stream) Data() []byte {
 	defer s.lock.RUnlock()
 
 	// grab their positions
-	r := s.cur.offset
+	r := s.tail.offset
 	w := s.head.offset
 
 	len := uint32(len(s.data))

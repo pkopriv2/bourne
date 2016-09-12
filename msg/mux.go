@@ -24,10 +24,10 @@ import "log"
 // Data flow:
 //
 //  IN FLOW:
-//  <DATA> ---> PARSER_IN ---> ROUTER ----> *CHANNEL
+//  <DATA> ---> DESERIALIZER ---> ROUTER ----> *CHANNEL
 //
 //  OUT FLOW:
-//  <DATA> ---> *CHANNEL ---> PARSER_OUT ----> <DATA>
+//  <DATA> ---> *CHANNEL ---> SERIALIZER ----> <DATA>
 //
 // NOTE: Any reference to output refers to the OUT FLOW direction.
 //
@@ -38,17 +38,13 @@ import "log"
 //      * SERIALIZER   : A single instance operating in its own routine (buffered output)
 //      * DESERIALIZER : A single instance operating in its own routine.(buffered input)
 //      * ROUTER       : A single instance operating in its own routine.(buffered input)
-//      * CHANNEL      : Operates in its own routine (buffered input)
+//      * CHANNEL      : Manages its own threds.
 //
-// Channel shutdown
-//
-//      * Closes the Channel's send
 //
 // Multiplex closing:
 //
+//      * Invoke close on all channels
 //      * Closes the Reader
-//      * Closes all send channels in the IN direction
-//      * Closes all send channels in the OUT direction
 //      * Closes the Writer
 //
 // Examples:
@@ -80,13 +76,13 @@ type StreamFactory func(entityId uint32) (*io.ReadWriter, error)
 //
 type Mux struct {
 
-	// ids of available ids
+	// pool of available channel ids
 	ids *IdPool
 
 	// the complete listing of sessions (both active and listening)
 	channels *ChannelCache
 
-	// a flag
+	// a flag indicating state.
 	closed bool
 
 	// the lock on the multiplexer
@@ -105,7 +101,7 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 
 	mux := &Mux{ids: NewIdPool(), channels: NewChannelCache()}
 
-	// start the reader thread
+	// start the parser thread
 	mux.workers.Add(1)
 	go func(mux *Mux, r io.Reader, next chan Packet) {
 		defer mux.workers.Done()
@@ -140,34 +136,28 @@ func NewMux(reader io.Reader, writer io.Writer) *Mux {
 	}(mux, parserOut, writer)
 
 	// start the packet router thread
-
-	// TODO: we eventually want to scale this to many router routines.
-	// TODO: in order to do that and still accomplish in-order processing,
-	// TODO: we need to apply a "consistent" hashing to the destination
-	// TODO: address.  Another alternative is to throw in-order processing
-	// TODO: out the window and let any active channels reconcile the ordering.
-	// TODO: a very simple integer heap would work nicely.
 	mux.workers.Add(1)
 	go func(mux *Mux, prev chan Packet, err chan Packet) {
 		defer mux.workers.Done()
 
 		for {
-			p, ok := <-prev
-			if !ok {
-				log.Println("Channel closed.  Stopping router thread")
-				// todo...return error packet!
-				continue
-			}
+			// p, ok := <-prev
+			// if !ok {
+				// // todo...return error packet!
+				// return
+			// }
 
-			channel := mux.channels.Get(ChannelAddress{p.dstEntityId, p.dstChannelId})
-			if channel == nil {
-				continue
-			}
-
-			if err := channel.send(&p); err != nil {
-				// todo...return error packet!
-				continue
-			}
+			// // see if there is an "active" session
+			// channel := mux.channels.get(newchanneladdress{p.dstentityid, p.dstchannelid})
+			// if channel == nil {
+				// continue
+			// }
+//
+			// // see if there is a "listener" session
+			// if err := channel.send(&p); err != nil {
+				// // todo...return error packet!
+				// continue
+			// }
 		}
 	}(mux, routerIn, parserOut)
 

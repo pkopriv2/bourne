@@ -7,20 +7,26 @@ import (
 	"sync"
 )
 
-// The pool of ids is restricted to the range [256, 65535].
-var ID_POOL_MAX_ID uint16 = 65535 // exclusive
-var ID_POOL_MIN_ID uint16 = 256   // exclusive
+var (
+	// To be returned if there are no more ids available.
+	ErrIdPoolCapacity = errors.New("IDPOOL:CAPACITY")
+)
 
-// Each time the pool is expanded, it grows by this amount.
-var ID_POOL_EXP_INC uint16 = 10
+const (
+	// The pool of ids is restricted to the range [256, 65535].
+	IdPoolMinId = 256   // exclusive
+	IdPoolMaxId = 65535 // exclusive
 
-// To be returned if there are no more ids available.
-var ID_POOL_CAP_ERROR error = errors.New("Pool has reached capacity!")
+	// Each time the pool is expanded, it grows by this amount.
+	IdPoolExpInc = 10
+)
+
+
 
 // A memory efficient pool of available ids. The pool will be
 // restricted to the range defined by:
 //
-//  [ID_POOL_MIN_ID, ID_POOL_MAX_ID]
+//  [IdPoolMinId, IdPoolMaxId]
 //
 // By convention, the pool will grow downward, meaning higher ids are
 // favored.  Unlike a sync.Pool, this class does not automatically
@@ -34,9 +40,9 @@ var ID_POOL_CAP_ERROR error = errors.New("Pool has reached capacity!")
 // *This object is thread-safe*
 //
 type IdPool struct {
-	lock  *sync.Mutex
+	lock  sync.Mutex
 	avail *list.List
-	next  uint16 // used as a low watermark
+	next  uint // used as a low watermark
 }
 
 // Creates a new id pool.  The pool is initialized with
@@ -44,11 +50,10 @@ type IdPool struct {
 // are exhausted, it is automatically and safely expanded.
 //
 func NewIdPool() *IdPool {
-	lock := new(sync.Mutex)
 	avail := list.New()
 
-	pool := &IdPool{lock, avail, ID_POOL_MAX_ID}
-	pool.expand(ID_POOL_EXP_INC)
+	pool := &IdPool{avail: avail, next: IdPoolMaxId}
+	pool.expand(IdPoolExpInc)
 	return pool
 }
 
@@ -57,17 +62,17 @@ func NewIdPool() *IdPool {
 // Expands the available ids by numItems or until
 // it has reached maximum capacity.
 //
-func (self *IdPool) expand(numItems uint16) error {
+func (self *IdPool) expand(numItems uint) error {
 	log.Printf("Attemping to expand id pool [%v] by [%v] items\n", self.next, numItems)
 
 	i, prev := self.next, self.next
-	for ; i > prev-numItems && i >= ID_POOL_MIN_ID; i-- {
+	for ; i > prev-numItems && i >= IdPoolMinId; i-- {
 		self.avail.PushBack(i)
 	}
 
 	// if we didn't move i, the pool is full.
 	if i == prev {
-		return ID_POOL_CAP_ERROR
+		return ErrIdPoolCapacity
 	}
 
 	// move the watermark
@@ -81,22 +86,22 @@ func (self *IdPool) expand(numItems uint16) error {
 // In the event of a non-nil error, the consumer MUST not use the
 // returned value.
 //
-func (self *IdPool) Take() (uint16, error) {
+func (self *IdPool) Take() (uint, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
 	// see if anything is available
 	if item := self.avail.Front(); item != nil {
-		return self.avail.Remove(item).(uint16), nil
+		return self.avail.Remove(item).(uint), nil
 	}
 
 	// try to expand the pool
-	if err := self.expand(ID_POOL_EXP_INC); err != nil {
+	if err := self.expand(IdPoolExpInc); err != nil {
 		return 0, err
 	}
 
 	// okay, the pool has been expanded
-	return self.avail.Remove(self.avail.Front()).(uint16), nil
+	return self.avail.Remove(self.avail.Front()).(uint), nil
 }
 
 // Returns an id to the pool.
@@ -106,7 +111,7 @@ func (self *IdPool) Take() (uint16, error) {
 //  Only ids that have been loaned out should be returned to the
 //  pool.
 //
-func (self *IdPool) Return(id uint16) {
+func (self *IdPool) Return(id uint) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if id < self.next {

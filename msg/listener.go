@@ -5,36 +5,36 @@ import (
 	"sync"
 )
 
-// Listeners listen on the range [0,255]
-var CHANNEL_LISTEN_MAX_ID uint16 = 255
-var CHANNEL_LISTEN_MIN_ID uint16 = 0
+var (
+	ErrListenerInvalidId = errors.New("LISTENER:INVALD_ID")
+)
 
-// Each listener can buffer n packets
-var CHANNEL_LISTEN_BUF_SIZE uint = 1024
+const (
+	ListenerMaxId   = 255
+	ListenerMinId   = 0
+	ListenerBufSize = 1024
+)
 
-//
-var CHANNEL_LISTEN_INV_ID_ERR error = errors.New("Invalid listener id.")
-
-// A listening channel is a simple channel awaiting new channel requests.
+// A listener is a simple channel awaiting new channel requests.
 //
 // *This object is thread safe.*
 //
-type ChannelListener struct {
+type listener struct {
 
-	// the local channel address
-	local *ChannelAddress
+	// the session address (will have a nil remote address)
+	session Session
 
 	// the channel cache (shared amongst all channels)
 	cache *ChannelCache
-
-	// the pool of ids (shared amongst all channels)
-	ids *IdPool
 
 	// the buffered "in" channel (owned by this channel)
 	in chan Packet
 
 	// the buffered "out" channel (shared amongst all channels)
 	out chan Packet
+
+	// options functions (called on each spawned channel)
+	config ChannelConfig
 
 	// the lock on this channel
 	lock sync.RWMutex
@@ -47,133 +47,113 @@ type ChannelListener struct {
 // channel to the channel cache, which means that it immediately available to have
 // packets routed to it.
 //
-func NewChannelListener(local *ChannelAddress, cache *ChannelCache, ids *IdPool, out chan Packet) (*ChannelListener, error) {
-	if local == nil {
-		panic("local address must not be nil")
-	}
-
-	if cache == nil {
-		panic("Cache must not be nil")
-	}
-
-	if ids == nil {
-		panic("Cache must not be nil")
-	}
-
-	if local.channelId > CHANNEL_LISTEN_MAX_ID {
-		return nil, CHANNEL_LISTEN_INV_ID_ERR
-	}
+func newListener(local Address, cache *ChannelCache, out chan Packet, config ChannelConfig) (*listener, error) {
 
 	// buffered input chan
-	in := make(chan Packet, CHANNEL_LISTEN_BUF_SIZE)
+	in := make(chan Packet, ListenerBufSize)
 
 	// create the channel
-	channel := &ChannelListener{
-		local: local,
-		cache: cache,
-		ids:   ids,
-		out:   out,
-		in:    in}
+	listener := &listener{
+		session: NewListenerSession(local),
+		cache:   cache,
+		out:     out,
+		config:  config,
+		in:      in}
 
 	// add it to the channel pool (i.e. make it available for routing)
-	if err := cache.Add(*local, channel); err != nil {
+	if err := cache.Add(listener); err != nil {
 		return nil, err
 	}
 
 	// finally, return control to the caller
-	return channel, nil
+	return listener, nil
 }
 
-func (self *ChannelListener) Accept() (Channel, error) {
-	for {
-		packet, ok := <-self.in
-		if !ok {
-			return nil, CHANNEL_CLOSED_ERROR
-		}
+func (l *listener) Session() Session {
+	return l.session
+}
 
-		if channel, err := self.tryAccept(&packet); channel != nil || err != nil {
-			return channel, err
-		}
+func (l *listener) Accept() (Channel, error) {
+	packet, ok := <-l.in
+	if !ok {
+		return nil, ErrChannelClosed
 	}
+
+	return l.tryAccept(&packet)
 }
 
 // split out for a more granular locking strategy
-func (self *ChannelListener) tryAccept(p *Packet) (Channel, error) {
-	self.lock.RLock()
-	defer self.lock.RUnlock()
-	if self.closed {
-		return nil, CHANNEL_CLOSED_ERROR
+func (l *listener) tryAccept(p *Packet) (Channel, error) {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+	if l.closed {
+		return nil, ErrChannelClosed
 	}
 
-	// ensure this packet is at the right destination. if not, return it!
-	if p.dstEntityId != self.local.entityId || p.dstChannelId != self.local.channelId {
-		// self.out <- *NewReturnPacket(p, ERR_FLAG, []uint8(CHANNEL_REFUSED_ERROR.Error()))
-		return nil, nil
-	}
+	lAddr := NewAddress(p.srcEntityId, p.srcChannelId)
+	rAddr := NewAddress(p.dstEntityId, p.dstChannelId)
 
-	// create the channel address
-	lChannelId, err := self.ids.Take()
-	if err != nil {
-		// TODO: return error packet.
-		// self.out<- NewReturnPacket
-		return nil, err
-	}
+	channel := newChannel(lAddr, rAddr, true, func(opts *ChannelOptions) {
+		l.config(opts)
 
-	lAddr := ChannelAddress{p.dstEntityId, lChannelId}
-	rAddr := ChannelAddress{p.srcEntityId, p.srcChannelId}
-
-	return NewChannelActive(lAddr, rAddr, true, func(opts *ChannelOptions) {
-
-		// make the channel routable.
-		opts.OnInit = func(c *ChannelActive) error {
-			return self.cache.Add(c.local, c)
-		}
-
-		// route to the main output
+		// these event handlers must always win!
 		opts.OnData = func(p *Packet) error {
-			self.out <- *p
+			l.out <- *p
 			return nil
 		}
 
-		// return the resources.
-		opts.OnClose = func(c *ChannelActive) error {
-			defer self.ids.Return(c.local.channelId)
-			defer self.cache.Remove(c.local)
+		opts.OnClose = func(c Channel) error {
+			defer l.cache.Remove(c.Session())
+			return nil
+		}
+
+		opts.OnFailure = func(c Channel) error {
+			defer l.cache.Remove(c.Session())
 			return nil
 		}
 	})
+
+	if err := l.cache.Add(channel); err != nil {
+		return nil, err
+	}
+
+	if err := channel.send(p); err != nil {
+		return nil, ErrChannelClosed
+	}
+
+	return channel, nil
 }
 
 // Sends a packet to the channel stream.
 //
-func (self *ChannelListener) send(p *Packet) error {
-	self.lock.RLock()
-	defer self.lock.RUnlock()
-	if self.closed {
-		return CHANNEL_CLOSED_ERROR
+func (l *listener) send(p *Packet) error {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+	if l.closed {
+		return ErrChannelClosed
 	}
 
-	self.in <- *p
+	l.in <- *p
 	return nil
 }
 
 // Closes the channel.  Returns an error the if the
 // channel is already closed.
 //
-func (self *ChannelListener) Close() error {
-	self.lock.Lock()
-	defer self.lock.Unlock()
-	if self.closed {
-		return CHANNEL_CLOSED_ERROR
+func (l *listener) Close() error {
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	if l.closed {
+		return ErrChannelClosed
 	}
 
 	// stop routing to this channel.
-	self.cache.Remove(*self.local)
+	l.cache.Remove(l.session)
 
 	// close the buffer
-	close(self.in)
+	close(l.in)
 
 	// finally, mark it closed
-	self.closed = true
+	l.closed = true
 	return nil
 }

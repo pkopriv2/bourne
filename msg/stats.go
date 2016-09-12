@@ -19,7 +19,7 @@ type ChannelStats struct {
 	numResets metrics.Counter
 }
 
-func NewChannelStats(addr ChannelAddress) *ChannelStats {
+func NewChannelStats(addr Address) *ChannelStats {
 	r := metrics.DefaultRegistry
 
 	return &ChannelStats{
@@ -42,6 +42,6 @@ func NewChannelStats(addr ChannelAddress) *ChannelStats {
 			NewChannelMetricName(addr, "channel.NumResets"), r)}
 }
 
-func NewChannelMetricName(addr ChannelAddress, name string) string {
+func NewChannelMetricName(addr Address, name string) string {
 	return fmt.Sprintf("-- %+v --: %s", addr, name)
 }

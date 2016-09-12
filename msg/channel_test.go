@@ -7,39 +7,39 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestChannelActive_openInitTimeout(t *testing.T) {
+func TestActiveChannel_openInitTimeout(t *testing.T) {
 	_, channel := newTestChannel(0, 0, 1, 1, false)
 	defer channel.Close()
 
-	channel.state.WaitUntil(ChannelOpened | ChannelError)
+	channel.state.WaitUntil(ChannelOpened | ChannelFailure)
 
-	assert.Equal(t, ChannelError, channel.state.Get())
+	assert.Equal(t, ChannelFailure, channel.state.Get())
 }
 
-func TestChannelActive_openRecvTimeout(t *testing.T) {
+func TestActiveChannel_openRecvTimeout(t *testing.T) {
 	_, channel := newTestChannel(0, 0, 1, 1, true)
 	defer channel.Close()
 
 	// start the sequence, but never respond
 	channel.send(newPacket(channel, PacketFlagOpen, 100, 0, []byte{}))
-	channel.state.WaitUntil(ChannelOpened | ChannelError)
+	channel.state.WaitUntil(ChannelOpened | ChannelFailure)
 
-	assert.Equal(t, ChannelError, channel.state.Get())
+	assert.Equal(t, ChannelFailure, channel.state.Get())
 }
 
-func TestChannelActive_openHandshake(t *testing.T) {
+func TestActiveChannel_openHandshake(t *testing.T) {
 	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
 	defer channelL.Close()
 	defer channelR.Close()
 
-	channelL.state.WaitUntil(ChannelOpened | ChannelError)
-	channelR.state.WaitUntil(ChannelOpened | ChannelError)
+	channelL.state.WaitUntil(ChannelOpened | ChannelFailure)
+	channelR.state.WaitUntil(ChannelOpened | ChannelFailure)
 
 	assert.Equal(t, ChannelOpened, channelL.state.Get())
 	assert.Equal(t, ChannelOpened, channelR.state.Get())
 }
 
-func TestChannelActive_sendSinglePacket(t *testing.T) {
+func TestActiveChannel_sendSinglePacket(t *testing.T) {
 	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
 	defer channelR.Close()
 	defer channelL.Close()
@@ -57,14 +57,14 @@ func TestChannelActive_sendSinglePacket(t *testing.T) {
 	assert.Equal(t, []byte{1}, buf[:1])
 }
 
-func TestChannelActive_sendSingleStream(t *testing.T) {
+func TestActiveChannel_sendSingleStream(t *testing.T) {
 	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
 	channelR.options.Debug = false
 	defer channelR.Close()
 	defer channelL.Close()
 
 	go func() {
-		for i := 0; i<255; i++ {
+		for i := 0; i < 255; i++ {
 			if _, err := channelL.Write([]byte{uint8(i)}); err != nil {
 				channelL.log("Error writing to channel: %v", err)
 				return
@@ -103,7 +103,7 @@ func TestChannelActive_sendSingleStream(t *testing.T) {
 	}
 }
 
-func TestChannelActive_sendDuplexStream(t *testing.T) {
+func TestActiveChannel_sendDuplexStream(t *testing.T) {
 	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
 	defer channelR.Close()
 	defer channelL.Close()
@@ -179,7 +179,7 @@ func TestChannelActive_sendDuplexStream(t *testing.T) {
 	}
 }
 
-func TestChannelActive_sendLargeStream(t *testing.T) {
+func TestActiveChannel_sendLargeStream(t *testing.T) {
 	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
 	defer channelR.Close()
 	defer channelL.Close()
@@ -223,23 +223,22 @@ func TestChannelActive_sendLargeStream(t *testing.T) {
 	assert.Equal(t, 1<<20, tot)
 }
 
-func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, listener bool) (chan Packet, *ChannelActive) {
-	l := ChannelAddress{entityIdL, channelIdL}
-	r := ChannelAddress{entityIdR, channelIdR}
+func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, listener bool) (chan Packet, *channel) {
+	l := NewAddress(entityIdL, channelIdL)
+	r := NewAddress(entityIdR, channelIdR)
 
 	out := make(chan Packet, 1<<10)
 
-	var channel *ChannelActive
-	channel, _ = NewChannelActive(l, r, listener, func(opts *ChannelOptions) {
+	channel := newChannel(l, r, listener, func(opts *ChannelOptions) {
 		opts.AckTimeout = 500 * time.Millisecond
-		opts.CloseTimeout =  500 * time.Millisecond
+		opts.CloseTimeout = 500 * time.Millisecond
 		opts.SendWait = 10 * time.Millisecond
 		opts.RecvWait = 1 * time.Millisecond
-		opts.SendLogSize = 1<<20
-		opts.RecvLogSize = 1<<20
-		opts.RecvInSize = 1<<10
+		opts.SendLogSize = 1 << 20
+		opts.RecvLogSize = 1 << 20
+		opts.RecvInSize = 1 << 10
 		opts.Debug = true
-		opts.OnClose = func(c *ChannelActive) error {
+		opts.OnClose = func(c Channel) error {
 			close(out)
 			return nil
 		}
@@ -252,19 +251,8 @@ func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, chann
 	return out, channel
 }
 
-func newTestChannelPairWithRouter(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, router func(chan Packet, chan Packet, *ChannelActive, *ChannelActive)) (*ChannelActive, *ChannelActive) {
-	outL, channelL := newTestChannel(entityIdL, channelIdL, entityIdR, channelIdR, false)
-	outR, channelR := newTestChannel(entityIdR, channelIdR, entityIdL, channelIdL, true)
-
-	go func() {
-		router(outL, outR, channelL, channelR)
-	}()
-
-	return channelL, channelR
-}
-
-func newTestChannelPair(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16) (*ChannelActive, *ChannelActive) {
-	return newTestChannelPairWithRouter(entityIdL, channelIdL, entityIdR, channelIdR, func(outL chan Packet, outR chan Packet, channelL *ChannelActive, channelR *ChannelActive) {
+func newTestRouter() func(outL chan Packet, outR chan Packet, channelL *channel, channelR *channel) {
+	return func(outL chan Packet, outR chan Packet, channelL *channel, channelR *channel) {
 		for {
 			select {
 			case p, ok := <-outR:
@@ -273,7 +261,6 @@ func newTestChannelPair(entityIdL uint32, channelIdL uint16, entityIdR uint32, c
 				}
 				channelL.log("Routing packet: %v", &p)
 				if err := channelL.send(&p); err != nil {
-					// channelL.log("Couldn't receive: %v", &p)
 					return
 				}
 			case p, ok := <-outL:
@@ -282,13 +269,22 @@ func newTestChannelPair(entityIdL uint32, channelIdL uint16, entityIdR uint32, c
 				}
 				channelR.log("Routing packet: %v", &p)
 				if err := channelR.send(&p); err != nil {
-					// channelR.log("Couldn't receive : %v", &p)
 					return
 				}
-			default:
-				break
-				// time.Sleep(5 * time.Millisecond)
 			}
 		}
-	})
+	}
+}
+
+func newTestChannelPairWithRouter(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, router func(chan Packet, chan Packet, *channel, *channel)) (*channel, *channel) {
+	outL, channelL := newTestChannel(entityIdL, channelIdL, entityIdR, channelIdR, false)
+	outR, channelR := newTestChannel(entityIdR, channelIdR, entityIdL, channelIdL, true)
+
+	go router(outL, outR, channelL, channelR)
+
+	return channelL, channelR
+}
+
+func newTestChannelPair(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16) (*channel, *channel) {
+	return newTestChannelPairWithRouter(entityIdL, channelIdL, entityIdR, channelIdR, newTestRouter())
 }

@@ -18,13 +18,18 @@ import (
 // http://www.ietf.org/proceedings/44/I-D/draft-ietf-sigtran-reliable-udp-00.txt
 // https://tools.ietf.org/html/rfc4987
 //
+// TODOS:
+//   * Make open/close more reliable.
+//   * Make open/close more secure.  (Ensure packets are properly addressed!)
+//   * Move entityId to uuid.
+//   * Move to varint encoding.
+//   * Handle offset/ack overflow!!!
+//   * Protect against offset flood.
+//   * Atomic options.
+//   * Drop packets when recv buffer is full!!!
+//
 var (
-	ErrChannelClosed   = errors.New("CHAN:CLOSED")
-	ErrChannelError    = errors.New("CHAN:ERROR")
 	ErrHandshakeFailed = errors.New("CHAN:HANDSHAKE")
-	ErrResponse        = errors.New("CHAN:BADRESPONSE")
-	ErrTimeout         = errors.New("CHAN:TIMEOUT")
-	ErrInvalidState    = errors.New("CHAN:INVALIDSTATE")
 )
 
 // channel states
@@ -33,7 +38,7 @@ const (
 	ChannelOpened
 	ChannelClosing
 	ChannelClosed
-	ChannelError
+	ChannelFailure
 )
 
 // An active channel represents one side of a conversation between two entities.
@@ -62,7 +67,7 @@ const (
 //
 //    init-->opening-->opened-->closing-->closed
 //              |         |        |
-//              |--------->-------->----->error
+//              |--------->-------->----->failure
 //
 //  The state machine is implemented using compare and swaps.
 //  In other words, there is no guarantee of strong consistency
@@ -90,6 +95,13 @@ const (
 //  thread7: (closing thread)
 //     * Performs the closing handshake and closes all resources.  This is a shortlived thread.
 //
+// Channel Opening:
+//     1. Transition to Opening.
+//     2. Perform reliable handshake
+//         * Initiator: send(open), recv(open,ack), send(ack)
+//         * Listener:  recv(open), send(open,ack), recv(ack)
+//     3. Transition to Opened.
+//
 // Channel Closing:
 //
 //   If initiated by consumer:
@@ -108,13 +120,10 @@ const (
 //
 // *This object is thread safe.*
 //
-type ChannelActive struct {
+type channel struct {
 
-	// the local channel address
-	local ChannelAddress
-
-	// the remote channel address
-	remote ChannelAddress
+	// the address of the session
+	session Session
 
 	// channel options.
 	options *ChannelOptions
@@ -134,36 +143,40 @@ type ChannelActive struct {
 	sendOut func(p *Packet) error
 
 	// event handlers
-	onInit  ChannelStateFn
-	onOpen  ChannelStateFn
-	onClose ChannelStateFn
+	onInit    ChannelStateHandler
+	onOpen    ChannelStateHandler
+	onClose   ChannelStateHandler
+	onFailure ChannelStateHandler
 
 	// the workers wait
 	workers sync.WaitGroup
 }
 
 // Creates and returns a new channel
-func NewChannelActive(l ChannelAddress, r ChannelAddress, listening bool, opts ...ChannelConfig) (*ChannelActive, error) {
+func newChannel(l Address, r Address, listening bool, opts ...ChannelConfig) *channel {
 	// initialize the options.
 	options := DefaultChannelOptions()
 	for _, opt := range opts {
 		opt(options)
 	}
 
+	// defensively copy the options (this is to eliminate any reference to the options that the consumer may have)
+	optionsCopy := *options
+
 	// create the channel
-	c := &ChannelActive{
-		local:   l,
-		remote:  r,
-		options: options,
-		stats:   NewChannelStats(l),
-		state:   NewAtomicState(ChannelOpening),
-		recvIn:  make(chan Packet, options.RecvInSize),
-		recvLog: NewStream(options.RecvLogSize),
-		sendLog: NewStream(options.SendLogSize),
-		sendOut: options.OnData,
-		onInit:  options.OnInit,
-		onOpen:  options.OnOpen,
-		onClose: options.OnClose}
+	c := &channel{
+		session:   NewChannelSession(l, r),
+		options:   &optionsCopy,
+		stats:     NewChannelStats(l),
+		state:     NewAtomicState(ChannelOpening),
+		recvIn:    make(chan Packet, options.RecvInSize),
+		recvLog:   NewStream(options.RecvLogSize),
+		sendLog:   NewStream(options.SendLogSize),
+		sendOut:   options.OnData,
+		onInit:    options.OnOpening,
+		onOpen:    options.OnOpen,
+		onClose:   options.OnClose,
+		onFailure: options.OnFailure}
 
 	// call the init function.
 	c.onInit(c)
@@ -175,27 +188,21 @@ func NewChannelActive(l ChannelAddress, r ChannelAddress, listening bool, opts .
 	go openWorker(c, listening)
 
 	// finally, return it.
-	return c, nil
+	return c
 }
 
-// Returns the local address of this channel
-func (c *ChannelActive) LocalAddr() ChannelAddress {
-	return c.local
+func (c *channel) Session() Session {
+	return c.session
 }
 
-// Returns the remote address of this channel
-func (c *ChannelActive) RemoteAddr() ChannelAddress {
-	return c.remote
-}
-
-func (c *ChannelActive) Flush() error {
+func (c *channel) Flush() error {
 	return c.flush(365 * 24 * time.Hour)
 }
 
 // Reads data from the channel.  Blocks if data isn't available.
-func (c *ChannelActive) Read(buf []byte) (int, error) {
-	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelError)
-	if state.Is(ChannelClosed | ChannelError) {
+func (c *channel) Read(buf []byte) (int, error) {
+	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
+	if state.Is(ChannelClosed | ChannelFailure) {
 		return 0, ErrChannelClosed
 	}
 
@@ -203,9 +210,9 @@ func (c *ChannelActive) Read(buf []byte) (int, error) {
 }
 
 // Writes the data to the channel.  Blocks if the underlying send buffer is full.
-func (c *ChannelActive) Write(data []byte) (int, error) {
-	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelError)
-	if state.Is(ChannelClosed | ChannelError) {
+func (c *channel) Write(data []byte) (int, error) {
+	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
+	if state.Is(ChannelClosed | ChannelClosing | ChannelFailure) {
 		return 0, ErrChannelClosed
 	}
 
@@ -213,12 +220,8 @@ func (c *ChannelActive) Write(data []byte) (int, error) {
 }
 
 // Closes the channel.  Returns an error if the channel is already closed.
-func (c *ChannelActive) Close() error {
-	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelError)
-	if state.Is(ChannelClosed | ChannelError) {
-		return ErrChannelClosed
-	}
-
+func (c *channel) Close() error {
+	c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
 	if !c.state.Transition(ChannelOpened, ChannelClosing) {
 		return ErrChannelClosed
 	}
@@ -232,7 +235,7 @@ func (c *ChannelActive) Close() error {
 // ** INTERNAL ONLY METHODS **
 
 // Send pushes a message on the input channel.  (used for internal routing.)
-func (c *ChannelActive) send(p *Packet) error {
+func (c *channel) send(p *Packet) error {
 	if !c.state.Is(ChannelOpening | ChannelOpened | ChannelClosing) {
 		return ErrChannelClosed
 	}
@@ -242,13 +245,13 @@ func (c *ChannelActive) send(p *Packet) error {
 }
 
 // Flushes the sendlog.
-func (c *ChannelActive) flush(timeout time.Duration) error {
-	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelError)
+func (c *channel) flush(timeout time.Duration) error {
+	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
 	if state.Is(ChannelClosed) {
 		return ErrChannelClosed
 	}
-	if state.Is(ChannelError) {
-		return ErrChannelError
+	if state.Is(ChannelFailure) {
+		return ErrChannelFailure
 	}
 
 	_, _, head, _ := c.sendLog.Snapshot()
@@ -265,7 +268,7 @@ func (c *ChannelActive) flush(timeout time.Duration) error {
 		}
 
 		if time.Since(start) >= timeout {
-			return ErrTimeout
+			return ErrChannelTimeout
 		}
 
 		time.Sleep(c.options.SendWait)
@@ -273,42 +276,46 @@ func (c *ChannelActive) flush(timeout time.Duration) error {
 }
 
 // Logs a message, tagging it with the channel's local address.
-func (c *ChannelActive) log(format string, vals ...interface{}) {
+func (c *channel) log(format string, vals ...interface{}) {
 	if !c.options.Debug {
 		return
 	}
 
-	log.Println(fmt.Sprintf("[%v] -- ", c.local) + fmt.Sprintf(format, vals...))
+	log.Println(fmt.Sprintf("[%v] -- ", c.session) + fmt.Sprintf(format, vals...))
 }
 
-func openWorker(c *ChannelActive, listening bool) {
+func openWorker(c *channel, listening bool) {
 	defer c.workers.Done()
 
 	var err error
 
 	for i := 0; i < 3; i++ {
-		c.log("Trying to open channel")
 		if listening {
 			err = openRecv(c)
 		} else {
 			err = openInit(c)
 		}
 		if err == nil {
-			c.log("Successfully performed handshake.")
 			break
 		}
 
-		c.log("Done with handshake attempt [%v]", i)
+		c.log("Error on open attempt [%v]: %v", i, err)
 	}
 
 	if err != nil {
-		c.state.Transition(ChannelOpening, ChannelError)
+		c.log("Failure to open channel")
+		if c.state.Transition(ChannelOpening, ChannelFailure) {
+			c.onFailure(c)
+		}
 	} else {
-		c.state.Transition(ChannelOpening, ChannelOpened)
+		c.log("Successfully opened channel")
+		if c.state.Transition(ChannelOpening, ChannelOpened) {
+			c.onOpen(c)
+		}
 	}
 }
 
-func closeWorker(c *ChannelActive, p *Packet) {
+func closeWorker(c *channel, p *Packet) {
 	defer c.workers.Done()
 
 	var err error
@@ -322,13 +329,19 @@ func closeWorker(c *ChannelActive, p *Packet) {
 	c.recvLog.Close()
 
 	if err != nil {
-		c.state.Transition(AnyAtomicState, ChannelError)
+		c.log("Failure to close channel")
+		if c.state.Transition(AnyAtomicState, ChannelFailure) {
+			c.onFailure(c)
+		}
 	} else {
-		c.state.Transition(ChannelClosing, ChannelClosed)
+		c.log("Successfully closed channel")
+		if c.state.Transition(ChannelClosing, ChannelClosed) {
+			c.onClose(c)
+		}
 	}
 }
 
-func sendWorker(c *ChannelActive) {
+func sendWorker(c *channel) {
 	defer c.workers.Done()
 	defer c.log("Send worker shutdown")
 
@@ -345,7 +358,7 @@ func sendWorker(c *ChannelActive) {
 	// the packet buffer (initialized here so we don't continually recreate memory.)
 	tmp := make([]byte, PacketMaxLength)
 	for {
-		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelError)
+		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelFailure)
 		if !state.Is(ChannelOpened) {
 			return
 		}
@@ -384,7 +397,9 @@ func sendWorker(c *ChannelActive) {
 			c.log("Ack timeout increased to [%v]", timeout)
 
 			if timeoutCnt++; timeoutCnt >= 3 {
-				c.state.Transition(AnyAtomicState, ChannelError)
+				c.log("Failure! Too many timeouts.")
+				c.state.Transition(AnyAtomicState, ChannelFailure)
+				c.onFailure(c)
 				return
 			}
 
@@ -421,7 +436,8 @@ func sendWorker(c *ChannelActive) {
 
 		// this can block indefinitely (What should we do???)
 		if err := c.sendOut(newPacket(c, flags, sendStart.offset, recvHead.offset, data)); err != nil {
-			c.state.Transition(AnyAtomicState, ChannelError)
+			c.state.Transition(AnyAtomicState, ChannelFailure)
+			c.onFailure(c)
 			return
 		}
 
@@ -429,7 +445,7 @@ func sendWorker(c *ChannelActive) {
 	}
 }
 
-func recvWorker(c *ChannelActive) {
+func recvWorker(c *channel) {
 	defer c.workers.Done()
 	defer c.log("Recv worker shutdown")
 
@@ -437,7 +453,7 @@ func recvWorker(c *ChannelActive) {
 	pending := treemap.NewWith(OffsetComparator)
 	for {
 		// block until we can do something useful!
-		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelError)
+		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelFailure)
 		if !state.Is(ChannelOpened) {
 			return
 		}
@@ -528,7 +544,7 @@ func recvWorker(c *ChannelActive) {
 }
 
 // Performs initiator  open handshake: send(open), recv(open,ack), send(ack)
-func openInit(c *ChannelActive) error {
+func openInit(c *channel) error {
 	c.log("Initiating open request")
 
 	var p *Packet
@@ -538,15 +554,17 @@ func openInit(c *ChannelActive) error {
 	offset := rand.Uint32()
 
 	// Send: open
+	c.log("Send (open)")
 	if err = send(c, PacketFlagOpen, offset, 0, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
 	// Receive: open, ack
+	c.log("Receive (open, ack)")
 	p, err = recvOrTimeout(c, c.options.AckTimeout)
 	if err != nil || p == nil {
 		send(c, PacketFlagErr, 0, 0, []byte("AckTimeout"))
-		return ErrTimeout
+		return ErrChannelTimeout
 	}
 
 	if p.ctrls != (PacketFlagOpen|PacketFlagAck) || p.ack != offset {
@@ -555,6 +573,7 @@ func openInit(c *ChannelActive) error {
 	}
 
 	// Send: ack
+	c.log("Send (ack)")
 	if err = send(c, PacketFlagAck, 0, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
@@ -563,17 +582,15 @@ func openInit(c *ChannelActive) error {
 }
 
 // Performs receiver (ie listener) open handshake: recv(open), send(open,ack), recv(ack)
-func openRecv(c *ChannelActive) error {
+func openRecv(c *channel) error {
 	c.log("Waiting for open request")
 
 	// Receive: open
+	c.log("Receive (open)")
 	p, err := recvOrTimeout(c, c.options.AckTimeout)
 	if err != nil {
-		return ErrTimeout
+		return ErrChannelTimeout
 	}
-
-
-	c.log("Got request: %v", p)
 
 	if p.ctrls != PacketFlagOpen {
 		send(c, PacketFlagErr, 0, 0, []byte("Required OPEN flag"))
@@ -581,13 +598,14 @@ func openRecv(c *ChannelActive) error {
 	}
 
 	// Send: open,ack
-	offset := rand.Uint32()
 	c.log("Sending (open,ack)")
+	offset := rand.Uint32()
 	if err := send(c, PacketFlagOpen|PacketFlagAck, offset, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
 	// Receive: Ack
+	c.log("Receive (ack)")
 	p, err = recvOrTimeout(c, c.options.AckTimeout)
 	if err != nil {
 		send(c, PacketFlagErr, 0, 0, []byte("Ack Timeout"))
@@ -603,7 +621,7 @@ func openRecv(c *ChannelActive) error {
 }
 
 // Performs close handshake from initiator's perspective: send(close), recv(close, ack), send(ack)
-func closeInit(c *ChannelActive) error {
+func closeInit(c *channel) error {
 	var p *Packet
 	var err error
 
@@ -619,7 +637,7 @@ func closeInit(c *ChannelActive) error {
 	for {
 		p, err = recvOrTimeout(c, c.options.AckTimeout)
 		if err != nil || p == nil {
-			return ErrTimeout
+			return ErrChannelTimeout
 		}
 
 		if p.ctrls == (PacketFlagClose|PacketFlagAck) && p.ack == offset {
@@ -636,7 +654,7 @@ func closeInit(c *ChannelActive) error {
 }
 
 // Performs receiver (ie listener) close handshake: recv(close), send(close,ack), recv(ack)
-func closeRecv(c *ChannelActive, p *Packet) error {
+func closeRecv(c *channel, p *Packet) error {
 
 	// Send: close ack
 	offset := rand.Uint32()
@@ -659,20 +677,23 @@ func closeRecv(c *ChannelActive, p *Packet) error {
 	return nil
 }
 
-func newPacket(c *ChannelActive, flags PacketFlags, offset uint32, ack uint32, data []byte) *Packet {
-	return NewPacket(c.local.entityId, c.local.channelId, c.remote.entityId, c.remote.channelId, flags, offset, ack, 0, data)
+func newPacket(c *channel, flags PacketFlags, offset uint32, ack uint32, data []byte) *Packet {
+	local := c.session.Local()
+	remote := c.session.Remote()
+
+	return NewPacket(local.EntityId(), local.ChannelId(), remote.EntityId(), remote.ChannelId(), flags, offset, ack, 0, data)
 }
 
-func send(c *ChannelActive, flags PacketFlags, offset uint32, ack uint32, data []byte) error {
+func send(c *channel, flags PacketFlags, offset uint32, ack uint32, data []byte) error {
 	return c.sendOut(newPacket(c, flags, offset, ack, data))
 }
 
-func recvOrTimeout(c *ChannelActive, timeout time.Duration) (*Packet, error) {
+func recvOrTimeout(c *channel, timeout time.Duration) (*Packet, error) {
 	timer := time.NewTimer(timeout)
 
 	select {
 	case <-timer.C:
-		return nil, ErrTimeout
+		return nil, ErrChannelTimeout
 	case p := <-c.recvIn:
 		return &p, nil
 	}

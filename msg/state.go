@@ -10,7 +10,6 @@ const (
 	AtomicStateMachineWait = 5 * time.Millisecond
 	EmptyAtomicState       = 0
 	AnyAtomicState         = (1<<32)-1
-	TransAtomicState       = 1
 )
 
 type StateError struct {

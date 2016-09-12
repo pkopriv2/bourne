@@ -11,44 +11,46 @@ import (
 type ChannelCache struct {
 
 	// the map locl (pool is thread safe already)
-	lock *sync.RWMutex
+	lock sync.RWMutex
 
 	// channels map
-	channels map[ChannelAddress]BaseChannel
+	channels map[Session]Routable
 }
 
 func NewChannelCache() *ChannelCache {
-	return &ChannelCache{lock: new(sync.RWMutex), channels: make(map[ChannelAddress]BaseChannel)}
+	return &ChannelCache{channels: make(map[Session]Routable)}
 }
 
-func (self *ChannelCache) Get(addr ChannelAddress) BaseChannel {
+func (self *ChannelCache) Get(session Session) Routable {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
-	return self.channels[addr]
+	return self.channels[session]
 }
 
-func (self *ChannelCache) Add(addr ChannelAddress, p BaseChannel) error {
+func (self *ChannelCache) Add(routable Routable) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
-	ret := self.channels[addr]
+	session := routable.Session()
+
+	ret := self.channels[session]
 	if ret != nil {
-		return CHANNEL_EXISTS_ERROR
+		return ErrChannelExists
 	}
 
-	self.channels[addr] = p
+	self.channels[session] = routable
 	return nil
 }
 
-func (self *ChannelCache) Remove(addr ChannelAddress) error {
+func (self *ChannelCache) Remove(session Session) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
-	ret := self.channels[addr]
+	ret := self.channels[session]
 	if ret == nil {
-		return CHANNEL_UNKNOWN_ERROR
+		return ErrChannelUnknown
 	}
 
-	delete(self.channels, addr)
+	delete(self.channels, session)
 	return nil
 }
