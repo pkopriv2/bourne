@@ -11,9 +11,9 @@ func TestChannelActive_openInitTimeout(t *testing.T) {
 	_, channel := newTestChannel(0, 0, 1, 1, false)
 	defer channel.Close()
 
-	channel.state.WaitUntil(ChannelOpened | ChannelClosed)
+	channel.state.WaitUntil(ChannelOpened | ChannelError)
 
-	assert.Equal(t, ChannelClosed, channel.state.Get())
+	assert.Equal(t, ChannelError, channel.state.Get())
 }
 
 func TestChannelActive_openRecvTimeout(t *testing.T) {
@@ -22,9 +22,9 @@ func TestChannelActive_openRecvTimeout(t *testing.T) {
 
 	// start the sequence, but never respond
 	channel.send(newPacket(channel, PacketFlagOpen, 100, 0, []byte{}))
-	channel.state.WaitUntil(ChannelOpened | ChannelClosed)
+	channel.state.WaitUntil(ChannelOpened | ChannelError)
 
-	assert.Equal(t, ChannelClosed, channel.state.Get())
+	assert.Equal(t, ChannelError, channel.state.Get())
 }
 
 func TestChannelActive_openHandshake(t *testing.T) {
@@ -32,8 +32,8 @@ func TestChannelActive_openHandshake(t *testing.T) {
 	defer channelL.Close()
 	defer channelR.Close()
 
-	channelL.state.WaitUntil(ChannelOpened | ChannelClosed)
-	channelR.state.WaitUntil(ChannelOpened | ChannelClosed)
+	channelL.state.WaitUntil(ChannelOpened | ChannelError)
+	channelR.state.WaitUntil(ChannelOpened | ChannelError)
 
 	assert.Equal(t, ChannelOpened, channelL.state.Get())
 	assert.Equal(t, ChannelOpened, channelR.state.Get())
