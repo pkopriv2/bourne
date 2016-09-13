@@ -2,20 +2,18 @@ package msg
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"strings"
 )
 
-import "encoding/binary"
-
-// TODO: Use VARINT encoding!  In addition to supporting 64bit numbers,
-// which means the offset and start overflow no longer matter, we can also
-// efficiently store them!
+// TODO:
+//	* Move to varint encoding
+//  * Develop compatibility scheme
 
 // The current protocol version. This defines the basis
 // for determining compatibility between changes.
-//
 const ProtocolVersion = 0
 
 // The maximum data length of any packet.  One of the main
@@ -26,95 +24,97 @@ const ProtocolVersion = 0
 // can dominate the underlying io stream.
 //
 // Encoded as a uint16
-//
 const PacketMaxLength = 1<<16 - 1
 
 // Each packet will contain a sequence of control flags, indicating the nature
 // of the packet and how the receiver should handle it.
 type PacketFlags uint8
-
-// control flags
 const (
 	PacketFlagNone PacketFlags = 0
 	PacketFlagOpen PacketFlags = 1 << iota
 	PacketFlagOffset
-	PacketFlagAck
+	PacketFlagVerify
 	PacketFlagClose
 	PacketFlagErr
 )
 
-// A packet is the basic data structure defining a simple
-// multiplexed data stream.
-//
-type Packet struct {
+// An entity identifier is simply a number.  However, it has been explicitly
+// declared so that we can move to new data types easily (e.g. UUID.).
+// Clients are only concerned with equality between instances, so the
+// the underlying type isn't important.
+type EntityId uint32
 
-	// necessary for backwards/forwards compatibility
+// An endpoint represents the address to one side of a session.
+type EndPoint interface {
+	EntityId() EntityId
+	ChannelId() uint16
+}
+
+// Creates a new endpoint and returns the value (not the reference!)
+// The returned value may be used for equality checks.
+func NewEndPoint(entityId EntityId, channelId uint16) EndPoint {
+	return endPoint{entityId, channelId}
+}
+
+// A packet is the basic data structure defining a simple multiplexed data stream.
+//
+// See: msg/channel.go for more information on the protocol details.
+type Packet struct {
 	version uint16
 
-	// every packet must identify its source
-	srcEntityId  uint32 // TODO: move to UTF-8 String
-	srcChannelId uint16
+	src EndPoint
+	dst EndPoint
+	flg PacketFlags
 
-	// every packet must identify its destination
-	dstEntityId  uint32 // TODO: move to UTF-8 String
-	dstChannelId uint16
-
-	// control flags
-	ctrls PacketFlags
-
-	// control values
 	offset uint32 // position of data within stream
-	ack    uint32 // position of ack (i.e. start)
-	cap    uint32 // the capacity of the sender
+	verify uint32 // position of verify (i.e. start)
+	window uint32 // the window of the sender
 
-	// the raw data (to be interpreted by the consumer)
 	data []uint8
 }
 
-func NewPacket(srcEntityId uint32, srcChannelId uint16, dstEntityId uint32, dstChannelId uint16, ctrls PacketFlags, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
+func NewPacket(src EndPoint, dst EndPoint, ctrls PacketFlags, offset uint32, verify uint32, window uint32, data []byte) *Packet {
 	c := make([]byte, len(data))
 	copy(c, data)
 
 	return &Packet{
-		version:      ProtocolVersion,
-		srcEntityId:  srcEntityId,
-		srcChannelId: srcChannelId,
-		dstEntityId:  dstEntityId,
-		dstChannelId: dstChannelId,
-		ctrls:        ctrls,
-		offset:       offset,
-		ack:          ack,
-		cap:          capacity,
-		data:         c}
+		version: ProtocolVersion,
+		src:     src,
+		dst:     dst,
+		flg:     ctrls,
+		offset:  offset,
+		verify:  verify,
+		window:  window,
+		data:    c}
 }
 
-func NewReturnPacket(p *Packet, ctrls PacketFlags, offset uint32, ack uint32, capacity uint32, data []byte) *Packet {
-	return NewPacket(p.dstEntityId, p.dstChannelId, p.srcEntityId, p.srcChannelId, ctrls, offset, ack, capacity, data)
+func NewReturnPacket(p *Packet, ctrls PacketFlags, offset uint32, verify uint32, window uint32, data []byte) *Packet {
+	return NewPacket(p.src, p.dst, ctrls, offset, verify, window, data)
 }
 
 func (p *Packet) String() string {
 	var buffer bytes.Buffer
-	buffer.WriteString(fmt.Sprintf("[%v,%v]->[%v,%v]  ", p.srcEntityId, p.srcEntityId, p.dstEntityId, p.dstChannelId))
+	buffer.WriteString(fmt.Sprintf("[%v]->[%v]  ", p.src, p.dst))
 
 	flags := make([]string, 0, 5)
 
-	if p.ctrls&PacketFlagErr > 0 {
+	if p.flg&PacketFlagErr > 0 {
 		flags = append(flags, fmt.Sprintf("Error(%v)", string(p.data)))
 	}
 
-	if p.ctrls&PacketFlagOpen > 0 {
+	if p.flg&PacketFlagOpen > 0 {
 		flags = append(flags, fmt.Sprintf("Open(%v)", p.offset))
 	}
 
-	if p.ctrls&PacketFlagOffset > 0 {
+	if p.flg&PacketFlagOffset > 0 {
 		flags = append(flags, fmt.Sprintf("Data(%v, %v)", p.offset, len(p.data)))
 	}
 
-	if p.ctrls&PacketFlagAck > 0 {
-		flags = append(flags, fmt.Sprintf("Ack(%v)", p.ack))
+	if p.flg&PacketFlagVerify > 0 {
+		flags = append(flags, fmt.Sprintf("verify(%v)", p.verify))
 	}
 
-	if p.ctrls&PacketFlagClose > 0 {
+	if p.flg&PacketFlagClose > 0 {
 		flags = append(flags, fmt.Sprintf("Close(%v)", p.offset))
 	}
 
@@ -131,31 +131,37 @@ func WritePacket(w io.Writer, m *Packet) error {
 	//    * BETTER ERRORS
 	//    * VARINT ENCODING?
 	//    * LENGTH PREFIXING? DELIMITING?
+	srcEntityId := m.src.EntityId()
+	srcChannelId := m.src.ChannelId()
+
+	dstEntityId := m.dst.EntityId()
+	dstChannelId := m.dst.ChannelId()
+
 	if err := binary.Write(w, binary.BigEndian, &m.version); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.srcEntityId); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &srcEntityId); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.srcChannelId); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &srcChannelId); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.dstEntityId); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &dstEntityId); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.dstChannelId); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &dstChannelId); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.ctrls); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &m.flg); err != nil {
 		return err
 	}
 	if err := binary.Write(w, binary.BigEndian, &m.offset); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.ack); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &m.verify); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.BigEndian, &m.cap); err != nil {
+	if err := binary.Write(w, binary.BigEndian, &m.window); err != nil {
 		return err
 	}
 
@@ -212,8 +218,8 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	var dstChannelId uint16
 	var ctrls PacketFlags
 	var offset uint32
-	var ack uint32
-	var capacity uint32
+	var verify uint32
+	var window uint32
 
 	if err := binary.Read(headerReader, binary.BigEndian, &protocolVersion); err != nil {
 		return nil, err
@@ -236,12 +242,32 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	if err := binary.Read(headerReader, binary.BigEndian, &offset); err != nil {
 		return nil, err
 	}
-	if err := binary.Read(headerReader, binary.BigEndian, &ack); err != nil {
+	if err := binary.Read(headerReader, binary.BigEndian, &verify); err != nil {
 		return nil, err
 	}
-	if err := binary.Read(headerReader, binary.BigEndian, &capacity); err != nil {
+	if err := binary.Read(headerReader, binary.BigEndian, &window); err != nil {
 		return nil, err
 	}
 
-	return &Packet{protocolVersion, srcEntityId, srcChannelId, dstEntityId, dstChannelId, ctrls, offset, ack, capacity, data}, nil
+	src := NewEndPoint(EntityId(srcEntityId), srcChannelId)
+	dst := NewEndPoint(EntityId(dstEntityId), dstChannelId)
+
+	return &Packet{protocolVersion, src, dst, ctrls, offset, verify, window, data}, nil
+}
+
+type endPoint struct {
+	entityId  EntityId
+	channelId uint16
+}
+
+func (c endPoint) EntityId() EntityId {
+	return c.entityId
+}
+
+func (c endPoint) ChannelId() uint16 {
+	return c.channelId
+}
+
+func (c endPoint) String() string {
+	return fmt.Sprintf("channel(%v:%v)", c.entityId, c.channelId)
 }

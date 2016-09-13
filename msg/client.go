@@ -1,16 +1,58 @@
 package msg
 
 import (
-	// "errors"
+	"errors"
 	"io"
 	"log"
 	"sync"
 )
 
+var (
+	ErrConnectionFailure = errors.New("CHAN:HANDSHAKE")
+	ErrConnectionTimeout = errors.New("CHAN:HANDSHAKE")
+	ErrClientClosed   = errors.New("CHAN:CLOSED")
+	ErrClientFailure  = errors.New("CHAN:FAILURE")
+	ErrClientTimeout  = errors.New("CHAN:TIMEOUT")
+	ErrClientExists   = errors.New("CHAN:EXISTS")
+	ErrClientUnknown  = errors.New("CHAN:UNKNONW")
+)
+
+const (
+	ClientInit AtomicState = 0
+	ClientConnecting AtomicState = 1 << iota
+	ClientConnected
+	ClientClosing
+	ClientClosed
+	ClientFailure
+)
+
+const (
+	// defaultChannelRecvInSize   = 1024
+	// defaultChannelRecvLogSize  = 1 << 20 // 1024K
+	// defaultChannelSendLogSize  = 1 << 18 // 256K
+	// defaultChannelSendWait     = 100 * time.Millisecond
+	// defaultChannelRecvWait     = 20 * time.Millisecond
+	// defaultChannelAckTimeout   = 5 * time.Second
+	// defaultChannelWinTimeout   = 2 * time.Second
+	// defaultChannelCloseTimeout = 10 * time.Second
+	// defaultChannelMaxRetries   = 3
+)
+
+// The primary client interface.
+type Client interface {
+	io.Closer
+
+	// Connects to the remote endpoint and returns a channel.
+	Connect(entityId EntityId, ChannelId uint16) (Channel, error)
+
+	// Begins listening on
+	Listen(channelId uint16) (Listener, error)
+}
+
+
 // A connection is a full-duplex streaming abstraction.
 //
-//   *Implementations must be thread-safe*
-//
+// Implementations are not explicitly required to be thread-safe.
 type Connection interface {
 	io.Reader
 	io.Writer
@@ -25,23 +67,7 @@ type Connection interface {
 // Consumers MUST NOT interfere with stream lifecycle.  Rather, they
 // should manage the lifecycle of the multiplexer.
 //
-// TODO: Figure out how to initialize streams.
-//
-type ConnectionFactory func(entityId uint32) (Connection, error)
-
-// The primary client interface.
-type Client interface {
-	io.Closer
-
-	// Each client is identified by a primary entity identifier.
-	EntityId() uint32
-
-	// Connects to the remote endpoint.
-	Connect(remote EndPoint) (Channel, error)
-
-	// Begins listening on
-	Listen(channelId uint32) (Listener, error)
-}
+type ConnectionFactory func() (Connection, error)
 
 // A multiplexer is responsible for taking a single data stream
 // and splitting it into multiple logical streams.  Once split,
@@ -51,7 +77,7 @@ type Client interface {
 //
 //      * Active - An active channel represents a "live" conversation
 //        between two entities.  Channels are full duplex, meaning that they
-//        have separate input and output streams.  The realationship between
+//        have separate input and output streams.  The relationship between
 //        client and server is NOT specified at this layer, but it is generally
 //        perceived that a listening channel will spawn a "server" channel
 //        while client channels must be spawned adhoc via the connect command.
@@ -61,22 +87,19 @@ type Client interface {
 // Data flow:
 //
 //  IN FLOW:
-//  <DATA> ---> DESERIALIZER ---> ROUTER ----> *CHANNEL
+//  <DATA> ---> READER ---> ROUTER ----> *CHANNEL
 //
 //  OUT FLOW:
-//  <DATA> ---> *CHANNEL ---> SERIALIZER ----> <DATA>
+//  <DATA> ---> *CHANNEL ---> WRITER ----> <DATA>
 //
 // NOTE: Any reference to output refers to the OUT FLOW direction.
 //
-// Concurrency model:
+// Thrading model:
 //
 //      * READER       : SINGLE THREADED (No one but multiplexer should read from this)
 //      * WRITER       : SINGLE THREADED (No one but multiplexer should write to this)
-//      * SERIALIZER   : A single instance operating in its own routine (buffered output)
-//      * DESERIALIZER : A single instance operating in its own routine.(buffered input)
 //      * ROUTER       : A single instance operating in its own routine.(buffered input)
-//      * CHANNEL      : Manages its own threds.
-//
+//      * CHANNEL      : Manages its own threads.
 //
 // Multiplex closing:
 //
@@ -98,11 +121,15 @@ type Client interface {
 // impement reconnect logic.
 var STREAM_MAX_RECONNECTS uint = 5
 
+
 //
 type Mux struct {
 
 	// the entity behind this client.
 	entityId uint32
+
+	//
+	factory ConnectionFactory
 
 	// pool of available channel ids
 	ids *IdPool
@@ -183,11 +210,11 @@ func routerWorker(m *Mux) {
 			return
 		}
 
-		local := NewEndPoint(p.dstEntityId, p.dstChannelId)
+		// local := NewEndPoint(p.dstEntityId, p.dstChannelId)
 
 		// see if there is an "active" session
 		var channel Routable
-		if channel = m.router.Get(NewChannelSession(local, NewEndPoint(p.srcEntityId, p.srcChannelId))); channel != nil {
+		if channel = m.router.Get(NewChannelSession(p.dst, p.src)); channel != nil {
 			if err := channel.send(p); err != nil {
 				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(err.Error()))
 			}
@@ -195,7 +222,7 @@ func routerWorker(m *Mux) {
 		}
 
 		// see if there is a "listener" session
-		if channel = m.router.Get(NewListenerSession(local)); channel != nil {
+		if channel = m.router.Get(NewListenerSession(p.dst)); channel != nil {
 			if err := channel.send(p); err != nil {
 				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(err.Error()))
 			}

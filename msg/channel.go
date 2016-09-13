@@ -24,17 +24,13 @@ import (
 //   * Make open/close more secure.  (Ensure packets are properly addressed!)
 //   * Move entityId to uuid.
 //   * Move to varint encoding.
-//   * Handle offset/ack overflow!!!
+//   * Handle offset/verify overflow!!!
 //   * Protect against offset flood.
 //   * Atomic options.
 //   * Drop packets when recv buffer is full!!!
 //
 var (
 	ErrHandshakeFailed = errors.New("CHAN:HANDSHAKE")
-)
-
-// Error types
-var (
 	ErrChannelClosed   = errors.New("CHAN:CLOSED")
 	ErrChannelFailure  = errors.New("CHAN:FAILURE")
 	ErrChannelResponse = errors.New("CHAN:RESPONSE")
@@ -101,10 +97,10 @@ type ChannelOptions struct {
 	// The duration to wait before trying to fetch again (when none was avaiable)
 	RecvWait time.Duration
 
-	// The duration to wait for an ack before data is considered lost
+	// The duration to wait for an verify before data is considered lost
 	AckTimeout time.Duration
 
-	// The duration to wait for an ack before data is considered lost
+	// The duration to wait for an verify before data is considered lost
 	WinTimeout time.Duration
 
 	// The duration to wait before the close is aborted.  any pending data is considered lost.
@@ -207,15 +203,15 @@ func defaultChannelOptions() *ChannelOptions {
 // Channel Opening:
 //     1. Transition to Opening.
 //     2. Perform reliable handshake
-//         * Initiator: send(open), recv(open,ack), send(ack)
-//         * Listener:  recv(open), send(open,ack), recv(ack)
+//         * Initiator: send(open), recv(open,verify), send(verify)
+//         * Listener:  recv(open), send(open,verify), recv(verify)
 //     3. Transition to Opened.
 //
 // Channel Closing:
 //     1. Transition to Closing
 //     2. Perform reliable handshake
-//         * Initiator: send(close), recv(close,ack), send(ack)
-//         * Listener:  recv(close), send(close,ack), recv(ack)
+//         * Initiator: send(close), recv(close,verify), send(verify)
+//         * Listener:  recv(close), send(close,verify), recv(verify)
 //     3. Transition to Closed.
 //
 // *This object is thread safe.*
@@ -446,10 +442,10 @@ func sendWorker(c *channel) {
 	timeout := c.options.AckTimeout
 	timeoutCnt := 0
 
-	// track last ack received
+	// track last verify received
 	recvAck, _, _, _ := c.sendIn.Snapshot()
 
-	// track last ack sent
+	// track last verify sent
 	_, _, sendAck, _ := c.recvOut.Snapshot()
 
 	// the packet buffer (initialized here so we don't continually recreate memory.)
@@ -472,7 +468,7 @@ func sendWorker(c *channel) {
 			return
 		}
 
-		// if we received an ack recently, reset the timeout values
+		// if we received an verify recently, reset the timeout values
 		if sendTail.offset > recvAck.offset {
 			recvAck = sendTail
 			timeout = c.options.AckTimeout
@@ -487,11 +483,11 @@ func sendWorker(c *channel) {
 			}
 
 			c.stats.numResets.Inc(1)
-			c.log("Ack timed out. Reset send log to [%v] from [%v]", cur.offset, prev.offset)
+			c.log("verify timed out. Reset send log to [%v] from [%v]", cur.offset, prev.offset)
 
 			// double the timeout (ie exponential backoff)
 			timeout *= 2
-			c.log("Ack timeout increased to [%v]", timeout)
+			c.log("verify timeout increased to [%v]", timeout)
 
 			if timeoutCnt++; timeoutCnt >= c.options.MaxRetries {
 				c.log("Failure! Too many timeouts.")
@@ -518,10 +514,10 @@ func sendWorker(c *channel) {
 			flags = flags | PacketFlagOffset
 		}
 
-		// see if we should be sending an ack.
+		// see if we should be sending an verify.
 		_, _, recvHead, _ := c.recvOut.Snapshot()
 		if recvHead.offset > sendAck.offset || time.Since(sendAck.time) >= c.options.AckTimeout/2 {
-			flags = flags | PacketFlagAck
+			flags = flags | PacketFlagVerify
 			sendAck = NewRef(recvHead.offset)
 		}
 
@@ -580,7 +576,7 @@ func recvWorker(c *channel) {
 		c.stats.packetsReceived.Inc(1)
 
 		// Handle: close flag
-		if p.ctrls&PacketFlagClose > 0 {
+		if p.flg&PacketFlagClose > 0 {
 			if !c.state.Transition(ChannelOpened, ChannelClosing) {
 				return
 			}
@@ -590,22 +586,22 @@ func recvWorker(c *channel) {
 			return
 		}
 
-		// Handle: ack flag
-		if p.ctrls&PacketFlagAck > 0 {
-			_, err := c.sendIn.Commit(p.ack)
+		// Handle: verify flag
+		if p.flg&PacketFlagVerify > 0 {
+			_, err := c.sendIn.Commit(p.verify)
 			switch err {
 			case ErrStreamClosed:
-				c.log("Error committing ack. Send log closed.")
+				c.log("Error committing verify. Send log closed.")
 				return
 			case ErrStreamInvalidCommit:
-				c.log("Error committing ack [%v] : [%v]", p.ack, err)
+				c.log("Error committing verify [%v] : [%v]", p.verify, err)
 				c.stats.packetsDropped.Inc(1)
 				continue
 			}
 		}
 
 		// Handle: data flag (consume elements of the stream)
-		if p.ctrls&PacketFlagOffset > 0 {
+		if p.flg&PacketFlagOffset > 0 {
 			pending.Put(p.offset, p.data)
 		}
 
@@ -640,7 +636,7 @@ func recvWorker(c *channel) {
 	}
 }
 
-// Performs initiator  open handshake: send(open), recv(open,ack), send(ack)
+// Performs initiator  open handshake: send(open), recv(open,verify), send(verify)
 func openInit(c *channel) error {
 	c.log("Initiating open request")
 
@@ -656,29 +652,29 @@ func openInit(c *channel) error {
 		return ErrHandshakeFailed
 	}
 
-	// Receive: open, ack
-	c.log("Receive (open, ack)")
+	// Receive: open, verify
+	c.log("Receive (open, verify)")
 	p, err = recvOrTimeout(c, c.options.AckTimeout)
 	if err != nil || p == nil {
 		send(c, PacketFlagErr, 0, 0, []byte("AckTimeout"))
 		return ErrChannelTimeout
 	}
 
-	if p.ctrls != (PacketFlagOpen|PacketFlagAck) || p.ack != offset {
-		send(c, PacketFlagErr, 0, 0, []byte("Incorrect Ack"))
+	if p.flg != (PacketFlagOpen|PacketFlagVerify) || p.verify != offset {
+		send(c, PacketFlagErr, 0, 0, []byte("Incorrect verify"))
 		return ErrHandshakeFailed
 	}
 
-	// Send: ack
-	c.log("Send (ack)")
-	if err = send(c, PacketFlagAck, 0, p.offset, []byte{}); err != nil {
+	// Send: verify
+	c.log("Send (verify)")
+	if err = send(c, PacketFlagVerify, 0, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
 	return nil
 }
 
-// Performs receiver (ie listener) open handshake: recv(open), send(open,ack), recv(ack)
+// Performs receiver (ie listener) open handshake: recv(open), send(open,verify), recv(verify)
 func openRecv(c *channel) error {
 	c.log("Waiting for open request")
 
@@ -689,27 +685,27 @@ func openRecv(c *channel) error {
 		return ErrChannelTimeout
 	}
 
-	if p.ctrls != PacketFlagOpen {
+	if p.flg != PacketFlagOpen {
 		send(c, PacketFlagErr, 0, 0, []byte("Required OPEN flag"))
 		return ErrHandshakeFailed
 	}
 
-	// Send: open,ack
-	c.log("Sending (open,ack)")
+	// Send: open,verify
+	c.log("Sending (open,verify)")
 	offset := rand.Uint32()
-	if err := send(c, PacketFlagOpen|PacketFlagAck, offset, p.offset, []byte{}); err != nil {
+	if err := send(c, PacketFlagOpen|PacketFlagVerify, offset, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
-	// Receive: Ack
-	c.log("Receive (ack)")
+	// Receive: verify
+	c.log("Receive (verify)")
 	p, err = recvOrTimeout(c, c.options.AckTimeout)
 	if err != nil {
-		send(c, PacketFlagErr, 0, 0, []byte("Ack Timeout"))
+		send(c, PacketFlagErr, 0, 0, []byte("verify Timeout"))
 		return ErrHandshakeFailed
 	}
 
-	if p.ctrls != PacketFlagAck || p.ack != offset {
+	if p.flg != PacketFlagVerify || p.verify != offset {
 		send(c, PacketFlagErr, 0, 0, []byte("Incorrect offset"))
 		return ErrHandshakeFailed
 	}
@@ -717,7 +713,7 @@ func openRecv(c *channel) error {
 	return nil
 }
 
-// Performs close handshake from initiator's perspective: send(close), recv(close, ack), send(ack)
+// Performs close handshake from initiator's perspective: send(close), recv(close, verify), send(verify)
 func closeInit(c *channel) error {
 	var p *Packet
 	var err error
@@ -730,43 +726,43 @@ func closeInit(c *channel) error {
 		return ErrHandshakeFailed
 	}
 
-	// Receive: close, ack (drop any packets taht don't conform to that)
+	// Receive: close, verify (drop any packets taht don't conform to that)
 	for {
 		p, err = recvOrTimeout(c, c.options.AckTimeout)
 		if err != nil || p == nil {
 			return ErrChannelTimeout
 		}
 
-		if p.ctrls == (PacketFlagClose|PacketFlagAck) && p.ack == offset {
+		if p.flg == (PacketFlagClose|PacketFlagVerify) && p.verify == offset {
 			break
 		}
 	}
 
-	// Send: ack
-	if err = send(c, PacketFlagAck, 0, p.offset, []byte{}); err != nil {
+	// Send: verify
+	if err = send(c, PacketFlagVerify, 0, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
 	return nil
 }
 
-// Performs receiver (ie listener) close handshake: recv(close), send(close,ack), recv(ack)
+// Performs receiver (ie listener) close handshake: recv(close), send(close,verify), recv(verify)
 func closeRecv(c *channel, p *Packet) error {
 
-	// Send: close ack
+	// Send: close verify
 	offset := rand.Uint32()
-	if err := send(c, PacketFlagClose|PacketFlagAck, offset, p.offset, []byte{}); err != nil {
+	if err := send(c, PacketFlagClose|PacketFlagVerify, offset, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
-	// Receive: Ack
+	// Receive: verify
 	p, err := recvOrTimeout(c, c.options.AckTimeout)
 	if err != nil {
-		send(c, PacketFlagErr, 0, 0, []byte("Ack timeout.  Aborting."))
+		send(c, PacketFlagErr, 0, 0, []byte("verify timeout.  Aborting."))
 		return ErrHandshakeFailed
 	}
 
-	if p.ctrls != PacketFlagAck || p.ack != offset {
+	if p.flg != PacketFlagVerify || p.verify != offset {
 		send(c, PacketFlagErr, 0, 0, []byte("Incorrect offset."))
 		return ErrHandshakeFailed
 	}
@@ -774,15 +770,15 @@ func closeRecv(c *channel, p *Packet) error {
 	return nil
 }
 
-func newPacket(c *channel, flags PacketFlags, offset uint32, ack uint32, data []byte) *Packet {
-	local := c.session.LocalEndPoint()
-	remote := c.session.RemoteEndPoint()
+func newPacket(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) *Packet {
+	local := c.session.Local()
+	remote := c.session.Remote()
 
-	return NewPacket(local.EntityId(), local.ChannelId(), remote.EntityId(), remote.ChannelId(), flags, offset, ack, 0, data)
+	return NewPacket(local, remote, flags, offset, verify, 0, data)
 }
 
-func send(c *channel, flags PacketFlags, offset uint32, ack uint32, data []byte) error {
-	return c.sendOut(newPacket(c, flags, offset, ack, data))
+func send(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) error {
+	return c.sendOut(newPacket(c, flags, offset, verify, data))
 }
 
 func recvOrTimeout(c *channel, timeout time.Duration) (*Packet, error) {

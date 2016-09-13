@@ -223,7 +223,7 @@ func TestActiveChannel_sendLargeStream(t *testing.T) {
 	assert.Equal(t, 1<<20, tot)
 }
 
-func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, listener bool) (chan *Packet, *channel) {
+func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, listener bool) (chan *Packet, *channel) {
 	l := NewEndPoint(entityIdL, channelIdL)
 	r := NewEndPoint(entityIdR, channelIdR)
 
@@ -276,7 +276,7 @@ func newTestRouter() func(outL chan *Packet, outR chan *Packet, channelL *channe
 	}
 }
 
-func newTestChannelPairWithRouter(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, router func(chan *Packet, chan *Packet, *channel, *channel)) (*channel, *channel) {
+func newTestChannelPairWithRouter(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, router func(chan *Packet, chan *Packet, *channel, *channel)) (*channel, *channel) {
 	outL, channelL := newTestChannel(entityIdL, channelIdL, entityIdR, channelIdR, false)
 	outR, channelR := newTestChannel(entityIdR, channelIdR, entityIdL, channelIdL, true)
 
@@ -285,6 +285,6 @@ func newTestChannelPairWithRouter(entityIdL uint32, channelIdL uint16, entityIdR
 	return channelL, channelR
 }
 
-func newTestChannelPair(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16) (*channel, *channel) {
+func newTestChannelPair(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16) (*channel, *channel) {
 	return newTestChannelPairWithRouter(entityIdL, channelIdL, entityIdR, channelIdR, newTestRouter())
 }

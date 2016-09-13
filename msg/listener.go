@@ -124,10 +124,7 @@ func (l *listener) tryAccept(p *Packet) (Channel, error) {
 		return nil, ErrChannelClosed
 	}
 
-	lAddr := NewEndPoint(p.srcEntityId, p.srcChannelId)
-	rAddr := NewEndPoint(p.dstEntityId, p.dstChannelId)
-
-	channel := newChannel(lAddr, rAddr, true, l.options.OnSpawn)
+	channel := newChannel(p.src, p.dst, true, l.options.OnSpawn)
 	if err := channel.send(p); err != nil {
 		return nil, ErrChannelClosed
 	}
