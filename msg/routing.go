@@ -1,8 +1,29 @@
 package msg
 
 import (
+	"io"
 	"sync"
 )
+
+// Something that is routable contains two components:
+//
+//   1. A session address
+//   2. A method which accepts packets
+//
+// *Implementations must be thread-safe*
+//
+type Routable interface {
+	io.Closer
+
+	// Returns the complete session address of this channel.
+	Session() Session
+
+	// Sends a packet the processors input channel.  Each implementation
+	// should attempt to implement this in a NON-BLOCKING
+	// fashion. However, may block if necessary.
+	//
+	send(p *Packet) error
+}
 
 // A thread safe channel tracking cache.
 //

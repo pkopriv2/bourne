@@ -10,6 +10,32 @@ const (
 	defaultListenerBufSize = 1024
 )
 
+// Listeners await channel requests and spawn new channels.
+// Consumers should take care to hand the received channel
+// to a separate thread as quickly as possible, as this
+// blocks additional channel requests.
+//
+// Closing a listener does NOT affect any channels that have
+// been spawned.
+//
+// *Implementations must be thread-safe*
+//
+type Listener interface {
+	Routable
+
+	// Accepts a channel request.  Blocks until one
+	// is available.  Returns a non-nil error if the
+	// listener has been closed.
+	//
+	Accept() (Channel, error)
+}
+
+// Function to be called when configuring a listener.
+type ListenerOptionsHandler func(*ListenerOptions)
+
+// Function to be called when state transitions occur.
+type ListenerTransitionHandler func(Listener) error
+
 // listener options struct
 type ListenerOptions struct {
 
@@ -25,12 +51,6 @@ type ListenerOptions struct {
 	// called when a new channel is spawned.
 	OnSpawn ChannelOptionsHandler
 }
-
-// Function to be called when configuring a listener.
-type ListenerOptionsHandler func(*ListenerOptions)
-
-// Function to be called when state transitions occur.
-type ListenerTransitionHandler func(Listener) error
 
 // Returns the default options.
 func defaultListenerOptions() *ListenerOptions {

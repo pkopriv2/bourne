@@ -3,6 +3,7 @@ package msg
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -32,6 +33,16 @@ var (
 	ErrHandshakeFailed = errors.New("CHAN:HANDSHAKE")
 )
 
+// Error types
+var (
+	ErrChannelClosed   = errors.New("CHAN:CLOSED")
+	ErrChannelFailure  = errors.New("CHAN:FAILURE")
+	ErrChannelResponse = errors.New("CHAN:RESPONSE")
+	ErrChannelTimeout  = errors.New("CHAN:TIMEOUT")
+	ErrChannelExists   = errors.New("CHAN:EXISTS")
+	ErrChannelUnknown  = errors.New("CHAN:UNKNONW")
+)
+
 const (
 	ChannelOpening AtomicState = 1 << iota
 	ChannelOpened
@@ -52,6 +63,15 @@ const (
 	defaultChannelMaxRetries   = 3
 )
 
+// A channel represents one side of an active sessin.
+//
+// *Implementations must be thread-safe*
+//
+type Channel interface {
+	Routable
+	io.Reader
+	io.Writer
+}
 
 // Function to be called when configuring a channel.  The function will
 // accept a mutable channel options object that the callee may update.
@@ -755,8 +775,8 @@ func closeRecv(c *channel, p *Packet) error {
 }
 
 func newPacket(c *channel, flags PacketFlags, offset uint32, ack uint32, data []byte) *Packet {
-	local := c.session.Local()
-	remote := c.session.Remote()
+	local := c.session.LocalEndPoint()
+	remote := c.session.RemoteEndPoint()
 
 	return NewPacket(local.EntityId(), local.ChannelId(), remote.EntityId(), remote.ChannelId(), flags, offset, ack, 0, data)
 }

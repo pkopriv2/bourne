@@ -1,121 +1,33 @@
 package msg
 
 import (
-	"errors"
+	// "errors"
 	"io"
+	"log"
+	"sync"
 )
 
-// Error types
-var (
-	ErrChannelClosed   = errors.New("CHAN:CLOSED")
-	ErrChannelFailure  = errors.New("CHAN:FAILURE")
-	ErrChannelResponse = errors.New("CHAN:RESPONSE")
-	ErrChannelTimeout  = errors.New("CHAN:TIMEOUT")
-	ErrChannelExists   = errors.New("CHAN:EXISTS")
-	ErrChannelUnknown  = errors.New("CHAN:UNKNONW")
-)
-
-// Basic channel identity.   This identifies one side of a "session".
+// A connection is a full-duplex streaming abstraction.
 //
-type EndPoint interface {
-	EntityId() uint32
-	ChannelId() uint16
-}
-
-type endpoint struct {
-	entityId  uint32
-	channelId uint16
-}
-
-func NewEndPoint(entityId uint32, channelId uint16) EndPoint {
-	return endpoint{entityId, channelId}
-}
-
-func (c endpoint) EntityId() uint32 {
-	return c.entityId
-}
-
-func (c endpoint) ChannelId() uint16 {
-	return c.channelId
-}
-
-// A session address is the tuple necessary to uniquely identify
-// a channel within a shared stream.  All packet routing is done
-// based on complete session address
+//   *Implementations must be thread-safe*
 //
-type Session interface {
-	Local() EndPoint
-	Remote() EndPoint // nil for listeners
-}
-
-type session struct {
-	local  EndPoint
-	remote EndPoint // nil for listeners.
-}
-
-func (s session) Local() EndPoint {
-	return s.local
-}
-
-func (s session) Remote() EndPoint {
-	return s.remote
-}
-
-func NewListenerSession(local EndPoint) Session {
-	return session{local, nil}
-}
-
-func NewChannelSession(local EndPoint, remote EndPoint) Session {
-	return session{local, remote}
-}
-
-// Accepts packets as input.
-//
-// *Implementations must be thread-safe*
-//
-type Routable interface {
-	io.Closer
-
-	// Returns the complete session address of this channel.
-	Session() Session
-
-	// Sends a packet the processors input channel.  Each implementation
-	// should attempt to implement this in a NON-BLOCKING
-	// fashion. However, may block if necessary.
-	//
-	send(p *Packet) error
-}
-
-// A channel represents one side of an active sessin.
-//
-// *Implementations must be thread-safe*
-//
-type Channel interface {
-	Routable
+type Connection interface {
 	io.Reader
 	io.Writer
+	io.Closer
 }
 
-// Listeners await channel requests and spawn new channels.
-// Consumers should take care to hand the received channel
-// to a separate thread as quickly as possible, as this
-// blocks additional channel requests.
+// Connection actories are used to create the underlying streams.  In
+// the event of failure, this allows streams to be "recreated", without
+// leaking how the streams are generated.  The intent is to create a
+// highly resilient multiplexer.
 //
-// Closing a listener does NOT affect any channels that have
-// been spawned.
+// Consumers MUST NOT interfere with stream lifecycle.  Rather, they
+// should manage the lifecycle of the multiplexer.
 //
-// *Implementations must be thread-safe*
+// TODO: Figure out how to initialize streams.
 //
-type Listener interface {
-	Routable
-
-	// Accepts a channel request.  Blocks until one
-	// is available.  Returns a non-nil error if the
-	// listener has been closed.
-	//
-	Accept() (Channel, error)
-}
-
+type ConnectionFactory func(entityId uint32) (Connection, error)
 
 // The primary client interface.
 type Client interface {
@@ -131,6 +43,166 @@ type Client interface {
 	Listen(channelId uint32) (Listener, error)
 }
 
-// func ServerHandler
+// A multiplexer is responsible for taking a single data stream
+// and splitting it into multiple logical streams.  Once split,
+// these streams are referred to as "channels".  A channel represents
+// one side of a conversation between two entities.  Channels come
+// in two different flavors:
 //
-// func Serve(l Listener)
+//      * Active - An active channel represents a "live" conversation
+//        between two entities.  Channels are full duplex, meaning that they
+//        have separate input and output streams.  The realationship between
+//        client and server is NOT specified at this layer, but it is generally
+//        perceived that a listening channel will spawn a "server" channel
+//        while client channels must be spawned adhoc via the connect command.
+//
+//      * Listening - A listening channel spawns active channels.
+//
+// Data flow:
+//
+//  IN FLOW:
+//  <DATA> ---> DESERIALIZER ---> ROUTER ----> *CHANNEL
+//
+//  OUT FLOW:
+//  <DATA> ---> *CHANNEL ---> SERIALIZER ----> <DATA>
+//
+// NOTE: Any reference to output refers to the OUT FLOW direction.
+//
+// Concurrency model:
+//
+//      * READER       : SINGLE THREADED (No one but multiplexer should read from this)
+//      * WRITER       : SINGLE THREADED (No one but multiplexer should write to this)
+//      * SERIALIZER   : A single instance operating in its own routine (buffered output)
+//      * DESERIALIZER : A single instance operating in its own routine.(buffered input)
+//      * ROUTER       : A single instance operating in its own routine.(buffered input)
+//      * CHANNEL      : Manages its own threds.
+//
+//
+// Multiplex closing:
+//
+//      * Invoke close on all channels
+//      * Closes the Reader
+//      * Closes the Writer
+//
+// Examples:
+//   m := NewMux(...)
+//   s := m.connect(0,0)
+//
+// Example:
+//
+
+// the parser output buffer is shared amonst all channels
+// var PARSER_BUF_OUT_SIZE uint = 8192
+
+// In order to build a highly resilient multiplexer we will
+// impement reconnect logic.
+var STREAM_MAX_RECONNECTS uint = 5
+
+//
+type Mux struct {
+
+	// the entity behind this client.
+	entityId uint32
+
+	// pool of available channel ids
+	ids *IdPool
+
+	// the complete listing of sessions (both active and listening)
+	router *routingTable
+
+	// Direction: RECV deserializerIn --> routerIn
+	readerIn io.Reader
+	routerIn chan *Packet
+
+	// Direction: SEND *Channel --> serializerIn --> serializerOut
+	writerIn  chan *Packet
+	writerOut io.Writer
+
+	// a flag indicating state.
+	closed bool
+
+	// the lock on the multiplexer
+	lock sync.RWMutex
+
+	// all the active routines under this multiplexer
+	workers sync.WaitGroup
+}
+
+func (m *Mux) Close() error {
+	panic("not implemented")
+}
+
+func (m *Mux) EntityId() uint32 {
+	panic("not implemented")
+}
+
+func (m *Mux) Connect(remote EndPoint) (Channel, error) {
+	panic("not implemented")
+}
+
+func (m *Mux) Listen(channelId uint32) (Listener, error) {
+	panic("not implemented")
+}
+
+func readerWorker(m *Mux) {
+	defer m.workers.Done()
+	for {
+
+		packet, err := ReadPacket(m.readerIn)
+		if err != nil {
+			log.Printf("Error parsing packet")
+			continue
+		}
+
+		m.routerIn <- packet
+	}
+}
+
+func writerWorker(m *Mux) {
+	defer m.workers.Done()
+	for {
+		packet, ok := <-m.writerIn
+		if !ok {
+			log.Println("Channel closed.  Stopping writer thread")
+		}
+
+		if err := WritePacket(m.writerOut, packet); err != nil {
+			// TODO: Handle connection errors
+			log.Printf("Error writing packet [%v]\n", err)
+			continue
+		}
+	}
+}
+
+func routerWorker(m *Mux) {
+	defer m.workers.Done()
+	for {
+		p, ok := <-m.routerIn
+		if !ok {
+			// todo...return error packet!
+			return
+		}
+
+		local := NewEndPoint(p.dstEntityId, p.dstChannelId)
+
+		// see if there is an "active" session
+		var channel Routable
+		if channel = m.router.Get(NewChannelSession(local, NewEndPoint(p.srcEntityId, p.srcChannelId))); channel != nil {
+			if err := channel.send(p); err != nil {
+				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(err.Error()))
+			}
+			continue
+		}
+
+		// see if there is a "listener" session
+		if channel = m.router.Get(NewListenerSession(local)); channel != nil {
+			if err := channel.send(p); err != nil {
+				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(err.Error()))
+			}
+			continue
+		}
+
+		// nobody to handle this.
+		m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(ErrChannelUnknown.Error()))
+	}
+}
