@@ -15,30 +15,15 @@ const (
 	StreamLockWait = 5 * time.Millisecond
 )
 
-// Used to compare relative offsets.
-func OffsetComparator(a, b interface{}) int {
-	offsetA := a.(uint32)
-	offsetB := b.(uint32)
-
-	if offsetA > offsetB {
-		return 1
-	}
-
-	if offsetA == offsetB {
-		return 0
-	}
-
-	return -1
-}
-
-// A ref represents a position within a stream at
-// particular moment in time.
+// A ref represents a position within a stream at particular moment in time.
 //
 type Ref struct {
 	offset uint32
 	time   time.Time
 }
 
+// Generates a new ref from the offset.  Uses time.Now() for time of ref.
+//
 func NewRef(offset uint32) *Ref {
 	return &Ref{offset, time.Now()}
 }
@@ -53,8 +38,8 @@ func NewRef(offset uint32) *Ref {
 //  * Tail: What can be forgotten.  (ie has been verified)
 //
 type Stream struct {
-	data []byte
-	lock sync.RWMutex // just using simple, coarse lock
+	buffer []byte
+	lock   sync.RWMutex // just using simple, coarse lock
 
 	tail *Ref
 	cur  *Ref
@@ -63,13 +48,13 @@ type Stream struct {
 	closed bool // no more io
 }
 
-func NewStream(size uint) *Stream {
+func NewStream(size int) *Stream {
 	ref := NewRef(0)
 	return &Stream{
-		data: make([]byte, size),
-		tail: ref,
-		cur:  ref,
-		head: ref}
+		buffer: make([]byte, size),
+		tail:   ref,
+		cur:    ref,
+		head:   ref}
 }
 
 func (s *Stream) Close() error {
@@ -144,12 +129,12 @@ func (s *Stream) Data() []byte {
 	r := s.tail.offset
 	w := s.head.offset
 
-	len := uint32(len(s.data))
+	len := uint32(len(s.buffer))
 	ret := make([]byte, w-r)
 
 	// just start copying until we get to write
 	for i := uint32(0); r+i < w; i++ {
-		ret[i] = s.data[(r+i)%len]
+		ret[i] = s.buffer[(r+i)%len]
 	}
 
 	return ret
@@ -167,7 +152,7 @@ func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32, error) {
 
 	// get the new write
 	inLen := uint32(len(in))
-	bufLen := uint32(len(s.data))
+	bufLen := uint32(len(s.buffer))
 
 	// grab the current read offset.
 	start := s.cur
@@ -178,7 +163,7 @@ func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32, error) {
 
 	var i uint32 = 0
 	for ; i < inLen && r+i < w; i++ {
-		in[i] = s.data[(r+i)%bufLen]
+		in[i] = s.buffer[(r+i)%bufLen]
 	}
 
 	s.cur = NewRef(r + i)
@@ -201,7 +186,7 @@ func (s *Stream) TryWrite(val []byte) (uint32, *Ref, error) {
 
 	// get the new write
 	valLen := uint32(len(val))
-	bufLen := uint32(len(s.data))
+	bufLen := uint32(len(s.buffer))
 
 	// grab current positions
 	r := s.tail.offset
@@ -210,7 +195,7 @@ func (s *Stream) TryWrite(val []byte) (uint32, *Ref, error) {
 	// just write until we can't write anymore.
 	var i uint32 = 0
 	for ; i < valLen && w+i < r+bufLen; i++ {
-		s.data[(w+i)%bufLen] = val[i]
+		s.buffer[(w+i)%bufLen] = val[i]
 	}
 
 	s.head = NewRef(w + i)
@@ -253,4 +238,20 @@ func (s *Stream) Read(in []byte) (int, error) {
 	}
 
 	panic("Not accessible")
+}
+
+// Used to compare relative offsets.
+func OffsetComparator(a, b interface{}) int {
+	offsetA := a.(uint32)
+	offsetB := b.(uint32)
+
+	if offsetA > offsetB {
+		return 1
+	}
+
+	if offsetA == offsetB {
+		return 0
+	}
+
+	return -1
 }

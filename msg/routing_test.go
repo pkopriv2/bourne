@@ -10,16 +10,16 @@ import (
 // Still need to test concurrency design and failure design.  These
 // tests where to ensure that the session addressing scheme would work.
 
-func TestCache_Listener(t *testing.T) {
-	cache := NewChannelCache()
-	cache.Add(NewRoutable(NewListenerSession(NewAddress(0, 1))))
-	assert.NotNil(t, cache.Get(NewListenerSession(NewAddress(0, 1))))
+func TestRoutingTable_Listener(t *testing.T) {
+	cache := newRoutingTable()
+	cache.Add(NewRoutable(NewListenerSession(NewEndPoint(0, 1))))
+	assert.NotNil(t, cache.Get(NewListenerSession(NewEndPoint(0, 1))))
 }
 
-func TestCache_Channel(t *testing.T) {
-	cache := NewChannelCache()
-	cache.Add(NewRoutable(NewChannelSession(NewAddress(0, 1), NewAddress(0,1))))
-	assert.NotNil(t, cache.Get(NewChannelSession(NewAddress(0, 1), NewAddress(0,1))))
+func TestRoutingTable_Channel(t *testing.T) {
+	cache := newRoutingTable()
+	cache.Add(NewRoutable(NewChannelSession(NewEndPoint(0, 1), NewEndPoint(0, 1))))
+	assert.NotNil(t, cache.Get(NewChannelSession(NewEndPoint(0, 1), NewEndPoint(0, 1))))
 }
 
 type testRoutable struct {

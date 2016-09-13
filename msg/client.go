@@ -17,25 +17,25 @@ var (
 
 // Basic channel identity.   This identifies one side of a "session".
 //
-type Address interface {
+type EndPoint interface {
 	EntityId() uint32
 	ChannelId() uint16
 }
 
-type address struct {
+type endpoint struct {
 	entityId  uint32
 	channelId uint16
 }
 
-func NewAddress(entityId uint32, channelId uint16) Address {
-	return address{entityId, channelId}
+func NewEndPoint(entityId uint32, channelId uint16) EndPoint {
+	return endpoint{entityId, channelId}
 }
 
-func (c address) EntityId() uint32 {
+func (c endpoint) EntityId() uint32 {
 	return c.entityId
 }
 
-func (c address) ChannelId() uint16 {
+func (c endpoint) ChannelId() uint16 {
 	return c.channelId
 }
 
@@ -44,28 +44,28 @@ func (c address) ChannelId() uint16 {
 // based on complete session address
 //
 type Session interface {
-	Local() Address
-	Remote() Address // nil for listeners
+	Local() EndPoint
+	Remote() EndPoint // nil for listeners
 }
 
 type session struct {
-	local  Address
-	remote Address // nil for listeners.
+	local  EndPoint
+	remote EndPoint // nil for listeners.
 }
 
-func (s session) Local() Address {
+func (s session) Local() EndPoint {
 	return s.local
 }
 
-func (s session) Remote() Address {
+func (s session) Remote() EndPoint {
 	return s.remote
 }
 
-func NewListenerSession(local Address) Session {
+func NewListenerSession(local EndPoint) Session {
 	return session{local, nil}
 }
 
-func NewChannelSession(local Address, remote Address) Session {
+func NewChannelSession(local EndPoint, remote EndPoint) Session {
 	return session{local, remote}
 }
 
@@ -116,7 +116,21 @@ type Listener interface {
 	Accept() (Channel, error)
 }
 
+
+// The primary client interface.
+type Client interface {
+	io.Closer
+
+	// Each client is identified by a primary entity identifier.
+	EntityId() uint32
+
+	// Connects to the remote endpoint.
+	Connect(remote EndPoint) (Channel, error)
+
+	// Begins listening on
+	Listen(channelId uint32) (Listener, error)
+}
+
+// func ServerHandler
 //
-// type Client interface {
-//
-// }
+// func Serve(l Listener)

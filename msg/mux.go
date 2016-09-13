@@ -1,8 +1,10 @@
 package msg
 
-import "sync"
-import "io"
-import "log"
+import (
+	"io"
+	"log"
+	"sync"
+)
 
 // import "errors"
 
@@ -61,7 +63,13 @@ import "log"
 // impement reconnect logic.
 var STREAM_MAX_RECONNECTS uint = 5
 
-// Stream factories are used to create the underlying streams.  In
+type Connection interface {
+	io.Reader
+	io.Writer
+	io.Closer
+}
+
+// Connection actories are used to create the underlying streams.  In
 // the event of failure, this allows streams to be "recreated", without
 // leaking how the streams are generated.  The intent is to create a
 // highly resilient multiplexer.
@@ -71,16 +79,28 @@ var STREAM_MAX_RECONNECTS uint = 5
 //
 // TODO: Figure out how to initialize streams.
 //
-type StreamFactory func(entityId uint32) (*io.ReadWriter, error)
+type ConnectionFactory func(entityId uint32) (Connection, error)
 
 //
 type Mux struct {
+
+
+	// the entity behind this client.
+	entityId uint32
 
 	// pool of available channel ids
 	ids *IdPool
 
 	// the complete listing of sessions (both active and listening)
-	channels *ChannelCache
+	router *routingTable
+
+	// Direction: RECV deserializerIn --> routerIn
+	readerIn io.Reader
+	routerIn chan *Packet
+
+	// Direction: SEND *Channel --> serializerIn --> serializerOut
+	writerIn  chan *Packet
+	writerOut io.Writer
 
 	// a flag indicating state.
 	closed bool
@@ -88,92 +108,86 @@ type Mux struct {
 	// the lock on the multiplexer
 	lock sync.RWMutex
 
-	// the shared output channel.
-	out chan Packet
-
 	// all the active routines under this multiplexer
 	workers sync.WaitGroup
 }
 
-func NewMux(reader io.Reader, writer io.Writer) *Mux {
-	parserOut := make(chan Packet, 1024)
-	routerIn := make(chan Packet, 1024)
-
-	mux := &Mux{ids: NewIdPool(), channels: NewChannelCache()}
-
-	// start the parser thread
-	mux.workers.Add(1)
-	go func(mux *Mux, r io.Reader, next chan Packet) {
-		defer mux.workers.Done()
-		for {
-
-			packet, err := ReadPacket(r)
-			if err != nil {
-				log.Printf("Error parsing packet")
-				continue
-			}
-
-			next <- *packet
-		}
-	}(mux, reader, routerIn)
-
-	// start the writer thread
-	mux.workers.Add(1)
-	go func(mux *Mux, prev chan Packet, w io.Writer) {
-		defer mux.workers.Done()
-		for {
-			packet, ok := <-prev
-			if !ok {
-				log.Println("Channel closed.  Stopping writer thread")
-			}
-
-			if err := WritePacket(w, &packet); err != nil {
-				// TODO: Handle connection errors
-				log.Printf("Error writing packet [%v]\n", err)
-				continue
-			}
-		}
-	}(mux, parserOut, writer)
-
-	// start the packet router thread
-	mux.workers.Add(1)
-	go func(mux *Mux, prev chan Packet, err chan Packet) {
-		defer mux.workers.Done()
-
-		for {
-			// p, ok := <-prev
-			// if !ok {
-				// // todo...return error packet!
-				// return
-			// }
-
-			// // see if there is an "active" session
-			// channel := mux.channels.get(newchanneladdress{p.dstentityid, p.dstchannelid})
-			// if channel == nil {
-				// continue
-			// }
-//
-			// // see if there is a "listener" session
-			// if err := channel.send(&p); err != nil {
-				// // todo...return error packet!
-				// continue
-			// }
-		}
-	}(mux, routerIn, parserOut)
-
-	return mux
-}
-
-func (m *Mux) Connect(srcEntityId uint32, dstEntityId uint32, dstChannelId uint16) (Channel, error) {
-	return nil, nil
-	// return NewActiveChannel(srcEntityId, ChannelAddress{dstEntityId, dstChannelId}, m.channels, m.ids, m.out)
-}
-
-func (m *Mux) Listen(srcEntityId uint32, srcChannelId uint16) (Listener, error) {
-	return nil, nil
-	// return NewChannelListener(&ChannelAddress{srcEntityId, srcChannelId}, m.channels, m.ids, m.out)
-}
-
 func (m *Mux) Close() error {
-	return nil
+	panic("not implemented")
+}
+
+func (m *Mux) EntityId() uint32 {
+	panic("not implemented")
+}
+
+func (m *Mux) Connect(remote EndPoint) (Channel, error) {
+	panic("not implemented")
+}
+
+func (m *Mux) Listen(channelId uint32) (Listener, error) {
+	panic("not implemented")
+}
+
+
+func readerWorker(m *Mux) {
+	defer m.workers.Done()
+	for {
+
+		packet, err := ReadPacket(m.readerIn)
+		if err != nil {
+			log.Printf("Error parsing packet")
+			continue
+		}
+
+		m.routerIn <- packet
+	}
+}
+
+func writerWorker(m *Mux) {
+	defer m.workers.Done()
+	for {
+		packet, ok := <-m.writerIn
+		if !ok {
+			log.Println("Channel closed.  Stopping writer thread")
+		}
+
+		if err := WritePacket(m.writerOut, packet); err != nil {
+			// TODO: Handle connection errors
+			log.Printf("Error writing packet [%v]\n", err)
+			continue
+		}
+	}
+}
+
+func routerWorker(m *Mux) {
+	defer m.workers.Done()
+	for {
+		p, ok := <-m.routerIn
+		if !ok {
+			// todo...return error packet!
+			return
+		}
+
+		local := NewEndPoint(p.dstEntityId, p.dstChannelId)
+
+		// see if there is an "active" session
+		var channel Routable
+		if channel = m.router.Get(NewChannelSession(local, NewEndPoint(p.srcEntityId, p.srcChannelId))); channel != nil {
+			if err := channel.send(p); err != nil {
+				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0,0,0, []byte(err.Error()))
+			}
+			continue
+		}
+
+		// see if there is a "listener" session
+		if channel = m.router.Get(NewListenerSession(local)); channel != nil {
+			if err := channel.send(p); err != nil {
+				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0,0,0, []byte(err.Error()))
+			}
+			continue
+		}
+
+		// nobody to handle this.
+		m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0,0,0, []byte(ErrChannelUnknown.Error()))
+	}
 }

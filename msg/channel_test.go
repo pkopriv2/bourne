@@ -223,13 +223,14 @@ func TestActiveChannel_sendLargeStream(t *testing.T) {
 	assert.Equal(t, 1<<20, tot)
 }
 
-func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, listener bool) (chan Packet, *channel) {
-	l := NewAddress(entityIdL, channelIdL)
-	r := NewAddress(entityIdR, channelIdR)
+func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, listener bool) (chan *Packet, *channel) {
+	l := NewEndPoint(entityIdL, channelIdL)
+	r := NewEndPoint(entityIdR, channelIdR)
 
-	out := make(chan Packet, 1<<10)
+	out := make(chan *Packet, 1<<10)
 
 	channel := newChannel(l, r, listener, func(opts *ChannelOptions) {
+		opts.Debug = true
 		opts.AckTimeout = 500 * time.Millisecond
 		opts.CloseTimeout = 500 * time.Millisecond
 		opts.SendWait = 10 * time.Millisecond
@@ -237,13 +238,12 @@ func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, chann
 		opts.SendLogSize = 1 << 20
 		opts.RecvLogSize = 1 << 20
 		opts.RecvInSize = 1 << 10
-		opts.Debug = true
 		opts.OnClose = func(c Channel) error {
 			close(out)
 			return nil
 		}
 		opts.OnData = func(p *Packet) error {
-			out <- *p
+			out <- p
 			return nil
 		}
 	})
@@ -251,24 +251,24 @@ func newTestChannel(entityIdL uint32, channelIdL uint16, entityIdR uint32, chann
 	return out, channel
 }
 
-func newTestRouter() func(outL chan Packet, outR chan Packet, channelL *channel, channelR *channel) {
-	return func(outL chan Packet, outR chan Packet, channelL *channel, channelR *channel) {
+func newTestRouter() func(outL chan *Packet, outR chan *Packet, channelL *channel, channelR *channel) {
+	return func(outL chan *Packet, outR chan *Packet, channelL *channel, channelR *channel) {
 		for {
 			select {
 			case p, ok := <-outR:
 				if !ok {
 					return
 				}
-				channelL.log("Routing packet: %v", &p)
-				if err := channelL.send(&p); err != nil {
+				channelL.log("Routing packet: %v", p)
+				if err := channelL.send(p); err != nil {
 					return
 				}
 			case p, ok := <-outL:
 				if !ok {
 					return
 				}
-				channelR.log("Routing packet: %v", &p)
-				if err := channelR.send(&p); err != nil {
+				channelR.log("Routing packet: %v", p)
+				if err := channelR.send(p); err != nil {
 					return
 				}
 			}
@@ -276,7 +276,7 @@ func newTestRouter() func(outL chan Packet, outR chan Packet, channelL *channel,
 	}
 }
 
-func newTestChannelPairWithRouter(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, router func(chan Packet, chan Packet, *channel, *channel)) (*channel, *channel) {
+func newTestChannelPairWithRouter(entityIdL uint32, channelIdL uint16, entityIdR uint32, channelIdR uint16, router func(chan *Packet, chan *Packet, *channel, *channel)) (*channel, *channel) {
 	outL, channelL := newTestChannel(entityIdL, channelIdL, entityIdR, channelIdR, false)
 	outR, channelR := newTestChannel(entityIdR, channelIdR, entityIdL, channelIdL, true)
 

@@ -1,69 +1,83 @@
 package msg
 
 import (
-	"errors"
 	"sync"
 )
 
-var (
-	ErrListenerInvalidId = errors.New("LISTENER:INVALD_ID")
+const (
+	// defaultListenerMaxId   = 255
+	// defaultListenerMinId   = 0
+	defaultListenerBufSize = 1024
 )
 
-const (
-	ListenerMaxId   = 255
-	ListenerMinId   = 0
-	ListenerBufSize = 1024
-)
+// listener options struct
+type ListenerOptions struct {
+
+	// Whether or not to enable debug logging.
+	Debug bool
+
+	// Size of the input buffe
+	ListenerBufSize int
+
+	// called when the listener has been close
+	OnClose ListenerTransitionHandler
+
+	// called when a new channel is spawned.
+	OnSpawn ChannelOptionsHandler
+}
+
+// Function to be called when configuring a listener.
+type ListenerOptionsHandler func(*ListenerOptions)
+
+// Function to be called when state transitions occur.
+type ListenerTransitionHandler func(Listener) error
+
+// Returns the default options.
+func defaultListenerOptions() *ListenerOptions {
+	return &ListenerOptions{ListenerBufSize: defaultListenerBufSize}
+}
 
 // A listener is a simple channel awaiting new channel requests.
 //
 // *This object is thread safe.*
 //
 type listener struct {
+	// the listener lock (used to synchronize state transitions)
+	lock sync.RWMutex
 
 	// the session address (will have a nil remote address)
 	session Session
 
-	// the channel cache (shared amongst all channels)
-	cache *ChannelCache
-
 	// the buffered "in" channel (owned by this channel)
-	in chan Packet
+	in chan *Packet
 
-	// the buffered "out" channel (shared amongst all channels)
-	out chan Packet
-
-	// options functions (called on each spawned channel)
-	config ChannelConfig
-
-	// the lock on this channel
-	lock sync.RWMutex
+	// options functions (called for each spawned channel)
+	options ListenerOptions
 
 	// a flag indicating that the channel is closed (updates/reads must be synchronized)
 	closed bool
 }
 
 // Creates and returns a new listening channel.  This has the side effect of adding the
-// channel to the channel cache, which means that it immediately available to have
+// channel to the channel router, which means that it immediately available to have
 // packets routed to it.
 //
-func newListener(local Address, cache *ChannelCache, out chan Packet, config ChannelConfig) (*listener, error) {
+func newListener(session Session, opts ...ListenerOptionsHandler) (*listener, error) {
 
-	// buffered input chan
-	in := make(chan Packet, ListenerBufSize)
+	// initialize the options.
+	defaultOpts := defaultListenerOptions()
+	for _, opt := range opts {
+		opt(defaultOpts)
+	}
+
+	// defensively copy the options (this is to eliminate any reference to the options that the consumer may have)
+	options := *defaultOpts
 
 	// create the channel
 	listener := &listener{
-		session: NewListenerSession(local),
-		cache:   cache,
-		out:     out,
-		config:  config,
-		in:      in}
-
-	// add it to the channel pool (i.e. make it available for routing)
-	if err := cache.Add(listener); err != nil {
-		return nil, err
-	}
+		session: session,
+		options: options,
+		in:      make(chan *Packet, options.ListenerBufSize)}
 
 	// finally, return control to the caller
 	return listener, nil
@@ -79,7 +93,7 @@ func (l *listener) Accept() (Channel, error) {
 		return nil, ErrChannelClosed
 	}
 
-	return l.tryAccept(&packet)
+	return l.tryAccept(packet)
 }
 
 // split out for a more granular locking strategy
@@ -90,33 +104,10 @@ func (l *listener) tryAccept(p *Packet) (Channel, error) {
 		return nil, ErrChannelClosed
 	}
 
-	lAddr := NewAddress(p.srcEntityId, p.srcChannelId)
-	rAddr := NewAddress(p.dstEntityId, p.dstChannelId)
+	lAddr := NewEndPoint(p.srcEntityId, p.srcChannelId)
+	rAddr := NewEndPoint(p.dstEntityId, p.dstChannelId)
 
-	channel := newChannel(lAddr, rAddr, true, func(opts *ChannelOptions) {
-		l.config(opts)
-
-		// these event handlers must always win!
-		opts.OnData = func(p *Packet) error {
-			l.out <- *p
-			return nil
-		}
-
-		opts.OnClose = func(c Channel) error {
-			defer l.cache.Remove(c.Session())
-			return nil
-		}
-
-		opts.OnFailure = func(c Channel) error {
-			defer l.cache.Remove(c.Session())
-			return nil
-		}
-	})
-
-	if err := l.cache.Add(channel); err != nil {
-		return nil, err
-	}
-
+	channel := newChannel(lAddr, rAddr, true, l.options.OnSpawn)
 	if err := channel.send(p); err != nil {
 		return nil, ErrChannelClosed
 	}
@@ -133,7 +124,7 @@ func (l *listener) send(p *Packet) error {
 		return ErrChannelClosed
 	}
 
-	l.in <- *p
+	l.in <- p
 	return nil
 }
 
@@ -147,11 +138,11 @@ func (l *listener) Close() error {
 		return ErrChannelClosed
 	}
 
-	// stop routing to this channel.
-	l.cache.Remove(l.session)
-
 	// close the buffer
 	close(l.in)
+
+	// call the on close handler
+	l.options.OnClose(l)
 
 	// finally, mark it closed
 	l.closed = true

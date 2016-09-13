@@ -92,10 +92,6 @@ func NewReturnPacket(p *Packet, ctrls PacketFlags, offset uint32, ack uint32, ca
 	return NewPacket(p.dstEntityId, p.dstChannelId, p.srcEntityId, p.srcChannelId, ctrls, offset, ack, capacity, data)
 }
 
-func NewErrorPacket(p *Packet, errorMsg string) *Packet {
-	return NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(errorMsg))
-}
-
 func (p *Packet) String() string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fmt.Sprintf("[%v,%v]->[%v,%v]  ", p.srcEntityId, p.srcEntityId, p.dstEntityId, p.dstChannelId))

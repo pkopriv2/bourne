@@ -8,7 +8,7 @@ import (
 //
 // *This object is thread-safe.*
 //
-type ChannelCache struct {
+type routingTable struct {
 
 	// the map locl (pool is thread safe already)
 	lock sync.RWMutex
@@ -17,17 +17,17 @@ type ChannelCache struct {
 	channels map[Session]Routable
 }
 
-func NewChannelCache() *ChannelCache {
-	return &ChannelCache{channels: make(map[Session]Routable)}
+func newRoutingTable() *routingTable {
+	return &routingTable{channels: make(map[Session]Routable)}
 }
 
-func (self *ChannelCache) Get(session Session) Routable {
+func (self *routingTable) Get(session Session) Routable {
 	self.lock.RLock()
 	defer self.lock.RUnlock()
 	return self.channels[session]
 }
 
-func (self *ChannelCache) Add(routable Routable) error {
+func (self *routingTable) Add(routable Routable) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
@@ -42,7 +42,7 @@ func (self *ChannelCache) Add(routable Routable) error {
 	return nil
 }
 
-func (self *ChannelCache) Remove(session Session) error {
+func (self *routingTable) Remove(session Session) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
