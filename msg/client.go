@@ -2,74 +2,60 @@ package msg
 
 import (
 	"errors"
-	"io"
+	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 
 var (
-	ErrConnectionFailure = errors.New("CHAN:HANDSHAKE")
-	ErrConnectionTimeout = errors.New("CHAN:HANDSHAKE")
-	ErrClientClosed   = errors.New("CHAN:CLOSED")
-	ErrClientFailure  = errors.New("CHAN:FAILURE")
-	ErrClientTimeout  = errors.New("CHAN:TIMEOUT")
-	ErrClientExists   = errors.New("CHAN:EXISTS")
-	ErrClientUnknown  = errors.New("CHAN:UNKNONW")
+	ErrClientClosed  = errors.New("CLIENT:CLOSED")
+	ErrClientFailure = errors.New("CLIENT:FAILURE")
 )
 
 const (
-	ClientInit AtomicState = 0
-	ClientConnecting AtomicState = 1 << iota
-	ClientConnected
+	ClientInit   AtomicState = 0
+	ClientOpened AtomicState = 1 << iota
 	ClientClosing
 	ClientClosed
 	ClientFailure
 )
 
 const (
-	// defaultChannelRecvInSize   = 1024
-	// defaultChannelRecvLogSize  = 1 << 20 // 1024K
-	// defaultChannelSendLogSize  = 1 << 18 // 256K
-	// defaultChannelSendWait     = 100 * time.Millisecond
-	// defaultChannelRecvWait     = 20 * time.Millisecond
-	// defaultChannelAckTimeout   = 5 * time.Second
-	// defaultChannelWinTimeout   = 2 * time.Second
-	// defaultChannelCloseTimeout = 10 * time.Second
-	// defaultChannelMaxRetries   = 3
+	defaultClientWriterInSize   = 8192
+	defaultClientRouterInSize   = 4096
+	defaultClientWriterWait     = 1 * time.Millisecond
+	defaultClientReaderWait     = 1 * time.Millisecond
+	defaultClientRouterWait     = 10 * time.Millisecond
+	defaultClientConnectRetries = 3
+	defaultClientConnectTimeout = 3
 )
 
-// The primary client interface.
-type Client interface {
-	io.Closer
-
-	// Connects to the remote endpoint and returns a channel.
-	Connect(entityId EntityId, ChannelId uint16) (Channel, error)
-
-	// Begins listening on
-	Listen(channelId uint16) (Listener, error)
+func Connect(EndPoint) (Channel, error) {
+	return nil, nil
 }
 
-
-// A connection is a full-duplex streaming abstraction.
-//
-// Implementations are not explicitly required to be thread-safe.
-type Connection interface {
-	io.Reader
-	io.Writer
-	io.Closer
+func Listen(EndPoint) (Listener, error) {
+	return nil, nil
 }
 
-// Connection actories are used to create the underlying streams.  In
-// the event of failure, this allows streams to be "recreated", without
-// leaking how the streams are generated.  The intent is to create a
-// highly resilient multiplexer.
-//
-// Consumers MUST NOT interfere with stream lifecycle.  Rather, they
-// should manage the lifecycle of the multiplexer.
-//
-type ConnectionFactory func() (Connection, error)
+type ClientOptions struct {
+	Debug          bool
+	WriterInSize   int
+	RouterInSize   int
+	WriterWait     time.Duration
+	ReaderWait     time.Duration
+	RouterWait     time.Duration
+	ConnectRetries int
+	ConnectTimeout time.Duration
 
-// A multiplexer is responsible for taking a single data stream
+	ConnectionFactory ConnectionFactory
+
+	ListenerOpts ListenerOptionsHandler
+	ChannelOpts  ChannelOptionsHandler
+}
+
+// A client is responsible for taking a single data stream
 // and splitting it into multiple logical streams.  Once split,
 // these streams are referred to as "channels".  A channel represents
 // one side of a conversation between two entities.  Channels come
@@ -96,9 +82,11 @@ type ConnectionFactory func() (Connection, error)
 //
 // Thrading model:
 //
-//      * READER       : SINGLE THREADED (No one but multiplexer should read from this)
-//      * WRITER       : SINGLE THREADED (No one but multiplexer should write to this)
-//      * ROUTER       : A single instance operating in its own routine.(buffered input)
+//      * RAW READER   : SINGLE THREADED (No one but multiplexer should read from this)
+//      * RAW WRITER   : SINGLE THREADED (No one but multiplexer should write to this)
+//      * READER       : A single instance operating in its own routine.  (always limited to a singleton)
+//      * WRITER       : A single instance operating in its own routine.  (always limited to a singleton)
+//      * ROUTER       : Each instance
 //      * CHANNEL      : Manages its own threads.
 //
 // Multiplex closing:
@@ -108,42 +96,38 @@ type ConnectionFactory func() (Connection, error)
 //      * Closes the Writer
 //
 // Examples:
-//   m := NewMux(...)
-//   s := m.connect(0,0)
+//   c := NewMux(...)
+//   s := c.connect(0,0)
 //
 // Example:
 //
 
-// the parser output buffer is shared amonst all channels
-// var PARSER_BUF_OUT_SIZE uint = 8192
-
-// In order to build a highly resilient multiplexer we will
-// impement reconnect logic.
-var STREAM_MAX_RECONNECTS uint = 5
-
-
 //
-type Mux struct {
+type client struct {
 
 	// the entity behind this client.
-	entityId uint32
+	entityId EntityId
 
-	//
-	factory ConnectionFactory
+	// client options
+	options ClientOptions
+
+	// the current "live" connection (initially nil) (synchronized via lock)
+	conn *Connector
+
+	// the current state of the client
+	state *AtomicState
 
 	// pool of available channel ids
-	ids *IdPool
+	ids *idPool
 
 	// the complete listing of sessions (both active and listening)
 	router *routingTable
 
 	// Direction: RECV deserializerIn --> routerIn
-	readerIn io.Reader
-	routerIn chan *Packet
+	routerIn chan *packet
 
 	// Direction: SEND *Channel --> serializerIn --> serializerOut
-	writerIn  chan *Packet
-	writerOut io.Writer
+	writerIn chan *packet
 
 	// a flag indicating state.
 	closed bool
@@ -155,45 +139,56 @@ type Mux struct {
 	workers sync.WaitGroup
 }
 
-func (m *Mux) Close() error {
+func (c *client) Close() error {
 	panic("not implemented")
 }
 
-func (m *Mux) EntityId() uint32 {
+func (c *client) EntityId() uint32 {
 	panic("not implemented")
 }
 
-func (m *Mux) Connect(remote EndPoint) (Channel, error) {
+func (c *client) Connect(remote EndPoint) (Channel, error) {
 	panic("not implemented")
 }
 
-func (m *Mux) Listen(channelId uint32) (Listener, error) {
+func (c *client) Listen(channelId uint32) (Listener, error) {
 	panic("not implemented")
 }
 
-func readerWorker(m *Mux) {
-	defer m.workers.Done()
+// ** INTERNAL ONLY METHODS **
+
+// Logs a message, tagging it with the channel's local address.
+func (c *client) log(format string, vals ...interface{}) {
+	if !c.options.Debug {
+		return
+	}
+
+	log.Println(fmt.Sprintf("client(%v) -- ", c.entityId) + fmt.Sprintf(format, vals...))
+}
+
+func readerWorker(c *client) {
+	defer c.workers.Done()
 	for {
 
-		packet, err := ReadPacket(m.readerIn)
+		packet, err := ReadPacket(c.conn)
 		if err != nil {
 			log.Printf("Error parsing packet")
 			continue
 		}
 
-		m.routerIn <- packet
+		c.routerIn <- packet
 	}
 }
 
-func writerWorker(m *Mux) {
-	defer m.workers.Done()
+func writerWorker(c *client) {
+	defer c.workers.Done()
 	for {
-		packet, ok := <-m.writerIn
+		packet, ok := <-c.writerIn
 		if !ok {
 			log.Println("Channel closed.  Stopping writer thread")
 		}
 
-		if err := WritePacket(m.writerOut, packet); err != nil {
+		if err := WritePacket(c.conn, packet); err != nil {
 			// TODO: Handle connection errors
 			log.Printf("Error writing packet [%v]\n", err)
 			continue
@@ -201,35 +196,33 @@ func writerWorker(m *Mux) {
 	}
 }
 
-func routerWorker(m *Mux) {
-	defer m.workers.Done()
+func routerWorker(c *client) {
+	defer c.workers.Done()
 	for {
-		p, ok := <-m.routerIn
+		p, ok := <-c.routerIn
 		if !ok {
 			// todo...return error packet!
 			return
 		}
 
-		// local := NewEndPoint(p.dstEntityId, p.dstChannelId)
-
 		// see if there is an "active" session
 		var channel Routable
-		if channel = m.router.Get(NewChannelSession(p.dst, p.src)); channel != nil {
+		if channel = c.router.Get(NewChannelSession(p.dst, p.src)); channel != nil {
 			if err := channel.send(p); err != nil {
-				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(err.Error()))
+				c.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, []byte(err.Error()))
 			}
 			continue
 		}
 
 		// see if there is a "listener" session
-		if channel = m.router.Get(NewListenerSession(p.dst)); channel != nil {
+		if channel = c.router.Get(NewListenerSession(p.dst)); channel != nil {
 			if err := channel.send(p); err != nil {
-				m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(err.Error()))
+				c.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, []byte(err.Error()))
 			}
 			continue
 		}
 
 		// nobody to handle this.
-		m.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, 0, []byte(ErrChannelUnknown.Error()))
+		c.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, []byte(ErrChannelUnknown.Error()))
 	}
 }

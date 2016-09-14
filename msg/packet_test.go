@@ -11,9 +11,9 @@ func TestPacket_Serialization(*testing.T) {
 	buffer := bytes.NewBuffer(make([]byte, 0))
 	writer := bufio.NewWriter(buffer)
 
-	src := NewEndPoint(0,0)
-	dst := NewEndPoint(1,1)
-	p1 := &Packet{0, src, dst, 5, 0, 0, 0, make([]byte, 20)}
+	src := NewEndPoint(0, 0)
+	dst := NewEndPoint(1, 1)
+	p1 := &packet{0, src, dst, 5, 0, 0, make([]byte, 20)}
 	WritePacket(writer, p1)
 	writer.Flush()
 

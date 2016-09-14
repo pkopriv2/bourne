@@ -21,8 +21,6 @@ const (
 	IdPoolExpInc = 10
 )
 
-
-
 // A memory efficient pool of available ids. The pool will be
 // restricted to the range defined by:
 //
@@ -39,7 +37,7 @@ const (
 //
 // *This object is thread-safe*
 //
-type IdPool struct {
+type idPool struct {
 	lock  sync.Mutex
 	avail *list.List
 	next  uint // used as a low watermark
@@ -49,10 +47,10 @@ type IdPool struct {
 // ID_POOL_EXP_INC values.  Each time the pool's values
 // are exhausted, it is automatically and safely expanded.
 //
-func NewIdPool() *IdPool {
+func NewIdPool() *idPool {
 	avail := list.New()
 
-	pool := &IdPool{avail: avail, next: IdPoolMaxId}
+	pool := &idPool{avail: avail, next: IdPoolMaxId}
 	pool.expand(IdPoolExpInc)
 	return pool
 }
@@ -62,7 +60,7 @@ func NewIdPool() *IdPool {
 // Expands the available ids by numItems or until
 // it has reached maximum capacity.
 //
-func (self *IdPool) expand(numItems uint) error {
+func (self *idPool) expand(numItems uint) error {
 	log.Printf("Attemping to expand id pool [%v] by [%v] items\n", self.next, numItems)
 
 	i, prev := self.next, self.next
@@ -86,7 +84,7 @@ func (self *IdPool) expand(numItems uint) error {
 // In the event of a non-nil error, the consumer MUST not use the
 // returned value.
 //
-func (self *IdPool) Take() (uint, error) {
+func (self *idPool) Take() (uint, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
@@ -111,7 +109,7 @@ func (self *IdPool) Take() (uint, error) {
 //  Only ids that have been loaned out should be returned to the
 //  pool.
 //
-func (self *IdPool) Return(id uint) {
+func (self *idPool) Return(id uint) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if id < self.next {

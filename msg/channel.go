@@ -76,53 +76,33 @@ type ChannelOptionsHandler func(*ChannelOptions)
 // Function to be called when state transitions occur.
 type ChannelTransitionHandler func(Channel) error
 
-// All the channel options
+// The complete set of configurable options on the channel
 type ChannelOptions struct {
-
-	// Whether or not to enable debug logging.
 	Debug bool
 
-	// Defines how many packets will be buffered before blocking
-	RecvInSize int
-
-	// Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
+	// buffer sizes
+	RecvInSize  int
 	RecvLogSize int
-
-	// Defines how many bytes will be buffered prior to being consumed (should always be greater than send buf)
 	SendLogSize int
 
-	// The duration to wait before trying to send data again (when none was available)
+	// thread sleeps
 	SendWait time.Duration
-
-	// The duration to wait before trying to fetch again (when none was avaiable)
 	RecvWait time.Duration
 
-	// The duration to wait for an verify before data is considered lost
-	AckTimeout time.Duration
-
-	// The duration to wait for an verify before data is considered lost
-	WinTimeout time.Duration
-
-	// The duration to wait before the close is aborted.  any pending data is considered lost.
+	// timeouts
+	AckTimeout   time.Duration
+	WinTimeout   time.Duration
 	CloseTimeout time.Duration
 
-	// The number of consecutive retries before the channel is tarnsitioned to a failure state.
 	MaxRetries int
 
-	// to be called when the channel has been initialized, and is in the process of being started
-	OnInit ChannelTransitionHandler
-
-	// to be called when the channel has encountered an unrecoverable error
-	OnOpen ChannelTransitionHandler
-
-	// to be called when the channel is closed (allows the release of external resources (ie ids, routing table))
+	// handlers
+	OnInit  ChannelTransitionHandler
+	OnOpen  ChannelTransitionHandler
 	OnClose ChannelTransitionHandler
+	OnFail  ChannelTransitionHandler
 
-	// to be called when the channel is closed (allows the release of external resources (ie ids, routing table))
-	OnFailure ChannelTransitionHandler
-
-	// to be called when the channel produces an outgoing packet. (may block)
-	OnData func(*Packet) error
+	OnData func(*packet) error
 }
 
 // Returns the default options.
@@ -139,11 +119,11 @@ func defaultChannelOptions() *ChannelOptions {
 		MaxRetries:   defaultChannelMaxRetries,
 
 		// state handlers
-		OnInit:    func(c Channel) error { return nil },
-		OnOpen:    func(c Channel) error { return nil },
-		OnClose:   func(c Channel) error { return nil },
-		OnFailure: func(c Channel) error { return nil },
-		OnData:    func(p *Packet) error { return nil }}
+		OnInit:  func(c Channel) error { return nil },
+		OnOpen:  func(c Channel) error { return nil },
+		OnClose: func(c Channel) error { return nil },
+		OnFail:  func(c Channel) error { return nil },
+		OnData:  func(p *packet) error { return nil }}
 }
 
 // An active channel represents one side of a conversation between two entities.
@@ -231,12 +211,12 @@ type channel struct {
 	state *AtomicState
 
 	// receive buffers
-	recvIn  chan *Packet
+	recvIn  chan *packet
 	recvOut *Stream
 
 	// send buffers
 	sendIn  *Stream
-	sendOut func(p *Packet) error
+	sendOut func(p *packet) error
 
 	// event handlers
 	onInit    ChannelTransitionHandler
@@ -265,14 +245,14 @@ func newChannel(l EndPoint, r EndPoint, listening bool, opts ...ChannelOptionsHa
 		options:   &options,
 		stats:     NewChannelStats(l),
 		state:     NewAtomicState(ChannelOpening),
-		recvIn:    make(chan *Packet, options.RecvInSize),
+		recvIn:    make(chan *packet, options.RecvInSize),
 		recvOut:   NewStream(options.RecvLogSize),
 		sendIn:    NewStream(options.SendLogSize),
 		sendOut:   options.OnData,
 		onInit:    options.OnInit,
 		onOpen:    options.OnOpen,
 		onClose:   options.OnClose,
-		onFailure: options.OnFailure}
+		onFailure: options.OnFail}
 
 	// call the init function. (before anything!)
 	c.onInit(c)
@@ -331,7 +311,7 @@ func (c *channel) Close() error {
 // ** INTERNAL ONLY METHODS **
 
 // Send pushes a message on the input channel.  (used for internal routing.)
-func (c *channel) send(p *Packet) error {
+func (c *channel) send(p *packet) error {
 	if !c.state.Is(ChannelOpening | ChannelOpened | ChannelClosing) {
 		return ErrChannelClosed
 	}
@@ -408,7 +388,7 @@ func openWorker(c *channel, listening bool) {
 	}
 }
 
-func closeWorker(c *channel, p *Packet) {
+func closeWorker(c *channel, p *packet) {
 	defer c.workers.Done()
 
 	var err error
@@ -528,7 +508,7 @@ func sendWorker(c *channel) {
 		}
 
 		// this can block indefinitely (What should we do???)
-		if err := c.sendOut(newPacket(c, flags, sendStart.offset, recvHead.offset, data)); err != nil {
+		if err := c.sendOut(NewPacket(c.session.Local(), c.session.Remote(), flags, sendStart.offset, recvHead.offset, data)); err != nil {
 			c.state.Transition(AnyAtomicState, ChannelFailure)
 			c.onFailure(c)
 			return
@@ -556,7 +536,7 @@ func recvWorker(c *channel) {
 		// able to detect state changes and handle appropriately.
 
 		// grab the next packet (cannot block as we need to evaluate state transitions)
-		var p *Packet = nil
+		var p *packet = nil
 		select {
 		case in, ok := <-c.recvIn:
 			if !ok {
@@ -576,7 +556,7 @@ func recvWorker(c *channel) {
 		c.stats.packetsReceived.Inc(1)
 
 		// Handle: close flag
-		if p.flg&PacketFlagClose > 0 {
+		if p.flags&PacketFlagClose > 0 {
 			if !c.state.Transition(ChannelOpened, ChannelClosing) {
 				return
 			}
@@ -587,7 +567,7 @@ func recvWorker(c *channel) {
 		}
 
 		// Handle: verify flag
-		if p.flg&PacketFlagVerify > 0 {
+		if p.flags&PacketFlagVerify > 0 {
 			_, err := c.sendIn.Commit(p.verify)
 			switch err {
 			case ErrStreamClosed:
@@ -601,7 +581,7 @@ func recvWorker(c *channel) {
 		}
 
 		// Handle: data flag (consume elements of the stream)
-		if p.flg&PacketFlagOffset > 0 {
+		if p.flags&PacketFlagOffset > 0 {
 			pending.Put(p.offset, p.data)
 		}
 
@@ -640,7 +620,7 @@ func recvWorker(c *channel) {
 func openInit(c *channel) error {
 	c.log("Initiating open request")
 
-	var p *Packet
+	var p *packet
 	var err error
 
 	// generate a new offset for the handshake.
@@ -660,7 +640,7 @@ func openInit(c *channel) error {
 		return ErrChannelTimeout
 	}
 
-	if p.flg != (PacketFlagOpen|PacketFlagVerify) || p.verify != offset {
+	if p.flags != (PacketFlagOpen|PacketFlagVerify) || p.verify != offset {
 		send(c, PacketFlagErr, 0, 0, []byte("Incorrect verify"))
 		return ErrHandshakeFailed
 	}
@@ -685,7 +665,7 @@ func openRecv(c *channel) error {
 		return ErrChannelTimeout
 	}
 
-	if p.flg != PacketFlagOpen {
+	if p.flags != PacketFlagOpen {
 		send(c, PacketFlagErr, 0, 0, []byte("Required OPEN flag"))
 		return ErrHandshakeFailed
 	}
@@ -705,7 +685,7 @@ func openRecv(c *channel) error {
 		return ErrHandshakeFailed
 	}
 
-	if p.flg != PacketFlagVerify || p.verify != offset {
+	if p.flags != PacketFlagVerify || p.verify != offset {
 		send(c, PacketFlagErr, 0, 0, []byte("Incorrect offset"))
 		return ErrHandshakeFailed
 	}
@@ -715,7 +695,7 @@ func openRecv(c *channel) error {
 
 // Performs close handshake from initiator's perspective: send(close), recv(close, verify), send(verify)
 func closeInit(c *channel) error {
-	var p *Packet
+	var p *packet
 	var err error
 
 	// generate a new random offset for jhe handshake.
@@ -733,7 +713,7 @@ func closeInit(c *channel) error {
 			return ErrChannelTimeout
 		}
 
-		if p.flg == (PacketFlagClose|PacketFlagVerify) && p.verify == offset {
+		if p.flags == (PacketFlagClose|PacketFlagVerify) && p.verify == offset {
 			break
 		}
 	}
@@ -747,7 +727,7 @@ func closeInit(c *channel) error {
 }
 
 // Performs receiver (ie listener) close handshake: recv(close), send(close,verify), recv(verify)
-func closeRecv(c *channel, p *Packet) error {
+func closeRecv(c *channel, p *packet) error {
 
 	// Send: close verify
 	offset := rand.Uint32()
@@ -762,7 +742,7 @@ func closeRecv(c *channel, p *Packet) error {
 		return ErrHandshakeFailed
 	}
 
-	if p.flg != PacketFlagVerify || p.verify != offset {
+	if p.flags != PacketFlagVerify || p.verify != offset {
 		send(c, PacketFlagErr, 0, 0, []byte("Incorrect offset."))
 		return ErrHandshakeFailed
 	}
@@ -770,18 +750,18 @@ func closeRecv(c *channel, p *Packet) error {
 	return nil
 }
 
-func newPacket(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) *Packet {
-	local := c.session.Local()
-	remote := c.session.Remote()
-
-	return NewPacket(local, remote, flags, offset, verify, 0, data)
-}
+// func newPacket(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) *packet {
+// local := c.session.Local()
+// remote := c.session.Remote()
+//
+// return NewPacket(local, remote, flags, offset, verify, 0, data)
+// }
 
 func send(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) error {
-	return c.sendOut(newPacket(c, flags, offset, verify, data))
+	return c.sendOut(NewPacket(c.session.Local(), c.session.Remote(), flags, offset, verify, data))
 }
 
-func recvOrTimeout(c *channel, timeout time.Duration) (*Packet, error) {
+func recvOrTimeout(c *channel, timeout time.Duration) (*packet, error) {
 	timer := time.NewTimer(timeout)
 
 	select {

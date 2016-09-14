@@ -38,23 +38,15 @@ type ListenerTransitionHandler func(Listener) error
 
 // listener options struct
 type ListenerOptions struct {
-
-	// Whether or not to enable debug logging.
-	Debug bool
-
-	// Size of the input buffe
-	ListenerBufSize int
-
-	// called when the listener has been close
+	Debug   bool
+	BufSize int
 	OnClose ListenerTransitionHandler
-
-	// called when a new channel is spawned.
 	OnSpawn ChannelOptionsHandler
 }
 
 // Returns the default options.
 func defaultListenerOptions() *ListenerOptions {
-	return &ListenerOptions{ListenerBufSize: defaultListenerBufSize}
+	return &ListenerOptions{BufSize: defaultListenerBufSize}
 }
 
 // A listener is a simple channel awaiting new channel requests.
@@ -69,7 +61,7 @@ type listener struct {
 	session Session
 
 	// the buffered "in" channel (owned by this channel)
-	in chan *Packet
+	in chan *packet
 
 	// options functions (called for each spawned channel)
 	options ListenerOptions
@@ -97,7 +89,7 @@ func newListener(session Session, opts ...ListenerOptionsHandler) (*listener, er
 	listener := &listener{
 		session: session,
 		options: options,
-		in:      make(chan *Packet, options.ListenerBufSize)}
+		in:      make(chan *packet, options.BufSize)}
 
 	// finally, return control to the caller
 	return listener, nil
@@ -117,7 +109,7 @@ func (l *listener) Accept() (Channel, error) {
 }
 
 // split out for a more granular locking strategy
-func (l *listener) tryAccept(p *Packet) (Channel, error) {
+func (l *listener) tryAccept(p *packet) (Channel, error) {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
 	if l.closed {
@@ -134,7 +126,7 @@ func (l *listener) tryAccept(p *Packet) (Channel, error) {
 
 // Sends a packet to the channel stream.
 //
-func (l *listener) send(p *Packet) error {
+func (l *listener) send(p *packet) error {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
 	if l.closed {

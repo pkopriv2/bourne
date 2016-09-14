@@ -38,6 +38,6 @@ func (t *testRoutable) Close() error {
 	panic("not implemented")
 }
 
-func (t *testRoutable) send(p *Packet) error {
+func (t *testRoutable) send(p *packet) error {
 	panic("not implemented")
 }

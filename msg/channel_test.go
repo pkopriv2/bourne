@@ -21,7 +21,7 @@ func TestActiveChannel_openRecvTimeout(t *testing.T) {
 	defer channel.Close()
 
 	// start the sequence, but never respond
-	channel.send(newPacket(channel, PacketFlagOpen, 100, 0, []byte{}))
+	channel.send(NewPacket(channel.session.Local(), channel.session.Remote(), PacketFlagOpen, 100, 0, []byte{}))
 	channel.state.WaitUntil(ChannelOpened | ChannelFailure)
 
 	assert.Equal(t, ChannelFailure, channel.state.Get())
@@ -223,11 +223,11 @@ func TestActiveChannel_sendLargeStream(t *testing.T) {
 	assert.Equal(t, 1<<20, tot)
 }
 
-func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, listener bool) (chan *Packet, *channel) {
+func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, listener bool) (chan *packet, *channel) {
 	l := NewEndPoint(entityIdL, channelIdL)
 	r := NewEndPoint(entityIdR, channelIdR)
 
-	out := make(chan *Packet, 1<<10)
+	out := make(chan *packet, 1<<10)
 
 	channel := newChannel(l, r, listener, func(opts *ChannelOptions) {
 		opts.Debug = true
@@ -242,7 +242,7 @@ func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, c
 			close(out)
 			return nil
 		}
-		opts.OnData = func(p *Packet) error {
+		opts.OnData = func(p *packet) error {
 			out <- p
 			return nil
 		}
@@ -251,8 +251,8 @@ func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, c
 	return out, channel
 }
 
-func newTestRouter() func(outL chan *Packet, outR chan *Packet, channelL *channel, channelR *channel) {
-	return func(outL chan *Packet, outR chan *Packet, channelL *channel, channelR *channel) {
+func newTestRouter() func(outL chan *packet, outR chan *packet, channelL *channel, channelR *channel) {
+	return func(outL chan *packet, outR chan *packet, channelL *channel, channelR *channel) {
 		for {
 			select {
 			case p, ok := <-outR:
@@ -276,7 +276,7 @@ func newTestRouter() func(outL chan *Packet, outR chan *Packet, channelL *channe
 	}
 }
 
-func newTestChannelPairWithRouter(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, router func(chan *Packet, chan *Packet, *channel, *channel)) (*channel, *channel) {
+func newTestChannelPairWithRouter(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, router func(chan *packet, chan *packet, *channel, *channel)) (*channel, *channel) {
 	outL, channelL := newTestChannel(entityIdL, channelIdL, entityIdR, channelIdR, false)
 	outR, channelR := newTestChannel(entityIdR, channelIdR, entityIdL, channelIdL, true)
 
