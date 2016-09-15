@@ -2,15 +2,9 @@ package msg
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"sync"
 	"time"
-)
-
-var (
-	ErrClientClosed  = errors.New("CLIENT:CLOSED")
-	ErrClientFailure = errors.New("CLIENT:FAILURE")
 )
 
 const (
@@ -31,29 +25,32 @@ const (
 	defaultClientConnectTimeout = 3
 )
 
-func Connect(EndPoint) (Channel, error) {
-	return nil, nil
-}
+var (
+	ErrClientClosed  = errors.New("CLIENT:CLOSED")
+	ErrClientFailure = errors.New("CLIENT:FAILURE")
+)
 
-func Listen(EndPoint) (Listener, error) {
-	return nil, nil
-}
 
 type ClientOptions struct {
-	Debug          bool
-	WriterInSize   int
-	RouterInSize   int
-	WriterWait     time.Duration
-	ReaderWait     time.Duration
-	RouterWait     time.Duration
+	Debug bool
+
+	WriterInSize int
+	RouterInSize int
+
+	WriterWait time.Duration
+	ReaderWait time.Duration
+	RouterWait time.Duration
+
 	ConnectRetries int
 	ConnectTimeout time.Duration
 
-	ConnectionFactory ConnectionFactory
+	Factory ConnectionFactory
 
 	ListenerOpts ListenerOptionsHandler
 	ChannelOpts  ChannelOptionsHandler
 }
+
+type ClientOptionsHandler func(*ClientOptions)
 
 // A client is responsible for taking a single data stream
 // and splitting it into multiple logical streams.  Once split,
@@ -82,8 +79,8 @@ type ClientOptions struct {
 //
 // Thrading model:
 //
-//      * RAW READER   : SINGLE THREADED (No one but multiplexer should read from this)
-//      * RAW WRITER   : SINGLE THREADED (No one but multiplexer should write to this)
+//      * RAW READER   : SINGLE THREADED (No one but reader should read from this)
+//      * RAW WRITER   : SINGLE THREADED (No one but writer should write to this)
 //      * READER       : A single instance operating in its own routine.  (always limited to a singleton)
 //      * WRITER       : A single instance operating in its own routine.  (always limited to a singleton)
 //      * ROUTER       : Each instance
@@ -105,16 +102,8 @@ type ClientOptions struct {
 //
 type client struct {
 
-	// the entity behind this client.
-	entityId EntityId
+	options *ClientOptions
 
-	// client options
-	options ClientOptions
-
-	// the current "live" connection (initially nil) (synchronized via lock)
-	conn *Connector
-
-	// the current state of the client
 	state *AtomicState
 
 	// pool of available channel ids
@@ -123,17 +112,12 @@ type client struct {
 	// the complete listing of sessions (both active and listening)
 	router *routingTable
 
-	// Direction: RECV deserializerIn --> routerIn
+	// the
+	conn     *Connector
+
+	// IO
 	routerIn chan *packet
-
-	// Direction: SEND *Channel --> serializerIn --> serializerOut
 	writerIn chan *packet
-
-	// a flag indicating state.
-	closed bool
-
-	// the lock on the multiplexer
-	lock sync.RWMutex
 
 	// all the active routines under this multiplexer
 	workers sync.WaitGroup
@@ -143,46 +127,60 @@ func (c *client) Close() error {
 	panic("not implemented")
 }
 
-func (c *client) EntityId() uint32 {
+func (c *client) Spawn(entity EntityId, remote EndPoint) (Channel, error) {
 	panic("not implemented")
 }
 
-func (c *client) Connect(remote EndPoint) (Channel, error) {
-	panic("not implemented")
-}
-
-func (c *client) Listen(channelId uint32) (Listener, error) {
+func (c *client) Listen(local EndPoint) (Listener, error) {
 	panic("not implemented")
 }
 
 // ** INTERNAL ONLY METHODS **
 
 // Logs a message, tagging it with the channel's local address.
-func (c *client) log(format string, vals ...interface{}) {
-	if !c.options.Debug {
-		return
-	}
-
-	log.Println(fmt.Sprintf("client(%v) -- ", c.entityId) + fmt.Sprintf(format, vals...))
-}
+// func (c *client) log(format string, vals ...interface{}) {
+	// if !c.options.Debug {
+		// return
+	// }
+//
+	// // log.Println(fmt.Sprintf("client(%v) -- ", c.entityId) + fmt.Sprintf(format, vals...))
+// }
 
 func readerWorker(c *client) {
 	defer c.workers.Done()
 	for {
-
-		packet, err := ReadPacket(c.conn)
-		if err != nil {
-			log.Printf("Error parsing packet")
-			continue
+		state := c.state.WaitUntil(ClientOpened | ClientClosing | ClientClosed)
+		if !state.Is(ClientOpened) {
+			return
 		}
 
-		c.routerIn <- packet
+		// packet, err := ReadPacket(c.conn)
+		// switch {
+		// case err = *err.(ConnectionErrors):
+//
+		// }
+		// if err != nil {
+//
+		// }
+		// if err != nil {
+			// log.Printf("Error parsing packet")
+			// time.Sleep(c.options.ReaderWait)
+			// continue
+		// }
+
+		// c.routerIn <- packet
+
 	}
 }
 
 func writerWorker(c *client) {
 	defer c.workers.Done()
 	for {
+		state := c.state.WaitUntil(ClientOpened | ClientClosing | ClientClosed)
+		if !state.Is(ClientOpened) {
+			return
+		}
+
 		packet, ok := <-c.writerIn
 		if !ok {
 			log.Println("Channel closed.  Stopping writer thread")

@@ -10,6 +10,9 @@ import (
 
 	"math/rand"
 
+	"github.com/pkopriv2/bourne/utils"
+	metrics "github.com/rcrowley/go-metrics"
+
 	"github.com/emirpasic/gods/maps/treemap"
 )
 
@@ -20,6 +23,7 @@ import (
 // https://tools.ietf.org/html/rfc4987
 //
 // TODOS:
+//   * Better errors!
 //   * Make open/close more reliable.
 //   * Make open/close more secure.  (Ensure packets are properly addressed!)
 //   * Move entityId to uuid.
@@ -48,13 +52,24 @@ const (
 )
 
 const (
+	confChannelDebug        = "bourne.msg.channel.debug"
+	confChannelRecvInSize   = "bourne.msg.channel.recv.in.size"
+	confChannelRecvLogSize  = "bourne.msg.channel.recv.log.size"
+	confChannelSendLogSize  = "bourne.msg.channel.send.log.size"
+	confChannelSendWait     = "bourne.msg.channel.send.wait"
+	confChannelRecvWait     = "bourne.msg.channel.send.wait"
+	confChannelAckTimeout   = "bourne.msg.channel.ack.timeout"
+	confChannelCloseTimeout = "bourne.msg.channel.close.size"
+	confChannelMaxRetries   = "bourne.msg.channel.max.retries"
+)
+
+const (
 	defaultChannelRecvInSize   = 1024
 	defaultChannelRecvLogSize  = 1 << 20 // 1024K
 	defaultChannelSendLogSize  = 1 << 18 // 256K
 	defaultChannelSendWait     = 100 * time.Millisecond
 	defaultChannelRecvWait     = 20 * time.Millisecond
 	defaultChannelAckTimeout   = 5 * time.Second
-	defaultChannelWinTimeout   = 2 * time.Second
 	defaultChannelCloseTimeout = 10 * time.Second
 	defaultChannelMaxRetries   = 3
 )
@@ -69,54 +84,26 @@ type Channel interface {
 	io.Writer
 }
 
-// Function to be called when configuring a channel.  The function will
-// accept a mutable channel options object that the callee may update.
-type ChannelOptionsHandler func(*ChannelOptions)
-
-// Function to be called when state transitions occur.
-type ChannelTransitionHandler func(Channel) error
-
-// The complete set of configurable options on the channel
 type ChannelOptions struct {
-	Debug bool
+	Config utils.Config
 
-	// buffer sizes
-	RecvInSize  int
-	RecvLogSize int
-	SendLogSize int
-
-	// thread sleeps
-	SendWait time.Duration
-	RecvWait time.Duration
-
-	// timeouts
-	AckTimeout   time.Duration
-	WinTimeout   time.Duration
-	CloseTimeout time.Duration
-
-	MaxRetries int
-
-	// handlers
+	// lifecycle handlers
 	OnInit  ChannelTransitionHandler
 	OnOpen  ChannelTransitionHandler
 	OnClose ChannelTransitionHandler
 	OnFail  ChannelTransitionHandler
 
+	// data handler
 	OnData func(*packet) error
 }
 
-// Returns the default options.
+type ChannelOptionsHandler func(*ChannelOptions)
+
+type ChannelTransitionHandler func(Channel) error
+
 func defaultChannelOptions() *ChannelOptions {
 	return &ChannelOptions{
-		RecvInSize:   defaultChannelRecvInSize,
-		RecvLogSize:  defaultChannelRecvLogSize,
-		SendLogSize:  defaultChannelSendLogSize,
-		SendWait:     defaultChannelSendWait,
-		RecvWait:     defaultChannelRecvWait,
-		AckTimeout:   defaultChannelAckTimeout,
-		WinTimeout:   defaultChannelWinTimeout,
-		CloseTimeout: defaultChannelCloseTimeout,
-		MaxRetries:   defaultChannelMaxRetries,
+		Config: utils.NewEmptyConfig(),
 
 		// state handlers
 		OnInit:  func(c Channel) error { return nil },
@@ -124,6 +111,48 @@ func defaultChannelOptions() *ChannelOptions {
 		OnClose: func(c Channel) error { return nil },
 		OnFail:  func(c Channel) error { return nil },
 		OnData:  func(p *packet) error { return nil }}
+}
+
+// will still need to define better statistics gathering,
+// but this was an easy get up and going method.
+type ChannelStats struct {
+	packetsSent     metrics.Counter
+	packetsDropped  metrics.Counter
+	packetsReceived metrics.Counter
+
+	bytesSent     metrics.Counter
+	bytesDropped  metrics.Counter
+	bytesReceived metrics.Counter
+	bytesReset    metrics.Counter
+
+	numResets metrics.Counter
+}
+
+func newChannelStats(endpoint EndPoint) *ChannelStats {
+	r := metrics.DefaultRegistry
+
+	return &ChannelStats{
+		packetsSent: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.PacketsSent"), r),
+		packetsReceived: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.PacketsReceived"), r),
+		packetsDropped: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.PacketsDropped"), r),
+
+		bytesSent: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesSent"), r),
+		bytesReceived: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesReceived"), r),
+		bytesDropped: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesDropped"), r),
+		bytesReset: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesReset"), r),
+		numResets: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.NumResets"), r)}
+}
+
+func newChannelMetric(endpoint EndPoint, name string) string {
+	return fmt.Sprintf("-- %+v --: %s", endpoint, name)
 }
 
 // An active channel represents one side of a conversation between two entities.
@@ -198,11 +227,8 @@ func defaultChannelOptions() *ChannelOptions {
 //
 type channel struct {
 
-	// the address of the session
+	// the endpointess of the session
 	session Session
-
-	// channel options.
-	options *ChannelOptions
 
 	// general channel statistics
 	stats *ChannelStats
@@ -210,11 +236,8 @@ type channel struct {
 	// the state of the channel.
 	state *AtomicState
 
-	// receive buffers
 	recvIn  chan *packet
 	recvOut *Stream
-
-	// send buffers
 	sendIn  *Stream
 	sendOut func(p *packet) error
 
@@ -223,6 +246,20 @@ type channel struct {
 	onOpen    ChannelTransitionHandler
 	onClose   ChannelTransitionHandler
 	onFailure ChannelTransitionHandler
+
+	// increased logging
+	debug bool
+
+	// thread sleeps
+	sendWait time.Duration
+	recvWait time.Duration
+
+	// timeouts
+	ackTimeout   time.Duration
+	closeTimeout time.Duration
+
+	// number of attempts (ie open/close)
+	maxRetries int
 
 	// the workers wait
 	workers sync.WaitGroup
@@ -239,22 +276,35 @@ func newChannel(l EndPoint, r EndPoint, listening bool, opts ...ChannelOptionsHa
 	// defensively copy the options (this is to eliminate any reference to the options that the consumer may have)
 	options := *defaultOpts
 
+	// preem
+	recvInSize := options.Config.OptionalInt(confChannelRecvInSize, defaultChannelRecvInSize)
+	recvLogSize := options.Config.OptionalInt(confChannelRecvLogSize, defaultChannelRecvLogSize)
+	sendLogSize := options.Config.OptionalInt(confChannelSendLogSize, defaultChannelSendLogSize)
+
 	// create the channel
 	c := &channel{
-		session:   NewChannelSession(l, r),
-		options:   &options,
-		stats:     NewChannelStats(l),
-		state:     NewAtomicState(ChannelOpening),
-		recvIn:    make(chan *packet, options.RecvInSize),
-		recvOut:   NewStream(options.RecvLogSize),
-		sendIn:    NewStream(options.SendLogSize),
-		sendOut:   options.OnData,
+		session: NewChannelSession(l, r),
+		stats:   newChannelStats(l),
+		state:   NewAtomicState(ChannelOpening),
+
+		recvIn:  make(chan *packet, recvInSize),
+		recvOut: NewStream(recvLogSize),
+		sendIn:  NewStream(sendLogSize),
+		sendOut: options.OnData,
+
 		onInit:    options.OnInit,
 		onOpen:    options.OnOpen,
 		onClose:   options.OnClose,
-		onFailure: options.OnFail}
+		onFailure: options.OnFail,
 
-	// call the init function. (before anything!)
+		debug:        options.Config.OptionalBool(confChannelDebug, false),
+		sendWait:     options.Config.OptionalDuration(confChannelSendWait, defaultChannelSendWait),
+		recvWait:     options.Config.OptionalDuration(confChannelRecvWait, defaultChannelRecvWait),
+		ackTimeout:   options.Config.OptionalDuration(confChannelAckTimeout, defaultChannelAckTimeout),
+		closeTimeout: options.Config.OptionalDuration(confChannelCloseTimeout, defaultChannelCloseTimeout),
+		maxRetries:   options.Config.OptionalInt(confChannelMaxRetries, defaultChannelMaxRetries)}
+
+	// call the init function.
 	c.onInit(c)
 
 	// kick off the workers
@@ -344,13 +394,13 @@ func (c *channel) flush(timeout time.Duration) error {
 			return ErrChannelTimeout
 		}
 
-		time.Sleep(c.options.SendWait)
+		time.Sleep(c.sendWait)
 	}
 }
 
-// Logs a message, tagging it with the channel's local address.
+// Logs a message, tagging it with the channel's local endpointess.
 func (c *channel) log(format string, vals ...interface{}) {
-	if !c.options.Debug {
+	if !c.debug {
 		return
 	}
 
@@ -362,7 +412,7 @@ func openWorker(c *channel, listening bool) {
 
 	var err error
 
-	for i := 0; i < c.options.MaxRetries; i++ {
+	for i := 0; i < c.maxRetries; i++ {
 		if listening {
 			err = openRecv(c)
 		} else {
@@ -419,7 +469,7 @@ func sendWorker(c *channel) {
 	defer c.log("Send worker shutdown")
 
 	// initialize the timeout values
-	timeout := c.options.AckTimeout
+	timeout := c.ackTimeout
 	timeoutCnt := 0
 
 	// track last verify received
@@ -451,7 +501,7 @@ func sendWorker(c *channel) {
 		// if we received an verify recently, reset the timeout values
 		if sendTail.offset > recvAck.offset {
 			recvAck = sendTail
-			timeout = c.options.AckTimeout
+			timeout = c.ackTimeout
 			timeoutCnt = 0
 		}
 
@@ -463,13 +513,13 @@ func sendWorker(c *channel) {
 			}
 
 			c.stats.numResets.Inc(1)
-			c.log("verify timed out. Reset send log to [%v] from [%v]", cur.offset, prev.offset)
+			c.log("Verify timed out. Reset send log to [%v] from [%v]", cur.offset, prev.offset)
 
 			// double the timeout (ie exponential backoff)
 			timeout *= 2
-			c.log("verify timeout increased to [%v]", timeout)
+			c.log("Verify timeout increased to [%v]", timeout)
 
-			if timeoutCnt++; timeoutCnt >= c.options.MaxRetries {
+			if timeoutCnt++; timeoutCnt >= c.maxRetries {
 				c.log("Failure! Too many timeouts.")
 				c.state.Transition(AnyAtomicState, ChannelFailure)
 				c.onFailure(c)
@@ -496,14 +546,14 @@ func sendWorker(c *channel) {
 
 		// see if we should be sending an verify.
 		_, _, recvHead, _ := c.recvOut.Snapshot()
-		if recvHead.offset > sendAck.offset || time.Since(sendAck.time) >= c.options.AckTimeout/2 {
+		if recvHead.offset > sendAck.offset || time.Since(sendAck.time) >= c.ackTimeout/2 {
 			flags = flags | PacketFlagVerify
 			sendAck = NewRef(recvHead.offset)
 		}
 
 		// just sleep if nothing to do
 		if flags == PacketFlagNone {
-			time.Sleep(c.options.SendWait)
+			time.Sleep(c.sendWait)
 			continue
 		}
 
@@ -549,7 +599,7 @@ func recvWorker(c *channel) {
 		}
 
 		if p == nil {
-			time.Sleep(c.options.RecvWait)
+			time.Sleep(c.recvWait)
 			continue
 		}
 
@@ -634,7 +684,7 @@ func openInit(c *channel) error {
 
 	// Receive: open, verify
 	c.log("Receive (open, verify)")
-	p, err = recvOrTimeout(c, c.options.AckTimeout)
+	p, err = recvOrTimeout(c, c.ackTimeout)
 	if err != nil || p == nil {
 		send(c, PacketFlagErr, 0, 0, []byte("AckTimeout"))
 		return ErrChannelTimeout
@@ -660,7 +710,7 @@ func openRecv(c *channel) error {
 
 	// Receive: open
 	c.log("Receive (open)")
-	p, err := recvOrTimeout(c, c.options.AckTimeout)
+	p, err := recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
 		return ErrChannelTimeout
 	}
@@ -679,7 +729,7 @@ func openRecv(c *channel) error {
 
 	// Receive: verify
 	c.log("Receive (verify)")
-	p, err = recvOrTimeout(c, c.options.AckTimeout)
+	p, err = recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
 		send(c, PacketFlagErr, 0, 0, []byte("verify Timeout"))
 		return ErrHandshakeFailed
@@ -708,7 +758,7 @@ func closeInit(c *channel) error {
 
 	// Receive: close, verify (drop any packets taht don't conform to that)
 	for {
-		p, err = recvOrTimeout(c, c.options.AckTimeout)
+		p, err = recvOrTimeout(c, c.ackTimeout)
 		if err != nil || p == nil {
 			return ErrChannelTimeout
 		}
@@ -736,7 +786,7 @@ func closeRecv(c *channel, p *packet) error {
 	}
 
 	// Receive: verify
-	p, err := recvOrTimeout(c, c.options.AckTimeout)
+	p, err := recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
 		send(c, PacketFlagErr, 0, 0, []byte("verify timeout.  Aborting."))
 		return ErrHandshakeFailed
@@ -749,13 +799,6 @@ func closeRecv(c *channel, p *packet) error {
 
 	return nil
 }
-
-// func newPacket(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) *packet {
-// local := c.session.Local()
-// remote := c.session.Remote()
-//
-// return NewPacket(local, remote, flags, offset, verify, 0, data)
-// }
 
 func send(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) error {
 	return c.sendOut(NewPacket(c.session.Local(), c.session.Remote(), flags, offset, verify, data))

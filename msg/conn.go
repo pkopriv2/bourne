@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	ErrConnectionClosed  = errors.New("CONN:CLOSED")
-	ErrConnectionFailure = errors.New("CONN:FAILURE")
-	ErrConnectionTimeout = errors.New("CHAN:TIMEOUT")
+	ErrConnectionClosed  = errors.New("CONN:ERR:CLOSED")
+	ErrConnectionFailure = errors.New("CONN:ERR:FAILURE")
+	ErrConnectionTimeout = errors.New("CONN:ERR:TIMEOUT")
 )
 
 // A connection is a full-duplex streaming abstraction.
@@ -100,7 +100,7 @@ func (c *Connector) Read(p []byte) (int, error) {
 	var n int
 
 	conn, err = c.get(false)
-	for i:=0; i<c.retries; i++ {
+	for i := 0; i < c.retries; i++ {
 		if conn != nil {
 			if n, err = conn.Read(p); err != nil {
 				return n, err
@@ -122,7 +122,7 @@ func (c *Connector) Write(p []byte) (int, error) {
 	var n int
 
 	conn, err = c.get(false)
-	for i:=0; i<c.retries; i++ {
+	for i := 0; i < c.retries; i++ {
 		if conn != nil {
 			if n, err = conn.Write(p); err != nil {
 				return n, err
@@ -148,8 +148,7 @@ func (c *Connector) Close() error {
 	return nil
 }
 
-
-func connect(fac ConnectionFactory, timeout time.Duration) (Connection, error) {
+func connect(factory ConnectionFactory, timeout time.Duration) (Connection, error) {
 	type attempt struct {
 		conn Connection
 		err  error
@@ -158,7 +157,7 @@ func connect(fac ConnectionFactory, timeout time.Duration) (Connection, error) {
 	// this will necessarily leak a go routine for each timeout.
 	out := make(chan attempt)
 	go func() {
-		conn, err := fac()
+		conn, err := factory()
 		out <- attempt{conn, err}
 	}()
 

@@ -42,16 +42,6 @@ func (c *AtomicState) Is(state AtomicState) bool {
 	return c.Get()&state != EmptyAtomicState
 }
 
-func (c *AtomicState) If(state AtomicState, fn func()) error {
-	cur := c.Get()
-	if cur&state == EmptyAtomicState {
-		return NewStateError(state, cur)
-	}
-
-	fn()
-	return nil
-}
-
 func (c *AtomicState) Transition(from AtomicState, to AtomicState) bool {
 	return atomic.CompareAndSwapUint32((*uint32)(c), (uint32)(from), (uint32)(to))
 }

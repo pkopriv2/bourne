@@ -2,12 +2,16 @@ package msg
 
 import (
 	"sync"
+
+	"github.com/pkopriv2/bourne/utils"
 )
 
 const (
-	// defaultListenerMaxId   = 255
-	// defaultListenerMinId   = 0
-	defaultListenerBufSize = 1024
+	confListenerRecvInSize = "bourne.msg.listener.recv.in.size"
+)
+
+const (
+	defaultListenerRecvInSize = 1024
 )
 
 // Listeners await channel requests and spawn new channels.
@@ -30,23 +34,19 @@ type Listener interface {
 	Accept() (Channel, error)
 }
 
-// Function to be called when configuring a listener.
-type ListenerOptionsHandler func(*ListenerOptions)
-
-// Function to be called when state transitions occur.
-type ListenerTransitionHandler func(Listener) error
-
-// listener options struct
 type ListenerOptions struct {
-	Debug   bool
-	BufSize int
+	Config  utils.Config
 	OnClose ListenerTransitionHandler
 	OnSpawn ChannelOptionsHandler
 }
 
-// Returns the default options.
+type ListenerTransitionHandler func(Listener) error
+
+type ListenerOptionsHandler func(*ListenerOptions)
+
 func defaultListenerOptions() *ListenerOptions {
-	return &ListenerOptions{BufSize: defaultListenerBufSize}
+	return &ListenerOptions{
+		Config: utils.NewEmptyConfig()}
 }
 
 // A listener is a simple channel awaiting new channel requests.
@@ -54,19 +54,13 @@ func defaultListenerOptions() *ListenerOptions {
 // *This object is thread safe.*
 //
 type listener struct {
-	// the listener lock (used to synchronize state transitions)
-	lock sync.RWMutex
-
-	// the session address (will have a nil remote address)
 	session Session
-
-	// the buffered "in" channel (owned by this channel)
-	in chan *packet
-
-	// options functions (called for each spawned channel)
 	options ListenerOptions
 
-	// a flag indicating that the channel is closed (updates/reads must be synchronized)
+	in chan *packet
+
+	// lifecyle transitions
+	lock   sync.RWMutex
 	closed bool
 }
 
@@ -89,7 +83,7 @@ func newListener(session Session, opts ...ListenerOptionsHandler) (*listener, er
 	listener := &listener{
 		session: session,
 		options: options,
-		in:      make(chan *packet, options.BufSize)}
+		in:      make(chan *packet, options.Config.OptionalInt(confListenerRecvInSize, defaultListenerRecvInSize))}
 
 	// finally, return control to the caller
 	return listener, nil
@@ -116,7 +110,9 @@ func (l *listener) tryAccept(p *packet) (Channel, error) {
 		return nil, ErrChannelClosed
 	}
 
-	channel := newChannel(p.src, p.dst, true, l.options.OnSpawn)
+	channel := newChannel(p.src, p.dst, true, l.options.OnSpawn, func(opts *ChannelOptions) {
+		opts.Config = l.options.Config
+	})
 	if err := channel.send(p); err != nil {
 		return nil, ErrChannelClosed
 	}

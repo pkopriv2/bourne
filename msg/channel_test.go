@@ -59,7 +59,7 @@ func TestActiveChannel_sendSinglePacket(t *testing.T) {
 
 func TestActiveChannel_sendSingleStream(t *testing.T) {
 	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
-	channelR.options.Debug = false
+	channelR.debug = false
 	defer channelR.Close()
 	defer channelL.Close()
 
@@ -230,14 +230,6 @@ func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, c
 	out := make(chan *packet, 1<<10)
 
 	channel := newChannel(l, r, listener, func(opts *ChannelOptions) {
-		opts.Debug = true
-		opts.AckTimeout = 500 * time.Millisecond
-		opts.CloseTimeout = 500 * time.Millisecond
-		opts.SendWait = 10 * time.Millisecond
-		opts.RecvWait = 1 * time.Millisecond
-		opts.SendLogSize = 1 << 20
-		opts.RecvLogSize = 1 << 20
-		opts.RecvInSize = 1 << 10
 		opts.OnClose = func(c Channel) error {
 			close(out)
 			return nil
@@ -247,6 +239,12 @@ func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, c
 			return nil
 		}
 	})
+
+	channel.debug = true
+	channel.ackTimeout = 500 * time.Millisecond
+	channel.closeTimeout = 500 * time.Millisecond
+	channel.sendWait = 10 * time.Millisecond
+	channel.recvWait = 1 * time.Millisecond
 
 	return out, channel
 }
