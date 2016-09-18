@@ -1,4 +1,4 @@
-package msg
+package net
 
 import (
 	"bytes"
@@ -7,13 +7,50 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/pkopriv2/bourne/utils"
+)
+
+const (
+	confConnectionRetries = "bourne.msg.connection.retries"
+	confConnectionTimeout = "bourne.msg.connection.timeout"
+)
+
+const (
+	defaultConnectionRetries = 3
+	defaultConnectionTimeout = 10 * time.Second
 )
 
 var (
-	ErrConnectionClosed  = errors.New("CONN:ERR:CLOSED")
-	ErrConnectionFailure = errors.New("CONN:ERR:FAILURE")
-	ErrConnectionTimeout = errors.New("CONN:ERR:TIMEOUT")
+	ErrConnectionClosed = errors.New("CONN:ERR:CLOSED")
 )
+
+type ConnectionTimeoutError struct {
+	Duration time.Duration
+}
+
+func (c ConnectionTimeoutError) Error() string {
+	return fmt.Sprintf("CONN:ERR:TIMEOUT(%v)", c.Duration)
+}
+
+func newConnectionTimeoutError(timeout time.Duration) ConnectionTimeoutError {
+	return ConnectionTimeoutError{timeout}
+}
+
+type ConnectionAttemptErrors struct {
+	errors []error
+}
+
+func (c ConnectionAttemptErrors) Error() string {
+	var buffer bytes.Buffer
+	buffer.WriteString("Errors: ")
+
+	for i, err := range c.errors {
+		buffer.WriteString(fmt.Sprintf("\n\t[%v](%v)", i, err))
+	}
+
+	return buffer.String()
+}
 
 // A connection is a full-duplex streaming abstraction.
 //
@@ -23,23 +60,6 @@ type Connection interface {
 	io.Reader
 	io.Writer
 	io.Closer
-}
-
-// In order to track the connection attempts and retain history of
-// errors, as we're attempting to reconnect, we'll add errors
-// that we encounter.  These will ultimately be relayed to the
-// consuming code.
-type ConnectionErrors []error
-
-func (c ConnectionErrors) Error() string {
-	var buffer bytes.Buffer
-	buffer.WriteString("Connection Errors: ")
-
-	for i, err := range c {
-		buffer.WriteString(fmt.Sprintf("\n\t[%v](%v)", i, err))
-	}
-
-	return buffer.String()
 }
 
 // Connection factories are used to create the underlying streams.  In
@@ -70,7 +90,10 @@ type Connector struct {
 	timeout time.Duration
 }
 
-func NewConnector(factory ConnectionFactory, retries int, timeout time.Duration) *Connector {
+func NewConnector(factory ConnectionFactory, config utils.Config) *Connector {
+	retries := config.OptionalInt(confConnectionRetries, defaultConnectionRetries)
+	timeout := config.OptionalDuration(confConnectionTimeout, defaultConnectionTimeout)
+
 	return &Connector{
 		factory: factory,
 		retries: retries,
@@ -94,7 +117,7 @@ func (c *Connector) get(reset bool) (Connection, error) {
 }
 
 func (c *Connector) Read(p []byte) (int, error) {
-	var errors ConnectionErrors
+	var errors []error = make([]error, 1, c.retries)
 	var conn Connection
 	var err error
 	var n int
@@ -111,12 +134,11 @@ func (c *Connector) Read(p []byte) (int, error) {
 		conn, err = c.get(true)
 	}
 
-	return 0, errors
-
+	return 0, ConnectionAttemptErrors{errors}
 }
 
 func (c *Connector) Write(p []byte) (int, error) {
-	var errors ConnectionErrors
+	var errors []error = make([]error, 1, c.retries)
 	var conn Connection
 	var err error
 	var n int
@@ -133,7 +155,7 @@ func (c *Connector) Write(p []byte) (int, error) {
 		conn, err = c.get(true)
 	}
 
-	return 0, errors
+	return 0, ConnectionAttemptErrors{errors}
 }
 
 func (c *Connector) Close() error {
@@ -143,9 +165,14 @@ func (c *Connector) Close() error {
 		return ErrConnectionClosed
 	}
 
+	var err error
+
 	c.closed = true
+	if c.conn != nil {
+		err = c.conn.Close()
+	}
 	c.conn = nil
-	return nil
+	return err
 }
 
 func connect(factory ConnectionFactory, timeout time.Duration) (Connection, error) {
@@ -164,7 +191,7 @@ func connect(factory ConnectionFactory, timeout time.Duration) (Connection, erro
 	timer := time.NewTimer(timeout)
 	select {
 	case <-timer.C:
-		return nil, ErrConnectionTimeout
+		return nil, newConnectionTimeoutError(timeout)
 	case attempt := <-out:
 		return attempt.conn, attempt.err
 	}

@@ -1,18 +1,24 @@
-package msg
+package client
 
 import (
 	"errors"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/pkopriv2/bourne/msg/net"
+	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/utils"
 )
 
 const (
-	ClientInit   AtomicState = 0
-	ClientOpened AtomicState = 1 << iota
-	ClientClosing
-	ClientClosed
-	ClientFailure
+	confClientWriterInSize   = "bourne.msg.client.writer.in.size"
+	confClientRouterInSize   = "bourne.msg.client.router.in.size"
+	confClientWriterWait     = "bourne.msg.client.writer.wait"
+	confClientReaderWait     = "bourne.msg.client.reader.wait"
+	confClientRouterWait     = "bourne.msg.client.router.wait"
+	confClientConnectRetries = "bourne.msg.client.connect.attempts"
+	confClientConnectTimeout = "bourne.msg.client.connect.timeout"
 )
 
 const (
@@ -30,22 +36,16 @@ var (
 	ErrClientFailure = errors.New("CLIENT:FAILURE")
 )
 
+const (
+	ClientOpened AtomicState = 1 << iota
+	ClientClosed
+	ClientFailure
+)
 
 type ClientOptions struct {
-	Debug bool
+	Config utils.Config
 
-	WriterInSize int
-	RouterInSize int
-
-	WriterWait time.Duration
-	ReaderWait time.Duration
-	RouterWait time.Duration
-
-	ConnectRetries int
-	ConnectTimeout time.Duration
-
-	Factory ConnectionFactory
-
+	Factory      net.ConnectionFactory
 	ListenerOpts ListenerOptionsHandler
 	ChannelOpts  ChannelOptionsHandler
 }
@@ -98,86 +98,86 @@ type ClientOptionsHandler func(*ClientOptions)
 //
 // Example:
 //
-
-//
 type client struct {
+	debug bool
 
 	options *ClientOptions
 
 	state *AtomicState
 
-	// pool of available channel ids
-	ids *idPool
+	conn *net.Connector
 
-	// the complete listing of sessions (both active and listening)
+	ids    *IdPool
 	router *routingTable
 
-	// the
-	conn     *Connector
+	routerIn chan *wire.Packet
+	writerIn chan *wire.Packet
 
-	// IO
-	routerIn chan *packet
-	writerIn chan *packet
-
-	// all the active routines under this multiplexer
 	workers sync.WaitGroup
+
+	writerInSize int
+	routerInSize int
+
+	writerWait time.Duration
+	readerWait time.Duration
+	routerWait time.Duration
+
+	connectRetries int
+	connectTimeout time.Duration
 }
 
 func (c *client) Close() error {
 	panic("not implemented")
 }
 
-func (c *client) Spawn(entity EntityId, remote EndPoint) (Channel, error) {
-	panic("not implemented")
-}
-
-func (c *client) Listen(local EndPoint) (Listener, error) {
-	panic("not implemented")
-}
+// func (c *client) Spawn(entity EntityId, remote EndPoint) (Channel, error) {
+	// panic("not implemented")
+// }
+//
+// func (c *client) Listen(local EndPoint) (Listener, error) {
+	// panic("not implemented")
+// }
 
 // ** INTERNAL ONLY METHODS **
 
 // Logs a message, tagging it with the channel's local address.
 // func (c *client) log(format string, vals ...interface{}) {
-	// if !c.options.Debug {
-		// return
-	// }
+// if !c.options.Debug {
+// return
+// }
 //
-	// // log.Println(fmt.Sprintf("client(%v) -- ", c.entityId) + fmt.Sprintf(format, vals...))
+// // log.Println(fmt.Sprintf("client(%v) -- ", c.entityId) + fmt.Sprintf(format, vals...))
 // }
 
 func readerWorker(c *client) {
 	defer c.workers.Done()
 	for {
-		state := c.state.WaitUntil(ClientOpened | ClientClosing | ClientClosed)
-		if !state.Is(ClientOpened) {
+		if state.Is(^ClientOpened) {
 			return
 		}
 
 		// packet, err := ReadPacket(c.conn)
 		// switch {
 		// case err = *err.(ConnectionErrors):
-//
+		//
 		// }
 		// if err != nil {
-//
+		//
 		// }
 		// if err != nil {
-			// log.Printf("Error parsing packet")
-			// time.Sleep(c.options.ReaderWait)
-			// continue
+		// log.Printf("Error parsing packet")
+		// time.Sleep(c.options.ReaderWait)
+		// continue
 		// }
-
+		//
 		// c.routerIn <- packet
-
 	}
 }
 
 func writerWorker(c *client) {
 	defer c.workers.Done()
 	for {
-		state := c.state.WaitUntil(ClientOpened | ClientClosing | ClientClosed)
-		if !state.Is(ClientOpened) {
+		if state.Is(^ClientOpened) {
 			return
 		}
 

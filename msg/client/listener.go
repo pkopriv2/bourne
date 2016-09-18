@@ -1,8 +1,9 @@
-package msg
+package client
 
 import (
 	"sync"
 
+	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -54,10 +55,10 @@ func defaultListenerOptions() *ListenerOptions {
 // *This object is thread safe.*
 //
 type listener struct {
-	session Session
+	session wire.Address
 	options ListenerOptions
 
-	in chan *packet
+	in chan *wire.Packet
 
 	// lifecyle transitions
 	lock   sync.RWMutex

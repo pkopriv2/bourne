@@ -1,32 +1,21 @@
-package msg
+package wire
 
-import "testing"
-import "bytes"
-import "bufio"
-import "fmt"
+import (
+	// "bytes"
+	// "fmt"
+	"testing"
+//
+	// uuid "github.com/satori/go.uuid"
+)
+
+// import "bufio"
 
 // import "time"
 
-func TestPacket_Serialization(*testing.T) {
-	buffer := bytes.NewBuffer(make([]byte, 0))
-	writer := bufio.NewWriter(buffer)
+func TestParcelPack_empty(*testing.T) {
+	parcel := NewParcel()
 
-	src := NewEndPoint(0, 0)
-	dst := NewEndPoint(1, 1)
-	p1 := &packet{0, src, dst, 5, 0, 0, make([]byte, 20)}
-	WritePacket(writer, p1)
-	writer.Flush()
-
-	fmt.Println()
-	fmt.Printf("%v\n", buffer.Bytes())
-	fmt.Println()
-	fmt.Println()
-
-	reader := bufio.NewReader(buffer)
-
-	p2, _ := ReadPacket(reader)
-	fmt.Printf("%v\n", p1)
-	fmt.Printf("%v\n", p2)
+	bytes, _ := Pack(parcel)
 }
 
 //func TestPacketReader(*testing.T) {

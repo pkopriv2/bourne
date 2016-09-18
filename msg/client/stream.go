@@ -1,4 +1,4 @@
-package msg
+package client
 
 import (
 	"errors"
@@ -18,13 +18,13 @@ const (
 // A ref represents a position within a stream at particular moment in time.
 //
 type Ref struct {
-	offset uint32
+	offset uint64
 	time   time.Time
 }
 
 // Generates a new ref from the offset.  Uses time.Now() for time of ref.
 //
-func NewRef(offset uint32) *Ref {
+func NewRef(offset uint64) *Ref {
 	return &Ref{offset, time.Now()}
 }
 
@@ -95,7 +95,7 @@ func (s *Stream) Reset() (*Ref, *Ref, error) {
 	return s.cur, prev, nil
 }
 
-func (s *Stream) Commit(pos uint32) (*Ref, error) {
+func (s *Stream) Commit(pos uint64) (*Ref, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -129,11 +129,11 @@ func (s *Stream) Data() []byte {
 	r := s.tail.offset
 	w := s.head.offset
 
-	len := uint32(len(s.buffer))
+	len := uint64(len(s.buffer))
 	ret := make([]byte, w-r)
 
 	// just start copying until we get to write
-	for i := uint32(0); r+i < w; i++ {
+	for i := uint64(0); r+i < w; i++ {
 		ret[i] = s.buffer[(r+i)%len]
 	}
 
@@ -142,7 +142,7 @@ func (s *Stream) Data() []byte {
 
 // Reads from the buffer from the current positon.
 //
-func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32, error) {
+func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint64, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -151,8 +151,8 @@ func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32, error) {
 	}
 
 	// get the new write
-	inLen := uint32(len(in))
-	bufLen := uint32(len(s.buffer))
+	inLen := uint64(len(in))
+	bufLen := uint64(len(s.buffer))
 
 	// grab the current read offset.
 	start := s.cur
@@ -161,7 +161,7 @@ func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32, error) {
 	r := start.offset
 	w := s.head.offset
 
-	var i uint32 = 0
+	var i uint64 = 0
 	for ; i < inLen && r+i < w; i++ {
 		in[i] = s.buffer[(r+i)%bufLen]
 	}
@@ -176,7 +176,7 @@ func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint32, error) {
 	return start, i, nil
 }
 
-func (s *Stream) TryWrite(val []byte) (uint32, *Ref, error) {
+func (s *Stream) TryWrite(val []byte) (uint64, *Ref, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -185,15 +185,15 @@ func (s *Stream) TryWrite(val []byte) (uint32, *Ref, error) {
 	}
 
 	// get the new write
-	valLen := uint32(len(val))
-	bufLen := uint32(len(s.buffer))
+	valLen := uint64(len(val))
+	bufLen := uint64(len(s.buffer))
 
 	// grab current positions
 	r := s.tail.offset
 	w := s.head.offset
 
 	// just write until we can't write anymore.
-	var i uint32 = 0
+	var i uint64 = 0
 	for ; i < valLen && w+i < r+bufLen; i++ {
 		s.buffer[(w+i)%bufLen] = val[i]
 	}
@@ -203,7 +203,7 @@ func (s *Stream) TryWrite(val []byte) (uint32, *Ref, error) {
 }
 
 func (s *Stream) Write(val []byte) (int, error) {
-	valLen := uint32(len(val))
+	valLen := uint64(len(val))
 
 	for {
 
@@ -242,8 +242,8 @@ func (s *Stream) Read(in []byte) (int, error) {
 
 // Used to compare relative offsets.
 func OffsetComparator(a, b interface{}) int {
-	offsetA := a.(uint32)
-	offsetB := b.(uint32)
+	offsetA := a.(uint64)
+	offsetB := b.(uint64)
 
 	if offsetA > offsetB {
 		return 1

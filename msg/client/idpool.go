@@ -1,4 +1,4 @@
-package msg
+package client
 
 import (
 	"container/list"
@@ -9,7 +9,7 @@ import (
 
 var (
 	// To be returned if there are no more ids available.
-	ErrIdPoolCapacity = errors.New("IDPOOL:CAPACITY")
+	IdPoolCapacityError = errors.New("IDPOOL:CAPACITY")
 )
 
 const (
@@ -37,7 +37,7 @@ const (
 //
 // *This object is thread-safe*
 //
-type idPool struct {
+type IdPool struct {
 	lock  sync.Mutex
 	avail *list.List
 	next  uint // used as a low watermark
@@ -47,10 +47,10 @@ type idPool struct {
 // ID_POOL_EXP_INC values.  Each time the pool's values
 // are exhausted, it is automatically and safely expanded.
 //
-func NewIdPool() *idPool {
+func NewIdPool() *IdPool {
 	avail := list.New()
 
-	pool := &idPool{avail: avail, next: IdPoolMaxId}
+	pool := &IdPool{avail: avail, next: IdPoolMaxId}
 	pool.expand(IdPoolExpInc)
 	return pool
 }
@@ -60,7 +60,7 @@ func NewIdPool() *idPool {
 // Expands the available ids by numItems or until
 // it has reached maximum capacity.
 //
-func (self *idPool) expand(numItems uint) error {
+func (self *IdPool) expand(numItems uint) error {
 	log.Printf("Attemping to expand id pool [%v] by [%v] items\n", self.next, numItems)
 
 	i, prev := self.next, self.next
@@ -70,7 +70,7 @@ func (self *idPool) expand(numItems uint) error {
 
 	// if we didn't move i, the pool is full.
 	if i == prev {
-		return ErrIdPoolCapacity
+		return IdPoolCapacityError
 	}
 
 	// move the watermark
@@ -84,7 +84,7 @@ func (self *idPool) expand(numItems uint) error {
 // In the event of a non-nil error, the consumer MUST not use the
 // returned value.
 //
-func (self *idPool) Take() (uint, error) {
+func (self *IdPool) Take() (uint, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
@@ -109,7 +109,7 @@ func (self *idPool) Take() (uint, error) {
 //  Only ids that have been loaned out should be returned to the
 //  pool.
 //
-func (self *idPool) Return(id uint) {
+func (self *IdPool) Return(id uint) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if id < self.next {

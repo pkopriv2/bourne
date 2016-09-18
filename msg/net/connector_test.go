@@ -1,18 +1,20 @@
-package msg
+package net
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/pkopriv2/bourne/utils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestConnector_initError(t *testing.T) {
 	factory := func() (Connection, error) {
-		return nil, ErrConnectionFailure
+		return nil, errors.New("error")
 	}
 
-	conn := NewConnector(factory, 3, time.Second)
+	conn := NewConnector(factory, utils.NewEmptyConfig())
 	assert.NotNil(t, conn)
 }
 
@@ -22,6 +24,6 @@ func TestConnector_initTimeout(t *testing.T) {
 		return nil, nil
 	}
 
-	conn := NewConnector(factory, 3, time.Second)
+	conn := NewConnector(factory, utils.NewEmptyConfig())
 	assert.NotNil(t, conn)
 }

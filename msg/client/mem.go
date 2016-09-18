@@ -1,4 +1,4 @@
-package msg
+package client
 
 import "bytes"
 import "bufio"

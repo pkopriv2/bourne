@@ -15,7 +15,8 @@ import (
 // values will be encoded as different types than what is returned.
 // For example, durations will not be stored in explicit time.Duration
 // format, but instead will be stored as a normal integer (type: int)
-// and interpreted as milliseconds.
+// and interpreted as milliseconds.   This should allow for a nice balance
+// between compile time guarantees and operational simplicity.
 type ConfigType string
 
 const (

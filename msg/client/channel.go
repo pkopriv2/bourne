@@ -1,4 +1,4 @@
-package msg
+package client
 
 import (
 	"errors"
@@ -10,10 +10,12 @@ import (
 
 	"math/rand"
 
+	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
-	metrics "github.com/rcrowley/go-metrics"
 
 	"github.com/emirpasic/gods/maps/treemap"
+
+	metrics "github.com/rcrowley/go-metrics"
 )
 
 // Much of this was inspired by the following papers:
@@ -40,7 +42,7 @@ var (
 	ErrChannelResponse = errors.New("CHAN:RESPONSE")
 	ErrChannelTimeout  = errors.New("CHAN:TIMEOUT")
 	ErrChannelExists   = errors.New("CHAN:EXISTS")
-	ErrChannelUnknown  = errors.New("CHAN:UNKNONW")
+	ErrChannelUnknown  = errors.New("CHAN:UNKNOWN")
 )
 
 const (
@@ -57,7 +59,7 @@ const (
 	confChannelRecvLogSize  = "bourne.msg.channel.recv.log.size"
 	confChannelSendLogSize  = "bourne.msg.channel.send.log.size"
 	confChannelSendWait     = "bourne.msg.channel.send.wait"
-	confChannelRecvWait     = "bourne.msg.channel.send.wait"
+	confChannelRecvWait     = "bourne.msg.channel.recv.wait"
 	confChannelAckTimeout   = "bourne.msg.channel.ack.timeout"
 	confChannelCloseTimeout = "bourne.msg.channel.close.size"
 	confChannelMaxRetries   = "bourne.msg.channel.max.retries"
@@ -75,15 +77,13 @@ const (
 )
 
 // A channel represents one side of an active sessin.
-//
-// *Implementations must be thread-safe*
-//
 type Channel interface {
 	Routable
 	io.Reader
 	io.Writer
 }
 
+// Channel options are used to configure a channel.
 type ChannelOptions struct {
 	Config utils.Config
 
@@ -94,7 +94,7 @@ type ChannelOptions struct {
 	OnFail  ChannelTransitionHandler
 
 	// data handler
-	OnData func(*packet) error
+	OnData func(wire.Packet) error
 }
 
 type ChannelOptionsHandler func(*ChannelOptions)
@@ -110,7 +110,7 @@ func defaultChannelOptions() *ChannelOptions {
 		OnOpen:  func(c Channel) error { return nil },
 		OnClose: func(c Channel) error { return nil },
 		OnFail:  func(c Channel) error { return nil },
-		OnData:  func(p *packet) error { return nil }}
+		OnData:  func(p wire.Packet) error { return nil }}
 }
 
 // will still need to define better statistics gathering,
@@ -128,16 +128,16 @@ type ChannelStats struct {
 	numResets metrics.Counter
 }
 
-func newChannelStats(endpoint EndPoint) *ChannelStats {
+func newChannelStats(endpoint wire.EndPoint) *ChannelStats {
 	r := metrics.DefaultRegistry
 
 	return &ChannelStats{
 		packetsSent: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.PacketsSent"), r),
+			newChannelMetric(endpoint, "channel.wire.PacketsSent"), r),
 		packetsReceived: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.PacketsReceived"), r),
+			newChannelMetric(endpoint, "channel.wire.PacketsReceived"), r),
 		packetsDropped: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.PacketsDropped"), r),
+			newChannelMetric(endpoint, "channel.wire.PacketsDropped"), r),
 
 		bytesSent: metrics.NewRegisteredCounter(
 			newChannelMetric(endpoint, "channel.BytesSent"), r),
@@ -151,7 +151,7 @@ func newChannelStats(endpoint EndPoint) *ChannelStats {
 			newChannelMetric(endpoint, "channel.NumResets"), r)}
 }
 
-func newChannelMetric(endpoint EndPoint, name string) string {
+func newChannelMetric(endpoint wire.EndPoint, name string) string {
 	return fmt.Sprintf("-- %+v --: %s", endpoint, name)
 }
 
@@ -228,7 +228,7 @@ func newChannelMetric(endpoint EndPoint, name string) string {
 type channel struct {
 
 	// the endpointess of the session
-	session Session
+	session wire.Address
 
 	// general channel statistics
 	stats *ChannelStats
@@ -236,10 +236,10 @@ type channel struct {
 	// the state of the channel.
 	state *AtomicState
 
-	recvIn  chan *packet
+	recvIn  chan wire.Packet
 	recvOut *Stream
 	sendIn  *Stream
-	sendOut func(p *packet) error
+	sendOut func(p wire.Packet) error
 
 	// event handlers
 	onInit    ChannelTransitionHandler
@@ -266,7 +266,7 @@ type channel struct {
 }
 
 // Creates and returns a new channel
-func newChannel(l EndPoint, r EndPoint, listening bool, opts ...ChannelOptionsHandler) *channel {
+func newChannel(l wire.EndPoint, r wire.EndPoint, listening bool, opts ...ChannelOptionsHandler) *channel {
 	// initialize the options.
 	defaultOpts := defaultChannelOptions()
 	for _, opt := range opts {
@@ -283,11 +283,11 @@ func newChannel(l EndPoint, r EndPoint, listening bool, opts ...ChannelOptionsHa
 
 	// create the channel
 	c := &channel{
-		session: NewChannelSession(l, r),
+		session: wire.NewRemoteAddress(l, r),
 		stats:   newChannelStats(l),
 		state:   NewAtomicState(ChannelOpening),
 
-		recvIn:  make(chan *packet, recvInSize),
+		recvIn:  make(chan wire.Packet, recvInSize),
 		recvOut: NewStream(recvLogSize),
 		sendIn:  NewStream(sendLogSize),
 		sendOut: options.OnData,
@@ -317,7 +317,7 @@ func newChannel(l EndPoint, r EndPoint, listening bool, opts ...ChannelOptionsHa
 	return c
 }
 
-func (c *channel) Session() Session {
+func (c *channel) Address() wire.Address {
 	return c.session
 }
 
@@ -361,7 +361,7 @@ func (c *channel) Close() error {
 // ** INTERNAL ONLY METHODS **
 
 // Send pushes a message on the input channel.  (used for internal routing.)
-func (c *channel) send(p *packet) error {
+func (c *channel) send(p wire.Packet) error {
 	if !c.state.Is(ChannelOpening | ChannelOpened | ChannelClosing) {
 		return ErrChannelClosed
 	}
@@ -438,7 +438,7 @@ func openWorker(c *channel, listening bool) {
 	}
 }
 
-func closeWorker(c *channel, p *packet) {
+func closeWorker(c *channel, p wire.Packet) {
 	defer c.workers.Done()
 
 	var err error
@@ -478,8 +478,8 @@ func sendWorker(c *channel) {
 	// track last verify sent
 	_, _, sendAck, _ := c.recvOut.Snapshot()
 
-	// the packet buffer (initialized here so we don't continually recreate memory.)
-	tmp := make([]byte, PacketMaxLength)
+	// the wire.Packet buffer (initialized here so we don't continually recreate memory.)
+	tmp := make([]byte, wire.PacketMaxDataLength)
 	for {
 		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelFailure)
 		if !state.Is(ChannelOpened) {
@@ -529,36 +529,36 @@ func sendWorker(c *channel) {
 			continue
 		}
 
-		// start building the outgoing packet
-		flags := PacketFlagNone
+		// start building the outgoing wire.Packet
+		flags := wire.FlagNone
 
-		// see if we should be sending a data packet.
+		// see if we should be sending a data wire.Packet.
 		sendStart, num, err := c.sendIn.TryRead(tmp, false)
 		if err != nil {
 			return
 		}
 
-		// build the packet data.
+		// build the wire.Packet data.
 		data := tmp[:num]
 		if num > 0 {
-			flags = flags | PacketFlagOffset
+			flags = flags | wire.FlagOffset
 		}
 
 		// see if we should be sending an verify.
 		_, _, recvHead, _ := c.recvOut.Snapshot()
 		if recvHead.offset > sendAck.offset || time.Since(sendAck.time) >= c.ackTimeout/2 {
-			flags = flags | PacketFlagVerify
+			flags = flags | wire.FlagVerify
 			sendAck = NewRef(recvHead.offset)
 		}
 
 		// just sleep if nothing to do
-		if flags == PacketFlagNone {
+		if flags == wire.FlagNone {
 			time.Sleep(c.sendWait)
 			continue
 		}
 
 		// this can block indefinitely (What should we do???)
-		if err := c.sendOut(NewPacket(c.session.Local(), c.session.Remote(), flags, sendStart.offset, recvHead.offset, data)); err != nil {
+		if err := c.sendOut(wire.NewStandardPacket(c.Address(), flags, sendStart.offset, recvHead.offset, data)); err != nil {
 			c.state.Transition(AnyAtomicState, ChannelFailure)
 			c.onFailure(c)
 			return
@@ -585,8 +585,8 @@ func recvWorker(c *channel) {
 		// at places that can have external side effects, or at least be
 		// able to detect state changes and handle appropriately.
 
-		// grab the next packet (cannot block as we need to evaluate state transitions)
-		var p *packet = nil
+		// grab the next wire.Packet (cannot block as we need to evaluate state transitions)
+		var p wire.Packet = nil
 		select {
 		case in, ok := <-c.recvIn:
 			if !ok {
@@ -606,7 +606,7 @@ func recvWorker(c *channel) {
 		c.stats.packetsReceived.Inc(1)
 
 		// Handle: close flag
-		if p.flags&PacketFlagClose > 0 {
+		if p.HasFlag(wire.FlagClose) {
 			if !c.state.Transition(ChannelOpened, ChannelClosing) {
 				return
 			}
@@ -617,21 +617,21 @@ func recvWorker(c *channel) {
 		}
 
 		// Handle: verify flag
-		if p.flags&PacketFlagVerify > 0 {
-			_, err := c.sendIn.Commit(p.verify)
+		if p.HasFlag(wire.FlagVerify) {
+			_, err := c.sendIn.Commit(p.Verify())
 			switch err {
 			case ErrStreamClosed:
 				c.log("Error committing verify. Send log closed.")
 				return
 			case ErrStreamInvalidCommit:
-				c.log("Error committing verify [%v] : [%v]", p.verify, err)
+				c.log("Error committing verify [%v] : [%v]", p.Verify(), err)
 				c.stats.packetsDropped.Inc(1)
 				continue
 			}
 		}
 
 		// Handle: data flag (consume elements of the stream)
-		if p.flags&PacketFlagOffset > 0 {
+		if p.HasFlag(FlagOffset) {
 			pending.Put(p.offset, p.data)
 		}
 
@@ -654,7 +654,7 @@ func recvWorker(c *channel) {
 			// Handle: Past offset
 			pending.Remove(offset)
 			if head.offset > offset+uint32(len(data)) {
-				c.stats.packetsDropped.Inc(1)
+				c.stats.wire.PacketsDropped.Inc(1)
 				continue
 			}
 
@@ -670,7 +670,7 @@ func recvWorker(c *channel) {
 func openInit(c *channel) error {
 	c.log("Initiating open request")
 
-	var p *packet
+	var p wire.Packet
 	var err error
 
 	// generate a new offset for the handshake.
@@ -678,7 +678,7 @@ func openInit(c *channel) error {
 
 	// Send: open
 	c.log("Send (open)")
-	if err = send(c, PacketFlagOpen, offset, 0, []byte{}); err != nil {
+	if err = send(c, wire.FlagOpen, offset, 0, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
@@ -686,18 +686,18 @@ func openInit(c *channel) error {
 	c.log("Receive (open, verify)")
 	p, err = recvOrTimeout(c, c.ackTimeout)
 	if err != nil || p == nil {
-		send(c, PacketFlagErr, 0, 0, []byte("AckTimeout"))
+		send(c, wire.FlagErr, 0, 0, []byte("AckTimeout"))
 		return ErrChannelTimeout
 	}
 
-	if p.flags != (PacketFlagOpen|PacketFlagVerify) || p.verify != offset {
-		send(c, PacketFlagErr, 0, 0, []byte("Incorrect verify"))
+	if p.flags != (wire.FlagOpen|wire.FlagVerify) || p.verify != offset {
+		send(c, wire.FlagErr, 0, 0, []byte("Incorrect verify"))
 		return ErrHandshakeFailed
 	}
 
 	// Send: verify
 	c.log("Send (verify)")
-	if err = send(c, PacketFlagVerify, 0, p.offset, []byte{}); err != nil {
+	if err = send(c, wire.FlagVerify, 0, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
@@ -715,15 +715,15 @@ func openRecv(c *channel) error {
 		return ErrChannelTimeout
 	}
 
-	if p.flags != PacketFlagOpen {
-		send(c, PacketFlagErr, 0, 0, []byte("Required OPEN flag"))
+	if p.flags != wire.FlagOpen {
+		send(c, wire.FlagErr, 0, 0, []byte("Required OPEN flag"))
 		return ErrHandshakeFailed
 	}
 
 	// Send: open,verify
 	c.log("Sending (open,verify)")
 	offset := rand.Uint32()
-	if err := send(c, PacketFlagOpen|PacketFlagVerify, offset, p.offset, []byte{}); err != nil {
+	if err := send(c, wire.FlagOpen|wire.FlagVerify, offset, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
@@ -731,12 +731,12 @@ func openRecv(c *channel) error {
 	c.log("Receive (verify)")
 	p, err = recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
-		send(c, PacketFlagErr, 0, 0, []byte("verify Timeout"))
+		send(c, wire.FlagErr, 0, 0, []byte("verify Timeout"))
 		return ErrHandshakeFailed
 	}
 
-	if p.flags != PacketFlagVerify || p.verify != offset {
-		send(c, PacketFlagErr, 0, 0, []byte("Incorrect offset"))
+	if p.flags != wire.FlagVerify || p.verify != offset {
+		send(c, wire.FlagErr, 0, 0, []byte("Incorrect offset"))
 		return ErrHandshakeFailed
 	}
 
@@ -745,31 +745,31 @@ func openRecv(c *channel) error {
 
 // Performs close handshake from initiator's perspective: send(close), recv(close, verify), send(verify)
 func closeInit(c *channel) error {
-	var p *packet
+	var p wire.Packet
 	var err error
 
 	// generate a new random offset for jhe handshake.
 	offset := rand.Uint32()
 
 	// Send: close
-	if err = send(c, PacketFlagClose, offset, 0, []byte{}); err != nil {
+	if err = send(c, wire.FlagClose, offset, 0, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
-	// Receive: close, verify (drop any packets taht don't conform to that)
+	// Receive: close, verify (drop any wire.Packets taht don't conform to that)
 	for {
 		p, err = recvOrTimeout(c, c.ackTimeout)
 		if err != nil || p == nil {
 			return ErrChannelTimeout
 		}
 
-		if p.flags == (PacketFlagClose|PacketFlagVerify) && p.verify == offset {
+		if p.flags == (wire.FlagClose|wire.FlagVerify) && p.verify == offset {
 			break
 		}
 	}
 
 	// Send: verify
-	if err = send(c, PacketFlagVerify, 0, p.offset, []byte{}); err != nil {
+	if err = send(c, wire.FlagVerify, 0, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
@@ -777,34 +777,34 @@ func closeInit(c *channel) error {
 }
 
 // Performs receiver (ie listener) close handshake: recv(close), send(close,verify), recv(verify)
-func closeRecv(c *channel, p *packet) error {
+func closeRecv(c *channel, p wire.Packet) error {
 
 	// Send: close verify
 	offset := rand.Uint32()
-	if err := send(c, PacketFlagClose|PacketFlagVerify, offset, p.offset, []byte{}); err != nil {
+	if err := send(c, wire.FlagClose|wire.FlagVerify, offset, p.offset, []byte{}); err != nil {
 		return ErrHandshakeFailed
 	}
 
 	// Receive: verify
 	p, err := recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
-		send(c, PacketFlagErr, 0, 0, []byte("verify timeout.  Aborting."))
+		send(c, wire.FlagErr, 0, 0, []byte("verify timeout.  Aborting."))
 		return ErrHandshakeFailed
 	}
 
-	if p.flags != PacketFlagVerify || p.verify != offset {
-		send(c, PacketFlagErr, 0, 0, []byte("Incorrect offset."))
+	if p.flags != wire.FlagVerify || p.verify != offset {
+		send(c, wire.FlagErr, 0, 0, []byte("Incorrect offset."))
 		return ErrHandshakeFailed
 	}
 
 	return nil
 }
 
-func send(c *channel, flags PacketFlags, offset uint32, verify uint32, data []byte) error {
-	return c.sendOut(NewPacket(c.session.Local(), c.session.Remote(), flags, offset, verify, data))
+func send(c *channel, flags wire.Flags, offset uint32, verify uint32, data []byte) error {
+	return c.sendOut(wire.NewPacket(c.session.Local(), c.session.Remote(), flags, offset, verify, data))
 }
 
-func recvOrTimeout(c *channel, timeout time.Duration) (*packet, error) {
+func recvOrTimeout(c *channel, timeout time.Duration) (wire.Packet, error) {
 	timer := time.NewTimer(timeout)
 
 	select {
