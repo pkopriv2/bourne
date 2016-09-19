@@ -575,7 +575,6 @@ func recvWorker(c *channel) {
 	// we'll use a simple sorted tree map to track out of order segments
 	pending := treemap.NewWith(OffsetComparator)
 	for {
-		// block until we can do something useful!
 		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelFailure)
 		if !state.Is(ChannelOpened) {
 			return

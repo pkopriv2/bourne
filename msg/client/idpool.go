@@ -7,20 +7,6 @@ import (
 	"sync"
 )
 
-var (
-	// To be returned if there are no more ids available.
-	IdPoolCapacityError = errors.New("IDPOOL:CAPACITY")
-)
-
-const (
-	// The pool of ids is restricted to the range [256, 65535].
-	IdPoolMinId = 256   // exclusive
-	IdPoolMaxId = 65535 // exclusive
-
-	// Each time the pool is expanded, it grows by this amount.
-	IdPoolExpInc = 10
-)
-
 // A memory efficient pool of available ids. The pool will be
 // restricted to the range defined by:
 //
@@ -37,6 +23,21 @@ const (
 //
 // *This object is thread-safe*
 //
+
+var (
+	// To be returned if there are no more ids available.
+	IdPoolCapacityError = errors.New("IDPOOL:CAPACITY")
+)
+
+const (
+	// The pool of ids is restricted to the range [256, 65535].
+	IdPoolMinId = 256   // exclusive
+	IdPoolMaxId = 65535 // exclusive
+
+	// Each time the pool is expanded, it grows by this amount.
+	IdPoolExpInc = 10
+)
+
 type IdPool struct {
 	lock  sync.Mutex
 	avail *list.List

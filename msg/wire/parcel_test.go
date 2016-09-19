@@ -1,63 +1,124 @@
 package wire
 
 import (
-	// "bytes"
 	// "fmt"
+	"bufio"
+	"bytes"
 	"testing"
-//
-	// uuid "github.com/satori/go.uuid"
+
+	"github.com/stretchr/testify/assert"
+
+	uuid "github.com/satori/go.uuid"
 )
 
-// import "bufio"
+func TestParcelSerialization_Empty(t *testing.T) {
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+	reader := bufio.NewReader(buf)
 
-// import "time"
+	orig := NewParcel()
+	orig.Write(writer)
 
-func TestParcelPack_empty(*testing.T) {
-	parcel := NewParcel()
+	read, _ := ReadParcel(reader)
 
-	bytes, _ := Pack(parcel)
+	assert.Equal(t, orig, read)
 }
 
-//func TestPacketReader(*testing.T) {
+func TestParcelSerialization_Uint8(t *testing.T) {
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+	reader := bufio.NewReader(buf)
 
-//c := make(chan Packet)
+	orig := NewParcel()
+	orig.Set(NewMessageId(1), uint8(1))
+	orig.Write(writer)
 
-//go func(c chan<- Packet) {
-//for {
-//p := &Packet { 0,1,2,3,4,5, []byte{0,1,2,3,4,5,6,7,8,9}}
-//c<- *p;
-//}
-//}(c)
+	read, _ := ReadParcel(reader)
 
-//reader := NewPacketReader(c)
+	assert.Equal(t, orig, read)
+}
 
-//for {
-//buf := make([]byte, 7)
+func TestParcelSerialization_Uint16(t *testing.T) {
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+	reader := bufio.NewReader(buf)
 
-//reader.Read(buf)
-//fmt.Printf("%v\n", buf)
+	orig := NewParcel()
+	orig.Set(NewMessageId(1), uint16(1))
+	orig.Write(writer)
 
-//time.Sleep(time.Second)
-//}
-//}
+	read, _ := ReadParcel(reader)
 
-// func TestPacketWriter(*testing.T) {
-//
-// c := make(chan Packet)
-//
-// go func(c chan<- Packet) {
-// writer := NewPacketWriter(c, 1,1, 2,2)
-//
-// for i := 0; ; i++{
-// writer.Write(make([]byte, 1+i))
-// }
-// }(c)
-//
-//
-// for {
-// p := <-c
-// fmt.Printf("%v\n", p)
-//
-// time.Sleep(time.Second)
-// }
-// }
+	assert.Equal(t, orig, read)
+}
+
+func TestParcelSerialization_Uint32(t *testing.T) {
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+	reader := bufio.NewReader(buf)
+
+	orig := NewParcel()
+	orig.Set(NewMessageId(1), uint32(1))
+	orig.Write(writer)
+
+	read, _ := ReadParcel(reader)
+
+	assert.Equal(t, orig, read)
+}
+
+func TestParcelSerialization_Uint64(t *testing.T) {
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+	reader := bufio.NewReader(buf)
+
+	orig := NewParcel()
+	orig.Set(NewMessageId(1), uint64(1))
+	orig.Write(writer)
+
+	read, _ := ReadParcel(reader)
+
+	assert.Equal(t, orig, read)
+}
+
+func TestParcelSerialization_String(t *testing.T) {
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+	reader := bufio.NewReader(buf)
+
+	orig := NewParcel()
+	orig.Set(NewMessageId(1), "string")
+	orig.Write(writer)
+
+	read, _ := ReadParcel(reader)
+
+	assert.Equal(t, orig, read)
+}
+
+func TestParcelSerialization_all(t *testing.T) {
+	buf := new(bytes.Buffer)
+	writer := bufio.NewWriter(buf)
+	reader := bufio.NewReader(buf)
+
+	id1 := NewMessageId(1)
+	id2 := NewMessageId(1 << 1)
+	id3 := NewMessageId(1 << 2)
+	id4 := NewMessageId(1 << 3)
+	id5 := NewMessageId(1 << 4)
+	id6 := NewMessageId(1 << 5)
+	id7 := NewMessageId(1 << 6)
+
+	orig := NewParcel()
+	orig.Set(id1, uint8(1))
+	orig.Set(id2, uint16(2))
+	orig.Set(id3, uint32(3))
+	orig.Set(id4, uint64(4))
+	orig.Set(id5, "string")
+	orig.Set(id6, uuid.NewV4())
+	orig.Set(id7, []byte{1, 2, 3, 4})
+
+	orig.Write(writer)
+
+	read, _ := ReadParcel(reader)
+
+	assert.Equal(t, orig, read)
+}

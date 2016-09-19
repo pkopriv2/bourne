@@ -1,212 +1,240 @@
 package wire
 
 import (
-	// "bytes"
-
+	"bufio"
+	"bytes"
 	"fmt"
-	// "io"
-	// "strings"
+	"strings"
 
-	"github.com/pkopriv2/bourne/utils"
+	uuid "github.com/satori/go.uuid"
 )
 
 // Defines the basic wire protocol for distributing streams in a non TCP/IP
 // addressing environment.
 
-// Constants
 const (
-	PacketMaxDataLength = 1 << 16
-)
-
-const (
-	packetFormat = 0
-	packetMagic  = 0x2A
+	packetProtocolVersion = 0
+	packetMaxSegmentLength   = 1 << 12
 )
 
 var (
-	packetReserved = []byte{}
+	versionId       MessageId = NewMessageId(1 << 0)
+	srcMemberId     MessageId = NewMessageId(1 << 1)
+	srcChannelId    MessageId = NewMessageId(1 << 2)
+	dstMemberId     MessageId = NewMessageId(1 << 3)
+	dstChannelId    MessageId = NewMessageId(1 << 4)
+	segmentOffsetId MessageId = NewMessageId(1 << 5)
+	segmentDataId   MessageId = NewMessageId(1 << 6)
+	verifyId        MessageId = NewMessageId(1 << 7)
+	openId          MessageId = NewMessageId(1 << 8)
+	closeId         MessageId = NewMessageId(1 << 9)
+	errorCodeId     MessageId = NewMessageId(1 << 10)
+	errorMsgId      MessageId = NewMessageId(1 << 11)
 )
 
-// To be used when encoding errors occur.
-type PacketEncodingError struct {
-	reason string
+type PacketFormatError struct {
+	msg string
 }
 
-func (e PacketEncodingError) Error() string {
-	return fmt.Sprintf("Error encoding packet: ", e.reason)
+func (e PacketFormatError) Error() string {
+	return fmt.Sprintf("ERR:PACKET:FORMAT[%v]", e.msg)
 }
 
-// To be used when decoding errors occur.
-type PacketDecodingError struct {
-	reason string
+type Open struct {
+	Challenge uint64
 }
 
-func (e PacketDecodingError) Error() string {
-	return fmt.Sprintf("Error decoding packet: ", e.reason)
+type Close struct {
+	Challenge uint64
 }
 
-// To be used when raw write errors occur.
-type WriterError struct {
-	err error
+type Segment struct {
+	Offset uint64
+	Data   []byte
 }
 
-func (e WriterError) Error() string {
-	return e.err.Error()
+type Verify struct {
+	Code uint64
 }
 
-// To be used when raw read errors occur.
-type ReaderError struct {
-	err error
+type Error struct {
+	Code uint64
+	Msg  string
 }
 
-func (e ReaderError) Error() string {
-	return e.err.Error()
+type Packet struct {
+	Version uint64
+	Route   Route
+
+	Open    *Open
+	Close   *Close
+	Segment *Segment
+	Verify  *Verify
+	Error   *Error
 }
 
-// Custom types
-const (
-	RequestOpen  utils.BitMask = 1 << 0
-	RequestClose utils.BitMask = 1 << 0
-
-	EmptyRequest utils.BitMask = 1 << 0
-	FlagNone     utils.BitMask = 0
-	FlagOpen     utils.BitMask = 1
-	FlagOffset   utils.BitMask = 1 << 1
-	FlagVerify   utils.BitMask = 1 << 2
-	FlagClose    utils.BitMask = 1 << 3
-	FlagErr      utils.BitMask = 1 << 8
-)
-
-type StandardPacket struct {
-	format uint64
-	addr   Address
-	flags  utils.BitMask
-	offset uint64
-	verify uint64
-	data   []byte
+func NewPacket(route Route) *Packet {
+	return &Packet{
+		Version: packetProtocolVersion,
+		Route:   route}
 }
 
-// func NewStandardPacket(addr Address, flags utils.BitMask, offset uint64, verify uint64, data []byte) Packet {
-// cop := make([]byte, len(data))
-// copy(cop, data)
+func (p *Packet) SetOpen(val uint64) {
+	p.Open = &Open{val}
+}
+
+func (p *Packet) SetClose(val uint64) {
+	p.Close = &Close{val}
+}
+
+func (p *Packet) SetVerify(val uint64) {
+	p.Verify = &Verify{val}
+}
+
+func (p *Packet) SetSegment(offset uint64, data []byte) {
+	p.Segment = &Segment{offset, data}
+}
+
+func (p *Packet) SetError(code uint64, msg string) {
+	p.Error = &Error{code, msg}
+}
+
+func (p *Packet) String() string {
+	var buffer bytes.Buffer
+	buffer.WriteString(fmt.Sprintf("%v ", p.Route))
+
+	msgs := make([]string, 0, 5)
+	if p.Open != nil {
+		msgs = append(msgs, fmt.Sprintf("Open(%v)", p.Open.Challenge))
+	}
+
+	if p.Close != nil {
+		msgs = append(msgs, fmt.Sprintf("Close(%v)", p.Close.Challenge))
+	}
+
+	if p.Verify != nil {
+		msgs = append(msgs, fmt.Sprintf("Close(%v)", p.Verify.Code))
+	}
+
+	if p.Segment != nil {
+		msgs = append(msgs, fmt.Sprintf("Segment(%v, %v)", p.Segment.Offset, p.Segment.Data))
+	}
+
+	if p.Error != nil {
+		msgs = append(msgs, fmt.Sprintf("Error(%v, %v)", p.Error.Code, p.Error.Msg))
+	}
+
+	buffer.WriteString(fmt.Sprintf("Messages: [%v] ", strings.Join(msgs, "|")))
+	return buffer.String()
+}
+
+func WritePacket(w *bufio.Writer, p *Packet) error {
+	parcel := NewParcel()
+	parcel.Set(versionId, p.Version)
+	parcel.Set(srcMemberId, p.Route.Src().MemberId())
+	parcel.Set(dstMemberId, p.Route.Dst().MemberId())
+	parcel.Set(srcChannelId, p.Route.Src().ChannelId())
+	parcel.Set(dstChannelId, p.Route.Dst().ChannelId())
+
+	if p.Open != nil {
+		parcel.Set(openId, p.Open.Challenge)
+	}
+
+	if p.Close != nil {
+		parcel.Set(closeId, p.Close.Challenge)
+	}
+
+	if p.Verify != nil {
+		parcel.Set(verifyId, p.Verify.Code)
+	}
+
+	if p.Segment != nil {
+		parcel.Set(segmentOffsetId, p.Segment.Offset)
+		parcel.Set(segmentDataId, p.Segment.Data)
+	}
+
+	if p.Error != nil {
+		parcel.Set(errorCodeId, p.Error.Code)
+		parcel.Set(errorCodeId, p.Error.Code)
+	}
+
+	err := parcel.Write(w)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Reads a packet from an io stream.  Any issues with the
+// stream encoding will result in (nil, err) being returned.
 //
-// return &packet{
-// format: packetFormat,
-// addr:   addr,
-// flags:  flags,
-// offset: offset,
-// verify: verify,
-// data:   cop}
-// }
-//
-// func NewErrorPacket(addr Address, msg string) Packet {
-// return NewStandardPacket(addr, FlagErr, 0, 0, []byte(msg))
-// }
-//
-// func (p *packet) String() string {
-// var buffer bytes.Buffer
-// buffer.WriteString(fmt.Sprintf("%v  ", p.addr))
-//
-// flags := make([]string, 0, 5)
-//
-// if p.flags&FlagErr > 0 {
-// flags = append(flags, fmt.Sprintf("Error(%v)", string(p.data)))
-// }
-//
-// if p.flags&FlagOpen > 0 {
-// flags = append(flags, fmt.Sprintf("Open(%v)", p.offset))
-// }
-//
-// if p.flags&FlagOffset > 0 {
-// flags = append(flags, fmt.Sprintf("Data(%v, %v)", p.offset, len(p.data)))
-// }
-//
-// if p.flags&FlagVerify > 0 {
-// flags = append(flags, fmt.Sprintf("Verify(%v)", p.verify))
-// }
-//
-// if p.flags&FlagClose > 0 {
-// flags = append(flags, fmt.Sprintf("Close(%v)", p.offset))
-// }
-//
-// buffer.WriteString(fmt.Sprintf("utils.BitMask: [%v] ", strings.Join(flags, "|")))
-// return buffer.String()
-// }
-//
-// // Writes a packet using the writer.  This method tries
-// // to limit the side effects of
-// func WritePacket(w io.Writer, m *packet) error {
-// var enc utils.Encoder
-//
-// buf := new(bytes.Buffer)
-// enc.Uint64(buf, m.format)
-// enc.UUID(buf, m.addr.Src().MemberId())
-// enc.UUID(buf, m.addr.Dst().MemberId())
-// enc.Uint64(buf, m.addr.Src().ChannelId())
-// enc.Uint64(buf, m.addr.Dst().ChannelId())
-// enc.Uint64(buf, uint64(m.flags))
-// enc.Uint64(buf, m.offset)
-// enc.Uint64(buf, m.verify)
-// enc.Raw(buf, packetReserved)
-// enc.Raw(buf, m.data)
-//
-// // encoding error.
-// if err := enc.Err(); err != nil {
-// return err
-// }
-//
-// // io error (enc can't be dead!)
-// data := buf.Bytes()
-// enc.Uint8(w, packetMagic)
-// enc.Raw(w, data)
-// return enc.Err()
-// }
-//
-// // Reads a packet from an io stream.  Any issues with the
-// // stream encoding will result in (nil, err) being returned.
-// //
-// func ReadPacket(r io.Reader) (*packet, error) {
-// var dec utils.Decoder
-//
-// mag := dec.Uint8(r)
-// if mag != packetMagic {
-// return nil, PacketDecodingError{"Missing expected delimiter"}
-// }
-//
-// raw := dec.Raw(r)
-// if err := dec.Err(); err != nil {
-// return nil, ReaderError{err}
-// }
-//
-// buf := bytes.NewBuffer(raw)
-//
-// format := dec.Uint64(buf)
-// srcMemberId := dec.UUID(buf)
-// srcChannelId := dec.Uint64(buf)
-// dstMemberId := dec.UUID(buf)
-// dstChannelId := dec.Uint64(buf)
-// flags := dec.Uint64(buf)
-// offset := dec.Uint64(buf)
-// verify := dec.Uint64(buf)
-//
-// // reserved space. just ignore (for future header values)
-// dec.Raw(buf)
-//
-// payload := dec.Raw(buf)
-//
-// // encoding error.
-// if err := dec.Err(); err != nil {
-// return nil, PacketDecodingError{err.Error()}
-// }
-//
-// src := NewEndPoint(srcMemberId, srcChannelId)
-// dst := NewEndPoint(dstMemberId, dstChannelId)
-//
-// return &packet{
-// format: format,
-// addr:   NewRemoteAddress(src, dst),
-// flags:  utils.BitMask(flags),
-// offset: offset,
-// verify: verify,
-// data:   payload}, nil
-// }
+func ReadPacket(r *bufio.Reader) (*Packet, error) {
+	parcel, err := ReadParcel(r)
+	if err != nil {
+		return nil, err
+	}
+
+	var ok bool
+
+	version, ok := parcel.Get(versionId)
+	if ! ok {
+		return nil, PacketFormatError{fmt.Sprintf("Missing version")}
+	}
+
+	srcMemberId, ok := parcel.Get(srcMemberId)
+	if ! ok {
+		return nil, PacketFormatError{fmt.Sprintf("Missing srcMemberId")}
+	}
+
+	dstMemberId, ok := parcel.Get(dstMemberId)
+	if ! ok {
+		return nil, PacketFormatError{fmt.Sprintf("Missing dstMemberId")}
+	}
+
+	srcChannelId, ok := parcel.Get(srcChannelId)
+	if ! ok {
+		return nil, PacketFormatError{fmt.Sprintf("Missing srcChannelId")}
+	}
+
+	dstChannelId, ok := parcel.Get(dstChannelId)
+	if ! ok {
+		return nil, PacketFormatError{fmt.Sprintf("Missing dstChannelId")}
+	}
+
+	src := NewEndPoint(srcMemberId.(uuid.UUID), srcChannelId.(uint64))
+	dst := NewEndPoint(dstMemberId.(uuid.UUID), dstChannelId.(uint64))
+
+	packet := NewPacket(NewRemoteRoute(src, dst))
+	packet.Version = version.(uint64)
+
+	if open, ok := parcel.Get(openId); ok {
+		packet.SetOpen(open.(uint64))
+	}
+
+	if close, ok := parcel.Get(closeId); ok {
+		packet.SetClose(close.(uint64))
+	}
+
+	if verify, ok := parcel.Get(verifyId); ok {
+		packet.SetVerify(verify.(uint64))
+	}
+
+	if offset, ok := parcel.Get(segmentOffsetId); ok {
+
+		data, ok := parcel.Get(segmentDataId)
+		if ! ok {
+			return nil, PacketFormatError{fmt.Sprintf("Inconsistent data segment. Has offset but no data.")}
+		}
+
+		packet.SetSegment(offset.(uint64), data.([]byte))
+	}
+
+	if code, ok := parcel.Get(errorCodeId); ok {
+		msg, _ :=  parcel.Get(errorMsgId)
+
+		packet.SetError(code.(uint64), msg.(string))
+	}
+
+	return packet, nil
+}
