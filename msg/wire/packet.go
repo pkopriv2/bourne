@@ -13,8 +13,8 @@ import (
 // addressing environment.
 
 const (
-	packetProtocolVersion = 0
-	packetMaxSegmentLength   = 1 << 12
+	PacketVersion          = 0
+	PacketMaxSegmentLength = 1 << 12
 )
 
 var (
@@ -32,130 +32,248 @@ var (
 	errorMsgId      MessageId = NewMessageId(1 << 11)
 )
 
-type PacketFormatError struct {
-	msg string
+type ProtocolError struct {
+	code uint64
+	msg  string
 }
 
-func (e PacketFormatError) Error() string {
-	return fmt.Sprintf("ERR:PACKET:FORMAT[%v]", e.msg)
+func (p *ProtocolError) Code() uint64 {
+	return p.code
 }
 
-type Open struct {
-	Challenge uint64
+func (p *ProtocolError) Msg() string {
+	return p.msg
 }
 
-type Close struct {
-	Challenge uint64
+func (e *ProtocolError) Error() string {
+	return fmt.Sprintf("ERR:PACKET[%v]:%v", e.code, e.msg)
 }
 
-type Segment struct {
-	Offset uint64
-	Data   []byte
+func NewProtocolErrorFamily(code uint64) func(msg string) *ProtocolError {
+	return func(msg string) *ProtocolError {
+		return &ProtocolError{code, msg}
+	}
 }
 
-type Verify struct {
-	Code uint64
+var (
+	NewFormatError = NewProtocolErrorFamily(0)
+)
+
+type NumMessage interface {
+	Val() uint64
 }
 
-type Error struct {
-	Code uint64
-	Msg  string
+type SegmentMessage interface {
+	Offset() uint64
+	Data() []byte
 }
 
-type Packet struct {
-	Version uint64
-	Route   Route
-
-	Open    *Open
-	Close   *Close
-	Segment *Segment
-	Verify  *Verify
-	Error   *Error
+type ErrorMessage interface {
+	Code() uint64
+	Msg() string
 }
 
-func NewPacket(route Route) *Packet {
-	return &Packet{
-		Version: packetProtocolVersion,
-		Route:   route}
+type PacketBuilder interface {
+	SetOpen(uint64) PacketBuilder
+	SetClose(uint64) PacketBuilder
+	SetVerify(uint64) PacketBuilder
+	SetSegment(uint64, []byte) PacketBuilder
+	SetError(*ProtocolError) PacketBuilder
+	Build() Packet
 }
 
-func (p *Packet) SetOpen(val uint64) {
-	p.Open = &Open{val}
+type Packet interface {
+	Route() Route
+
+	Empty() bool
+
+	Open() NumMessage
+	Close() NumMessage
+	Verify() NumMessage
+	Segment() SegmentMessage
+	Error() *ProtocolError
+
+	Return() PacketBuilder
+
+	Write(*bufio.Writer) error
 }
 
-func (p *Packet) SetClose(val uint64) {
-	p.Close = &Close{val}
+func BuildPacket(route Route) PacketBuilder {
+	return &packetBuilder{&packet{route: route}}
 }
 
-func (p *Packet) SetVerify(val uint64) {
-	p.Verify = &Verify{val}
+type packetBuilder struct {
+	packet *packet
 }
 
-func (p *Packet) SetSegment(offset uint64, data []byte) {
-	p.Segment = &Segment{offset, data}
+func (p *packetBuilder) SetOpen(val uint64) PacketBuilder {
+	p.packet.open = &numMessage{val}
+	return p
 }
 
-func (p *Packet) SetError(code uint64, msg string) {
-	p.Error = &Error{code, msg}
+func (p *packetBuilder) SetClose(val uint64) PacketBuilder {
+	p.packet.close = &numMessage{val}
+	return p
 }
 
-func (p *Packet) String() string {
+func (p *packetBuilder) SetVerify(val uint64) PacketBuilder {
+	p.packet.verify = &numMessage{val}
+	return p
+}
+
+func (p *packetBuilder) SetSegment(offset uint64, data []byte) PacketBuilder {
+	cop := make([]byte, len(data))
+	copy(cop, data)
+
+	p.packet.segment = &segmentMessage{offset, cop}
+	return p
+}
+
+func (p *packetBuilder) SetError(err *ProtocolError) PacketBuilder {
+	p.packet.err = err
+	return p
+}
+
+func (p *packetBuilder) Build() Packet {
+	return p.packet
+}
+
+type packet struct {
+	route   Route
+	open    NumMessage
+	close   NumMessage
+	verify  NumMessage
+	segment SegmentMessage
+	err     *ProtocolError
+}
+
+func (p *packet) Empty() bool {
+	return p.open == nil && p.close == nil && p.verify == nil && p.segment == nil && p.err == nil
+}
+
+func (p *packet) Return() PacketBuilder {
+	return BuildPacket(p.route.Reverse())
+}
+
+func (p *packet) Route() Route {
+	return p.route
+}
+
+func (p *packet) Open() NumMessage {
+	return p.open
+}
+
+func (p *packet) Close() NumMessage {
+	return p.close
+}
+
+func (p *packet) Verify() NumMessage {
+	return p.verify
+}
+
+func (p *packet) Segment() SegmentMessage {
+	return p.segment
+}
+
+func (p *packet) Error() *ProtocolError {
+	return p.err
+}
+
+func (p *packet) Write(writer *bufio.Writer) error {
+	return writePacket(writer, p)
+}
+
+func (p *packet) String() string {
 	var buffer bytes.Buffer
-	buffer.WriteString(fmt.Sprintf("%v ", p.Route))
+	buffer.WriteString(fmt.Sprintf("%v ", p.route))
 
 	msgs := make([]string, 0, 5)
-	if p.Open != nil {
-		msgs = append(msgs, fmt.Sprintf("Open(%v)", p.Open.Challenge))
+	if p.open != nil {
+		msgs = append(msgs, fmt.Sprintf("Open(%v)", p.open.Val()))
 	}
 
-	if p.Close != nil {
-		msgs = append(msgs, fmt.Sprintf("Close(%v)", p.Close.Challenge))
+	if p.close != nil {
+		msgs = append(msgs, fmt.Sprintf("Close(%v)", p.close.Val()))
 	}
 
-	if p.Verify != nil {
-		msgs = append(msgs, fmt.Sprintf("Close(%v)", p.Verify.Code))
+	if p.verify != nil {
+		msgs = append(msgs, fmt.Sprintf("Verify(%v)", p.verify.Val()))
 	}
 
-	if p.Segment != nil {
-		msgs = append(msgs, fmt.Sprintf("Segment(%v, %v)", p.Segment.Offset, p.Segment.Data))
+	if p.segment != nil {
+		msgs = append(msgs, fmt.Sprintf("Segment(off:%v, len:%v)", p.segment.Offset(), len(p.segment.Data())))
 	}
 
-	if p.Error != nil {
-		msgs = append(msgs, fmt.Sprintf("Error(%v, %v)", p.Error.Code, p.Error.Msg))
+	if p.err != nil {
+		msgs = append(msgs, fmt.Sprintf("Error(code:%v, msg:%v)", p.err.code, p.err.msg))
 	}
 
 	buffer.WriteString(fmt.Sprintf("Messages: [%v] ", strings.Join(msgs, "|")))
 	return buffer.String()
 }
 
-func WritePacket(w *bufio.Writer, p *Packet) error {
+type numMessage struct {
+	val uint64
+}
+
+func (n *numMessage) Val() uint64 {
+	return n.val
+}
+
+type segmentMessage struct {
+	offset uint64
+	data   []byte
+}
+
+func (s *segmentMessage) Offset() uint64 {
+	return s.offset
+}
+
+func (s *segmentMessage) Data() []byte {
+	return s.data
+}
+
+type errorMessage struct {
+	code uint64
+	msg  string
+}
+
+func (e *errorMessage) Code() uint64 {
+	return e.code
+}
+
+func (e *errorMessage) Msg() string {
+	return e.msg
+}
+
+func writePacket(w *bufio.Writer, p *packet) error {
 	parcel := NewParcel()
-	parcel.Set(versionId, p.Version)
-	parcel.Set(srcMemberId, p.Route.Src().MemberId())
-	parcel.Set(dstMemberId, p.Route.Dst().MemberId())
-	parcel.Set(srcChannelId, p.Route.Src().ChannelId())
-	parcel.Set(dstChannelId, p.Route.Dst().ChannelId())
+	// parcel.Set(versionId, p.Versio)
+	parcel.Set(srcMemberId, p.route.Src().MemberId())
+	parcel.Set(dstMemberId, p.route.Dst().MemberId())
+	parcel.Set(srcChannelId, p.route.Src().ChannelId())
+	parcel.Set(dstChannelId, p.route.Dst().ChannelId())
 
-	if p.Open != nil {
-		parcel.Set(openId, p.Open.Challenge)
+	if p.open != nil {
+		parcel.Set(openId, p.open.Val())
 	}
 
-	if p.Close != nil {
-		parcel.Set(closeId, p.Close.Challenge)
+	if p.close != nil {
+		parcel.Set(closeId, p.close.Val())
 	}
 
-	if p.Verify != nil {
-		parcel.Set(verifyId, p.Verify.Code)
+	if p.verify != nil {
+		parcel.Set(verifyId, p.verify.Val())
 	}
 
-	if p.Segment != nil {
-		parcel.Set(segmentOffsetId, p.Segment.Offset)
-		parcel.Set(segmentDataId, p.Segment.Data)
+	if p.segment != nil {
+		parcel.Set(segmentOffsetId, p.segment.Offset())
+		parcel.Set(segmentDataId, p.segment.Data())
 	}
 
-	if p.Error != nil {
-		parcel.Set(errorCodeId, p.Error.Code)
-		parcel.Set(errorCodeId, p.Error.Code)
+	if p.err != nil {
+		parcel.Set(errorCodeId, p.err.code)
+		parcel.Set(errorMsgId, p.err.msg)
 	}
 
 	err := parcel.Write(w)
@@ -169,7 +287,7 @@ func WritePacket(w *bufio.Writer, p *Packet) error {
 // Reads a packet from an io stream.  Any issues with the
 // stream encoding will result in (nil, err) being returned.
 //
-func ReadPacket(r *bufio.Reader) (*Packet, error) {
+func ReadPacket(r *bufio.Reader) (Packet, error) {
 	parcel, err := ReadParcel(r)
 	if err != nil {
 		return nil, err
@@ -177,64 +295,65 @@ func ReadPacket(r *bufio.Reader) (*Packet, error) {
 
 	var ok bool
 
-	version, ok := parcel.Get(versionId)
-	if ! ok {
-		return nil, PacketFormatError{fmt.Sprintf("Missing version")}
-	}
+	// version, ok := parcel.Get(versionId)
+	// if !ok {
+	// return nil, PacketFormatError{fmt.Sprintf("Missing version")}
+	// }
 
 	srcMemberId, ok := parcel.Get(srcMemberId)
-	if ! ok {
-		return nil, PacketFormatError{fmt.Sprintf("Missing srcMemberId")}
+	if !ok {
+		return nil, NewFormatError("Missing required srcMemberId")
 	}
 
 	dstMemberId, ok := parcel.Get(dstMemberId)
-	if ! ok {
-		return nil, PacketFormatError{fmt.Sprintf("Missing dstMemberId")}
+	if !ok {
+		return nil, NewFormatError("Missing required dstMemberId")
 	}
 
 	srcChannelId, ok := parcel.Get(srcChannelId)
-	if ! ok {
-		return nil, PacketFormatError{fmt.Sprintf("Missing srcChannelId")}
+	if !ok {
+		return nil, NewFormatError("Missing required srcChannelId")
 	}
 
 	dstChannelId, ok := parcel.Get(dstChannelId)
-	if ! ok {
-		return nil, PacketFormatError{fmt.Sprintf("Missing dstChannelId")}
+	if !ok {
+		return nil, NewFormatError("Missing required dstChannelId")
 	}
 
-	src := NewEndPoint(srcMemberId.(uuid.UUID), srcChannelId.(uint64))
-	dst := NewEndPoint(dstMemberId.(uuid.UUID), dstChannelId.(uint64))
+	src := NewAddress(srcMemberId.(uuid.UUID), srcChannelId.(uint64))
+	dst := NewAddress(dstMemberId.(uuid.UUID), dstChannelId.(uint64))
 
-	packet := NewPacket(NewRemoteRoute(src, dst))
-	packet.Version = version.(uint64)
+	builder := BuildPacket(NewRemoteRoute(src, dst))
 
 	if open, ok := parcel.Get(openId); ok {
-		packet.SetOpen(open.(uint64))
+		builder.SetOpen(open.(uint64))
 	}
 
 	if close, ok := parcel.Get(closeId); ok {
-		packet.SetClose(close.(uint64))
+		builder.SetClose(close.(uint64))
 	}
 
 	if verify, ok := parcel.Get(verifyId); ok {
-		packet.SetVerify(verify.(uint64))
+		builder.SetVerify(verify.(uint64))
 	}
 
 	if offset, ok := parcel.Get(segmentOffsetId); ok {
-
 		data, ok := parcel.Get(segmentDataId)
-		if ! ok {
-			return nil, PacketFormatError{fmt.Sprintf("Inconsistent data segment. Has offset but no data.")}
+		if !ok {
+			return nil, NewFormatError("Segment missing data")
 		}
 
-		packet.SetSegment(offset.(uint64), data.([]byte))
+		builder.SetSegment(offset.(uint64), data.([]byte))
 	}
 
 	if code, ok := parcel.Get(errorCodeId); ok {
-		msg, _ :=  parcel.Get(errorMsgId)
+		msg, ok := parcel.Get(errorMsgId)
+		if !ok {
+			return nil, NewFormatError("Error missing message")
+		}
 
-		packet.SetError(code.(uint64), msg.(string))
+		builder.SetError(&ProtocolError{code.(uint64), msg.(string)})
 	}
 
-	return packet, nil
+	return builder.Build(), nil
 }

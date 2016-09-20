@@ -8,44 +8,48 @@ import (
 
 // A route simply describes the start and stop for a packet
 type Route interface {
-	Src() EndPoint
-	Dst() EndPoint
-
+	Src() Address
+	Dst() Address
 	Reverse() Route
+	BuildPacket() PacketBuilder
 }
 
 // An endpoint is the tuple necessary to identify one side of a route
-type EndPoint interface {
+type Address interface {
 	MemberId() uuid.UUID
 	ChannelId() uint64
 }
 
-func NewLocalRoute(src EndPoint) Route {
+func NewLocalRoute(src Address) Route {
 	return route{src, nil}
 }
 
-func NewRemoteRoute(src EndPoint, dst EndPoint) Route {
+func NewRemoteRoute(src Address, dst Address) Route {
 	return route{src, dst}
 }
 
-func NewEndPoint(memberId uuid.UUID, channelId uint64) EndPoint {
-	return endPoint{memberId, channelId}
+func NewAddress(memberId uuid.UUID, channelId uint64) Address {
+	return address{memberId, channelId}
 }
 
 type route struct {
-	src EndPoint
-	dst EndPoint // nil for listeners.
+	src Address
+	dst Address // nil for listeners.
+}
+
+func (s route) BuildPacket() PacketBuilder {
+	return BuildPacket(s)
 }
 
 func (s route) Reverse() Route {
 	return route{s.dst, s.src}
 }
 
-func (s route) Src() EndPoint {
+func (s route) Src() Address {
 	return s.src
 }
 
-func (s route) Dst() EndPoint {
+func (s route) Dst() Address {
 	return s.dst
 }
 
@@ -53,19 +57,19 @@ func (s route) String() string {
 	return fmt.Sprintf("[%v->%v]", s.src, s.dst)
 }
 
-type endPoint struct {
+type address struct {
 	memberId  uuid.UUID
 	channelId uint64
 }
 
-func (c endPoint) MemberId() uuid.UUID {
+func (c address) MemberId() uuid.UUID {
 	return c.memberId
 }
 
-func (c endPoint) ChannelId() uint64 {
+func (c address) ChannelId() uint64 {
 	return c.channelId
 }
 
-func (c endPoint) String() string {
-	return fmt.Sprintf("endpoint(%v:%v)", c.memberId, c.channelId)
+func (c address) String() string {
+	return fmt.Sprintf("channel(%v:%v)", c.memberId.String()[:4], c.channelId)
 }

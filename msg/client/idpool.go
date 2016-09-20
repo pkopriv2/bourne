@@ -25,16 +25,12 @@ import (
 //
 
 var (
-	// To be returned if there are no more ids available.
 	IdPoolCapacityError = errors.New("IDPOOL:CAPACITY")
 )
 
 const (
-	// The pool of ids is restricted to the range [256, 65535].
-	IdPoolMinId = 256   // exclusive
-	IdPoolMaxId = 65535 // exclusive
-
-	// Each time the pool is expanded, it grows by this amount.
+	IdPoolMinId = 256
+	IdPoolMaxId = 65535
 	IdPoolExpInc = 10
 )
 

@@ -1,24 +1,21 @@
 package client
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
 	"github.com/pkopriv2/bourne/msg/wire"
 )
 
-// Something that is routable contains two components:
-//
 type Routable interface {
 	io.Closer
 
-	// Returns the complete addr address of this channel.
-	Address() wire.Address
+	Route() wire.Route
 
 	// Sends a packet the processors input channel.  Each implementation
 	// should attempt to implement this in a NON-BLOCKING
 	// fashion. However, may block if necessary.
-	//
 	send(p wire.Packet) error
 }
 
@@ -32,43 +29,43 @@ type routingTable struct {
 	lock sync.RWMutex
 
 	// channels map
-	channels map[wire.Address]Routable
+	channels map[wire.Route]Routable
 }
 
 func newRoutingTable() *routingTable {
-	return &routingTable{channels: make(map[core.Address]Routable)}
+	return &routingTable{channels: make(map[wire.Route]Routable)}
 }
 
-func (self *routingTable) Get(addr core.Address) Routable {
-	self.lock.RLock()
-	defer self.lock.RUnlock()
-	return self.channels[addr]
+func (r *routingTable) Get(addr wire.Route) Routable {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+	return r.channels[addr]
 }
 
-func (self *routingTable) Add(routable Routable) error {
-	self.lock.Lock()
-	defer self.lock.Unlock()
+func (r *routingTable) Add(routable Routable) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
 
-	addr := routable.Address()
+	key := routable.Route()
 
-	ret := self.channels[addr]
+	ret := r.channels[key]
 	if ret != nil {
-		return ErrChannelExists
+		return fmt.Errorf("Route exists: %v", key)
 	}
 
-	self.channels[addr] = routable
+	r.channels[key] = routable
 	return nil
 }
 
-func (self *routingTable) Remove(addr core.Address) error {
-	self.lock.Lock()
-	defer self.lock.Unlock()
+func (r *routingTable) Remove(addr wire.Route) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
 
-	ret := self.channels[addr]
+	ret := r.channels[addr]
 	if ret == nil {
-		return ErrChannelUnknown
+		return fmt.Errorf("Route does not exist: %v", addr)
 	}
 
-	delete(self.channels, addr)
+	delete(r.channels, addr)
 	return nil
 }

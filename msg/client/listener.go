@@ -55,21 +55,18 @@ func defaultListenerOptions() *ListenerOptions {
 // *This object is thread safe.*
 //
 type listener struct {
-	session wire.Address
+	lock    sync.RWMutex
+	route   wire.Route
 	options ListenerOptions
-
-	in chan *wire.Packet
-
-	// lifecyle transitions
-	lock   sync.RWMutex
-	closed bool
+	in      chan wire.Packet
+	closed  bool
 }
 
 // Creates and returns a new listening channel.  This has the side effect of adding the
 // channel to the channel router, which means that it immediately available to have
 // packets routed to it.
 //
-func newListener(session Session, opts ...ListenerOptionsHandler) (*listener, error) {
+func newListener(route wire.Route, opts ...ListenerOptionsHandler) (*listener, error) {
 
 	// initialize the options.
 	defaultOpts := defaultListenerOptions()
@@ -82,16 +79,16 @@ func newListener(session Session, opts ...ListenerOptionsHandler) (*listener, er
 
 	// create the channel
 	listener := &listener{
-		session: session,
+		route:   route,
 		options: options,
-		in:      make(chan *packet, options.Config.OptionalInt(confListenerRecvInSize, defaultListenerRecvInSize))}
+		in:      make(chan wire.Packet, options.Config.OptionalInt(confListenerRecvInSize, defaultListenerRecvInSize))}
 
 	// finally, return control to the caller
 	return listener, nil
 }
 
-func (l *listener) Session() Session {
-	return l.session
+func (l *listener) Route() wire.Route {
+	return l.route
 }
 
 func (l *listener) Accept() (Channel, error) {
@@ -104,14 +101,14 @@ func (l *listener) Accept() (Channel, error) {
 }
 
 // split out for a more granular locking strategy
-func (l *listener) tryAccept(p *packet) (Channel, error) {
+func (l *listener) tryAccept(p wire.Packet) (Channel, error) {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
 	if l.closed {
 		return nil, ErrChannelClosed
 	}
 
-	channel := newChannel(p.src, p.dst, true, l.options.OnSpawn, func(opts *ChannelOptions) {
+	channel := newChannel(p.Route().Reverse(), true, l.options.OnSpawn, func(opts *ChannelOptions) {
 		opts.Config = l.options.Config
 	})
 	if err := channel.send(p); err != nil {
@@ -123,7 +120,7 @@ func (l *listener) tryAccept(p *packet) (Channel, error) {
 
 // Sends a packet to the channel stream.
 //
-func (l *listener) send(p *packet) error {
+func (l *listener) send(p wire.Packet) error {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
 	if l.closed {

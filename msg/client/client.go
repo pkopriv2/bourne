@@ -2,7 +2,7 @@ package client
 
 import (
 	"errors"
-	"log"
+	// "log"
 	"sync"
 	"time"
 
@@ -110,8 +110,8 @@ type client struct {
 	ids    *IdPool
 	router *routingTable
 
-	routerIn chan *wire.Packet
-	writerIn chan *wire.Packet
+	routerIn chan wire.Packet
+	writerIn chan wire.Packet
 
 	workers sync.WaitGroup
 
@@ -152,10 +152,10 @@ func (c *client) Close() error {
 func readerWorker(c *client) {
 	defer c.workers.Done()
 	for {
-		if state.Is(^ClientOpened) {
-			return
-		}
-
+		// if state.Is(^ClientOpened) {
+			// return
+		// }
+//
 		// packet, err := ReadPacket(c.conn)
 		// switch {
 		// case err = *err.(ConnectionErrors):
@@ -177,20 +177,20 @@ func readerWorker(c *client) {
 func writerWorker(c *client) {
 	defer c.workers.Done()
 	for {
-		if state.Is(^ClientOpened) {
-			return
-		}
-
-		packet, ok := <-c.writerIn
-		if !ok {
-			log.Println("Channel closed.  Stopping writer thread")
-		}
-
-		if err := WritePacket(c.conn, packet); err != nil {
-			// TODO: Handle connection errors
-			log.Printf("Error writing packet [%v]\n", err)
-			continue
-		}
+		// if state.Is(^ClientOpened) {
+			// return
+		// }
+//
+		// packet, ok := <-c.writerIn
+		// if !ok {
+			// log.Println("Channel closed.  Stopping writer thread")
+		// }
+//
+		// if err := WritePacket(c.conn, packet); err != nil {
+			// // TODO: Handle connection errors
+			// log.Printf("Error writing packet [%v]\n", err)
+			// continue
+		// }
 	}
 }
 
@@ -205,22 +205,22 @@ func routerWorker(c *client) {
 
 		// see if there is an "active" session
 		var channel Routable
-		if channel = c.router.Get(NewChannelSession(p.dst, p.src)); channel != nil {
+		if channel = c.router.Get(p.Route()); channel != nil {
 			if err := channel.send(p); err != nil {
-				c.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, []byte(err.Error()))
+				c.writerIn <- p.Return().SetError(wire.NewProtocolErrorFamily(255)("No such channel")).Build()
 			}
 			continue
 		}
 
 		// see if there is a "listener" session
-		if channel = c.router.Get(NewListenerSession(p.dst)); channel != nil {
+		if channel = c.router.Get(wire.NewLocalRoute(p.Route().Dst())); channel != nil {
 			if err := channel.send(p); err != nil {
-				c.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, []byte(err.Error()))
+				c.writerIn <- p.Return().SetError(wire.NewProtocolErrorFamily(255)("No such channel")).Build()
 			}
 			continue
 		}
 
 		// nobody to handle this.
-		c.writerIn <- NewReturnPacket(p, PacketFlagErr, 0, 0, []byte(ErrChannelUnknown.Error()))
+		c.writerIn <- p.Return().SetError(wire.NewProtocolErrorFamily(255)("No such channel")).Build()
 	}
 }

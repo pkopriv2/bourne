@@ -10,9 +10,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// "io"
-// "strings"
-
 // Implements an efficient, self describing, messaging packaging algorithm.  This is
 // especially useful in the context of a reliable streaming algorithm, which needs
 // to efficiently and simultaneously package several independent messages all with
@@ -61,13 +58,13 @@ func (s *Parcel) Get(m MessageId) (interface{}, bool) {
 	return val, ok
 }
 
-
 func (s *Parcel) Write(writer *bufio.Writer) error {
 	return WriteParcel(writer, s)
 }
 
 func WriteParcel(writer *bufio.Writer, p *Parcel) error {
-	enc := utils.NewMessageWriter(writer)
+	buf := new(bytes.Buffer)
+	enc := utils.NewMessageWriter(bufio.NewWriter(buf))
 
 	// create the messages index
 	idx := utils.EmptyBitMask
@@ -107,20 +104,33 @@ func WriteParcel(writer *bufio.Writer, p *Parcel) error {
 		}
 	}
 
-	// finally, put the delimiter
+	enc.Flush()
+	if err := enc.Err(); err != nil {
+		return err
+	}
+
+	enc = utils.NewMessageWriter(writer)
 	enc.PutUint8(ParcelDelimiter)
+	enc.PutBytes(buf.Bytes())
 	enc.Flush()
 
 	return enc.Err()
 }
 
 func ReadParcel(r *bufio.Reader) (*Parcel, error) {
-	raw, err:= r.ReadBytes(ParcelDelimiter)
-	if err != nil {
+	// seek to next delimiter
+	if _, err := r.ReadBytes(ParcelDelimiter); err != nil {
 		return nil, err
 	}
 
-	dec := utils.NewMessageReader(bufio.NewReader(bytes.NewBuffer(raw)))
+	// extract out raw bytes
+	dec := utils.NewMessageReader(r)
+	raw := dec.ReadBytes()
+	if err := dec.Err(); err != nil {
+		return nil, err
+	}
+
+	dec = utils.NewMessageReader(bufio.NewReader(bytes.NewBuffer(raw)))
 	data := make(map[MessageId]interface{})
 
 	idx := utils.BitMask(dec.ReadUint64())

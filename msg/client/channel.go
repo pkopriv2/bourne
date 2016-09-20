@@ -1,6 +1,7 @@
 package client
 
 import (
+	// "errors"
 	"errors"
 	"fmt"
 	"io"
@@ -10,10 +11,9 @@ import (
 
 	"math/rand"
 
+	"github.com/emirpasic/gods/maps/treemap"
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
-
-	"github.com/emirpasic/gods/maps/treemap"
 
 	metrics "github.com/rcrowley/go-metrics"
 )
@@ -25,24 +25,27 @@ import (
 // https://tools.ietf.org/html/rfc4987
 //
 // TODOS:
-//   * Better errors!
 //   * Make open/close more reliable.
 //   * Make open/close more secure.  (Ensure packets are properly addressed!)
-//   * Move entityId to uuid.
-//   * Move to varint encoding.
-//   * Handle offset/verify overflow!!!
+//   * Close streams independently!
 //   * Protect against offset flood.
-//   * Atomic options.
 //   * Drop packets when recv buffer is full!!!
+//   * Better performance
 //
+const (
+	ChannelOpeningErrorCode = 100
+	ChannelClosingErrorCode = 101
+)
+
 var (
-	ErrHandshakeFailed = errors.New("CHAN:HANDSHAKE")
-	ErrChannelClosed   = errors.New("CHAN:CLOSED")
-	ErrChannelFailure  = errors.New("CHAN:FAILURE")
-	ErrChannelResponse = errors.New("CHAN:RESPONSE")
-	ErrChannelTimeout  = errors.New("CHAN:TIMEOUT")
-	ErrChannelExists   = errors.New("CHAN:EXISTS")
-	ErrChannelUnknown  = errors.New("CHAN:UNKNOWN")
+	NewOpeningError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
+	NewClosingError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
+)
+
+var (
+	ErrChannelClosed  = errors.New("CHAN:CLOSED")
+	ErrChannelFailed  = errors.New("CHAN:FAILURE")
+	ErrChannelTimeout = errors.New("CHAN:TIMEOUT")
 )
 
 const (
@@ -128,7 +131,7 @@ type ChannelStats struct {
 	numResets metrics.Counter
 }
 
-func newChannelStats(endpoint wire.EndPoint) *ChannelStats {
+func newChannelStats(endpoint wire.Address) *ChannelStats {
 	r := metrics.DefaultRegistry
 
 	return &ChannelStats{
@@ -151,7 +154,7 @@ func newChannelStats(endpoint wire.EndPoint) *ChannelStats {
 			newChannelMetric(endpoint, "channel.NumResets"), r)}
 }
 
-func newChannelMetric(endpoint wire.EndPoint, name string) string {
+func newChannelMetric(endpoint wire.Address, name string) string {
 	return fmt.Sprintf("-- %+v --: %s", endpoint, name)
 }
 
@@ -227,8 +230,8 @@ func newChannelMetric(endpoint wire.EndPoint, name string) string {
 //
 type channel struct {
 
-	// the endpointess of the session
-	session wire.Address
+	// the endpointess of the route
+	route wire.Route
 
 	// general channel statistics
 	stats *ChannelStats
@@ -266,26 +269,26 @@ type channel struct {
 }
 
 // Creates and returns a new channel
-func newChannel(l wire.EndPoint, r wire.EndPoint, listening bool, opts ...ChannelOptionsHandler) *channel {
+func newChannel(route wire.Route, listening bool, opts ...ChannelOptionsHandler) *channel {
 	// initialize the options.
 	defaultOpts := defaultChannelOptions()
 	for _, opt := range opts {
 		opt(defaultOpts)
 	}
 
-	// defensively copy the options (this is to eliminate any reference to the options that the consumer may have)
+	// defensively copy the options (this is to eliminate any reference to
+	// the options that the consumer may have)
 	options := *defaultOpts
 
-	// preem
 	recvInSize := options.Config.OptionalInt(confChannelRecvInSize, defaultChannelRecvInSize)
 	recvLogSize := options.Config.OptionalInt(confChannelRecvLogSize, defaultChannelRecvLogSize)
 	sendLogSize := options.Config.OptionalInt(confChannelSendLogSize, defaultChannelSendLogSize)
 
 	// create the channel
 	c := &channel{
-		session: wire.NewRemoteAddress(l, r),
-		stats:   newChannelStats(l),
-		state:   NewAtomicState(ChannelOpening),
+		route: route,
+		stats: newChannelStats(route.Src()),
+		state: NewAtomicState(ChannelOpening),
 
 		recvIn:  make(chan wire.Packet, recvInSize),
 		recvOut: NewStream(recvLogSize),
@@ -317,8 +320,8 @@ func newChannel(l wire.EndPoint, r wire.EndPoint, listening bool, opts ...Channe
 	return c
 }
 
-func (c *channel) Address() wire.Address {
-	return c.session
+func (c *channel) Route() wire.Route {
+	return c.route
 }
 
 func (c *channel) Flush() error {
@@ -404,7 +407,7 @@ func (c *channel) log(format string, vals ...interface{}) {
 		return
 	}
 
-	log.Println(fmt.Sprintf("[%v] -- ", c.session) + fmt.Sprintf(format, vals...))
+	log.Println(fmt.Sprintf("[%v] -- ", c.route) + fmt.Sprintf(format, vals...))
 }
 
 func openWorker(c *channel, listening bool) {
@@ -442,11 +445,11 @@ func closeWorker(c *channel, p wire.Packet) {
 	defer c.workers.Done()
 
 	var err error
-	if p == nil {
-		err = closeInit(c)
-	} else {
-		err = closeRecv(c, p)
-	}
+	// if p == nil {
+	// err = closeInit(c)
+	// } else {
+	// err = closeRecv(c, p)
+	// }
 
 	c.sendIn.Close()
 	c.recvOut.Close()
@@ -479,7 +482,7 @@ func sendWorker(c *channel) {
 	_, _, sendAck, _ := c.recvOut.Snapshot()
 
 	// the wire.Packet buffer (initialized here so we don't continually recreate memory.)
-	tmp := make([]byte, wire.PacketMaxDataLength)
+	tmp := make([]byte, wire.PacketMaxSegmentLength)
 	for {
 		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelFailure)
 		if !state.Is(ChannelOpened) {
@@ -530,7 +533,7 @@ func sendWorker(c *channel) {
 		}
 
 		// start building the outgoing wire.Packet
-		flags := wire.FlagNone
+		builder := wire.BuildPacket(c.route.Reverse())
 
 		// see if we should be sending a data wire.Packet.
 		sendStart, num, err := c.sendIn.TryRead(tmp, false)
@@ -541,24 +544,25 @@ func sendWorker(c *channel) {
 		// build the wire.Packet data.
 		data := tmp[:num]
 		if num > 0 {
-			flags = flags | wire.FlagOffset
+			builder.SetSegment(sendStart.offset, data)
 		}
 
 		// see if we should be sending an verify.
 		_, _, recvHead, _ := c.recvOut.Snapshot()
 		if recvHead.offset > sendAck.offset || time.Since(sendAck.time) >= c.ackTimeout/2 {
-			flags = flags | wire.FlagVerify
+			builder.SetVerify(recvHead.offset)
 			sendAck = NewRef(recvHead.offset)
 		}
 
 		// just sleep if nothing to do
-		if flags == wire.FlagNone {
+		p := builder.Build()
+		if p.Empty() {
 			time.Sleep(c.sendWait)
 			continue
 		}
 
 		// this can block indefinitely (What should we do???)
-		if err := c.sendOut(wire.NewStandardPacket(c.Address(), flags, sendStart.offset, recvHead.offset, data)); err != nil {
+		if err := c.sendOut(p); err != nil {
 			c.state.Transition(AnyAtomicState, ChannelFailure)
 			c.onFailure(c)
 			return
@@ -602,10 +606,11 @@ func recvWorker(c *channel) {
 			continue
 		}
 
+		c.log("Received packet: %v", p)
 		c.stats.packetsReceived.Inc(1)
 
-		// Handle: close flag
-		if p.HasFlag(wire.FlagClose) {
+		// Handle: close message
+		if close := p.Close(); close != nil {
 			if !c.state.Transition(ChannelOpened, ChannelClosing) {
 				return
 			}
@@ -615,23 +620,23 @@ func recvWorker(c *channel) {
 			return
 		}
 
-		// Handle: verify flag
-		if p.HasFlag(wire.FlagVerify) {
-			_, err := c.sendIn.Commit(p.Verify())
+		// Handle: verify message
+		if verify := p.Verify(); verify != nil {
+			_, err := c.sendIn.Commit(verify.Val())
 			switch err {
 			case ErrStreamClosed:
 				c.log("Error committing verify. Send log closed.")
 				return
 			case ErrStreamInvalidCommit:
-				c.log("Error committing verify [%v] : [%v]", p.Verify(), err)
+				c.log("Error committing verify [%v] : [%v]", verify.Val(), err)
 				c.stats.packetsDropped.Inc(1)
 				continue
 			}
 		}
 
-		// Handle: data flag (consume elements of the stream)
-		if p.HasFlag(FlagOffset) {
-			pending.Put(p.offset, p.data)
+		// Handle: segment message
+		if segment := p.Segment(); segment != nil {
+			pending.Put(segment.Offset(), segment.Data())
 		}
 
 		// consume the pending items
@@ -645,15 +650,15 @@ func recvWorker(c *channel) {
 			_, _, head, _ := c.recvOut.Snapshot()
 
 			// Handle: Future offset
-			offset, data := k.(uint32), v.([]byte)
+			offset, data := k.(uint64), v.([]byte)
 			if offset > head.offset {
 				break
 			}
 
 			// Handle: Past offset
 			pending.Remove(offset)
-			if head.offset > offset+uint32(len(data)) {
-				c.stats.wire.PacketsDropped.Inc(1)
+			if head.offset > offset+uint64(len(data)) {
+				c.stats.packetsDropped.Inc(1)
 				continue
 			}
 
@@ -665,7 +670,7 @@ func recvWorker(c *channel) {
 	}
 }
 
-// Performs initiator  open handshake: send(open), recv(open,verify), send(verify)
+// Performs open handshake: send(open), recv(open,verify), send(verify)
 func openInit(c *channel) error {
 	c.log("Initiating open request")
 
@@ -673,31 +678,40 @@ func openInit(c *channel) error {
 	var err error
 
 	// generate a new offset for the handshake.
-	offset := rand.Uint32()
+	offset := uint64(rand.Uint32())
 
 	// Send: open
-	c.log("Send (open)")
-	if err = send(c, wire.FlagOpen, offset, 0, []byte{}); err != nil {
-		return ErrHandshakeFailed
+	if err = send(c, wire.BuildPacket(c.route).SetOpen(offset).Build()); err != nil {
+		return NewOpeningError("Failed: send(open)")
 	}
 
 	// Receive: open, verify
-	c.log("Receive (open, verify)")
 	p, err = recvOrTimeout(c, c.ackTimeout)
 	if err != nil || p == nil {
-		send(c, wire.FlagErr, 0, 0, []byte("AckTimeout"))
-		return ErrChannelTimeout
+		ret := NewOpeningError("Failed: recv(open, verify)")
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
 	}
 
-	if p.flags != (wire.FlagOpen|wire.FlagVerify) || p.verify != offset {
-		send(c, wire.FlagErr, 0, 0, []byte("Incorrect verify"))
-		return ErrHandshakeFailed
+	open, verify := p.Open(), p.Verify()
+	if open == nil || verify == nil {
+		ret := NewOpeningError("Failed: recv(open, verify): Missing open or verify")
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
+	}
+
+	if verify.Val() != offset {
+		ret := NewOpeningError(fmt.Sprintf("Failed: receive(open, verify): Incorrect verify [%v]", verify.Val()))
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
 	}
 
 	// Send: verify
 	c.log("Send (verify)")
-	if err = send(c, wire.FlagVerify, 0, p.offset, []byte{}); err != nil {
-		return ErrHandshakeFailed
+	if err = send(c, wire.BuildPacket(c.route).SetVerify(open.Val()).Build()); err != nil {
+		ret := NewOpeningError("Failed: send(verify)")
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
 	}
 
 	return nil
@@ -711,32 +725,39 @@ func openRecv(c *channel) error {
 	c.log("Receive (open)")
 	p, err := recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
-		return ErrChannelTimeout
+		return NewOpeningError("Failed: recv(open)")
 	}
 
-	if p.flags != wire.FlagOpen {
-		send(c, wire.FlagErr, 0, 0, []byte("Required OPEN flag"))
-		return ErrHandshakeFailed
+	open := p.Open()
+	if open == nil {
+		ret := NewOpeningError("Failed: recv(open): Missing open message.")
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
 	}
 
 	// Send: open,verify
 	c.log("Sending (open,verify)")
-	offset := rand.Uint32()
-	if err := send(c, wire.FlagOpen|wire.FlagVerify, offset, p.offset, []byte{}); err != nil {
-		return ErrHandshakeFailed
+	offset := uint64(rand.Uint32())
+	if err := send(c, wire.BuildPacket(c.route).SetVerify(open.Val()).SetOpen(offset).Build()); err != nil {
+		ret := NewOpeningError("Failed: send(open,verify)")
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
 	}
 
 	// Receive: verify
 	c.log("Receive (verify)")
 	p, err = recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
-		send(c, wire.FlagErr, 0, 0, []byte("verify Timeout"))
-		return ErrHandshakeFailed
+		ret := NewOpeningError("Failed: recv(verify)")
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
 	}
 
-	if p.flags != wire.FlagVerify || p.verify != offset {
-		send(c, wire.FlagErr, 0, 0, []byte("Incorrect offset"))
-		return ErrHandshakeFailed
+	verify := p.Verify()
+	if verify == nil || verify.Val() != offset {
+		ret := NewOpeningError("Failed: recv(verify): Missing or incorrect verify")
+		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
+		return ret
 	}
 
 	return nil
@@ -744,32 +765,37 @@ func openRecv(c *channel) error {
 
 // Performs close handshake from initiator's perspective: send(close), recv(close, verify), send(verify)
 func closeInit(c *channel) error {
-	var p wire.Packet
 	var err error
 
-	// generate a new random offset for jhe handshake.
-	offset := rand.Uint32()
+	// generate a new random value for the handshake.
+	offset := uint64(rand.Uint32())
 
 	// Send: close
-	if err = send(c, wire.FlagClose, offset, 0, []byte{}); err != nil {
-		return ErrHandshakeFailed
+	if err = send(c, wire.BuildPacket(c.route).SetClose(offset).Build()); err != nil {
+		return NewClosingError("Failed: send(close)")
 	}
 
-	// Receive: close, verify (drop any wire.Packets taht don't conform to that)
+	// Receive: close, verify (drop any non close packets)
+	var p wire.Packet
 	for {
 		p, err = recvOrTimeout(c, c.ackTimeout)
 		if err != nil || p == nil {
-			return ErrChannelTimeout
+			return NewClosingError("Timeout: recv(close,verify)")
 		}
 
-		if p.flags == (wire.FlagClose|wire.FlagVerify) && p.verify == offset {
+		close, verify := p.Close(), p.Verify()
+		if close == nil || verify == nil {
+			continue
+		}
+
+		if verify.Val() == offset {
 			break
 		}
 	}
 
 	// Send: verify
-	if err = send(c, wire.FlagVerify, 0, p.offset, []byte{}); err != nil {
-		return ErrHandshakeFailed
+	if err = send(c, wire.BuildPacket(c.route).SetClose(p.Close().Val()).Build()); err != nil {
+		return NewClosingError("Failed: verify(close)")
 	}
 
 	return nil
@@ -779,28 +805,22 @@ func closeInit(c *channel) error {
 func closeRecv(c *channel, p wire.Packet) error {
 
 	// Send: close verify
-	offset := rand.Uint32()
-	if err := send(c, wire.FlagClose|wire.FlagVerify, offset, p.offset, []byte{}); err != nil {
-		return ErrHandshakeFailed
+	offset := uint64(rand.Uint32())
+	if err := send(c, wire.BuildPacket(c.route).SetClose(offset).SetVerify(p.Close().Val()).Build()); err != nil {
+		return NewClosingError("Failed: send(close,verify)")
 	}
 
 	// Receive: verify
 	p, err := recvOrTimeout(c, c.ackTimeout)
 	if err != nil {
-		send(c, wire.FlagErr, 0, 0, []byte("verify timeout.  Aborting."))
-		return ErrHandshakeFailed
+		return NewClosingError("Failed: receive(verify)")
 	}
 
-	if p.flags != wire.FlagVerify || p.verify != offset {
-		send(c, wire.FlagErr, 0, 0, []byte("Incorrect offset."))
-		return ErrHandshakeFailed
+	if verify := p.Verify(); verify == nil || verify.Val() != offset {
+		return NewClosingError("Failed: receive(verify). Incorrect value")
 	}
 
 	return nil
-}
-
-func send(c *channel, flags wire.Flags, offset uint32, verify uint32, data []byte) error {
-	return c.sendOut(wire.NewPacket(c.session.Local(), c.session.Remote(), flags, offset, verify, data))
 }
 
 func recvOrTimeout(c *channel, timeout time.Duration) (wire.Packet, error) {
@@ -812,4 +832,8 @@ func recvOrTimeout(c *channel, timeout time.Duration) (wire.Packet, error) {
 	case p := <-c.recvIn:
 		return p, nil
 	}
+}
+
+func send(c *channel, p wire.Packet) error {
+	return c.sendOut(p)
 }

@@ -4,11 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkopriv2/bourne/msg/wire"
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestActiveChannel_openInitTimeout(t *testing.T) {
-	_, channel := newTestChannel(0, 0, 1, 1, false)
+	_, channel := newTestChannel(uuid.NewV4(), 0, uuid.NewV4(), 1, false)
 	defer channel.Close()
 
 	channel.state.WaitUntil(ChannelOpened | ChannelFailure)
@@ -17,30 +19,31 @@ func TestActiveChannel_openInitTimeout(t *testing.T) {
 }
 
 func TestActiveChannel_openRecvTimeout(t *testing.T) {
-	_, channel := newTestChannel(0, 0, 1, 1, true)
+	_, channel := newTestChannel(uuid.NewV4(), 0, uuid.NewV4(), 1, true)
 	defer channel.Close()
 
 	// start the sequence, but never respond
-	channel.send(NewPacket(channel.session.Local(), channel.session.Remote(), PacketFlagOpen, 100, 0, []byte{}))
+	channel.send(wire.BuildPacket(channel.Route().Reverse()).SetOpen(1).Build())
 	channel.state.WaitUntil(ChannelOpened | ChannelFailure)
 
 	assert.Equal(t, ChannelFailure, channel.state.Get())
 }
 
 func TestActiveChannel_openHandshake(t *testing.T) {
-	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
+	channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
 	defer channelL.Close()
 	defer channelR.Close()
 
-	channelL.state.WaitUntil(ChannelOpened | ChannelFailure)
-	channelR.state.WaitUntil(ChannelOpened | ChannelFailure)
+	channelL.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
+	channelR.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
 
 	assert.Equal(t, ChannelOpened, channelL.state.Get())
 	assert.Equal(t, ChannelOpened, channelR.state.Get())
 }
 
+
 func TestActiveChannel_sendSinglePacket(t *testing.T) {
-	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
+	channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
 	defer channelR.Close()
 	defer channelL.Close()
 
@@ -58,7 +61,7 @@ func TestActiveChannel_sendSinglePacket(t *testing.T) {
 }
 
 func TestActiveChannel_sendSingleStream(t *testing.T) {
-	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
+	channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
 	channelR.debug = false
 	defer channelR.Close()
 	defer channelL.Close()
@@ -104,7 +107,7 @@ func TestActiveChannel_sendSingleStream(t *testing.T) {
 }
 
 func TestActiveChannel_sendDuplexStream(t *testing.T) {
-	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
+	channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
 	defer channelR.Close()
 	defer channelL.Close()
 
@@ -180,7 +183,7 @@ func TestActiveChannel_sendDuplexStream(t *testing.T) {
 }
 
 func TestActiveChannel_sendLargeStream(t *testing.T) {
-	channelL, channelR := newTestChannelPair(0, 0, 1, 1)
+	channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
 	defer channelR.Close()
 	defer channelL.Close()
 
@@ -223,18 +226,18 @@ func TestActiveChannel_sendLargeStream(t *testing.T) {
 	assert.Equal(t, 1<<20, tot)
 }
 
-func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, listener bool) (chan *packet, *channel) {
-	l := NewEndPoint(entityIdL, channelIdL)
-	r := NewEndPoint(entityIdR, channelIdR)
+func newTestChannel(memberIdL uuid.UUID, channelIdL uint64, memberIdR uuid.UUID, channelIdR uint64, listener bool) (chan wire.Packet, *channel) {
+	l := wire.NewAddress(memberIdL, channelIdL)
+	r := wire.NewAddress(memberIdR, channelIdR)
 
-	out := make(chan *packet, 1<<10)
+	out := make(chan wire.Packet, 1<<10)
 
-	channel := newChannel(l, r, listener, func(opts *ChannelOptions) {
+	channel := newChannel(wire.NewRemoteRoute(l, r), listener, func(opts *ChannelOptions) {
 		opts.OnClose = func(c Channel) error {
 			close(out)
 			return nil
 		}
-		opts.OnData = func(p *packet) error {
+		opts.OnData = func(p wire.Packet) error {
 			out <- p
 			return nil
 		}
@@ -243,14 +246,14 @@ func newTestChannel(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, c
 	channel.debug = true
 	channel.ackTimeout = 500 * time.Millisecond
 	channel.closeTimeout = 500 * time.Millisecond
-	channel.sendWait = 10 * time.Millisecond
+	channel.sendWait = 1 * time.Millisecond
 	channel.recvWait = 1 * time.Millisecond
 
 	return out, channel
 }
 
-func newTestRouter() func(outL chan *packet, outR chan *packet, channelL *channel, channelR *channel) {
-	return func(outL chan *packet, outR chan *packet, channelL *channel, channelR *channel) {
+func newTestRouter() func(outL chan wire.Packet, outR chan wire.Packet, channelL *channel, channelR *channel) {
+	return func(outL chan wire.Packet, outR chan wire.Packet, channelL *channel, channelR *channel) {
 		for {
 			select {
 			case p, ok := <-outR:
@@ -274,15 +277,15 @@ func newTestRouter() func(outL chan *packet, outR chan *packet, channelL *channe
 	}
 }
 
-func newTestChannelPairWithRouter(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16, router func(chan *packet, chan *packet, *channel, *channel)) (*channel, *channel) {
-	outL, channelL := newTestChannel(entityIdL, channelIdL, entityIdR, channelIdR, false)
-	outR, channelR := newTestChannel(entityIdR, channelIdR, entityIdL, channelIdL, true)
+func newTestChannelPairWithRouter(memberIdL uuid.UUID, channelIdL uint64, memberIdR uuid.UUID, channelIdR uint64, router func(chan wire.Packet, chan wire.Packet, *channel, *channel)) (*channel, *channel) {
+	outL, channelL := newTestChannel(memberIdL, channelIdL, memberIdR, channelIdR, false)
+	outR, channelR := newTestChannel(memberIdR, channelIdR, memberIdL, channelIdL, true)
 
 	go router(outL, outR, channelL, channelR)
 
 	return channelL, channelR
 }
 
-func newTestChannelPair(entityIdL EntityId, channelIdL uint16, entityIdR EntityId, channelIdR uint16) (*channel, *channel) {
-	return newTestChannelPairWithRouter(entityIdL, channelIdL, entityIdR, channelIdR, newTestRouter())
+func newTestChannelPair(memberIdL uuid.UUID, channelIdL uint64, memberIdR uuid.UUID, channelIdR uint64) (*channel, *channel) {
+	return newTestChannelPairWithRouter(memberIdL, channelIdL, memberIdR, channelIdR, newTestRouter())
 }
