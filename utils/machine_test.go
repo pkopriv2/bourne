@@ -22,10 +22,7 @@ func TestState_workerfail(t *testing.T) {
 	e := errors.New("error")
 
 	state := newState(1, func(c StateController) {
-		select {
-		case <-c.Done():
-		case c.Fail() <- e:
-		}
+		c.Fail(e)
 	})
 
 	controller := state.Run()
@@ -45,12 +42,44 @@ func TestState_externalFail(t *testing.T) {
 	})
 
 	controller := state.Run()
-	controller.Fail() <- e
-	result := <-controller.Done()
+	result := controller.Fail(e)
 
 	assert.Equal(t, TerminalState, result.Target)
 	assert.Equal(t, e, result.Failure)
 	assert.True(t, returned)
+}
+
+func TestState_multiWorker(t *testing.T) {
+	e := errors.New("error")
+
+	returned1 := false
+	worker1 := func(c StateController) {
+		c.Fail(e)
+		returned1 = true
+	}
+
+	returned2 := false
+	worker2 := func(c StateController) {
+		time.Sleep(1 * time.Second)
+		returned2 = true
+	}
+
+	returned3 := false
+	worker3 := func(c StateController) {
+		time.Sleep(1 * time.Second)
+		returned3 = true
+	}
+
+	state := newState(1, worker1, worker2, worker3)
+
+	controller := state.Run()
+	result := <-controller.Done()
+
+	assert.Equal(t, TerminalState, result.Target)
+	assert.Equal(t, e, result.Failure)
+	assert.True(t, returned1)
+	assert.True(t, returned2)
+	assert.True(t, returned3)
 }
 
 func TestStateMachine_empty(t *testing.T) {
@@ -71,7 +100,7 @@ func TestStateMachine_empty(t *testing.T) {
 func TestStateMachine_IllegalTransition(t *testing.T) {
 	factory := BuildStateMachine()
 	factory.AddState(1, func(c StateController) {
-		c.Next() <- 2
+		c.Next(2)
 	})
 
 	machine := factory.Start(1)
@@ -101,10 +130,10 @@ func TestStateMachine_MultiState(t *testing.T) {
 	factory := BuildStateMachine()
 
 	factory.AddState(1, func(c StateController) {
-		c.Next() <- 2
+		c.Next(2)
 	})
 	factory.AddState(2, func(c StateController) {
-		c.Next() <- 3
+		c.Next(3)
 	})
 	factory.AddState(3, func(c StateController) {
 	})
@@ -125,13 +154,10 @@ func TestStateMachine_ExternalTransition(t *testing.T) {
 	factory.AddState(1, func(c StateController) {
 		time.Sleep(100 * time.Millisecond)
 
-		select {
-		case c.Next() <- 2:
-		case <-c.Done():
-		}
+		c.Next(2)
 	})
 	factory.AddState(2, func(c StateController) {
-		c.Next() <- 3
+		c.Next(3)
 	})
 	factory.AddState(3, func(c StateController) {
 	})
@@ -142,13 +168,7 @@ func TestStateMachine_ExternalTransition(t *testing.T) {
 	assert.Nil(t, err)
 
 	// skip 2
-	var result MachineResult
-	select {
-	case result = <-c.Done():
-	case c.Next() <- 3:
-		result = <-c.Done()
-	}
-
+	result := c.Transition(3)
 	assert.Nil(t, result.Failure)
 	assert.Equal(t, []int{1, 3}, result.Transitions)
 }
@@ -158,14 +178,10 @@ func TestStateMachine_ExternalFailure(t *testing.T) {
 
 	factory.AddState(1, func(c StateController) {
 		time.Sleep(100 * time.Millisecond)
-
-		select {
-		case c.Next() <- 2:
-		case <-c.Done():
-		}
+		c.Next(2)
 	})
 	factory.AddState(2, func(c StateController) {
-		c.Next() <- 3
+		c.Next(3)
 	})
 	factory.AddState(3, func(c StateController) {
 	})
@@ -177,13 +193,7 @@ func TestStateMachine_ExternalFailure(t *testing.T) {
 
 	// fail
 	e := errors.New("error")
-	var result MachineResult
-	select {
-	case result = <-c.Done():
-	case c.Fail() <- e:
-		result = <-c.Done()
-	}
-
+	result := c.Fail(e)
 	assert.Equal(t, e, result.Failure)
 	assert.Equal(t, []int{1}, result.Transitions)
 }

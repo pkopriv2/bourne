@@ -40,12 +40,12 @@ type StateController interface {
 	// Signals to the stateController that the machine should transition to the given state.
 	// This will cause an item to be put on the stateController's done channel, giving it a
 	// chance to perform an necessary cleanup and die.
-	Next() chan<- int
+	Next(int) StateResult
 
 	// Signals to the stateController that an irrecoverable error has occured in a worker.
 	// This will cause an item to be put on the stateController's done channel, meaning
 	// This puts the machine into a terminally failed state.
-	Fail() chan<- error
+	Fail(error) StateResult
 }
 
 // A state controller allows both workers and operators the ability to
@@ -53,19 +53,17 @@ type StateController interface {
 //
 // Instances should only be used by a single routine.
 type MachineController interface {
-
-	// Signals to the consumer
 	Done() <-chan MachineResult
 
 	// Signals to the stateController that the machine should transition to the given state.
 	// This will cause an item to be put on the stateController's done channel, giving it a
 	// chance to perform an necessary cleanup and die.
-	Next() chan<- int
+	Transition(int) MachineResult
 
 	// Signals to the stateController that an irrecoverable error has occured in a worker.
 	// This will cause an item to be put on the stateController's done channel, meaning
 	// This puts the machine into a terminally failed state.
-	Fail() chan<- error
+	Fail(error) MachineResult
 }
 
 // The result of a completed state within the state machine.
@@ -82,7 +80,7 @@ type MachineResult struct {
 
 // A simple factory interface for creating state machines.
 type StateMachineFactory interface {
-	AddState(int, Worker) StateMachineFactory
+	AddState(int, ...Worker) StateMachineFactory
 	Start(int) StateMachine
 }
 
@@ -151,38 +149,54 @@ func (m *stateController) Done() <-chan StateResult {
 	return m.done
 }
 
-func (m *stateController) Next() chan<- int {
-	return m.next
+func (m *stateController) Next(t int) StateResult {
+	select {
+	case m.next<-t:
+		return <-m.done
+	case result := <-m.done:
+		return result
+	}
 }
 
-func (m *stateController) Fail() chan<- error {
-	return m.fail
+func (m *stateController) Fail(e error) StateResult {
+	select {
+	case m.fail<-e:
+		return <-m.done
+	case result := <-m.done:
+		return result
+	}
 }
 
-// a state is basically a suspended worker.
+// A state is a suspended worker.
 type state struct {
 	id     int
-	worker Worker
+	workers []Worker
 }
 
-func newState(id int, worker Worker) *state {
-	return &state{id, worker}
+func newState(id int, workers ...Worker) *state {
+	return &state{id, workers}
 }
 
 func (s *state) Id() int {
 	return s.id
 }
 
-func (s *state) Run() StateController {
+func (s *state) Run() *stateController {
 	root := newRootController()
-	child, _ := root.spawn()
 
-	ret := make(chan bool)
-	go func() {
-		s.worker(child)
-		ret <- true
-	}()
+	triggers := make([]chan bool, 0)
+	for _,w := range s.workers {
+		worker := w
+		trigger := make(chan bool)
+		triggers = append(triggers, trigger)
+		child,_ := root.spawn()
+		go func() {
+			worker(child)
+			trigger<-true
+		}()
+	}
 
+	ret := CombineTriggers(triggers)
 	go func() {
 		var result StateResult
 		var returned bool
@@ -211,8 +225,8 @@ type stateMachineFactory struct {
 	states map[int]*state
 }
 
-func (s *stateMachineFactory) AddState(id int, fn Worker) StateMachineFactory {
-	s.states[id] = newState(id, fn)
+func (s *stateMachineFactory) AddState(id int, fn ...Worker) StateMachineFactory {
+	s.states[id] = newState(id, fn...)
 	return s
 }
 
@@ -229,6 +243,7 @@ type machineController struct {
 	lock sync.Mutex
 	dead bool
 
+	curr chan int
 	next chan int
 	fail chan error
 	done chan MachineResult
@@ -238,6 +253,7 @@ type machineController struct {
 
 func newRootMachineController() *machineController {
 	return &machineController{
+		curr:     make(chan int),
 		next:     make(chan int),
 		fail:     make(chan error),
 		done:     make(chan MachineResult, 1),
@@ -283,12 +299,22 @@ func (m *machineController) Done() <-chan MachineResult {
 	return m.done
 }
 
-func (m *machineController) Next() chan<- int {
-	return m.next
+func (m *machineController) Transition(t int) MachineResult {
+	select {
+	case m.next<-t:
+		return <-m.done
+	case result := <-m.done:
+		return result
+	}
 }
 
-func (m *machineController) Fail() chan<- error {
-	return m.fail
+func (m *machineController) Fail(e error) MachineResult {
+	select {
+	case m.fail<-e:
+		return <-m.done
+	case result := <-m.done:
+		return result
+	}
 }
 
 type stateMachine struct {
@@ -301,33 +327,6 @@ func newStateMachine(states map[int]*state, init int) StateMachine {
 	m := &stateMachine{
 		states: states,
 		root:   newRootMachineController()}
-
-	// Attempts to force the currently running state to transition to the target state.
-	// Any errors returned by the stateController will override the transition
-	next := func(c StateController, target int) StateResult {
-		ret := StateResult{target, nil}
-		select {
-		case c.Next() <- target:
-			<-c.Done()
-		case result := <-c.Done():
-			if result.Failure != nil {
-				return result
-			}
-		}
-
-		return ret
-	}
-
-	// Forces the current stateController to fail.  (even if it actually succeeded)
-	fail := func(c StateController, failure error) StateResult {
-		select {
-		case <-c.Done():
-		case c.Fail() <- failure:
-			<-c.Done()
-		}
-
-		return StateResult{TerminalState, failure}
-	}
 
 	m.wait.Add(1)
 	go func() {
@@ -352,9 +351,11 @@ func newStateMachine(states map[int]*state, init int) StateMachine {
 			var result StateResult
 			select {
 			case target := <-m.root.next:
-				result = next(control, target)
+				result = control.Next(target)
+				result = StateResult{target, result.Failure}
 			case failure := <-m.root.fail:
-				result = fail(control, failure)
+				control.Fail(failure)
+				result = StateResult{TerminalState, failure}
 			case result = <-control.Done():
 			}
 
@@ -366,7 +367,7 @@ func newStateMachine(states map[int]*state, init int) StateMachine {
 				return
 			}
 
-			// handle: normal transition
+			// handle: transition
 			cur, ok = m.states[result.Target]
 			if !ok {
 				ret := MachineResult{transitions, fmt.Errorf("Illegal state transition. Target does not exist [%v]", result.Target)}
@@ -384,4 +385,16 @@ func newStateMachine(states map[int]*state, init int) StateMachine {
 
 func (s *stateMachine) Control() (MachineController, error) {
 	return s.root.spawn()
+}
+
+func CombineTriggers(triggers []chan bool) <-chan bool {
+	ret := make(chan bool)
+	go func() {
+		for _,t := range triggers {
+			<-t
+		}
+
+		ret<-true
+	}()
+	return ret
 }

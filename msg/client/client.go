@@ -1,8 +1,8 @@
 package client
 
 import (
+	"bufio"
 	"errors"
-	// "log"
 	"sync"
 	"time"
 
@@ -37,10 +37,18 @@ var (
 )
 
 const (
-	ClientOpened AtomicState = 1 << iota
-	ClientClosed
-	ClientFailure
+	ClientRouteErrorCode = 200
 )
+
+var (
+	NewRoutingError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
+)
+
+// const (
+	// ClientOpened AtomicState = 1 << iota
+	// ClientClosed
+	// ClientFailure
+// )
 
 type ClientOptions struct {
 	Config utils.Config
@@ -103,9 +111,10 @@ type client struct {
 
 	options *ClientOptions
 
-	state *AtomicState
+	state *interface{}
 
-	conn *net.Connector
+	reader *bufio.Reader
+	writer *bufio.Writer
 
 	ids    *IdPool
 	router *routingTable
@@ -131,11 +140,11 @@ func (c *client) Close() error {
 }
 
 // func (c *client) Spawn(entity EntityId, remote EndPoint) (Channel, error) {
-	// panic("not implemented")
+// panic("not implemented")
 // }
 //
 // func (c *client) Listen(local EndPoint) (Listener, error) {
-	// panic("not implemented")
+// panic("not implemented")
 // }
 
 // ** INTERNAL ONLY METHODS **
@@ -153,9 +162,9 @@ func readerWorker(c *client) {
 	defer c.workers.Done()
 	for {
 		// if state.Is(^ClientOpened) {
-			// return
+		// return
 		// }
-//
+		//
 		// packet, err := ReadPacket(c.conn)
 		// switch {
 		// case err = *err.(ConnectionErrors):
@@ -174,53 +183,3 @@ func readerWorker(c *client) {
 	}
 }
 
-func writerWorker(c *client) {
-	defer c.workers.Done()
-	for {
-		// if state.Is(^ClientOpened) {
-			// return
-		// }
-//
-		// packet, ok := <-c.writerIn
-		// if !ok {
-			// log.Println("Channel closed.  Stopping writer thread")
-		// }
-//
-		// if err := WritePacket(c.conn, packet); err != nil {
-			// // TODO: Handle connection errors
-			// log.Printf("Error writing packet [%v]\n", err)
-			// continue
-		// }
-	}
-}
-
-func routerWorker(c *client) {
-	defer c.workers.Done()
-	for {
-		p, ok := <-c.routerIn
-		if !ok {
-			// todo...return error packet!
-			return
-		}
-
-		// see if there is an "active" session
-		var channel Routable
-		if channel = c.router.Get(p.Route()); channel != nil {
-			if err := channel.send(p); err != nil {
-				c.writerIn <- p.Return().SetError(wire.NewProtocolErrorFamily(255)("No such channel")).Build()
-			}
-			continue
-		}
-
-		// see if there is a "listener" session
-		if channel = c.router.Get(wire.NewLocalRoute(p.Route().Dst())); channel != nil {
-			if err := channel.send(p); err != nil {
-				c.writerIn <- p.Return().SetError(wire.NewProtocolErrorFamily(255)("No such channel")).Build()
-			}
-			continue
-		}
-
-		// nobody to handle this.
-		c.writerIn <- p.Return().SetError(wire.NewProtocolErrorFamily(255)("No such channel")).Build()
-	}
-}

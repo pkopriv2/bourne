@@ -37,12 +37,12 @@ func newConnectionTimeoutError(timeout time.Duration) ConnectionTimeoutError {
 	return ConnectionTimeoutError{timeout}
 }
 
-type ConnectionAttemptErrors struct {
+type ConnectorError struct {
 	errors []error
 }
 
-func (c ConnectionAttemptErrors) Error() string {
-	var buffer bytes.Buffer
+func (c ConnectorError) Error() string {
+	buffer := new(bytes.Buffer)
 	buffer.WriteString("Errors: ")
 
 	for i, err := range c.errors {
@@ -134,7 +134,7 @@ func (c *Connector) Read(p []byte) (int, error) {
 		conn, err = c.get(true)
 	}
 
-	return 0, ConnectionAttemptErrors{errors}
+	return 0, ConnectorError{errors}
 }
 
 func (c *Connector) Write(p []byte) (int, error) {
@@ -155,7 +155,7 @@ func (c *Connector) Write(p []byte) (int, error) {
 		conn, err = c.get(true)
 	}
 
-	return 0, ConnectionAttemptErrors{errors}
+	return 0, ConnectorError{errors}
 }
 
 func (c *Connector) Close() error {

@@ -14,6 +14,7 @@ import (
 // especially useful in the context of a reliable streaming algorithm, which needs
 // to efficiently and simultaneously package several independent messages all with
 // minimal encoding/decoding overhead.
+// TODO: MIGRATE TO SINGLE INTEGER TYPE.
 
 const (
 	ParcelDelimiter = 0x2a

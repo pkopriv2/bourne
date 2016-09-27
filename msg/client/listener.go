@@ -91,63 +91,63 @@ func (l *listener) Route() wire.Route {
 	return l.route
 }
 
-func (l *listener) Accept() (Channel, error) {
-	packet, ok := <-l.in
-	if !ok {
-		return nil, ErrChannelClosed
-	}
-
-	return l.tryAccept(packet)
-}
-
-// split out for a more granular locking strategy
-func (l *listener) tryAccept(p wire.Packet) (Channel, error) {
-	l.lock.RLock()
-	defer l.lock.RUnlock()
-	if l.closed {
-		return nil, ErrChannelClosed
-	}
-
-	channel := newChannel(p.Route().Reverse(), true, l.options.OnSpawn, func(opts *ChannelOptions) {
-		opts.Config = l.options.Config
-	})
-	if err := channel.send(p); err != nil {
-		return nil, ErrChannelClosed
-	}
-
-	return channel, nil
-}
-
-// Sends a packet to the channel stream.
+// func (l *listener) Accept() (Channel, error) {
+	// packet, ok := <-l.in
+	// if !ok {
+		// return nil, ErrChannelClosed
+	// }
 //
-func (l *listener) send(p wire.Packet) error {
-	l.lock.RLock()
-	defer l.lock.RUnlock()
-	if l.closed {
-		return ErrChannelClosed
-	}
-
-	l.in <- p
-	return nil
-}
-
-// Closes the channel.  Returns an error the if the
-// channel is already closed.
+	// return l.tryAccept(packet)
+// }
 //
-func (l *listener) Close() error {
-	l.lock.Lock()
-	defer l.lock.Unlock()
-	if l.closed {
-		return ErrChannelClosed
-	}
-
-	// close the buffer
-	close(l.in)
-
-	// call the on close handler
-	l.options.OnClose(l)
-
-	// finally, mark it closed
-	l.closed = true
-	return nil
-}
+// // split out for a more granular locking strategy
+// func (l *listener) tryAccept(p wire.Packet) (Channel, error) {
+	// l.lock.RLock()
+	// defer l.lock.RUnlock()
+	// if l.closed {
+		// return nil, ErrChannelClosed
+	// }
+//
+	// channel := newChannel(p.Route().Reverse(), true, l.options.OnSpawn, func(opts *ChannelOptions) {
+		// opts.Config = l.options.Config
+	// })
+	// if err := channel.send(p); err != nil {
+		// return nil, ErrChannelClosed
+	// }
+//
+	// return channel, nil
+// }
+//
+// // Sends a packet to the channel stream.
+// //
+// func (l *listener) send(p wire.Packet) error {
+	// l.lock.RLock()
+	// defer l.lock.RUnlock()
+	// if l.closed {
+		// return ErrChannelClosed
+	// }
+//
+	// l.in <- p
+	// return nil
+// }
+//
+// // Closes the channel.  Returns an error the if the
+// // channel is already closed.
+// //
+// func (l *listener) Close() error {
+	// l.lock.Lock()
+	// defer l.lock.Unlock()
+	// if l.closed {
+		// return ErrChannelClosed
+	// }
+//
+	// // close the buffer
+	// close(l.in)
+//
+	// // call the on close handler
+	// l.options.OnClose(l)
+//
+	// // finally, mark it closed
+	// l.closed = true
+	// return nil
+// }

@@ -56,7 +56,7 @@ func NewProtocolErrorFamily(code uint64) func(msg string) *ProtocolError {
 }
 
 var (
-	NewFormatError = NewProtocolErrorFamily(0)
+	NewEncodingError = NewProtocolErrorFamily(0)
 )
 
 type NumMessage interface {
@@ -302,22 +302,22 @@ func ReadPacket(r *bufio.Reader) (Packet, error) {
 
 	srcMemberId, ok := parcel.Get(srcMemberId)
 	if !ok {
-		return nil, NewFormatError("Missing required srcMemberId")
+		return nil, NewEncodingError("Missing required srcMemberId")
 	}
 
 	dstMemberId, ok := parcel.Get(dstMemberId)
 	if !ok {
-		return nil, NewFormatError("Missing required dstMemberId")
+		return nil, NewEncodingError("Missing required dstMemberId")
 	}
 
 	srcChannelId, ok := parcel.Get(srcChannelId)
 	if !ok {
-		return nil, NewFormatError("Missing required srcChannelId")
+		return nil, NewEncodingError("Missing required srcChannelId")
 	}
 
 	dstChannelId, ok := parcel.Get(dstChannelId)
 	if !ok {
-		return nil, NewFormatError("Missing required dstChannelId")
+		return nil, NewEncodingError("Missing required dstChannelId")
 	}
 
 	src := NewAddress(srcMemberId.(uuid.UUID), srcChannelId.(uint64))
@@ -340,7 +340,7 @@ func ReadPacket(r *bufio.Reader) (Packet, error) {
 	if offset, ok := parcel.Get(segmentOffsetId); ok {
 		data, ok := parcel.Get(segmentDataId)
 		if !ok {
-			return nil, NewFormatError("Segment missing data")
+			return nil, NewEncodingError("Segment missing data")
 		}
 
 		builder.SetSegment(offset.(uint64), data.([]byte))
@@ -349,7 +349,7 @@ func ReadPacket(r *bufio.Reader) (Packet, error) {
 	if code, ok := parcel.Get(errorCodeId); ok {
 		msg, ok := parcel.Get(errorMsgId)
 		if !ok {
-			return nil, NewFormatError("Error missing message")
+			return nil, NewEncodingError("Error missing message")
 		}
 
 		builder.SetError(&ProtocolError{code.(uint64), msg.(string)})

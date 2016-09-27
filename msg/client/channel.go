@@ -1,12 +1,9 @@
 package client
 
 import (
-	// "errors"
-	"errors"
 	"fmt"
 	"io"
 	"log"
-	"sync"
 	"time"
 
 	"math/rand"
@@ -30,30 +27,26 @@ import (
 //   * Close streams independently!
 //   * Protect against offset flood.
 //   * Drop packets when recv buffer is full!!!
-//   * Better performance
+//   * Better concurrency model!
 //
 const (
 	ChannelOpeningErrorCode = 100
 	ChannelClosingErrorCode = 101
+	ChannelTimeoutErrorCode = 102
 )
 
 var (
 	NewOpeningError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
 	NewClosingError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
-)
-
-var (
-	ErrChannelClosed  = errors.New("CHAN:CLOSED")
-	ErrChannelFailed  = errors.New("CHAN:FAILURE")
-	ErrChannelTimeout = errors.New("CHAN:TIMEOUT")
+	NewTimeoutError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
 )
 
 const (
-	ChannelOpening AtomicState = 1 << iota
+	ChannelInit = iota
+	ChannelOpening
 	ChannelOpened
 	ChannelClosing
 	ChannelClosed
-	ChannelFailure
 )
 
 const (
@@ -69,14 +62,15 @@ const (
 )
 
 const (
-	defaultChannelRecvInSize   = 1024
-	defaultChannelRecvLogSize  = 1 << 20 // 1024K
-	defaultChannelSendLogSize  = 1 << 18 // 256K
-	defaultChannelSendWait     = 100 * time.Millisecond
-	defaultChannelRecvWait     = 20 * time.Millisecond
-	defaultChannelAckTimeout   = 5 * time.Second
-	defaultChannelCloseTimeout = 10 * time.Second
-	defaultChannelMaxRetries   = 3
+	defaultChannelRecvAssemblerSize = 1 << 20 // 1 MB
+	defaultChannelRecvInSize        = 1024
+	defaultChannelRecvLogSize       = 1 << 20 // 1024K
+	defaultChannelSendLogSize       = 1 << 18 // 256K
+	defaultChannelSendWait          = 100 * time.Millisecond
+	defaultChannelRecvWait          = 20 * time.Millisecond
+	defaultChannelAckTimeout        = 5 * time.Second
+	defaultChannelCloseTimeout      = 10 * time.Second
+	defaultChannelMaxRetries        = 3
 )
 
 // A channel represents one side of an active sessin.
@@ -86,7 +80,18 @@ type Channel interface {
 	io.Writer
 }
 
-// Channel options are used to configure a channel.
+// configs are used to change the behavior of a channel
+type channelConfig struct {
+	debug bool
+
+	recvMax int
+
+	ackTimeout   time.Duration
+	closeTimeout time.Duration
+	maxRetries   int
+}
+
+// options are used to intialize a channel.
 type ChannelOptions struct {
 	Config utils.Config
 
@@ -95,9 +100,6 @@ type ChannelOptions struct {
 	OnOpen  ChannelTransitionHandler
 	OnClose ChannelTransitionHandler
 	OnFail  ChannelTransitionHandler
-
-	// data handler
-	OnData func(wire.Packet) error
 }
 
 type ChannelOptionsHandler func(*ChannelOptions)
@@ -112,8 +114,7 @@ func defaultChannelOptions() *ChannelOptions {
 		OnInit:  func(c Channel) error { return nil },
 		OnOpen:  func(c Channel) error { return nil },
 		OnClose: func(c Channel) error { return nil },
-		OnFail:  func(c Channel) error { return nil },
-		OnData:  func(p wire.Packet) error { return nil }}
+		OnFail:  func(c Channel) error { return nil }}
 }
 
 // will still need to define better statistics gathering,
@@ -160,14 +161,10 @@ func newChannelMetric(endpoint wire.Address, name string) string {
 
 // An active channel represents one side of a conversation between two entities.
 //
-// The majority of packet stream logic is handled here. The fundamental laws of
-// channels are as follows:
-//
-//   * A channel reprents a full-duplex stream abstraction.  In other words,
-//     there are independent input and output streams.  Read again: INDEPENDENT!
+//   * A channel reprents a full-duplex stream abstraction.
 //
 //   * A channel may be thought of as two send streams, with one sender on each
-//     side of the conversation.
+//     side of the session.
 //
 //   * Each sender is responsible for the reliability his data stream.
 //
@@ -221,51 +218,36 @@ func newChannelMetric(endpoint wire.Address, name string) string {
 //
 // Channel Closing:
 //     1. Transition to Closing
-//     2. Perform reliable handshake
+//     2. Perform close handshake
 //         * Initiator: send(close), recv(close,verify), send(verify)
 //         * Listener:  recv(close), send(close,verify), recv(verify)
 //     3. Transition to Closed.
+//
+// Channel Failure:
+//     1. Transition to Failure
 //
 // *This object is thread safe.*
 //
 type channel struct {
 
-	// the endpointess of the route
+	// the complete address of the channel
 	route wire.Route
 
 	// general channel statistics
 	stats *ChannelStats
 
-	// the state of the channel.
-	state *AtomicState
+	// the channel state machine
+	machine utils.StateMachine
 
-	recvIn  chan wire.Packet
-	recvOut *Stream
-	sendIn  *Stream
-	sendOut func(p wire.Packet) error
+	recvOut       chan []byte
+	recvBuffer    chan []byte
+	recvAssembler chan wire.SegmentMessage
+	recvIn        chan wire.Packet
 
-	// event handlers
-	onInit    ChannelTransitionHandler
-	onOpen    ChannelTransitionHandler
-	onClose   ChannelTransitionHandler
-	onFailure ChannelTransitionHandler
+	ack chan uint64
 
-	// increased logging
-	debug bool
-
-	// thread sleeps
-	sendWait time.Duration
-	recvWait time.Duration
-
-	// timeouts
-	ackTimeout   time.Duration
-	closeTimeout time.Duration
-
-	// number of attempts (ie open/close)
-	maxRetries int
-
-	// the workers wait
-	workers sync.WaitGroup
+	// config
+	config channelConfig
 }
 
 // Creates and returns a new channel
@@ -280,41 +262,26 @@ func newChannel(route wire.Route, listening bool, opts ...ChannelOptionsHandler)
 	// the options that the consumer may have)
 	options := *defaultOpts
 
-	recvInSize := options.Config.OptionalInt(confChannelRecvInSize, defaultChannelRecvInSize)
-	recvLogSize := options.Config.OptionalInt(confChannelRecvLogSize, defaultChannelRecvLogSize)
-	sendLogSize := options.Config.OptionalInt(confChannelSendLogSize, defaultChannelSendLogSize)
-
-	// create the channel
-	c := &channel{
-		route: route,
-		stats: newChannelStats(route.Src()),
-		state: NewAtomicState(ChannelOpening),
-
-		recvIn:  make(chan wire.Packet, recvInSize),
-		recvOut: NewStream(recvLogSize),
-		sendIn:  NewStream(sendLogSize),
-		sendOut: options.OnData,
-
-		onInit:    options.OnInit,
-		onOpen:    options.OnOpen,
-		onClose:   options.OnClose,
-		onFailure: options.OnFail,
-
+	config := channelConfig{
 		debug:        options.Config.OptionalBool(confChannelDebug, false),
-		sendWait:     options.Config.OptionalDuration(confChannelSendWait, defaultChannelSendWait),
-		recvWait:     options.Config.OptionalDuration(confChannelRecvWait, defaultChannelRecvWait),
 		ackTimeout:   options.Config.OptionalDuration(confChannelAckTimeout, defaultChannelAckTimeout),
 		closeTimeout: options.Config.OptionalDuration(confChannelCloseTimeout, defaultChannelCloseTimeout),
 		maxRetries:   options.Config.OptionalInt(confChannelMaxRetries, defaultChannelMaxRetries)}
 
-	// call the init function.
-	c.onInit(c)
+	// initialize the channel
+	c := &channel{
+		route:  route,
+		stats:  newChannelStats(route.Src()),
+		config: config}
 
-	// kick off the workers
-	c.workers.Add(3)
-	go sendWorker(c)
-	go recvWorker(c)
-	go openWorker(c, listening)
+
+	// build the statemachine
+	factory := utils.BuildStateMachine()
+	factory.AddState(ChannelInit, NewInitWorker(c))
+	factory.AddState(ChannelOpening, NewOpeningWorker(c, listening))
+	factory.AddState(ChannelOpened, NewRecvWorker(c), NewRecvAssembleWorker(c), NewRecvBufferWorker(c))
+
+	c.machine = factory.Start(ChannelInit)
 
 	// finally, return it.
 	return c
@@ -324,350 +291,248 @@ func (c *channel) Route() wire.Route {
 	return c.route
 }
 
-func (c *channel) Flush() error {
-	return c.flush(365 * 24 * time.Hour)
-}
+// func (c *channel) Flush() error {
+// return c.flush(365 * 24 * time.Hour)
+// }
 
 // Reads data from the channel.  Blocks if data isn't available.
 func (c *channel) Read(buf []byte) (int, error) {
-	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
-	if state.Is(ChannelClosed | ChannelFailure) {
-		return 0, ErrChannelClosed
-	}
-
-	return c.recvOut.Read(buf)
+	return 0, nil
+	// state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
+	// if state.Is(ChannelClosed | ChannelFailure) {
+	// return 0, ErrChannelClosed
+	// }
+	//
+	// return c.recvOut.Read(buf)
 }
 
 // Writes the data to the channel.  Blocks if the underlying send buffer is full.
 func (c *channel) Write(data []byte) (int, error) {
-	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
-	if state.Is(ChannelClosed | ChannelClosing | ChannelFailure) {
-		return 0, ErrChannelClosed
-	}
-
-	return c.sendIn.Write(data)
+	return 0, nil
+	// state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
+	// if state.Is(ChannelClosed | ChannelClosing | ChannelFailure) {
+	// return 0, ErrChannelClosed
+	// }
+	//
+	// return c.sendIn.Write(data)
 }
 
 // Closes the channel.  Returns an error if the channel is already closed.
 func (c *channel) Close() error {
-	c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
-	if !c.state.Transition(ChannelOpened, ChannelClosing) {
-		return ErrChannelClosed
-	}
-
-	c.workers.Add(1)
-	go closeWorker(c, nil)
-	c.workers.Wait()
 	return nil
 }
 
 // ** INTERNAL ONLY METHODS **
+func (c *channel) fail(reason error) {
+	control, err := c.machine.Control()
+	if err != nil {
+		return
+	}
+
+	control.Fail(reason)
+}
 
 // Send pushes a message on the input channel.  (used for internal routing.)
 func (c *channel) send(p wire.Packet) error {
-	if !c.state.Is(ChannelOpening | ChannelOpened | ChannelClosing) {
-		return ErrChannelClosed
-	}
 
 	c.recvIn <- p
 	return nil
 }
 
-// Flushes the sendlog.
-func (c *channel) flush(timeout time.Duration) error {
-	state := c.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
-	if state.Is(^ChannelOpened) {
-		return ErrChannelClosed
-	}
-
-	_, _, head, _ := c.sendIn.Snapshot()
-
-	start := time.Now()
-	for {
-		tail, _, _, closed := c.sendIn.Snapshot()
-		if closed {
-			return ErrChannelClosed
-		}
-
-		if tail.offset >= head.offset {
-			return nil
-		}
-
-		if time.Since(start) >= timeout {
-			return ErrChannelTimeout
-		}
-
-		time.Sleep(c.sendWait)
+func NewInitWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
+		state.Next(ChannelOpening)
 	}
 }
 
+func NewRecvBufferWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
+	}
+}
+
+func NewSendBufferWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
+	}
+}
+
+func NewSendWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
+	}
+}
+
+func NewRecvWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
+		for {
+			var p wire.Packet
+			select {
+			case <-state.Done():
+				return
+			case p = <-channel.recvIn:
+			}
+
+			// Handle: close
+			if close := p.Close(); close != nil {
+				state.Next(ChannelClosing)
+				return
+			}
+
+			// Handle: error
+			if err := p.Error(); err != nil {
+				state.Fail(err)
+				return
+			}
+
+			// Handle: verify message
+			if verify := p.Verify(); verify != nil {
+				select {
+				case <-state.Done():
+					return
+				case channel.ack <- verify.Val():
+				}
+			}
+
+			// Handle: segment
+			if segment := p.Segment(); segment != nil {
+				select {
+				case <-state.Done():
+					return
+				case channel.recvAssembler <- segment:
+				}
+			}
+		}
+	}
+}
+
+func NewRecvAssembleWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
+		pending := treemap.NewWith(OffsetComparator)
+
+		curSize := 0
+		curOffset := uint64(0)
+
+		curOut := ([]byte)(nil)
+		chanIn := channel.recvAssembler
+		chanOut := channel.recvBuffer
+
+		maxSize := channel.config.recvMax
+
+		for {
+			if curOut == nil {
+				chanOut = nil
+			}
+
+			OuterSelect:
+			select {
+			case <-state.Done():
+				return
+			case chanOut <- curOut:
+				curSize -= len(curOut)
+			case curIn := <-chanIn:
+				min := 0
+				max := len(curIn.Data())
+
+				switch {
+				case curIn.Offset() > curOffset:
+					break
+				case curIn.Offset() == curOffset:
+					break
+				case curIn.Offset()+uint64(len(curIn.Data())) < curOffset:
+					break OuterSelect
+				default:
+					min = int(curOffset - curIn.Offset())
+				}
+
+				size := max-min
+				switch {
+				case size <= 0:
+					break OuterSelect
+				case size > maxSize - curSize:
+					max = maxSize - curSize
+				}
+
+				pending.Put(curIn.Offset()+uint64(min), curIn.Data()[min:max])
+			}
+
+			// try to grab next item
+			for {
+				k, v := pending.Min()
+				if k == nil || v == nil {
+					break
+				}
+
+				// Handle: Future offset
+				offset, data := k.(uint64), v.([]byte)
+				if offset > curOffset {
+					break
+				}
+
+				// Handle: Past offset
+				pending.Remove(offset)
+				if curOffset > offset+uint64(len(data)) {
+					continue
+				}
+
+				if curOut != nil {
+					curOut = append(curOut, data[curOffset-offset:]...)
+				}
+			}
+		}
+	}
+}
+
+func NewOpeningWorker(channel *channel, listening bool) func(utils.StateController) {
+	return func(state utils.StateController) {
+		var err error
+
+		for i := 0; i < channel.config.maxRetries; i++ {
+			if listening {
+				err = openRecv(channel)
+			} else {
+				err = openInit(channel)
+			}
+
+			if err == nil {
+				state.Next(ChannelOpened)
+				return
+			}
+
+			channel.log("Error on open attempt [%v]: %v", i, err)
+		}
+
+		state.Fail(err)
+	}
+}
+
+// func NewClosingWorker(channel *channel) func(utils.StateController) {
+// return func(state utils.StateController) {
+// var err error
+//
+// if p == nil {
+// err = closeInit(channel)
+// } else {
+// err = closeRecv(c, p)
+// }
+//
+// c.sendIn.Close()
+// c.recvOut.Close()
+//
+// if err != nil {
+// c.Fail(err)
+// return
+// }
+//
+// c.log("Successfully closed channel")
+// c.Next(ChannelClosed)
+// }
+// }
+
 // Logs a message, tagging it with the channel's local endpointess.
 func (c *channel) log(format string, vals ...interface{}) {
-	if !c.debug {
+	if !c.config.debug {
 		return
 	}
 
 	log.Println(fmt.Sprintf("[%v] -- ", c.route) + fmt.Sprintf(format, vals...))
-}
-
-func openWorker(c *channel, listening bool) {
-	defer c.workers.Done()
-
-	var err error
-
-	for i := 0; i < c.maxRetries; i++ {
-		if listening {
-			err = openRecv(c)
-		} else {
-			err = openInit(c)
-		}
-		if err == nil {
-			break
-		}
-
-		c.log("Error on open attempt [%v]: %v", i, err)
-	}
-
-	if err != nil {
-		c.log("Failure to open channel")
-		if c.state.Transition(ChannelOpening, ChannelFailure) {
-			c.onFailure(c)
-		}
-	} else {
-		c.log("Successfully opened channel")
-		if c.state.Transition(ChannelOpening, ChannelOpened) {
-			c.onOpen(c)
-		}
-	}
-}
-
-func closeWorker(c *channel, p wire.Packet) {
-	defer c.workers.Done()
-
-	var err error
-	// if p == nil {
-	// err = closeInit(c)
-	// } else {
-	// err = closeRecv(c, p)
-	// }
-
-	c.sendIn.Close()
-	c.recvOut.Close()
-
-	if err != nil {
-		c.log("Failure to close channel")
-		if c.state.Transition(AnyAtomicState, ChannelFailure) {
-			c.onFailure(c)
-		}
-	} else {
-		c.log("Successfully closed channel")
-		if c.state.Transition(ChannelClosing, ChannelClosed) {
-			c.onClose(c)
-		}
-	}
-}
-
-func sendWorker(c *channel) {
-	defer c.workers.Done()
-	defer c.log("Send worker shutdown")
-
-	// initialize the timeout values
-	timeout := c.ackTimeout
-	timeoutCnt := 0
-
-	// track last verify received
-	recvAck, _, _, _ := c.sendIn.Snapshot()
-
-	// track last verify sent
-	_, _, sendAck, _ := c.recvOut.Snapshot()
-
-	// the wire.Packet buffer (initialized here so we don't continually recreate memory.)
-	tmp := make([]byte, wire.PacketMaxSegmentLength)
-	for {
-		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelFailure)
-		if !state.Is(ChannelOpened) {
-			return
-		}
-
-		var err error
-
-		// ** IMPORTANT ** Channel state can still change!  Need to lock
-		// at places that can have external side effects, or at least be
-		// able to detect state changes and handle appropriately.
-
-		// let's see if we need to retransmit
-		sendTail, sendCur, _, sendClosed := c.sendIn.Snapshot()
-		if sendClosed {
-			return
-		}
-
-		// if we received an verify recently, reset the timeout values
-		if sendTail.offset > recvAck.offset {
-			recvAck = sendTail
-			timeout = c.ackTimeout
-			timeoutCnt = 0
-		}
-
-		// let's see if we're in a timeout senario.
-		if sendCur.offset > sendTail.offset && time.Since(sendTail.time) >= timeout {
-			cur, prev, err := c.sendIn.Reset()
-			if err != nil {
-				return
-			}
-
-			c.stats.numResets.Inc(1)
-			c.log("Verify timed out. Reset send log to [%v] from [%v]", cur.offset, prev.offset)
-
-			// double the timeout (ie exponential backoff)
-			timeout *= 2
-			c.log("Verify timeout increased to [%v]", timeout)
-
-			if timeoutCnt++; timeoutCnt >= c.maxRetries {
-				c.log("Failure! Too many timeouts.")
-				c.state.Transition(AnyAtomicState, ChannelFailure)
-				c.onFailure(c)
-				return
-			}
-
-			continue
-		}
-
-		// start building the outgoing wire.Packet
-		builder := wire.BuildPacket(c.route.Reverse())
-
-		// see if we should be sending a data wire.Packet.
-		sendStart, num, err := c.sendIn.TryRead(tmp, false)
-		if err != nil {
-			return
-		}
-
-		// build the wire.Packet data.
-		data := tmp[:num]
-		if num > 0 {
-			builder.SetSegment(sendStart.offset, data)
-		}
-
-		// see if we should be sending an verify.
-		_, _, recvHead, _ := c.recvOut.Snapshot()
-		if recvHead.offset > sendAck.offset || time.Since(sendAck.time) >= c.ackTimeout/2 {
-			builder.SetVerify(recvHead.offset)
-			sendAck = NewRef(recvHead.offset)
-		}
-
-		// just sleep if nothing to do
-		p := builder.Build()
-		if p.Empty() {
-			time.Sleep(c.sendWait)
-			continue
-		}
-
-		// this can block indefinitely (What should we do???)
-		if err := c.sendOut(p); err != nil {
-			c.state.Transition(AnyAtomicState, ChannelFailure)
-			c.onFailure(c)
-			return
-		}
-
-		c.stats.packetsSent.Inc(1)
-	}
-}
-
-func recvWorker(c *channel) {
-	defer c.workers.Done()
-	defer c.log("Recv worker shutdown")
-
-	// we'll use a simple sorted tree map to track out of order segments
-	pending := treemap.NewWith(OffsetComparator)
-	for {
-		state := c.state.WaitUntil(ChannelOpened | ChannelClosing | ChannelClosed | ChannelFailure)
-		if !state.Is(ChannelOpened) {
-			return
-		}
-
-		// ** IMPORTANT ** Channel state can still change!  Need to lock
-		// at places that can have external side effects, or at least be
-		// able to detect state changes and handle appropriately.
-
-		// grab the next wire.Packet (cannot block as we need to evaluate state transitions)
-		var p wire.Packet = nil
-		select {
-		case in, ok := <-c.recvIn:
-			if !ok {
-				return
-			}
-
-			p = in
-		default:
-			break
-		}
-
-		if p == nil {
-			time.Sleep(c.recvWait)
-			continue
-		}
-
-		c.log("Received packet: %v", p)
-		c.stats.packetsReceived.Inc(1)
-
-		// Handle: close message
-		if close := p.Close(); close != nil {
-			if !c.state.Transition(ChannelOpened, ChannelClosing) {
-				return
-			}
-
-			c.workers.Add(1)
-			go closeWorker(c, p)
-			return
-		}
-
-		// Handle: verify message
-		if verify := p.Verify(); verify != nil {
-			_, err := c.sendIn.Commit(verify.Val())
-			switch err {
-			case ErrStreamClosed:
-				c.log("Error committing verify. Send log closed.")
-				return
-			case ErrStreamInvalidCommit:
-				c.log("Error committing verify [%v] : [%v]", verify.Val(), err)
-				c.stats.packetsDropped.Inc(1)
-				continue
-			}
-		}
-
-		// Handle: segment message
-		if segment := p.Segment(); segment != nil {
-			pending.Put(segment.Offset(), segment.Data())
-		}
-
-		// consume the pending items
-		for {
-			k, v := pending.Min()
-			if k == nil || v == nil {
-				break
-			}
-
-			// Take a snapshot of the current receive stream offsets
-			_, _, head, _ := c.recvOut.Snapshot()
-
-			// Handle: Future offset
-			offset, data := k.(uint64), v.([]byte)
-			if offset > head.offset {
-				break
-			}
-
-			// Handle: Past offset
-			pending.Remove(offset)
-			if head.offset > offset+uint64(len(data)) {
-				c.stats.packetsDropped.Inc(1)
-				continue
-			}
-
-			// Handle: Write the valid elements of the segment.
-			if _, err := c.recvOut.Write(data[head.offset-offset:]); err != nil {
-				return
-			}
-		}
-	}
 }
 
 // Performs open handshake: send(open), recv(open,verify), send(verify)
@@ -686,7 +551,7 @@ func openInit(c *channel) error {
 	}
 
 	// Receive: open, verify
-	p, err = recvOrTimeout(c, c.ackTimeout)
+	p, err = recvOrTimeout(c, c.config.ackTimeout)
 	if err != nil || p == nil {
 		ret := NewOpeningError("Failed: recv(open, verify)")
 		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
@@ -723,7 +588,7 @@ func openRecv(c *channel) error {
 
 	// Receive: open
 	c.log("Receive (open)")
-	p, err := recvOrTimeout(c, c.ackTimeout)
+	p, err := recvOrTimeout(c, c.config.ackTimeout)
 	if err != nil {
 		return NewOpeningError("Failed: recv(open)")
 	}
@@ -746,7 +611,7 @@ func openRecv(c *channel) error {
 
 	// Receive: verify
 	c.log("Receive (verify)")
-	p, err = recvOrTimeout(c, c.ackTimeout)
+	p, err = recvOrTimeout(c, c.config.ackTimeout)
 	if err != nil {
 		ret := NewOpeningError("Failed: recv(verify)")
 		send(c, wire.BuildPacket(c.route).SetError(ret).Build())
@@ -778,7 +643,7 @@ func closeInit(c *channel) error {
 	// Receive: close, verify (drop any non close packets)
 	var p wire.Packet
 	for {
-		p, err = recvOrTimeout(c, c.ackTimeout)
+		p, err = recvOrTimeout(c, c.config.ackTimeout)
 		if err != nil || p == nil {
 			return NewClosingError("Timeout: recv(close,verify)")
 		}
@@ -811,7 +676,7 @@ func closeRecv(c *channel, p wire.Packet) error {
 	}
 
 	// Receive: verify
-	p, err := recvOrTimeout(c, c.ackTimeout)
+	p, err := recvOrTimeout(c, c.config.ackTimeout)
 	if err != nil {
 		return NewClosingError("Failed: receive(verify)")
 	}
@@ -828,12 +693,13 @@ func recvOrTimeout(c *channel, timeout time.Duration) (wire.Packet, error) {
 
 	select {
 	case <-timer.C:
-		return nil, ErrChannelTimeout
+		return nil, NewTimeoutError("Timeout")
 	case p := <-c.recvIn:
 		return p, nil
 	}
 }
 
 func send(c *channel, p wire.Packet) error {
-	return c.sendOut(p)
+	return nil
+	// return c.sendOut(p)
 }
