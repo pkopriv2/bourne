@@ -1,4 +1,4 @@
-package client
+package tunnel
 
 import (
 	"github.com/emirpasic/gods/maps/treemap"
@@ -6,13 +6,32 @@ import (
 	"github.com/pkopriv2/bourne/utils"
 )
 
-const (
-	confChannelRecvAssemblerLimit = "bourne.msg.channel.recv.assembler.size"
-)
+func NewAssembler(env *Env, in chan wire.SegmentMessage, out chan []byte) func(utils.StateController, []interface{}) {
 
-const (
-	defaultChannelRecvAssemblerLimit = 1000
-)
+	return func(state utils.StateController, args []interface{}) {
+		pending := NewPendingSegments(env.conf.AssemblerMax)
+
+		chanIn := in
+		chanOut := out
+
+		var curOut []byte
+		for {
+			if curOut == nil {
+				chanOut = nil
+			}
+
+			select {
+			case <-state.Done():
+				return
+			case chanOut <- curOut:
+			case curIn := <-chanIn:
+				pending.Add(curIn.Offset(), curIn.Data())
+			}
+
+			curOut = pending.Next()
+		}
+	}
+}
 
 func OffsetComparator(a, b interface{}) int {
 	offsetA := a.(uint64)
@@ -77,33 +96,4 @@ func (a *PendingSegments) Add(offset uint64, data []byte) {
 	}
 
 	a.sorted.Put(offset, data)
-}
-
-
-func NewAssembler(config utils.Config, in chan wire.SegmentMessage, out chan []byte) func(utils.StateController, []interface{}) {
-	limit := config.OptionalInt(confChannelRecvAssemblerLimit, defaultChannelRecvAssemblerLimit)
-
-	return func(state utils.StateController, args []interface{}) {
-		pending := NewPendingSegments(limit)
-
-		chanIn := in
-		chanOut := out
-
-		var curOut []byte
-		for {
-			if curOut == nil {
-				chanOut = nil
-			}
-
-			select {
-			case <-state.Done():
-				return
-			case chanOut <- curOut:
-			case curIn := <-chanIn:
-				pending.Add(curIn.Offset(), curIn.Data())
-			}
-
-			curOut = pending.Next()
-		}
-	}
 }

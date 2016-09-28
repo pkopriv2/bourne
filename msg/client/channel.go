@@ -10,8 +10,6 @@ import (
 
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
-
-	metrics "github.com/rcrowley/go-metrics"
 )
 
 // Much of this was inspired by the following papers:
@@ -116,29 +114,6 @@ const (
 	ChannelOpened
 	ChannelClosing
 	ChannelClosed
-)
-
-const (
-	confChannelDebug        = "bourne.msg.channel.debug"
-	confChannelRecvInSize   = "bourne.msg.channel.recv.in.size"
-	confChannelRecvLogSize  = "bourne.msg.channel.recv.log.size"
-	confChannelSendLogSize  = "bourne.msg.channel.send.log.size"
-	confChannelSendWait     = "bourne.msg.channel.send.wait"
-	confChannelRecvWait     = "bourne.msg.channel.recv.wait"
-	confChannelAckTimeout   = "bourne.msg.channel.ack.timeout"
-	confChannelCloseTimeout = "bourne.msg.channel.close.size"
-	confChannelMaxRetries   = "bourne.msg.channel.max.retries"
-)
-
-const (
-	defaultChannelRecvInSize        = 1024
-	defaultChannelRecvLogSize       = 1 << 20 // 1024K
-	defaultChannelSendLogSize       = 1 << 18 // 256K
-	defaultChannelSendWait          = 100 * time.Millisecond
-	defaultChannelRecvWait          = 20 * time.Millisecond
-	defaultChannelAckTimeout        = 5 * time.Second
-	defaultChannelCloseTimeout      = 10 * time.Second
-	defaultChannelMaxRetries        = 3
 )
 
 type Channel interface {
@@ -311,71 +286,6 @@ func (c *channel) send(p wire.Packet) error {
 	return nil
 }
 
-func NewInitWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-		channel.comms.onInit(channel)
-		state.Next(ChannelOpening)
-	}
-}
-
-func NewRecvBufferWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-	}
-}
-
-func NewRecvWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-		for {
-			var p wire.Packet
-			select {
-			case <-state.Done():
-				return
-			case p = <-channel.comms.recvIn:
-			}
-
-			// Handle: close
-			if close := p.Close(); close != nil {
-				state.Next(ChannelClosing)
-				return
-			}
-
-			// Handle: error
-			if err := p.Error(); err != nil {
-				state.Fail(err)
-				return
-			}
-
-			// Handle: verify message
-			if verify := p.Verify(); verify != nil {
-				select {
-				case <-state.Done():
-					return
-				case channel.comms.ack <- verify.Val():
-				}
-			}
-
-			// Handle: segment
-			if segment := p.Segment(); segment != nil {
-				select {
-				case <-state.Done():
-					return
-				case channel.comms.recvAssembler <- segment:
-				}
-			}
-		}
-	}
-}
-
-func NewSendBufferWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-	}
-}
-
-func NewSendWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-	}
-}
-
 func NewOpeningWorker(channel *channel, listening bool) func(utils.StateController) {
 	return func(state utils.StateController) {
 		var err error
@@ -397,28 +307,28 @@ func NewOpeningWorker(channel *channel, listening bool) func(utils.StateControll
 	}
 }
 
-// func NewClosingWorker(channel *channel) func(utils.StateController) {
-// return func(state utils.StateController) {
-// var err error
-//
-// if p == nil {
-// err = closeInit(channel)
-// } else {
-// err = closeRecv(c, p)
-// }
-//
-// c.sendIn.Close()
-// c.recvOut.Close()
-//
-// if err != nil {
-// c.Fail(err)
-// return
-// }
-//
-// c.log("Successfully closed channel")
-// c.Next(ChannelClosed)
-// }
-// }
+func NewClosingWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
+		var err error
+
+		if p == nil {
+			err = closeInit(channel)
+		} else {
+			err = closeRecv(c, p)
+		}
+
+		c.sendIn.Close()
+		c.recvOut.Close()
+
+		if err != nil {
+			c.Fail(err)
+			return
+		}
+
+		c.log("Successfully closed channel")
+		c.Next(ChannelClosed)
+	}
+}
 
 // Logs a message, tagging it with the channel's local endpointess.
 func (c *channel) log(format string, vals ...interface{}) {
@@ -596,46 +506,4 @@ func recvOrTimeout(c *channel, timeout time.Duration) (wire.Packet, error) {
 func send(c *channel, p wire.Packet) error {
 	return nil
 	// return c.sendOut(p)
-}
-
-// will still need to define better statistics gathering,
-// but this was an easy get up and going method.
-type ChannelStats struct {
-	packetsSent     metrics.Counter
-	packetsDropped  metrics.Counter
-	packetsReceived metrics.Counter
-
-	bytesSent     metrics.Counter
-	bytesDropped  metrics.Counter
-	bytesReceived metrics.Counter
-	bytesReset    metrics.Counter
-
-	numResets metrics.Counter
-}
-
-func newChannelStats(endpoint wire.Address) *ChannelStats {
-	r := metrics.DefaultRegistry
-
-	return &ChannelStats{
-		packetsSent: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.wire.PacketsSent"), r),
-		packetsReceived: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.wire.PacketsReceived"), r),
-		packetsDropped: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.wire.PacketsDropped"), r),
-
-		bytesSent: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesSent"), r),
-		bytesReceived: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesReceived"), r),
-		bytesDropped: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesDropped"), r),
-		bytesReset: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesReset"), r),
-		numResets: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.NumResets"), r)}
-}
-
-func newChannelMetric(endpoint wire.Address, name string) string {
-	return fmt.Sprintf("-- %+v --: %s", endpoint, name)
 }
