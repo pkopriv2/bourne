@@ -12,7 +12,6 @@ func NewBufferer(env *Env, in chan []byte) (io.Reader, func(utils.StateControlle
 
 	return stream, func(state utils.StateController, args []interface{}) {
 		for {
-
 			var cur []byte
 			select {
 			case <-state.Done():
@@ -20,7 +19,7 @@ func NewBufferer(env *Env, in chan []byte) (io.Reader, func(utils.StateControlle
 			case cur = <-in:
 			}
 
-			done, timer := NewCircuitBreaker(365 * 24 * time.Hour, func() { stream.Write(cur) })
+			done, timer := utils.NewCircuitBreaker(365*24*time.Hour, func() { stream.Write(cur) })
 			select {
 			case <-state.Done():
 				return
@@ -28,19 +27,9 @@ func NewBufferer(env *Env, in chan []byte) (io.Reader, func(utils.StateControlle
 				continue
 			case <-timer:
 				state.Fail(NewTimeoutError("BUFFERER(Timeout delivering data)"))
+				return
+			}
 		}
 	}
 }
-}
 
-func NewCircuitBreaker(dur time.Duration, fn func()) (<-chan bool, <-chan time.Time) {
-	timer := time.After(dur)
-	done := make(chan bool)
-
-	go func() {
-		fn()
-		done<-true
-	}()
-
-	return done, timer
-}
