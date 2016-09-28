@@ -239,19 +239,3 @@ func (s *Stream) Read(in []byte) (int, error) {
 
 	panic("Not accessible")
 }
-
-// Used to compare relative offsets.
-func OffsetComparator(a, b interface{}) int {
-	offsetA := a.(uint64)
-	offsetB := b.(uint64)
-
-	if offsetA > offsetB {
-		return 1
-	}
-
-	if offsetA == offsetB {
-		return 0
-	}
-
-	return -1
-}

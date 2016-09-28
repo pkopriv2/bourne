@@ -8,7 +8,6 @@ import (
 
 	"math/rand"
 
-	"github.com/emirpasic/gods/maps/treemap"
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 
@@ -29,135 +28,6 @@ import (
 //   * Drop packets when recv buffer is full!!!
 //   * Better concurrency model!
 //
-const (
-	ChannelOpeningErrorCode = 100
-	ChannelClosingErrorCode = 101
-	ChannelTimeoutErrorCode = 102
-)
-
-var (
-	NewOpeningError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
-	NewClosingError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
-	NewTimeoutError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
-)
-
-const (
-	ChannelInit = iota
-	ChannelOpening
-	ChannelOpened
-	ChannelClosing
-	ChannelClosed
-)
-
-const (
-	confChannelDebug        = "bourne.msg.channel.debug"
-	confChannelRecvInSize   = "bourne.msg.channel.recv.in.size"
-	confChannelRecvLogSize  = "bourne.msg.channel.recv.log.size"
-	confChannelSendLogSize  = "bourne.msg.channel.send.log.size"
-	confChannelSendWait     = "bourne.msg.channel.send.wait"
-	confChannelRecvWait     = "bourne.msg.channel.recv.wait"
-	confChannelAckTimeout   = "bourne.msg.channel.ack.timeout"
-	confChannelCloseTimeout = "bourne.msg.channel.close.size"
-	confChannelMaxRetries   = "bourne.msg.channel.max.retries"
-)
-
-const (
-	defaultChannelRecvAssemblerSize = 1 << 20 // 1 MB
-	defaultChannelRecvInSize        = 1024
-	defaultChannelRecvLogSize       = 1 << 20 // 1024K
-	defaultChannelSendLogSize       = 1 << 18 // 256K
-	defaultChannelSendWait          = 100 * time.Millisecond
-	defaultChannelRecvWait          = 20 * time.Millisecond
-	defaultChannelAckTimeout        = 5 * time.Second
-	defaultChannelCloseTimeout      = 10 * time.Second
-	defaultChannelMaxRetries        = 3
-)
-
-// A channel represents one side of an active sessin.
-type Channel interface {
-	Routable
-	io.Reader
-	io.Writer
-}
-
-// configs are used to change the behavior of a channel
-type channelConfig struct {
-	debug bool
-
-	recvMax int
-
-	ackTimeout   time.Duration
-	closeTimeout time.Duration
-	maxRetries   int
-}
-
-// options are used to intialize a channel.
-type ChannelOptions struct {
-	Config utils.Config
-
-	// lifecycle handlers
-	OnInit  ChannelTransitionHandler
-	OnOpen  ChannelTransitionHandler
-	OnClose ChannelTransitionHandler
-	OnFail  ChannelTransitionHandler
-}
-
-type ChannelOptionsHandler func(*ChannelOptions)
-
-type ChannelTransitionHandler func(Channel) error
-
-func defaultChannelOptions() *ChannelOptions {
-	return &ChannelOptions{
-		Config: utils.NewEmptyConfig(),
-
-		// state handlers
-		OnInit:  func(c Channel) error { return nil },
-		OnOpen:  func(c Channel) error { return nil },
-		OnClose: func(c Channel) error { return nil },
-		OnFail:  func(c Channel) error { return nil }}
-}
-
-// will still need to define better statistics gathering,
-// but this was an easy get up and going method.
-type ChannelStats struct {
-	packetsSent     metrics.Counter
-	packetsDropped  metrics.Counter
-	packetsReceived metrics.Counter
-
-	bytesSent     metrics.Counter
-	bytesDropped  metrics.Counter
-	bytesReceived metrics.Counter
-	bytesReset    metrics.Counter
-
-	numResets metrics.Counter
-}
-
-func newChannelStats(endpoint wire.Address) *ChannelStats {
-	r := metrics.DefaultRegistry
-
-	return &ChannelStats{
-		packetsSent: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.wire.PacketsSent"), r),
-		packetsReceived: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.wire.PacketsReceived"), r),
-		packetsDropped: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.wire.PacketsDropped"), r),
-
-		bytesSent: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesSent"), r),
-		bytesReceived: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesReceived"), r),
-		bytesDropped: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesDropped"), r),
-		bytesReset: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.BytesReset"), r),
-		numResets: metrics.NewRegisteredCounter(
-			newChannelMetric(endpoint, "channel.NumResets"), r)}
-}
-
-func newChannelMetric(endpoint wire.Address, name string) string {
-	return fmt.Sprintf("-- %+v --: %s", endpoint, name)
-}
 
 // An active channel represents one side of a conversation between two entities.
 //
@@ -228,6 +98,109 @@ func newChannelMetric(endpoint wire.Address, name string) string {
 //
 // *This object is thread safe.*
 //
+const (
+	ChannelOpeningErrorCode = 100
+	ChannelClosingErrorCode = 101
+	ChannelTimeoutErrorCode = 102
+)
+
+var (
+	NewOpeningError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
+	NewClosingError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
+	NewTimeoutError = wire.NewProtocolErrorFamily(ChannelOpeningErrorCode)
+)
+
+const (
+	ChannelInit = iota
+	ChannelOpening
+	ChannelOpened
+	ChannelClosing
+	ChannelClosed
+)
+
+const (
+	confChannelDebug        = "bourne.msg.channel.debug"
+	confChannelRecvInSize   = "bourne.msg.channel.recv.in.size"
+	confChannelRecvLogSize  = "bourne.msg.channel.recv.log.size"
+	confChannelSendLogSize  = "bourne.msg.channel.send.log.size"
+	confChannelSendWait     = "bourne.msg.channel.send.wait"
+	confChannelRecvWait     = "bourne.msg.channel.recv.wait"
+	confChannelAckTimeout   = "bourne.msg.channel.ack.timeout"
+	confChannelCloseTimeout = "bourne.msg.channel.close.size"
+	confChannelMaxRetries   = "bourne.msg.channel.max.retries"
+)
+
+const (
+	defaultChannelRecvInSize        = 1024
+	defaultChannelRecvLogSize       = 1 << 20 // 1024K
+	defaultChannelSendLogSize       = 1 << 18 // 256K
+	defaultChannelSendWait          = 100 * time.Millisecond
+	defaultChannelRecvWait          = 20 * time.Millisecond
+	defaultChannelAckTimeout        = 5 * time.Second
+	defaultChannelCloseTimeout      = 10 * time.Second
+	defaultChannelMaxRetries        = 3
+)
+
+type Channel interface {
+	Routable
+	io.Reader
+	io.Writer
+}
+
+type channelConfig struct {
+	debug bool
+
+	recvMax int
+
+	ackTimeout   time.Duration
+	closeTimeout time.Duration
+	maxRetries   int
+}
+
+type ChannelOptions struct {
+	Config utils.Config
+
+	// lifecycle handlers
+	OnInit  ChannelTransitionHandler
+	OnOpen  ChannelTransitionHandler
+	OnClose ChannelTransitionHandler
+	OnFail  ChannelTransitionHandler
+}
+
+type ChannelOptionsHandler func(*ChannelOptions)
+
+type ChannelTransitionHandler func(Channel) error
+
+func defaultChannelOptions() *ChannelOptions {
+	return &ChannelOptions{
+		Config: utils.NewEmptyConfig(),
+
+		// state handlers
+		OnInit:  func(c Channel) error { return nil },
+		OnOpen:  func(c Channel) error { return nil },
+		OnClose: func(c Channel) error { return nil },
+		OnFail:  func(c Channel) error { return nil }}
+}
+
+type channelComms struct {
+	recvOut       chan []byte
+	recvBuffer    chan []byte
+	recvAssembler chan wire.SegmentMessage
+	recvIn        chan wire.Packet
+
+	sendIn        chan wire.Packet
+	sendBuffer    chan []byte
+	sendAssembler chan wire.SegmentMessage
+	sendOut       chan []byte
+
+	ack chan uint64
+
+	onInit    ChannelTransitionHandler
+	onOpen    ChannelTransitionHandler
+	onClose   ChannelTransitionHandler
+	onFailure ChannelTransitionHandler
+}
+
 type channel struct {
 
 	// the complete address of the channel
@@ -239,15 +212,11 @@ type channel struct {
 	// the channel state machine
 	machine utils.StateMachine
 
-	recvOut       chan []byte
-	recvBuffer    chan []byte
-	recvAssembler chan wire.SegmentMessage
-	recvIn        chan wire.Packet
-
-	ack chan uint64
+	// channel communications
+	comms *channelComms
 
 	// config
-	config channelConfig
+	config *channelConfig
 }
 
 // Creates and returns a new channel
@@ -262,25 +231,29 @@ func newChannel(route wire.Route, listening bool, opts ...ChannelOptionsHandler)
 	// the options that the consumer may have)
 	options := *defaultOpts
 
-	config := channelConfig{
+	config := &channelConfig{
 		debug:        options.Config.OptionalBool(confChannelDebug, false),
 		ackTimeout:   options.Config.OptionalDuration(confChannelAckTimeout, defaultChannelAckTimeout),
 		closeTimeout: options.Config.OptionalDuration(confChannelCloseTimeout, defaultChannelCloseTimeout),
 		maxRetries:   options.Config.OptionalInt(confChannelMaxRetries, defaultChannelMaxRetries)}
 
+	// create the channel channelComms
+	comms := &channelComms{}
+
 	// initialize the channel
 	c := &channel{
 		route:  route,
 		stats:  newChannelStats(route.Src()),
+		comms:  comms,
 		config: config}
-
 
 	// build the statemachine
 	factory := utils.BuildStateMachine()
-	factory.AddState(ChannelInit, NewInitWorker(c))
-	factory.AddState(ChannelOpening, NewOpeningWorker(c, listening))
-	factory.AddState(ChannelOpened, NewRecvWorker(c), NewRecvAssembleWorker(c), NewRecvBufferWorker(c))
+	// factory.AddState(ChannelInit, NewInitWorker(c))
+	// factory.AddState(ChannelOpening, NewOpeningWorker(c, listening))
+	// factory.AddState(ChannelOpened, NewRecvWorker(c), NewRecvAssembleWorker(c), NewRecvBufferWorker(c))
 
+	// ugly....
 	c.machine = factory.Start(ChannelInit)
 
 	// finally, return it.
@@ -334,28 +307,18 @@ func (c *channel) fail(reason error) {
 
 // Send pushes a message on the input channel.  (used for internal routing.)
 func (c *channel) send(p wire.Packet) error {
-
-	c.recvIn <- p
+	// c.recvIn <- p
 	return nil
 }
 
 func NewInitWorker(channel *channel) func(utils.StateController) {
 	return func(state utils.StateController) {
+		channel.comms.onInit(channel)
 		state.Next(ChannelOpening)
 	}
 }
 
 func NewRecvBufferWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-	}
-}
-
-func NewSendBufferWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-	}
-}
-
-func NewSendWorker(channel *channel) func(utils.StateController) {
 	return func(state utils.StateController) {
 	}
 }
@@ -367,7 +330,7 @@ func NewRecvWorker(channel *channel) func(utils.StateController) {
 			select {
 			case <-state.Done():
 				return
-			case p = <-channel.recvIn:
+			case p = <-channel.comms.recvIn:
 			}
 
 			// Handle: close
@@ -387,7 +350,7 @@ func NewRecvWorker(channel *channel) func(utils.StateController) {
 				select {
 				case <-state.Done():
 					return
-				case channel.ack <- verify.Val():
+				case channel.comms.ack <- verify.Val():
 				}
 			}
 
@@ -396,87 +359,20 @@ func NewRecvWorker(channel *channel) func(utils.StateController) {
 				select {
 				case <-state.Done():
 					return
-				case channel.recvAssembler <- segment:
+				case channel.comms.recvAssembler <- segment:
 				}
 			}
 		}
 	}
 }
 
-func NewRecvAssembleWorker(channel *channel) func(utils.StateController) {
+func NewSendBufferWorker(channel *channel) func(utils.StateController) {
 	return func(state utils.StateController) {
-		pending := treemap.NewWith(OffsetComparator)
+	}
+}
 
-		curSize := 0
-		curOffset := uint64(0)
-
-		curOut := ([]byte)(nil)
-		chanIn := channel.recvAssembler
-		chanOut := channel.recvBuffer
-
-		maxSize := channel.config.recvMax
-
-		for {
-			if curOut == nil {
-				chanOut = nil
-			}
-
-			OuterSelect:
-			select {
-			case <-state.Done():
-				return
-			case chanOut <- curOut:
-				curSize -= len(curOut)
-			case curIn := <-chanIn:
-				min := 0
-				max := len(curIn.Data())
-
-				switch {
-				case curIn.Offset() > curOffset:
-					break
-				case curIn.Offset() == curOffset:
-					break
-				case curIn.Offset()+uint64(len(curIn.Data())) < curOffset:
-					break OuterSelect
-				default:
-					min = int(curOffset - curIn.Offset())
-				}
-
-				size := max-min
-				switch {
-				case size <= 0:
-					break OuterSelect
-				case size > maxSize - curSize:
-					max = maxSize - curSize
-				}
-
-				pending.Put(curIn.Offset()+uint64(min), curIn.Data()[min:max])
-			}
-
-			// try to grab next item
-			for {
-				k, v := pending.Min()
-				if k == nil || v == nil {
-					break
-				}
-
-				// Handle: Future offset
-				offset, data := k.(uint64), v.([]byte)
-				if offset > curOffset {
-					break
-				}
-
-				// Handle: Past offset
-				pending.Remove(offset)
-				if curOffset > offset+uint64(len(data)) {
-					continue
-				}
-
-				if curOut != nil {
-					curOut = append(curOut, data[curOffset-offset:]...)
-				}
-			}
-		}
+func NewSendWorker(channel *channel) func(utils.StateController) {
+	return func(state utils.StateController) {
 	}
 }
 
@@ -486,17 +382,15 @@ func NewOpeningWorker(channel *channel, listening bool) func(utils.StateControll
 
 		for i := 0; i < channel.config.maxRetries; i++ {
 			if listening {
-				err = openRecv(channel)
+				// err = openRecv(channel)
 			} else {
-				err = openInit(channel)
+				// err = openInit(channel)
 			}
 
 			if err == nil {
 				state.Next(ChannelOpened)
 				return
 			}
-
-			channel.log("Error on open attempt [%v]: %v", i, err)
 		}
 
 		state.Fail(err)
@@ -694,7 +588,7 @@ func recvOrTimeout(c *channel, timeout time.Duration) (wire.Packet, error) {
 	select {
 	case <-timer.C:
 		return nil, NewTimeoutError("Timeout")
-	case p := <-c.recvIn:
+	case p := <-c.comms.recvIn:
 		return p, nil
 	}
 }
@@ -702,4 +596,46 @@ func recvOrTimeout(c *channel, timeout time.Duration) (wire.Packet, error) {
 func send(c *channel, p wire.Packet) error {
 	return nil
 	// return c.sendOut(p)
+}
+
+// will still need to define better statistics gathering,
+// but this was an easy get up and going method.
+type ChannelStats struct {
+	packetsSent     metrics.Counter
+	packetsDropped  metrics.Counter
+	packetsReceived metrics.Counter
+
+	bytesSent     metrics.Counter
+	bytesDropped  metrics.Counter
+	bytesReceived metrics.Counter
+	bytesReset    metrics.Counter
+
+	numResets metrics.Counter
+}
+
+func newChannelStats(endpoint wire.Address) *ChannelStats {
+	r := metrics.DefaultRegistry
+
+	return &ChannelStats{
+		packetsSent: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.wire.PacketsSent"), r),
+		packetsReceived: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.wire.PacketsReceived"), r),
+		packetsDropped: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.wire.PacketsDropped"), r),
+
+		bytesSent: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesSent"), r),
+		bytesReceived: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesReceived"), r),
+		bytesDropped: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesDropped"), r),
+		bytesReset: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.BytesReset"), r),
+		numResets: metrics.NewRegisteredCounter(
+			newChannelMetric(endpoint, "channel.NumResets"), r)}
+}
+
+func newChannelMetric(endpoint wire.Address, name string) string {
+	return fmt.Sprintf("-- %+v --: %s", endpoint, name)
 }
