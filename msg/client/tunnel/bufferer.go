@@ -32,4 +32,3 @@ func NewBufferer(env *Env, in chan []byte) (io.Reader, func(utils.StateControlle
 		}
 	}
 }
-

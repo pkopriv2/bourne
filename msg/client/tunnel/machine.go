@@ -61,7 +61,10 @@ type config struct {
 
 	AssemblerMax int
 	BuffererMax int
+	SenderMax int
 
+	RecvTimeout time.Duration
+	SendTimeout time.Duration
 	ackTimeout time.Duration
 	maxRetries int
 }
@@ -72,10 +75,33 @@ type Env struct {
 	conf  *config
 }
 
+// helper functions
 func (c *Env) Log(format string, vals ...interface{}) {
 	if !c.conf.debug {
 		return
 	}
 
 	log.Println(fmt.Sprintf("[%v] -- ", c.route) + fmt.Sprintf(format, vals...))
+}
+
+func (c *Env) recvOrTimeout(in <-chan wire.Packet) (wire.Packet, error) {
+	timer := time.NewTimer(c.conf.RecvTimeout)
+
+	select {
+	case <-timer.C:
+		return nil, NewTimeoutError("Timeout")
+	case p := <-in:
+		return p, nil
+	}
+}
+
+func (c *Env) sendOrTimeout(out chan<- wire.Packet, p wire.Packet) error {
+	timer := time.NewTimer(c.conf.SendTimeout)
+
+	select {
+	case <-timer.C:
+		return NewTimeoutError("Timeout")
+	case out<-p:
+		return nil
+	}
 }

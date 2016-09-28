@@ -1,8 +1,8 @@
 package tunnel
 
 import (
+	"fmt"
 	"math/rand"
-	"time"
 
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
@@ -37,13 +37,15 @@ func closeInit(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) error {
 	offset := uint64(rand.Uint32())
 
 	// Send: close
-	out<-wire.BuildPacket(env.route).SetClose(offset).Build()
+	if err := env.sendOrTimeout(out, wire.BuildPacket(env.route).SetClose(offset).Build()); err != nil {
+		return NewClosingError(fmt.Sprintf("Failed: send(close): %v", err.Error()))
+	}
 
 	// Receive: close, verify (drop any non close packets)
 	var p wire.Packet
 	var err error
 	for {
-		p, err = recvOrTimeout(env.conf.ackTimeout, in)
+		p, err = env.recvOrTimeout(in)
 		if err != nil || p == nil {
 			return NewClosingError("Timeout: recv(close,verify)")
 		}
@@ -64,18 +66,20 @@ func closeInit(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) error {
 	return nil
 }
 
-// Performs receiver (ie listener) close handshake: recv(close), send(close,verify), recv(verify)
+// Performs receiver (ie listener) close handshake: recv(close)[already received], send(close,verify), recv(verify)
 func closeRecv(env *Env, in <-chan wire.Packet, out chan<- wire.Packet, challenge uint64) error {
 
 	// Send: close verify
 	offset := uint64(rand.Uint32())
 
-	out<-wire.BuildPacket(env.route).SetClose(offset).SetVerify(challenge).Build()
+	if err := env.sendOrTimeout(out, wire.BuildPacket(env.route).SetClose(offset).SetVerify(challenge).Build()); err != nil {
+		return NewClosingError(fmt.Sprintf("Failed: send(close,verify): %v", err.Error()))
+	}
 
 	// Receive: verify
-	p, err := recvOrTimeout(env.conf.ackTimeout, in)
+	p, err := env.recvOrTimeout(in)
 	if err != nil {
-		return NewClosingError("Failed: receive(verify)")
+		return NewClosingError(fmt.Sprintf("Failed: receive(verify): %v", err.Error()))
 	}
 
 	if verify := p.Verify(); verify == nil || verify.Val() != offset {
@@ -83,15 +87,4 @@ func closeRecv(env *Env, in <-chan wire.Packet, out chan<- wire.Packet, challeng
 	}
 
 	return nil
-}
-
-func recvOrTimeout(timeout time.Duration, in <-chan wire.Packet) (wire.Packet, error) {
-	timer := time.NewTimer(timeout)
-
-	select {
-	case <-timer.C:
-		return nil, NewTimeoutError("Timeout")
-	case p := <-in:
-		return p, nil
-	}
 }

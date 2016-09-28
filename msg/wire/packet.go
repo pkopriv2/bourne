@@ -93,6 +93,7 @@ type Packet interface {
 	Segment() SegmentMessage
 	Error() *ProtocolError
 
+	Update() PacketBuilder
 	Return() PacketBuilder
 
 	Write(*bufio.Writer) error
@@ -145,6 +146,10 @@ type packet struct {
 	verify  NumMessage
 	segment SegmentMessage
 	err     *ProtocolError
+}
+
+func (p *packet) Update() PacketBuilder {
+	return &packetBuilder{&packet{p.route, p.open, p.close, p.verify, p.segment, p.err}}
 }
 
 func (p *packet) Empty() bool {
