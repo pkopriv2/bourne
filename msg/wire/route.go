@@ -7,6 +7,11 @@ import (
 )
 
 // A route simply describes the start and stop for a packet
+type Routable interface {
+	Route() Route
+}
+
+// A route simply describes the start and stop for a packet
 type Route interface {
 	Src() Address
 	Dst() Address

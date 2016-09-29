@@ -7,9 +7,10 @@ import (
 )
 
 func NewAssembler(env *Env, in chan wire.SegmentMessage, out chan []byte) func(utils.StateController, []interface{}) {
-
 	return func(state utils.StateController, args []interface{}) {
-		pending := NewPendingSegments(env.conf.AssemblerMax)
+		defer env.Log("Assembler closing")
+
+		pending := NewPendingSegments(env.config.AssemblerLimit)
 
 		chanIn := in
 		chanOut := out

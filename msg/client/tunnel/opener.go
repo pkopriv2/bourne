@@ -8,11 +8,12 @@ import (
 	"github.com/pkopriv2/bourne/utils"
 )
 
+// TODO: Due to quick refactor, these workers don't respond to controller signals yet.
 func NewOpenerInit(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) func(utils.StateController, []interface{}) {
 	return func(state utils.StateController, args []interface{}) {
 		var err error
 
-		for i := 0; i < env.conf.maxRetries; i++ {
+		for i := 0; i < env.config.MaxRetries; i++ {
 			if err = openInit(env, in, out); err == nil {
 				state.Next(TunnelOpened)
 				return
@@ -27,7 +28,7 @@ func NewOpenerRecv(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) func
 	return func(state utils.StateController, args []interface{}) {
 		var err error
 
-		for i := 0; i < env.conf.maxRetries; i++ {
+		for i := 0; i < env.config.MaxRetries; i++ {
 			if err = openRecv(env, in, out); err == nil {
 				state.Next(TunnelOpened)
 				return

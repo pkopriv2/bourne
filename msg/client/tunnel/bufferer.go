@@ -1,16 +1,18 @@
 package tunnel
 
 import (
-	"io"
 	"time"
 
+	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewBufferer(env *Env, in chan []byte) (io.Reader, func(utils.StateController, []interface{})) {
-	stream := NewStream(env.conf.BuffererMax)
+func NewBufferer(env *Env, in chan []byte, recvVerify chan wire.NumMessage) (*Stream, func(utils.StateController, []interface{})) {
+	stream := NewStream(env.config.BuffererLimit)
 
 	return stream, func(state utils.StateController, args []interface{}) {
+		defer env.Log("Bufferer closing")
+		defer stream.Close()
 		for {
 			var cur []byte
 			select {

@@ -7,13 +7,15 @@ import (
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewSender(env *Env, prune <-chan uint64, verify <-chan uint64, out chan<- wire.Packet) (*Stream, func(utils.StateController, []interface{})) {
-	stream := NewStream(env.conf.BuffererMax)
+func NewSender(env *Env, prune <-chan wire.NumMessage, verify <-chan wire.NumMessage, out chan<- wire.Packet) (*Stream, func(utils.StateController, []interface{})) {
+	stream := NewStream(env.config.SenderLimit)
 
 	return stream, func(state utils.StateController, args []interface{}) {
 		defer env.Log("Sender closing")
+		defer stream.Close()
 
-		in := tryReadStream(stream)
+		// wrap the stream in a channel
+		in := readStream(stream)
 
 		// track time between received verifications.
 		var timeout <-chan time.Time
@@ -21,34 +23,38 @@ func NewSender(env *Env, prune <-chan uint64, verify <-chan uint64, out chan<- w
 		var timeoutCnt int
 		timeoutReset := func() {
 			timeoutCnt = 0
-			timeoutCur = env.conf.ackTimeout
+			timeoutCur = env.config.VerifyTimeout
 			timeout = time.After(timeoutCur)
 		}
 
-		var curIn <-chan input
-		var curOut chan<- wire.Packet
+		var chanIn <-chan input
+		var chanOut chan<- wire.Packet
 
 		packet := wire.BuildPacket(env.route).Build()
 		for {
-
-			// only allow input if we don't already have a segment to deal with!
-			if packet.Segment() != nil {
-				curIn = nil
-			} else {
-				curIn = in
-			}
-
-			// verify timeouts can only occur if we've sent something!
+			// timeouts only apply if we've sent data.
 			tail, cur, _, _ := stream.Snapshot()
 			if cur.offset == tail.offset {
 				timeout = nil
+			}
+
+			// we can send any non-empty packet
+			if !packet.Empty() {
+				chanOut = out
+			}
+
+			// we can read input as long as we don't have a segment
+			if packet.Segment() != nil {
+				chanIn = nil
+			} else {
+				chanIn = in
 			}
 
 			select {
 			case <-state.Done():
 				return
 			case <-timeout:
-				if timeoutCnt++; timeoutCnt >= env.conf.maxRetries {
+				if timeoutCnt++; timeoutCnt >= env.config.MaxRetries {
 					state.Fail(NewTimeoutError("Too many ack timeouts"))
 					return
 				}
@@ -56,23 +62,23 @@ func NewSender(env *Env, prune <-chan uint64, verify <-chan uint64, out chan<- w
 				// exponential backoff
 				timeoutCur *= 2
 				timeout = time.After(timeoutCur)
-			case offset := <-prune:
-				if _, err := stream.Commit(offset); err != nil {
+			case msg := <-prune:
+				if _, err := stream.Commit(msg.Val()); err != nil {
 					state.Fail(err)
 					return
 				}
 
 				timeoutReset()
-			case offset := <-verify:
-				packet = packet.Update().SetVerify(offset).Build()
-			case input := <-curIn:
+			case msg := <-verify:
+				packet = packet.Update().SetVerify(msg.Val()).Build()
+			case input := <-chanIn:
 				if input.err != nil {
 					state.Fail(input.err)
 					return
 				}
 
 				packet = packet.Update().SetSegment(input.segment.offset, input.segment.data).Build()
-			case curOut<-packet:
+			case chanOut <- packet:
 				packet = wire.BuildPacket(env.route).Build()
 			}
 		}
@@ -81,15 +87,15 @@ func NewSender(env *Env, prune <-chan uint64, verify <-chan uint64, out chan<- w
 
 type segment struct {
 	offset uint64
-	data []byte
+	data   []byte
 }
 
 type input struct {
-	err error
+	err     error
 	segment *segment
 }
 
-func tryReadStream(stream *Stream) <-chan input {
+func readStream(stream *Stream) <-chan input {
 	data := make(chan input)
 
 	buf := make([]byte, wire.PacketMaxSegmentLength)

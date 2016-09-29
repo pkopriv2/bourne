@@ -12,90 +12,6 @@ import (
 	"github.com/pkopriv2/bourne/utils"
 )
 
-// Much of this was inspired by the following papers:
-//
-// https://tools.ietf.org/html/rfc793
-// http://www.ietf.org/proceedings/44/I-D/draft-ietf-sigtran-reliable-udp-00.txt
-// https://tools.ietf.org/html/rfc4987
-//
-// TODOS:
-//   * Make open/close more reliable.
-//   * Make open/close more secure.  (Ensure packets are properly addressed!)
-//   * Close streams independently!
-//   * Protect against offset flood.
-//   * Drop packets when recv buffer is full!!!
-//   * Better concurrency model!
-//
-
-// An active channel represents one side of a conversation between two entities.
-//
-//   * A channel reprents a full-duplex stream abstraction.
-//
-//   * A channel may be thought of as two send streams, with one sender on each
-//     side of the session.
-//
-//   * Each sender is responsible for the reliability his data stream.
-//
-//   * Senders currently implement timeout based retransmission.
-//
-//  Similar to TCP, this protocol ensures reliable, in-order delivery of data.
-//  This also allows sessions to be resumed if errors occur. However, unlike
-//  TCP, this does NOT attempt to solve the following problems:
-//
-//     * Flow/congestion control
-//     * Message integrity
-//
-//  The class implements the following state machine:
-//
-//    init-->opening-->opened-->closing-->closed
-//              |         |        |
-//              |--------->-------->----->failure
-//
-//  The state machine is implemented using compare and swaps.
-//  In other words, there is no guarantee of strong consistency
-//  with respect to the actions taken with out of date knowledge.
-//  This is done by design, as the need for strong consistency
-//  lead to deadlock where an external action block transitions
-//  indefinitely if they themselves are blocked or long running.
-//  Consistency errors are avoided by synchronized access to any
-//  shared data structures.
-//
-//  This class uses the following threading model:
-//
-//  thread1: (consumer read thread)
-//     * Makes external facing calls (e.g. Read/Close)
-//  thread2: (consumer write thread) [optional]
-//     * Makes external facing calls (e.g. Write/Flush/Close)
-//  thread3: (mux router thread)
-//     * Spawns and routes packets to the thread.  Can also initiate a close.
-//  thread4: (recv thread)
-//     * Accepts incoming data from a different channel and pushes it to consumer thread.
-//  thread5: (send thread)
-//     * Accepts incoming data from the consumer and pushes it to the target channel.
-//  thread6: (opening thread)
-//     * Performs the opening handshake.  This is a shortlived thread.
-//  thread7: (closing thread)
-//     * Performs the closing handshake and closes all resources.  This is a shortlived thread.
-//
-// Channel Opening:
-//     1. Transition to Opening.
-//     2. Perform reliable handshake
-//         * Initiator: send(open), recv(open,verify), send(verify)
-//         * Listener:  recv(open), send(open,verify), recv(verify)
-//     3. Transition to Opened.
-//
-// Channel Closing:
-//     1. Transition to Closing
-//     2. Perform close handshake
-//         * Initiator: send(close), recv(close,verify), send(verify)
-//         * Listener:  recv(close), send(close,verify), recv(verify)
-//     3. Transition to Closed.
-//
-// Channel Failure:
-//     1. Transition to Failure
-//
-// *This object is thread safe.*
-//
 const (
 	ChannelOpeningErrorCode = 100
 	ChannelClosingErrorCode = 101
@@ -116,11 +32,6 @@ const (
 	ChannelClosed
 )
 
-type Channel interface {
-	Routable
-	io.Reader
-	io.Writer
-}
 
 type channelConfig struct {
 	debug bool
@@ -286,55 +197,3 @@ func (c *channel) send(p wire.Packet) error {
 	return nil
 }
 
-func NewOpeningWorker(channel *channel, listening bool) func(utils.StateController) {
-	return func(state utils.StateController) {
-		var err error
-
-		for i := 0; i < channel.config.maxRetries; i++ {
-			if listening {
-				// err = openRecv(channel)
-			} else {
-				// err = openInit(channel)
-			}
-
-			if err == nil {
-				state.Next(ChannelOpened)
-				return
-			}
-		}
-
-		state.Fail(err)
-	}
-}
-
-func NewClosingWorker(channel *channel) func(utils.StateController) {
-	return func(state utils.StateController) {
-		var err error
-
-		if p == nil {
-			err = closeInit(channel)
-		} else {
-			err = closeRecv(c, p)
-		}
-
-		c.sendIn.Close()
-		c.recvOut.Close()
-
-		if err != nil {
-			c.Fail(err)
-			return
-		}
-
-		c.log("Successfully closed channel")
-		c.Next(ChannelClosed)
-	}
-}
-
-// Logs a message, tagging it with the channel's local endpointess.
-func (c *channel) log(format string, vals ...interface{}) {
-	if !c.config.debug {
-		return
-	}
-
-	log.Println(fmt.Sprintf("[%v] -- ", c.route) + fmt.Sprintf(format, vals...))
-}
