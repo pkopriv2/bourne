@@ -8,36 +8,36 @@ import (
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewCloserInit(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) func(utils.StateController, []interface{}) {
-	return func(state utils.StateController, args []interface{}) {
-		if err := closeInit(env, in, out); err != nil {
+func NewCloserInit(route wire.Route, env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
+	return func(state utils.Controller, args []interface{}) {
+		if err := closeInit(route, env, channels.recvMain, channels.sendMain); err != nil {
 			state.Fail(err)
 		}
 
-		state.Next(TunnelClosed)
+		state.Transition(TunnelClosed)
 	}
 }
 
-func NewCloserRecv(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) func(utils.StateController, []interface{}) {
-	return func(state utils.StateController, args []interface{}) {
+func NewCloserRecv(route wire.Route, env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
+	return func(state utils.Controller, args []interface{}) {
 		challenge := args[0].(uint64)
 
-		if err := closeRecv(env, in, out, challenge); err != nil {
+		if err := closeRecv(route, env, channels.recvMain, channels.sendMain, challenge); err != nil {
 			state.Fail(err)
 		}
 
-		state.Next(TunnelClosed)
+		state.Transition(TunnelClosed)
 	}
 }
 
 // Performs close handshake from initiator's perspective: send(close), recv(close, verify), send(verify)
-func closeInit(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) error {
+func closeInit(route wire.Route, env *tunnelEnv, in <-chan wire.Packet, out chan<- wire.Packet) error {
 
 	// generate a new random value for the handshake.
 	offset := uint64(rand.Uint32())
 
 	// Send: close
-	if err := env.sendOrTimeout(out, wire.BuildPacket(env.route).SetClose(offset).Build()); err != nil {
+	if err := sendOrTimeout(env, out, wire.BuildPacket(route).SetClose(offset).Build()); err != nil {
 		return NewClosingError(fmt.Sprintf("Failed: send(close): %v", err.Error()))
 	}
 
@@ -45,7 +45,7 @@ func closeInit(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) error {
 	var p wire.Packet
 	var err error
 	for {
-		p, err = env.recvOrTimeout(in)
+		p, err = recvOrTimeout(env, in)
 		if err != nil || p == nil {
 			return NewClosingError("Timeout: recv(close,verify)")
 		}
@@ -61,23 +61,23 @@ func closeInit(env *Env, in <-chan wire.Packet, out chan<- wire.Packet) error {
 	}
 
 	// Send: verify
-	out <- wire.BuildPacket(env.route).SetClose(p.Close().Val()).Build()
+	out <- wire.BuildPacket(route).SetClose(p.Close().Val()).Build()
 
 	return nil
 }
 
 // Performs receiver (ie listener) close handshake: recv(close)[already received], send(close,verify), recv(verify)
-func closeRecv(env *Env, in <-chan wire.Packet, out chan<- wire.Packet, challenge uint64) error {
+func closeRecv(route wire.Route, env *tunnelEnv, in <-chan wire.Packet, out chan<- wire.Packet, challenge uint64) error {
 
 	// Send: close verify
 	offset := uint64(rand.Uint32())
 
-	if err := env.sendOrTimeout(out, wire.BuildPacket(env.route).SetClose(offset).SetVerify(challenge).Build()); err != nil {
+	if err := sendOrTimeout(env, out, wire.BuildPacket(route).SetClose(offset).SetVerify(challenge).Build()); err != nil {
 		return NewClosingError(fmt.Sprintf("Failed: send(close,verify): %v", err.Error()))
 	}
 
 	// Receive: verify
-	p, err := env.recvOrTimeout(in)
+	p, err := recvOrTimeout(env, in)
 	if err != nil {
 		return NewClosingError(fmt.Sprintf("Failed: receive(verify): %v", err.Error()))
 	}

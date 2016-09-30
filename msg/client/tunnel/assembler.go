@@ -2,18 +2,17 @@ package tunnel
 
 import (
 	"github.com/emirpasic/gods/maps/treemap"
-	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewAssembler(env *Env, in chan wire.SegmentMessage, out chan []byte) func(utils.StateController, []interface{}) {
-	return func(state utils.StateController, args []interface{}) {
-		defer env.Log("Assembler closing")
+func NewRecvAssembler(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
+	return func(state utils.Controller, args []interface{}) {
+		defer env.logger.Info("Assembler closing")
 
 		pending := NewPendingSegments(env.config.AssemblerLimit)
 
-		chanIn := in
-		chanOut := out
+		chanIn := channels.assembler
+		chanOut := channels.bufferer
 
 		var curOut []byte
 		for {
@@ -22,7 +21,7 @@ func NewAssembler(env *Env, in chan wire.SegmentMessage, out chan []byte) func(u
 			}
 
 			select {
-			case <-state.Done():
+			case <-state.Close():
 				return
 			case chanOut <- curOut:
 			case curIn := <-chanIn:

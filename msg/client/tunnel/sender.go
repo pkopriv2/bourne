@@ -7,11 +7,11 @@ import (
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewSender(env *Env, prune <-chan wire.NumMessage, verify <-chan wire.NumMessage, out chan<- wire.Packet) (*Stream, func(utils.StateController, []interface{})) {
+func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*Stream, func(utils.Controller, []interface{})) {
 	stream := NewStream(env.config.SenderLimit)
 
-	return stream, func(state utils.StateController, args []interface{}) {
-		defer env.Log("Sender closing")
+	return stream, func(state utils.Controller, args []interface{}) {
+		defer env.logger.Info("Sender closing")
 		defer stream.Close()
 
 		// wrap the stream in a channel
@@ -30,7 +30,7 @@ func NewSender(env *Env, prune <-chan wire.NumMessage, verify <-chan wire.NumMes
 		var chanIn <-chan input
 		var chanOut chan<- wire.Packet
 
-		packet := wire.BuildPacket(env.route).Build()
+		packet := wire.BuildPacket(route).Build()
 		for {
 			// timeouts only apply if we've sent data.
 			tail, cur, _, _ := stream.Snapshot()
@@ -40,7 +40,7 @@ func NewSender(env *Env, prune <-chan wire.NumMessage, verify <-chan wire.NumMes
 
 			// we can send any non-empty packet
 			if !packet.Empty() {
-				chanOut = out
+				chanOut = channels.sendMain
 			}
 
 			// we can read input as long as we don't have a segment
@@ -51,7 +51,7 @@ func NewSender(env *Env, prune <-chan wire.NumMessage, verify <-chan wire.NumMes
 			}
 
 			select {
-			case <-state.Done():
+			case <-state.Close():
 				return
 			case <-timeout:
 				if timeoutCnt++; timeoutCnt >= env.config.MaxRetries {
@@ -62,14 +62,14 @@ func NewSender(env *Env, prune <-chan wire.NumMessage, verify <-chan wire.NumMes
 				// exponential backoff
 				timeoutCur *= 2
 				timeout = time.After(timeoutCur)
-			case msg := <-prune:
+			case msg := <-channels.sendVerifier:
 				if _, err := stream.Commit(msg.Val()); err != nil {
 					state.Fail(err)
 					return
 				}
 
 				timeoutReset()
-			case msg := <-verify:
+			case msg := <-channels.recvVerifier:
 				packet = packet.Update().SetVerify(msg.Val()).Build()
 			case input := <-chanIn:
 				if input.err != nil {
@@ -79,7 +79,7 @@ func NewSender(env *Env, prune <-chan wire.NumMessage, verify <-chan wire.NumMes
 
 				packet = packet.Update().SetSegment(input.segment.offset, input.segment.data).Build()
 			case chanOut <- packet:
-				packet = wire.BuildPacket(env.route).Build()
+				packet = wire.BuildPacket(route).Build()
 			}
 		}
 	}

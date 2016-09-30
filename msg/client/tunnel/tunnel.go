@@ -1,9 +1,7 @@
 package tunnel
 
 import (
-	"fmt"
 	"io"
-	"log"
 	"time"
 
 	"github.com/pkopriv2/bourne/msg/wire"
@@ -123,7 +121,7 @@ const (
 	defaultTunnelMaxRetries     = 3
 )
 
-type Config struct {
+type tunnelConfig struct {
 	Debug          bool
 	AssemblerLimit int
 	BuffererLimit  int
@@ -134,8 +132,8 @@ type Config struct {
 	MaxRetries     int
 }
 
-func NewConfig(conf utils.Config) *Config {
-	return &Config{
+func newTunnelConfig(conf utils.Config) *tunnelConfig {
+	return &tunnelConfig{
 		Debug:          conf.OptionalBool(confTunnelDebug, false),
 		AssemblerLimit: conf.OptionalInt(confTunnelAssemblerLimit, defaultTunnelAssemblerLimit),
 		BuffererLimit:  conf.OptionalInt(confTunnelBuffererLimit, defaultTunnelBuffererLimit),
@@ -146,15 +144,12 @@ func NewConfig(conf utils.Config) *Config {
 		MaxRetries:     conf.OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)}
 }
 
+// Initialization Helpers
 type TunnelOptions struct {
 	Config utils.Config
 
 	// A listening channel
 	Listening bool
-
-	// IO
-	In  <-chan wire.Packet
-	Out chan<- wire.Packet
 
 	// lifecycle handlers
 	OnInit  TunnelTransitionHandler
@@ -172,27 +167,23 @@ func defaultTunnelOptions() *TunnelOptions {
 		Config: utils.NewEmptyConfig(),
 
 		// state handlers
-		OnInit:  func(c Tunnel) error { return nil },
-		OnOpen:  func(c Tunnel) error { return nil },
-		OnClose: func(c Tunnel) error { return nil },
-		OnFail:  func(c Tunnel) error { return nil }}
+		OnInit:  func(Tunnel) error { return nil },
+		OnOpen:  func(Tunnel) error { return nil },
+		OnClose: func(Tunnel) error { return nil },
+		OnFail:  func(Tunnel) error { return nil }}
 }
 
-// Environment
-type Env struct {
-	route  wire.Route
-	config *Config
+// the general dependency injector
+type tunnelEnv struct {
+	logger utils.Logger
+	config *tunnelConfig
 }
 
-func (e *Env) Log(format string, vals ...interface{}) {
-	if !e.config.Debug {
-		return
-	}
-
-	log.Println(fmt.Sprintf("[%v] -- ", e.route) + fmt.Sprintf(format, vals...))
+func newTunnelEnv(config utils.Config) *tunnelEnv {
+	return &tunnelEnv{logger: utils.NewStandardLogger(config), config: newTunnelConfig(config)}
 }
 
-func (e *Env) recvOrTimeout(in <-chan wire.Packet) (wire.Packet, error) {
+func recvOrTimeout(e *tunnelEnv, in <-chan wire.Packet) (wire.Packet, error) {
 	timer := time.NewTimer(e.config.RecvTimeout)
 
 	select {
@@ -203,7 +194,7 @@ func (e *Env) recvOrTimeout(in <-chan wire.Packet) (wire.Packet, error) {
 	}
 }
 
-func (e *Env) sendOrTimeout(out chan<- wire.Packet, p wire.Packet) error {
+func sendOrTimeout(e *tunnelEnv, out chan<- wire.Packet, p wire.Packet) error {
 	timer := time.NewTimer(e.config.SendTimeout)
 
 	select {
@@ -214,15 +205,37 @@ func (e *Env) sendOrTimeout(out chan<- wire.Packet, p wire.Packet) error {
 	}
 }
 
-type tunnel struct {
-	env     *Env
-	machine utils.StateMachine
+// complete listing of tunnel channels.
+type tunnelChannels struct {
+	recvMain <-chan wire.Packet
+	sendMain chan<- wire.Packet
 
+	bufferer     chan []byte
+	assembler    chan wire.SegmentMessage
+	sendVerifier chan wire.NumMessage
+	recvVerifier chan wire.NumMessage
+}
+
+func newTunnelChannels(recvMain <-chan wire.Packet, sendMain chan<- wire.Packet) *tunnelChannels {
+	return &tunnelChannels{
+		recvMain:     recvMain,
+		sendMain:     sendMain,
+		bufferer:     make(chan []byte),
+		assembler:    make(chan wire.SegmentMessage),
+		sendVerifier: make(chan wire.NumMessage),
+		recvVerifier: make(chan wire.NumMessage)}
+}
+
+// the main tunnel abstraction
+type tunnel struct {
+	route      wire.Route
+	env        *tunnelEnv
+	machine    utils.StateMachine
 	streamRecv *Stream
 	streamSend *Stream
 }
 
-func NewTunnel(route wire.Route, opts ...TunnelOptionsHandler) Tunnel {
+func NewTunnel(route wire.Route, mainRecv <-chan wire.Packet, mainSend chan<- wire.Packet, opts ...TunnelOptionsHandler) Tunnel {
 	// initialize the options.
 	defaultOpts := defaultTunnelOptions()
 	for _, opt := range opts {
@@ -231,28 +244,34 @@ func NewTunnel(route wire.Route, opts ...TunnelOptionsHandler) Tunnel {
 	options := *defaultOpts
 
 	// initialize the environment
-	env := &Env{route, NewConfig(options.Config)}
+	env := newTunnelEnv(options.Config)
 
-	// create all the channels
-	chanBufferer := make(chan []byte)
-	chanAssembler := make(chan wire.SegmentMessage)
-	chanSendVerify := make(chan wire.NumMessage)
-	chanRecvVerify := make(chan wire.NumMessage)
-	chanIn := options.In
-	chanOut := options.Out
+	// initialize all the channels
+	channels := newTunnelChannels(mainRecv, mainSend)
 
-	// create all the workers instances
-	streamRecv, bufferer := NewBufferer(env, chanBufferer, chanRecvVerify)
-	assembler := NewAssembler(env, chanAssembler, chanBufferer)
-	receiver := NewReceiver(env, chanIn, chanAssembler, chanSendVerify)
-	streamSend, sender := NewSender(env, chanSendVerify, chanRecvVerify, chanOut)
+	// opening workers
+	openerInit := NewOpenerInit(route, env, channels)
+	openerRecv := NewOpenerRecv(route, env, channels)
 
+	// closing workers
+	closerInit := NewCloserInit(route, env, channels)
+	closerRecv := NewCloserRecv(route, env, channels)
+
+	// opened workers
+	streamSend, sendMain := NewSendMain(route, env, channels)
+	streamRecv, recvBuff := NewRecvBuffer(env, channels)
+	recvAssembler := NewRecvAssembler(env, channels)
+	recvMain := NewRecvMain(env, channels)
+
+	// build the machine
 	builder := utils.BuildStateMachine()
-	builder.AddState(TunnelOpeningInit, NewOpenerInit(env, chanIn, chanOut))
-	builder.AddState(TunnelOpeningRecv, NewOpenerRecv(env, chanIn, chanOut))
-	builder.AddState(TunnelOpeningRecv, bufferer, assembler, receiver, sender)
-	builder.AddState(TunnelOpened, bufferer, assembler, receiver, sender)
+	builder.AddState(TunnelOpeningInit, openerInit)
+	builder.AddState(TunnelOpeningRecv, openerRecv)
+	builder.AddState(TunnelOpened, sendMain, recvBuff, recvAssembler, recvMain)
+	builder.AddState(TunnelClosingInit, closerInit)
+	builder.AddState(TunnelClosingRecv, closerRecv)
 
+	// start the machine
 	var machine utils.StateMachine
 	if options.Listening {
 		machine = builder.Start(TunnelOpeningInit)
@@ -260,6 +279,7 @@ func NewTunnel(route wire.Route, opts ...TunnelOptionsHandler) Tunnel {
 		machine = builder.Start(TunnelOpeningRecv)
 	}
 
+	// finally, return the tunnel
 	return &tunnel{
 		env:        env,
 		machine:    machine,
@@ -268,19 +288,19 @@ func NewTunnel(route wire.Route, opts ...TunnelOptionsHandler) Tunnel {
 }
 
 func (t *tunnel) Route() wire.Route {
-	return t.env.route
+	return t.route
 }
 
-func (c *tunnel) Read(p []byte) (n int, err error) {
-	return c.streamRecv.Read(p)
+func (t *tunnel) Read(p []byte) (n int, err error) {
+	return t.streamRecv.Read(p)
 }
 
-func (c *tunnel) Write(p []byte) (n int, err error) {
-	return c.streamSend.Write(p)
+func (t *tunnel) Write(p []byte) (n int, err error) {
+	return t.streamSend.Write(p)
 }
 
-func (c *tunnel) Close() error {
-	control, err := c.machine.Control()
+func (t *tunnel) Close() error {
+	control, err := t.machine.Control()
 	if err != nil {
 		return err
 	}

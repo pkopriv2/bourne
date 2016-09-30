@@ -5,41 +5,41 @@ import (
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewReceiver(env *Env, in <-chan wire.Packet, assembler chan<- wire.SegmentMessage, verifier chan<- wire.NumMessage) func(utils.StateController, []interface{}) {
-	return func(state utils.StateController, args []interface{}) {
-		defer env.Log("Receiver closing")
+func NewRecvMain(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
+	return func(state utils.Controller, args []interface{}) {
+		defer env.logger.Info("Receiver closing")
 
 		var chanIn <-chan wire.Packet
-		var chanAssembler chan<-wire.SegmentMessage
-		var chanVerifier chan<-wire.NumMessage
+		var chanAssembler chan<- wire.SegmentMessage
+		var chanVerifier chan<- wire.NumMessage
 
 		var msgVerify wire.NumMessage
 		var msgSegment wire.SegmentMessage
 
 		for {
 			if msgVerify == nil && msgSegment == nil {
-				chanIn = in
+				chanIn = channels.recvMain
 			}
 
 			if msgVerify != nil {
-				chanVerifier = verifier
+				chanVerifier = channels.sendVerifier
 			}
 
 			if msgSegment != nil {
-				chanAssembler = assembler
+				chanAssembler = channels.assembler
 			}
 
 			select {
-			case <-state.Done():
+			case <-state.Close():
 				return
-			case chanAssembler<-msgSegment:
+			case chanAssembler <- msgSegment:
 				break
-			case chanVerifier<-msgVerify:
+			case chanVerifier <- msgVerify:
 				break
 			case p := <-chanIn:
 				// Handle: close
 				if close := p.Close(); close != nil {
-					state.Next(TunnelClosingRecv, p.Close().Val())
+					state.Transition(TunnelClosingRecv, p.Close().Val())
 					return
 				}
 

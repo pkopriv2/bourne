@@ -3,27 +3,26 @@ package tunnel
 import (
 	"time"
 
-	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewBufferer(env *Env, in chan []byte, recvVerify chan wire.NumMessage) (*Stream, func(utils.StateController, []interface{})) {
+func NewRecvBuffer(env *tunnelEnv, channels *tunnelChannels) (*Stream, func(utils.Controller, []interface{})) {
 	stream := NewStream(env.config.BuffererLimit)
 
-	return stream, func(state utils.StateController, args []interface{}) {
-		defer env.Log("Bufferer closing")
+	return stream, func(state utils.Controller, args []interface{}) {
+		defer env.logger.Info("Bufferer closing")
 		defer stream.Close()
 		for {
 			var cur []byte
 			select {
-			case <-state.Done():
+			case <-state.Close():
 				return
-			case cur = <-in:
+			case cur = <-channels.bufferer:
 			}
 
 			done, timer := utils.NewCircuitBreaker(365*24*time.Hour, func() { stream.Write(cur) })
 			select {
-			case <-state.Done():
+			case <-state.Close():
 				return
 			case <-done:
 				continue

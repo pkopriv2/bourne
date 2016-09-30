@@ -1,48 +1,56 @@
 package tunnel
 
-// func TestActiveChannel_openInitTimeout(t *testing.T) {
-// _, channel := newTestChannel(uuid.NewV4(), 0, uuid.NewV4(), 1, false)
-// defer channel.Close()
+// import (
+	// "testing"
+	// "time"
 //
-// channel.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
+	// "github.com/pkopriv2/bourne/msg/wire"
+	// uuid "github.com/satori/go.uuid"
+	// "github.com/stretchr/testify/assert"
+// )
 //
-// assert.Equal(t, ChannelFailure, channel.state.Get())
+// func TestActiveTunnel_openInitTimeout(t *testing.T) {
+	// _, tunnel := newTestTunnel(uuid.NewV4(), 0, uuid.NewV4(), 1, false)
+	// defer tunnel.Close()
+//
+	// assert.Equal(t, TunnelFailure, tunnel.state.Get())
 // }
+
 //
-// func TestActiveChannel_openRecvTimeout(t *testing.T) {
-// _, channel := newTestChannel(uuid.NewV4(), 0, uuid.NewV4(), 1, true)
-// defer channel.Close()
+// func TestActiveTunnel_openRecvTimeout(t *testing.T) {
+// _, tunnel := newTestTunnel(uuid.NewV4(), 0, uuid.NewV4(), 1, true)
+// defer tunnel.Close()
 //
 // // start the sequence, but never respond
-// channel.send(wire.BuildPacket(channel.Route().Reverse()).SetOpen(1).Build())
-// channel.state.WaitUntil(ChannelOpened | ChannelFailure)
+// tunnel.send(wire.BuildPacket(tunnel.Route().Reverse()).SetOpen(1).Build())
+// tunnel.state.WaitUntil(TunnelOpened | TunnelFailure)
 //
-// assert.Equal(t, ChannelFailure, channel.state.Get())
+// assert.Equal(t, TunnelFailure, tunnel.state.Get())
 // }
 //
-// func TestActiveChannel_openHandshake(t *testing.T) {
-// channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
-// defer channelL.Close()
-// defer channelR.Close()
+// func TestActiveTunnel_openHandshake(t *testing.T) {
+// tunnelL, tunnelR := newTestTunnelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
+// defer tunnelL.Close()
+// defer tunnelR.Close()
 //
-// channelL.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
-// channelR.state.WaitUntil(ChannelOpened | ChannelClosed | ChannelFailure)
+// tunnelL.state.WaitUntil(TunnelOpened | TunnelClosed | TunnelFailure)
+// tunnelR.state.WaitUntil(TunnelOpened | TunnelClosed | TunnelFailure)
 //
-// assert.Equal(t, ChannelOpened, channelL.state.Get())
-// assert.Equal(t, ChannelOpened, channelR.state.Get())
+// assert.Equal(t, TunnelOpened, tunnelL.state.Get())
+// assert.Equal(t, TunnelOpened, tunnelR.state.Get())
 // }
 //
 //
-// func TestActiveChannel_sendSinglePacket(t *testing.T) {
-// channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
-// defer channelR.Close()
-// defer channelL.Close()
+// func TestActiveTunnel_sendSinglePacket(t *testing.T) {
+// tunnelL, tunnelR := newTestTunnelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
+// defer tunnelR.Close()
+// defer tunnelL.Close()
 //
-// channelR.Write([]byte{1})
+// tunnelR.Write([]byte{1})
 //
 // buf := make([]byte, 1024)
 //
-// num, err := channelL.Read(buf)
+// num, err := tunnelL.Read(buf)
 // if err != nil {
 // t.Fail()
 // }
@@ -51,16 +59,16 @@ package tunnel
 // assert.Equal(t, []byte{1}, buf[:1])
 // }
 //
-// func TestActiveChannel_sendSingleStream(t *testing.T) {
-// channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
-// channelR.debug = false
-// defer channelR.Close()
-// defer channelL.Close()
+// func TestActiveTunnel_sendSingleStream(t *testing.T) {
+// tunnelL, tunnelR := newTestTunnelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
+// tunnelR.debug = false
+// defer tunnelR.Close()
+// defer tunnelL.Close()
 //
 // go func() {
 // for i := 0; i < 255; i++ {
-// if _, err := channelL.Write([]byte{uint8(i)}); err != nil {
-// channelL.log("Error writing to channel: %v", err)
+// if _, err := tunnelL.Write([]byte{uint8(i)}); err != nil {
+// tunnelL.log("Error writing to tunnel: %v", err)
 // return
 // }
 // }
@@ -79,7 +87,7 @@ package tunnel
 // break
 // }
 //
-// num, err := channelR.Read(buf[tot:])
+// num, err := tunnelR.Read(buf[tot:])
 // if err != nil {
 // t.Fail()
 // break
@@ -97,20 +105,20 @@ package tunnel
 // }
 // }
 //
-// func TestActiveChannel_sendDuplexStream(t *testing.T) {
-// channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
-// defer channelR.Close()
-// defer channelL.Close()
+// func TestActiveTunnel_sendDuplexStream(t *testing.T) {
+// tunnelL, tunnelR := newTestTunnelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
+// defer tunnelR.Close()
+// defer tunnelL.Close()
 //
 // go func() {
 // for i := 0; i < 255; i++ {
-// channelL.Write([]byte{uint8(i)})
+// tunnelL.Write([]byte{uint8(i)})
 // }
 // }()
 //
 // go func() {
 // for i := 0; i < 255; i++ {
-// channelR.Write([]byte{uint8(i)})
+// tunnelR.Write([]byte{uint8(i)})
 // }
 // }()
 //
@@ -127,7 +135,7 @@ package tunnel
 // break
 // }
 //
-// num, err := channelR.Read(bufR[totR:])
+// num, err := tunnelR.Read(bufR[totR:])
 // if err != nil {
 // t.Fail()
 // break
@@ -155,7 +163,7 @@ package tunnel
 // break
 // }
 //
-// num, err := channelL.Read(bufL[totL:])
+// num, err := tunnelL.Read(bufL[totL:])
 // if err != nil {
 // t.Fail()
 // break
@@ -173,10 +181,10 @@ package tunnel
 // }
 // }
 //
-// func TestActiveChannel_sendLargeStream(t *testing.T) {
-// channelL, channelR := newTestChannelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
-// defer channelR.Close()
-// defer channelL.Close()
+// func TestActiveTunnel_sendLargeStream(t *testing.T) {
+// tunnelL, tunnelR := newTestTunnelPair(uuid.NewV4(), 0, uuid.NewV4(), 1)
+// defer tunnelR.Close()
+// defer tunnelL.Close()
 //
 // out := make([]byte, 1024)
 // for i := 0; i < 1024; i++ {
@@ -185,7 +193,7 @@ package tunnel
 //
 // go func() {
 // for i := 0; i < 1<<10; i++ {
-// channelL.Write(out)
+// tunnelL.Write(out)
 // }
 // }()
 //
@@ -202,7 +210,7 @@ package tunnel
 // break
 // }
 //
-// num, err := channelR.Read(buf)
+// num, err := tunnelR.Read(buf)
 // if err != nil {
 // t.Fail()
 // break
@@ -217,66 +225,66 @@ package tunnel
 // assert.Equal(t, 1<<20, tot)
 // }
 //
-// func newTestChannel(memberIdL uuid.UUID, channelIdL uint64, memberIdR uuid.UUID, channelIdR uint64, listener bool) (chan wire.Packet, *channel) {
-// l := wire.NewAddress(memberIdL, channelIdL)
-// r := wire.NewAddress(memberIdR, channelIdR)
+// func newTestTunnel(memberIdL uuid.UUID, tunnelIdL uint64, memberIdR uuid.UUID, tunnelIdR uint64, listener bool) (chan wire.Packet, *tunnel) {
+	// l := wire.NewAddress(memberIdL, tunnelIdL)
+	// r := wire.NewAddress(memberIdR, tunnelIdR)
 //
-// out := make(chan wire.Packet, 1<<10)
+	// out := make(chan wire.Packet, 1<<10)
 //
-// channel := newChannel(wire.NewRemoteRoute(l, r), listener, func(opts *ChannelOptions) {
-// opts.OnClose = func(c Channel) error {
-// close(out)
-// return nil
-// }
-// opts.OnData = func(p wire.Packet) error {
-// out <- p
-// return nil
-// }
-// })
+	// tunnel := newTunnel(wire.NewRemoteRoute(l, r), listener, func(opts *TunnelOptions) {
+		// opts.OnClose = func(c Tunnel) error {
+			// close(out)
+			// return nil
+		// }
+		// opts.OnData = func(p wire.Packet) error {
+			// out <- p
+			// return nil
+		// }
+	// })
 //
-// channel.config.debug = true
-// channel.config.ackTimeout = 500 * time.Millisecond
-// channel.config.closeTimeout = 500 * time.Millisecond
-// channel.config.sendWait = 1 * time.Millisecond
-// channel.config.recvWait = 1 * time.Millisecond
+	// tunnel.config.debug = true
+	// tunnel.config.ackTimeout = 500 * time.Millisecond
+	// tunnel.config.closeTimeout = 500 * time.Millisecond
+	// tunnel.config.sendWait = 1 * time.Millisecond
+	// tunnel.config.recvWait = 1 * time.Millisecond
 //
-// return out, channel
-// }
-//
-// func newTestRouter() func(outL chan wire.Packet, outR chan wire.Packet, channelL *channel, channelR *channel) {
-// return func(outL chan wire.Packet, outR chan wire.Packet, channelL *channel, channelR *channel) {
-// for {
-// select {
-// case p, ok := <-outR:
-// if !ok {
-// return
-// }
-// channelL.log("Routing packet: %v", p)
-// if err := channelL.send(p); err != nil {
-// return
-// }
-// case p, ok := <-outL:
-// if !ok {
-// return
-// }
-// channelR.log("Routing packet: %v", p)
-// if err := channelR.send(p); err != nil {
-// return
-// }
-// }
-// }
-// }
+	// return out, tunnel
 // }
 //
-// func newTestChannelPairWithRouter(memberIdL uuid.UUID, channelIdL uint64, memberIdR uuid.UUID, channelIdR uint64, router func(chan wire.Packet, chan wire.Packet, *channel, *channel)) (*channel, *channel) {
-// outL, channelL := newTestChannel(memberIdL, channelIdL, memberIdR, channelIdR, false)
-// outR, channelR := newTestChannel(memberIdR, channelIdR, memberIdL, channelIdL, true)
-//
-// go router(outL, outR, channelL, channelR)
-//
-// return channelL, channelR
+// func newTestRouter() func(outL chan wire.Packet, outR chan wire.Packet, tunnelL *tunnel, tunnelR *tunnel) {
+	// return func(outL chan wire.Packet, outR chan wire.Packet, tunnelL *tunnel, tunnelR *tunnel) {
+		// for {
+			// select {
+			// case p, ok := <-outR:
+				// if !ok {
+					// return
+				// }
+				// tunnelL.log("Routing packet: %v", p)
+				// if err := tunnelL.send(p); err != nil {
+					// return
+				// }
+			// case p, ok := <-outL:
+				// if !ok {
+					// return
+				// }
+				// tunnelR.log("Routing packet: %v", p)
+				// if err := tunnelR.send(p); err != nil {
+					// return
+				// }
+			// }
+		// }
+	// }
 // }
 //
-// func newTestChannelPair(memberIdL uuid.UUID, channelIdL uint64, memberIdR uuid.UUID, channelIdR uint64) (*channel, *channel) {
-// return newTestChannelPairWithRouter(memberIdL, channelIdL, memberIdR, channelIdR, newTestRouter())
+// func newTestTunnelPairWithRouter(memberIdL uuid.UUID, tunnelIdL uint64, memberIdR uuid.UUID, tunnelIdR uint64, router func(chan wire.Packet, chan wire.Packet, *tunnel, *tunnel)) (*tunnel, *tunnel) {
+	// outL, tunnelL := newTestTunnel(memberIdL, tunnelIdL, memberIdR, tunnelIdR, false)
+	// outR, tunnelR := newTestTunnel(memberIdR, tunnelIdR, memberIdL, tunnelIdL, true)
+//
+	// go router(outL, outR, tunnelL, tunnelR)
+//
+	// return tunnelL, tunnelR
+// }
+//
+// func newTestTunnelPair(memberIdL uuid.UUID, tunnelIdL uint64, memberIdR uuid.UUID, tunnelIdR uint64) (*tunnel, *tunnel) {
+	// return newTestTunnelPairWithRouter(memberIdL, tunnelIdL, memberIdR, tunnelIdR, newTestRouter())
 // }

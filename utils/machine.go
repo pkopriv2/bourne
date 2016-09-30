@@ -1,9 +1,6 @@
 package utils
 
-import (
-	"fmt"
-	"sync"
-)
+import "sync"
 
 // This class serves to simplify much of the concurrency issues that arise
 // in objects that have complex lifecycles.  In objects that require more
@@ -13,64 +10,53 @@ import (
 // be managed with extreme care.  This allows authors to bind each separate
 // concurrency model with a particule state in the lifecycle.
 
-// Return
-func BuildStateMachine() StateMachineFactory {
-	return &stateMachineFactory{make(map[int]*state)}
-}
+const (
+	InitialState  = -1
+	TerminalState = -2
+	FailureState  = -3
+)
 
-// A worker is the runtime implementation of a particular state in the
-// state machine.  Each worker is maintained in its own go routine.
-// Each routine is free to create additional routines as necessary, but it
-// is their repsonsibity to ensure there are no leaks
-type Worker func(StateController, []interface{})
+// func BuildStateMachine() StateMachineFactory {
+// return &stateMachineFactory{make(map[int]*state)}
+// }
 
-type StateController interface {
-
-	// Signals to the worker that it has been requested to die.  The worker
-	// should perform any necessary cleanup and return.
-	Done() <-chan StateResult
-
-	// Signals to the stateController that the machine should transition to the given state.
-	// This will cause an item to be put on the stateController's done channel, giving it a
-	// chance to perform an necessary cleanup and die.
-	Next(int, ...interface{}) StateResult
-
-	// Signals to the stateController that an irrecoverable error has occured in a worker.
-	// This will cause an item to be put on the stateController's done channel, meaning
-	// This puts the machine into a terminally failed state.
-	Fail(error) StateResult
-}
-
-type MachineController interface {
-
-	// Signals to the worker that it has been requested to die.  The worker
-	// should perform any necessary cleanup and return.
-	Done() <-chan MachineResult
-
-	// Signals to the stateController that the machine should transition to the given state.
-	// This will cause an item to be put on the stateController's done channel, giving it a
-	// chance to perform an necessary cleanup and die.
-	Transition(int, ...interface{}) MachineResult
-
-	// Signals to the stateController that an irrecoverable error has occured in a worker.
-	// This will cause an item to be put on the stateController's done channel, meaning
-	// This puts the machine into a terminally failed state.
-	Fail(error) MachineResult
-}
-
-type StateResult struct {
-	Transition *Transition
-	Failure    error
-}
+// A worker is the runtime implementation of a particular state in the state machine.
+type Worker func(Controller, []interface{})
 
 type Transition struct {
 	Target int
 	Args   []interface{}
 }
 
-type MachineResult struct {
-	Transitions []Transition
-	Failure     error
+func Terminal() Transition {
+	return Next(TerminalState)
+}
+
+func Fail(e error) Transition {
+	return Next(FailureState, e)
+}
+
+func Next(target int, args ...interface{}) Transition {
+	return Transition{target, args}
+}
+
+type Controller interface {
+	Close() <-chan struct{}
+	Transition() chan<- Transition
+	Next(int, ...interface{}) bool
+	Fail(error) bool
+}
+
+type StateController interface {
+	Wait() <-chan Transition
+	Transition() chan<- Transition
+}
+
+type MachineController interface {
+	Current() int
+	Summary() []Transition
+	Wait() <-chan error
+	Transition() chan<- Transition
 }
 
 type StateMachineFactory interface {
@@ -79,83 +65,122 @@ type StateMachineFactory interface {
 }
 
 type StateMachine interface {
-	Control() (MachineController, error)
+	Control() MachineController
+}
+
+type wait struct {
+	inner sync.WaitGroup
+}
+
+func (w *wait) Done() {
+	w.inner.Done()
+}
+
+func (w *wait) Add() {
+	w.inner.Add(1)
+}
+
+func (w *wait) Wait() <-chan struct{} {
+	done := make(chan struct{}, 1)
+	go func() {
+		w.inner.Wait()
+		done <- struct{}{}
+	}()
+	return done
+}
+
+type workerController struct {
+	sharedWait       *wait
+	sharedTransition chan<- Transition
+
+	close chan struct{}
+}
+
+func newWorkerController(wait *wait, result chan<- Transition) *workerController {
+	return &workerController{wait, result, make(chan struct{}, 1)}
+}
+
+func (w *workerController) Done() {
+	w.sharedWait.Done()
+}
+
+func (w *workerController) Close() <-chan struct{} {
+	return w.close
+}
+
+func (w *workerController) Transition() chan<- Transition {
+	return w.sharedTransition
+}
+
+func (w *workerController) Next(target int, args ...interface{}) bool {
+	select {
+	case <-w.close:
+		return false
+	case w.sharedTransition <- Transition{target, args}:
+		return true
+	}
+}
+
+func (w *workerController) Fail(e error) bool {
+	select {
+	case <-w.close:
+		return false
+	case w.sharedTransition <- Transition{FailureState, []interface{}{e}}:
+		return true
+	}
 }
 
 type stateController struct {
-	lock sync.Mutex
-	dead bool
-
-	next chan Transition
-	fail chan error
-	done chan StateResult
-
-	children []*stateController
+	wait      *wait
+	resultIn  chan Transition
+	resultOut chan Transition
+	workers   []*workerController
 }
 
-func newRootController() *stateController {
-	return &stateController{
-		next:     make(chan Transition),
-		fail:     make(chan error),
-		done:     make(chan StateResult, 1),
-		children: make([]*stateController, 0, 1)}
+func newStateController() *stateController {
+	s := &stateController{&wait{},
+		make(chan Transition),
+		make(chan Transition, 1),
+		make([]*workerController, 0, 10)}
+
+	go func() {
+		var result Transition
+		select {
+		case <-s.wait.Wait():
+			s.resultOut <- Transition{TerminalState, nil}
+			return
+		case result = <-s.resultIn:
+		}
+
+		// broadcast the result
+		for _, w := range s.workers {
+			w.close <- struct{}{}
+		}
+
+		// wait for the workers to close
+		<-s.wait.Wait()
+
+		// finally, send the result out
+		s.resultOut <- result
+	}()
+
+	return s
 }
 
-func newChildController(parent *stateController) *stateController {
-	return &stateController{
-		next:     parent.next,
-		fail:     parent.fail,
-		done:     make(chan StateResult, 1),
-		children: make([]*stateController, 0, 1)}
+func (s *stateController) Spawn() *workerController {
+	defer s.wait.Add()
+
+	worker := newWorkerController(s.wait, s.resultIn)
+	s.workers = append(s.workers, worker)
+	return worker
 }
 
-func (m *stateController) spawn() (StateController, error) {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	if m.dead {
-		return nil, fmt.Errorf("Cannot spawn a child stateController from a dead parent")
-	}
-
-	child := newChildController(m)
-	m.children = append(m.children, child)
-	return child, nil
+func (s *stateController) Wait() <-chan Transition {
+	return s.resultOut
 }
 
-func (m *stateController) broadcast(result StateResult) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	if m.dead {
-		return fmt.Errorf("Cannot broadcast from a dead stateController")
-	}
-
-	for _, c := range m.children {
-		c.done <- result
-	}
-
-	m.dead = true
-	return nil
-}
-
-func (m *stateController) Done() <-chan StateResult {
-	return m.done
-}
-
-func (m *stateController) Next(target int, args ...interface{}) StateResult {
-	select {
-	case m.next <- Transition{target, args}:
-		return <-m.done
-	case result := <-m.done:
-		return result
-	}
-}
-
-func (m *stateController) Fail(e error) StateResult {
-	select {
-	case m.fail <- e:
-		return <-m.done
-	case result := <-m.done:
-		return result
-	}
+func (s *stateController) Transition() chan<- Transition {
+	return s.resultIn
 }
 
 type state struct {
@@ -167,48 +192,57 @@ func newState(id int, workers ...Worker) *state {
 	return &state{id, workers}
 }
 
-func (s *state) Id() int {
-	return s.id
-}
+func (s *state) run(args []interface{}) *stateController {
+	controller := newStateController()
 
-func (s *state) Run(args []interface{}) *stateController {
-	root := newRootController()
-
-	triggers := make([]chan bool, 0)
 	for _, w := range s.workers {
 		worker := w
-		trigger := make(chan bool)
-		triggers = append(triggers, trigger)
-		child, _ := root.spawn()
+		child := controller.Spawn()
 		go func() {
+			defer child.Done()
 			worker(child, args)
-			trigger <- true
 		}()
 	}
 
-	ret := CombineTriggers(triggers)
-	go func() {
-		var result StateResult
-		var returned bool
+	return controller
+}
 
-		select {
-		case returned = <-ret:
-			result = StateResult{nil, nil}
-		case target := <-root.next:
-			result = StateResult{&target, nil}
-		case failure := <-root.fail:
-			result = StateResult{nil, failure}
-		}
+type history struct {
+	sync.Mutex
+	transitions []Transition
+}
 
-		root.broadcast(result)
-		if !returned {
-			<-ret
-		}
+type machineController struct {
+	history *history
+	next chan<- Transition
+	done <-chan []Transition
+}
 
-		root.done <- result
-	}()
+func (m *machineController) Current() int {
+	summary := m.Summary()
 
-	return root
+	len := len(summary)
+	if len == 0 {
+		return TerminalState
+	}
+
+	return summary[len-1].Target
+}
+
+func (m *machineController) Summary() []Transition {
+	m.history.Lock()
+	defer m.history.Lock()
+	ret := make([]Transition, len(m.history.transitions))
+	copy(ret, m.history.transitions)
+	return ret
+}
+
+func (m *machineController) Wait() <-chan []Transition {
+	return m.done
+}
+
+func (m *machineController) Transition() chan<- Transition {
+	return m.next
 }
 
 type stateMachineFactory struct {
@@ -229,164 +263,75 @@ func (s *stateMachineFactory) Start(init int, args ...interface{}) StateMachine 
 	return newStateMachine(cop, init, args)
 }
 
-type machineController struct {
-	lock sync.Mutex
-	dead bool
-
-	curr chan int
-	next chan Transition
-	fail chan error
-	done chan MachineResult
-
-	children []*machineController
-}
-
-func newRootMachineController() *machineController {
-	return &machineController{
-		curr:     make(chan int),
-		next:     make(chan Transition),
-		fail:     make(chan error),
-		done:     make(chan MachineResult, 1),
-		children: make([]*machineController, 0, 1)}
-}
-
-func newChildMachineController(parent *machineController) *machineController {
-	return &machineController{
-		next:     parent.next,
-		fail:     parent.fail,
-		done:     make(chan MachineResult, 1),
-		children: make([]*machineController, 0, 1)}
-}
-
-func (m *machineController) spawn() (MachineController, error) {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	if m.dead {
-		return nil, fmt.Errorf("Cannot spawn a child controller from a dead parent")
-	}
-
-	child := newChildMachineController(m)
-	m.children = append(m.children, child)
-	return child, nil
-}
-
-func (m *machineController) broadcast(result MachineResult) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	if m.dead {
-		return fmt.Errorf("Cannot broadcast from a dead controller")
-	}
-
-	for _, c := range m.children {
-		c.done <- result
-	}
-
-	m.dead = true
-	return nil
-}
-
-func (m *machineController) Done() <-chan MachineResult {
-	return m.done
-}
-
-func (m *machineController) Transition(t int, args ...interface{}) MachineResult {
-	select {
-	case m.next <- Transition{t, args}:
-		return <-m.done
-	case result := <-m.done:
-		return result
-	}
-}
-
-func (m *machineController) Fail(e error) MachineResult {
-	select {
-	case m.fail <- e:
-		return <-m.done
-	case result := <-m.done:
-		return result
-	}
-}
-
 type stateMachine struct {
-	wait   sync.WaitGroup
 	states map[int]*state
-	root   *machineController
+	observers []*machineController
 }
 
-func newStateMachine(states map[int]*state, init int, args []interface{}) StateMachine {
-	m := &stateMachine{
-		states: states,
-		root:   newRootMachineController()}
-
-	m.wait.Add(1)
-	go func() {
-		defer m.wait.Done()
-
-		transitions := make([]Transition, 0, 1)
-
-		cur, ok := m.states[init]
-		if !ok {
-			ret := MachineResult{transitions, fmt.Errorf("Could not start machine. State [%v] does not exist", init)}
-			m.root.broadcast(ret)
-			m.root.done <- ret
-			return
-		}
-
-		transition := Transition{init, args}
-		transitions = append(transitions, transition)
-
-		for {
-			control := cur.Run(transition.Args)
-
-			// determine result of current worker(s).
-			var result StateResult
-			select {
-			case target := <-m.root.next:
-				result = control.Next(target.Target, target.Args...)
-				result = StateResult{&target, result.Failure}
-			case failure := <-m.root.fail:
-				control.Fail(failure)
-				result = StateResult{nil, failure}
-			case result = <-control.Done():
-			}
-
-			// handle: terminal state/failure
-			if result.Transition == nil || result.Failure != nil {
-				ret := MachineResult{transitions, result.Failure}
-				m.root.broadcast(ret)
-				m.root.done <- ret
-				return
-			}
-
-			// handle: transition
-			cur, ok = m.states[result.Transition.Target]
-			if !ok {
-				ret := MachineResult{transitions, fmt.Errorf("Illegal state transition. Target does not exist [%v]", result.Transition.Target)}
-				m.root.broadcast(ret)
-				m.root.done <- ret
-				return
-			}
-
-			transition = *result.Transition
-			transitions = append(transitions, transition)
-		}
-	}()
-
-	return m
-}
-
-func (s *stateMachine) Control() (MachineController, error) {
-	return s.root.spawn()
-}
-
-func CombineTriggers(triggers []chan bool) <-chan bool {
-	ret := make(chan bool)
-	go func() {
-		for _, t := range triggers {
-			<-t
-		}
-
-		ret <- true
-	}()
-	return ret
-}
+//
+// cur, ok := m.states[init]
+// if !ok {
+// ret := Summary{transitions, fmt.Errorf("Could not start machine. State [%v] does not exist", init)}
+// m.root.broadcast(ret)
+// m.root.done <- ret
+// return
+// }
+//
+// transition := Transition{init, args}
+// transitions = append(transitions, transition)
+//
+// for {
+// control := cur.Run(transition.Args)
+//
+// // determine result of current worker(s).
+// var result Transition
+// select {
+// case target := <-m.root.next:
+// result = control.Transition(target.Target, target.Args...)
+// result = Transition{&target, result.Failure}
+// case failure := <-m.root.fail:
+// control.Fail(failure)
+// result = Transition{nil, failure}
+// case result = <-control.Close():
+// }
+//
+// // handle: terminal state/failure
+// if result.Transition == nil || result.Failure != nil {
+// ret := Summary{transitions, result.Failure}
+// m.root.broadcast(ret)
+// m.root.done <- ret
+// return
+// }
+//
+// // handle: transition
+// cur, ok = m.states[result.Transition.Target]
+// if !ok {
+// ret := Summary{transitions, fmt.Errorf("Illegal state transition. Target does not exist [%v]", result.Transition.Target)}
+// m.root.broadcast(ret)
+// m.root.done <- ret
+// return
+// }
+//
+// transition = *result.Transition
+// transitions = append(transitions, transition)
+// }
+// }()
+//
+// return m
+// }
+//
+// func (s *stateMachine) Control() (OperatorController, error) {
+// return s.root.spawn()
+// }
+//
+// func CombineTriggers(triggers []chan bool) <-chan bool {
+// ret := make(chan bool)
+// go func() {
+// for _, t := range triggers {
+// <-t
+// }
+//
+// ret <- true
+// }()
+// return ret
+// }
