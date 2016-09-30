@@ -230,16 +230,6 @@ func (h *history) Append(t Transition) {
 	h.transitions = append(h.transitions, t)
 }
 
-// an update request that each machine controller can use to trigger transitions externally.
-type TransitionRequest struct {
-	transition Transition
-	success    chan bool
-}
-
-func newTransitionRequest(t Transition) TransitionRequest {
-	return TransitionRequest{t, make(chan bool, 1)}
-}
-
 type machineController struct {
 	sharedHistory *history
 	sharedUpdate  chan<- Transition
