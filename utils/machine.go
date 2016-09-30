@@ -23,6 +23,17 @@ func BuildStateMachine() StateMachineFactory {
 	return &stateMachineFactory{make(map[int]*state)}
 }
 
+func Terminate(machine StateMachine) {
+	c := machine.Control()
+	select {
+	case c.Transition() <- Terminal():
+	case <-c.Wait():
+		return
+	}
+
+	<-c.Wait()
+}
+
 // A worker is the runtime implementation of a particular state in the state machine.
 type Worker func(Controller, []interface{})
 
@@ -31,7 +42,7 @@ type Transition struct {
 	Args   []interface{}
 }
 
-func Terminate() Transition {
+func Terminal() Transition {
 	return State(TerminalState)
 }
 

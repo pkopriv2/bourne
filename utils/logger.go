@@ -36,19 +36,19 @@ func NewStandardLogger(c Config) Logger {
 
 func (s *standardLogger) Debug(format string, vals ...interface{}) {
 	if s.level >= Debug {
-		s.Log(format, vals)
+		s.Log(format, vals...)
 	}
 }
 
 func (s *standardLogger) Info(format string, vals ...interface{}) {
 	if s.level >= Info {
-		s.Log(format, vals)
+		s.Log(format, vals...)
 	}
 }
 
 func (s *standardLogger) Error(format string, vals ...interface{}) {
 	if s.level >= Error {
-		s.Log(format, vals)
+		s.Log(format, vals...)
 	}
 }
 

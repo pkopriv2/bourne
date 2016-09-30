@@ -2,13 +2,13 @@ package utils
 
 import "time"
 
-func NewCircuitBreaker(dur time.Duration, fn func()) (<-chan bool, <-chan time.Time) {
+func NewCircuitBreaker(dur time.Duration, fn func()) (<-chan struct{}, <-chan time.Time) {
 	timer := time.After(dur)
-	done := make(chan bool)
+	done := make(chan struct{})
 
 	go func() {
 		fn()
-		done <- true
+		done <- struct{}{}
 	}()
 
 	return done, timer

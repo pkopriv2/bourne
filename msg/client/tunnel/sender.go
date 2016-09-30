@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/pkopriv2/bourne/msg/wire"
@@ -17,15 +18,10 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 		// wrap the stream in a channel
 		in := readStream(stream)
 
-		// track time between received verifications.
+		// track time between send verifications.
 		var timeout <-chan time.Time
 		var timeoutCur time.Duration
 		var timeoutCnt int
-		timeoutReset := func() {
-			timeoutCnt = 0
-			timeoutCur = env.config.VerifyTimeout
-			timeout = time.After(timeoutCur)
-		}
 
 		var chanIn <-chan input
 		var chanOut chan<- wire.Packet
@@ -44,10 +40,10 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 			}
 
 			// we can read input as long as we don't have a segment
-			if packet.Segment() != nil {
-				chanIn = nil
-			} else {
+			if packet.Segment() == nil {
 				chanIn = in
+			} else {
+				chanIn = nil
 			}
 
 			select {
@@ -67,8 +63,11 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 					state.Fail(err)
 					return
 				}
+				fmt.Println(stream.Data())
 
-				timeoutReset()
+				timeoutCnt = 0
+				timeoutCur = env.config.VerifyTimeout
+				timeout = time.After(timeoutCur)
 			case msg := <-channels.recvVerifier:
 				packet = packet.Update().SetVerify(msg.Val()).Build()
 			case input := <-chanIn:

@@ -225,6 +225,10 @@ func (n *numMessage) Val() uint64 {
 	return n.val
 }
 
+func NewNumMessage(i uint64) NumMessage {
+	return &numMessage{i}
+}
+
 type segmentMessage struct {
 	offset uint64
 	data   []byte
@@ -236,6 +240,10 @@ func (s *segmentMessage) Offset() uint64 {
 
 func (s *segmentMessage) Data() []byte {
 	return s.data
+}
+
+func NewSegmentMessage(offset uint64, data []byte) SegmentMessage {
+	return &segmentMessage{offset, data}
 }
 
 type errorMessage struct {

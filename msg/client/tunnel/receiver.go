@@ -19,14 +19,20 @@ func NewRecvMain(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller
 		for {
 			if msgVerify == nil && msgSegment == nil {
 				chanIn = channels.recvMain
+			} else {
+				chanIn = nil
 			}
 
 			if msgVerify != nil {
 				chanVerifier = channels.sendVerifier
+			} else {
+				chanVerifier = nil
 			}
 
 			if msgSegment != nil {
 				chanAssembler = channels.assembler
+			} else {
+				chanAssembler = nil
 			}
 
 			select {

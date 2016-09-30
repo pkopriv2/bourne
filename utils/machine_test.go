@@ -125,7 +125,7 @@ func TestStateMachine_SingleState(t *testing.T) {
 
 	c := machine.Control()
 	assert.Nil(t, <-c.Wait())
-	assert.Equal(t, []Transition{Transition{1, []interface{}{"args"}}, Terminate()}, c.Summary())
+	assert.Equal(t, []Transition{Transition{1, []interface{}{"args"}}, Terminal()}, c.Summary())
 }
 
 func TestStateMachine_MultiState(t *testing.T) {
@@ -148,7 +148,7 @@ func TestStateMachine_MultiState(t *testing.T) {
 		Transition{1, []interface{}{"1"}},
 		Transition{2, []interface{}{"2"}},
 		Transition{3, []interface{}{"3"}},
-		Terminate()}, c.Summary())
+		Terminal()}, c.Summary())
 }
 
 func TestStateMachine_ExternalTransition(t *testing.T) {
@@ -180,7 +180,7 @@ func TestStateMachine_ExternalTransition(t *testing.T) {
 	assert.Equal(t, []Transition{
 		State(1),
 		State(3),
-		Terminate()}, c.Summary())
+		Terminal()}, c.Summary())
 }
 
 func TestStateMachine_ExternalFailure(t *testing.T) {

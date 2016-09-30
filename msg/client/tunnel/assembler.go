@@ -11,24 +11,23 @@ func NewRecvAssembler(env *tunnelEnv, channels *tunnelChannels) func(utils.Contr
 
 		pending := NewPendingSegments(env.config.AssemblerLimit)
 
-		chanIn := channels.assembler
-		chanOut := channels.bufferer
-
-		var curOut []byte
+		var outChan chan<- []byte
+		var outSegment []byte
 		for {
-			if curOut == nil {
-				chanOut = nil
+			outSegment = pending.Next()
+			if outSegment == nil {
+				outChan = nil
+			} else {
+				outChan = channels.bufferer
 			}
 
 			select {
 			case <-state.Close():
 				return
-			case chanOut <- curOut:
-			case curIn := <-chanIn:
+			case outChan <- outSegment:
+			case curIn := <-channels.assembler:
 				pending.Add(curIn.Offset(), curIn.Data())
 			}
-
-			curOut = pending.Next()
 		}
 	}
 }
@@ -60,26 +59,43 @@ func NewPendingSegments(limit int) *PendingSegments {
 		limit:  limit}
 }
 
+func (a *PendingSegments) Take() []byte {
+	tmp := make([]byte, 0, 4096)
+	for cur := a.Next(); cur != nil; cur = a.Next() {
+		tmp = append(tmp, cur...)
+	}
+
+	if len(tmp) == 0 {
+		return nil
+	}
+
+	return tmp
+}
+
 func (a *PendingSegments) Next() []byte {
 	for {
 		k, v := a.sorted.Min()
 		if k == nil || v == nil {
-			panic("Cannot have nil keys or values")
+			return nil
 		}
 
 		// Handle: Future segment
 		offset, data := k.(uint64), v.([]byte)
 		if offset > a.offset {
-			break
+			return nil
 		}
 
 		// Handle: Past segment
 		a.sorted.Remove(offset)
-		if a.offset > offset+uint64(len(data)) {
+		if a.offset-offset > uint64(len(data)) {
 			continue
 		}
 
 		data = data[a.offset-offset:]
+		if len(data) == 0 {
+			return nil
+		}
+
 		a.offset += uint64(len(data))
 		return data
 	}

@@ -11,7 +11,6 @@ func NewRecvBuffer(env *tunnelEnv, channels *tunnelChannels) (*Stream, func(util
 
 	return stream, func(state utils.Controller, args []interface{}) {
 		defer env.logger.Info("Bufferer closing")
-		defer stream.Close()
 		for {
 			var cur []byte
 			select {
@@ -27,7 +26,7 @@ func NewRecvBuffer(env *tunnelEnv, channels *tunnelChannels) (*Stream, func(util
 			case <-done:
 				continue
 			case <-timer:
-				state.Fail(NewTimeoutError("BUFFERER(Timeout delivering data)"))
+				state.Fail(NewTimeoutError("RecvBuffer(Timeout delivering data)"))
 				return
 			}
 		}
