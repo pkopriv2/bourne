@@ -15,7 +15,7 @@ func NewOpenerInit(route wire.Route, env *tunnelEnv, channels *tunnelChannels) f
 
 		for i := 0; i < env.config.MaxRetries; i++ {
 			if err = openInit(route, env, channels.recvMain, channels.sendMain); err == nil {
-				state.Transition(TunnelOpened)
+				state.Next(TunnelOpened)
 				return
 			}
 		}
@@ -30,7 +30,7 @@ func NewOpenerRecv(route wire.Route, env *tunnelEnv, channels *tunnelChannels) f
 
 		for i := 0; i < env.config.MaxRetries; i++ {
 			if err = openRecv(route, env, channels.recvMain, channels.sendMain); err == nil {
-				state.Transition(TunnelOpened)
+				state.Next(TunnelOpened)
 				return
 			}
 		}

@@ -14,7 +14,7 @@ func NewCloserInit(route wire.Route, env *tunnelEnv, channels *tunnelChannels) f
 			state.Fail(err)
 		}
 
-		state.Transition(TunnelClosed)
+		state.Next(TunnelClosed)
 	}
 }
 
@@ -26,7 +26,7 @@ func NewCloserRecv(route wire.Route, env *tunnelEnv, channels *tunnelChannels) f
 			state.Fail(err)
 		}
 
-		state.Transition(TunnelClosed)
+		state.Next(TunnelClosed)
 	}
 }
 

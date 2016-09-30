@@ -19,9 +19,9 @@ const (
 	FailureState  = -3
 )
 
-// func BuildStateMachine() StateMachineFactory {
-// return &stateMachineFactory{make(map[int]*state)}
-// }
+func BuildStateMachine() StateMachineFactory {
+	return &stateMachineFactory{make(map[int]*state)}
+}
 
 // A worker is the runtime implementation of a particular state in the state machine.
 type Worker func(Controller, []interface{})
@@ -31,15 +31,15 @@ type Transition struct {
 	Args   []interface{}
 }
 
-func Terminal() Transition {
-	return Next(TerminalState)
+func Terminate() Transition {
+	return State(TerminalState)
 }
 
 func Fail(e error) Transition {
-	return Next(FailureState, e)
+	return State(FailureState, e)
 }
 
-func Next(target int, args ...interface{}) Transition {
+func State(target int, args ...interface{}) Transition {
 	return Transition{target, args}
 }
 
@@ -230,15 +230,38 @@ func (h *history) Append(t Transition) {
 	h.transitions = append(h.transitions, t)
 }
 
+// an update request that each machine controller can use to trigger transitions externally.
+type TransitionRequest struct {
+	transition Transition
+	success    chan bool
+}
+
+func newTransitionRequest(t Transition) TransitionRequest {
+	return TransitionRequest{t, make(chan bool, 1)}
+}
+
 type machineController struct {
 	sharedHistory *history
 	sharedUpdate  chan<- Transition
 
-	result chan []Transition
+	done chan []Transition
+	wait chan error
 }
 
 func newMachineController(history *history, update chan<- Transition) *machineController {
-	return &machineController{history, update, make(chan []Transition, 1)}
+	m := &machineController{history, update, make(chan []Transition, 1), make(chan error, 1)}
+	go func() {
+		select {
+		case <-m.done:
+		}
+
+		m.wait <- extractResult(m.sharedHistory.Get())
+	}()
+	return m
+}
+
+func (m *machineController) Summary() []Transition {
+	return m.sharedHistory.Get()
 }
 
 func (m *machineController) Current() int {
@@ -246,37 +269,14 @@ func (m *machineController) Current() int {
 
 	len := len(summary)
 	if len == 0 {
-		return TerminalState
+		return InitialState
 	}
 
 	return summary[len-1].Target
 }
 
-func (m *machineController) Summary() []Transition {
-	return m.sharedHistory.Get()
-}
-
 func (m *machineController) Wait() <-chan error {
-
-	ret := make(chan error)
-	go func() {
-		select {
-		case <-m.result:
-		}
-
-		history := m.sharedHistory.Get()
-		if len(history) == 0 { // is it even possible to be empty?
-			ret <- nil
-		}
-
-		last := history[len(history)-1]
-		if last.Target != FailureState {
-			ret <- nil
-		}
-
-		ret <- last.Args[0].(error)
-	}()
-	return ret
+	return m.wait
 }
 
 func (m *machineController) Transition() chan<- Transition {
@@ -303,7 +303,7 @@ func (s *stateMachineFactory) Start(init int, args ...interface{}) StateMachine 
 
 type stateMachine struct {
 	lock        sync.Mutex
-	done		bool
+	done        bool
 	states      map[int]*state
 	controllers []*machineController
 
@@ -322,10 +322,11 @@ func newStateMachine(states map[int]*state, init int, args []interface{}) *state
 		cur, ok := s.states[init]
 		if !ok {
 			s.sharedHistory.Append(Fail(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
-			s.Broadcast(s.sharedHistory.Get())
+			s.broadcast(s.sharedHistory.Get())
 			return
 		}
 
+		s.sharedHistory.Append(State(init, args...))
 		for {
 			control := cur.run(args)
 
@@ -333,27 +334,40 @@ func newStateMachine(states map[int]*state, init int, args []interface{}) *state
 			select {
 			case next = <-control.Wait():
 			case next = <-s.sharedUpdate:
+				select {
+				case tmp := <-control.Wait():
+					if tmp.Target == FailureState {
+						next = tmp
+					}
+				case control.Transition() <- next:
+					tmp := <-control.Wait()
+					if tmp.Target == FailureState {
+						next = tmp
+					}
+				}
 			}
 
-			s.sharedHistory.Append(next)
 			if next.Target == FailureState || next.Target == TerminalState {
-				s.Broadcast(s.sharedHistory.Get())
+				s.sharedHistory.Append(next)
+				s.broadcast(s.sharedHistory.Get())
 				return
 			}
 
 			cur, ok = s.states[next.Target]
 			if !ok {
-				s.sharedHistory.Append(Fail(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
-				s.Broadcast(s.sharedHistory.Get())
+				s.sharedHistory.Append(Fail(fmt.Errorf("State [%v] does not exist", next.Target)))
+				s.broadcast(s.sharedHistory.Get())
 				return
 			}
+
+			s.sharedHistory.Append(next)
 		}
 	}()
 
 	return s
 }
 
-func (s *stateMachine) Broadcast(result []Transition) {
+func (s *stateMachine) broadcast(result []Transition) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if s.done {
@@ -362,14 +376,33 @@ func (s *stateMachine) Broadcast(result []Transition) {
 
 	s.done = true
 	for _, c := range s.controllers {
-		c.result <- result
+		c.done <- result
 	}
 }
 
 func (s *stateMachine) Control() MachineController {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
 	ret := newMachineController(s.sharedHistory, s.sharedUpdate)
 	s.controllers = append(s.controllers, ret)
+
+	if s.done {
+		ret.done <- s.sharedHistory.Get()
+	}
+
 	return ret
+}
+
+func extractResult(transitions []Transition) error {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	last := transitions[len(transitions)-1]
+	if last.Target != FailureState {
+		return nil
+	}
+
+	return last.Args[0].(error)
 }

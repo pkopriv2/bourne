@@ -39,7 +39,7 @@ func NewRecvMain(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller
 			case p := <-chanIn:
 				// Handle: close
 				if close := p.Close(); close != nil {
-					state.Transition(TunnelClosingRecv, p.Close().Val())
+					state.Next(TunnelClosingRecv, p.Close().Val())
 					return
 				}
 

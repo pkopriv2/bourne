@@ -300,11 +300,12 @@ func (t *tunnel) Write(p []byte) (n int, err error) {
 }
 
 func (t *tunnel) Close() error {
-	control, err := t.machine.Control()
-	if err != nil {
+	control := t.machine.Control()
+
+	select {
+	case control.Transition() <- utils.State(TunnelClosingInit):
+		return nil
+	case err := <-control.Wait():
 		return err
 	}
-
-	control.Transition(TunnelClosingInit)
-	return nil
 }
