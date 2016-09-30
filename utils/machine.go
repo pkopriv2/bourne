@@ -208,14 +208,34 @@ func (s *state) run(args []interface{}) *stateController {
 }
 
 type history struct {
-	sync.Mutex
+	lock sync.Mutex
 	transitions []Transition
+}
+
+func (h* history) Get() []Transition {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+
+	ret := make([]Transition, len(h.transitions))
+	copy(ret, h.transitions)
+	return ret
+}
+
+
+func (h* history) Append(t Transition) {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	h.transitions = append(h.transitions, t)
 }
 
 type machineController struct {
 	history *history
-	next chan<- Transition
-	done <-chan []Transition
+	next    chan<- Transition
+	done    chan []Transition
+}
+
+func newMachineController(history *history, next chan<- Transition) *machineController {
+	return &machineController{history, next, make(chan []Transition, 1)}
 }
 
 func (m *machineController) Current() int {
@@ -230,11 +250,7 @@ func (m *machineController) Current() int {
 }
 
 func (m *machineController) Summary() []Transition {
-	m.history.Lock()
-	defer m.history.Lock()
-	ret := make([]Transition, len(m.history.transitions))
-	copy(ret, m.history.transitions)
-	return ret
+	return m.history.Get()
 }
 
 func (m *machineController) Wait() <-chan []Transition {
@@ -264,8 +280,42 @@ func (s *stateMachineFactory) Start(init int, args ...interface{}) StateMachine 
 }
 
 type stateMachine struct {
-	states map[int]*state
-	observers []*machineController
+	lock        sync.Mutex
+	states      map[int]*state
+	history     *history
+	controllers []*machineController
+	result      chan Transition
+}
+
+func newStateMachine(states map[int]*state, init int, args []interface{}) *stateMachine {
+	s := &stateMachine{
+		states:      states,
+		history:     &history{transitions: make([]Transition, 0, 1)},
+		controllers: make([]*machineController,0,1),
+		result:      make(chan Transition)}
+
+	go func() {
+		cur, ok := s.states[init]
+		if !ok {
+			s.history.Append(Fail(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
+
+			m.root.broadcast(ret)
+			m.root.done <- ret
+			return
+		}
+
+	}()
+
+	return s
+}
+
+func (s *stateMachine) Control() MachineController {
+	s.lock.Lock()
+	defer s.lock.UnLock()
+
+	ret := newMachineController(s.history, s.result)
+	s.controllers = append(s.controllers, ret)
+	return ret
 }
 
 //
