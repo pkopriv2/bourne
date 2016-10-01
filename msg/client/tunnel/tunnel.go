@@ -207,7 +207,7 @@ func sendOrTimeout(e *tunnelEnv, out chan<- wire.Packet, p wire.Packet) error {
 
 // complete listing of tunnel channels.
 type tunnelChannels struct {
-	recvMain <-chan wire.Packet
+	recvMain chan wire.Packet
 	sendMain chan<- wire.Packet
 
 	bufferer     chan []byte
@@ -216,10 +216,10 @@ type tunnelChannels struct {
 	recvVerifier chan wire.NumMessage
 }
 
-func newTunnelChannels(recvMain <-chan wire.Packet, sendMain chan<- wire.Packet) *tunnelChannels {
+func newTunnelChannels(sendMain chan<- wire.Packet) *tunnelChannels {
 	return &tunnelChannels{
-		recvMain:     recvMain,
 		sendMain:     sendMain,
+		recvMain:     make(chan wire.Packet),
 		bufferer:     make(chan []byte),
 		assembler:    make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
@@ -228,26 +228,29 @@ func newTunnelChannels(recvMain <-chan wire.Packet, sendMain chan<- wire.Packet)
 
 // the main tunnel abstraction
 type tunnel struct {
-	route      wire.Route
-	env        *tunnelEnv
-	machine    utils.StateMachine
+	route    wire.Route
+	env      *tunnelEnv
+	channels *tunnelChannels
+	machine  utils.StateMachine
+
 	streamRecv *Stream
 	streamSend *Stream
 }
 
-func NewTunnel(route wire.Route, mainRecv <-chan wire.Packet, mainSend chan<- wire.Packet, opts ...TunnelOptionsHandler) Tunnel {
+func NewTunnel(route wire.Route, mainSend chan<- wire.Packet, opts ...TunnelOptionsHandler) Tunnel {
 	// initialize the options.
 	defaultOpts := defaultTunnelOptions()
 	for _, opt := range opts {
 		opt(defaultOpts)
 	}
+
 	options := *defaultOpts
 
 	// initialize the environment
 	env := newTunnelEnv(options.Config)
 
 	// initialize all the channels
-	channels := newTunnelChannels(mainRecv, mainSend)
+	channels := newTunnelChannels(mainSend)
 
 	// opening workers
 	openerInit := NewOpenerInit(route, env, channels)
@@ -259,15 +262,15 @@ func NewTunnel(route wire.Route, mainRecv <-chan wire.Packet, mainSend chan<- wi
 
 	// opened workers
 	streamSend, sendMain := NewSendMain(route, env, channels)
-	streamRecv, recvBuff := NewRecvBuffer(env, channels)
-	recvAssembler := NewRecvAssembler(env, channels)
 	recvMain := NewRecvMain(env, channels)
+	recvAssembler := NewRecvAssembler(env, channels)
+	streamRecv, recvBuff := NewRecvBuffer(env, channels)
 
 	// build the machine
 	builder := utils.BuildStateMachine()
 	builder.AddState(TunnelOpeningInit, openerInit)
 	builder.AddState(TunnelOpeningRecv, openerRecv)
-	builder.AddState(TunnelOpened, sendMain, recvBuff, recvAssembler, recvMain)
+	builder.AddState(TunnelOpened, sendMain, recvMain, recvAssembler, recvBuff)
 	builder.AddState(TunnelClosingInit, closerInit)
 	builder.AddState(TunnelClosingRecv, closerRecv)
 
@@ -279,10 +282,11 @@ func NewTunnel(route wire.Route, mainRecv <-chan wire.Packet, mainSend chan<- wi
 		machine = builder.Start(TunnelOpeningRecv)
 	}
 
-	// finally, return the tunnel
 	return &tunnel{
+		route:      route,
 		env:        env,
 		machine:    machine,
+		channels:   channels,
 		streamRecv: streamRecv,
 		streamSend: streamSend}
 }

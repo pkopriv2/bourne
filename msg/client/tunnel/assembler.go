@@ -2,29 +2,50 @@ package tunnel
 
 import (
 	"github.com/emirpasic/gods/maps/treemap"
+	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
 func NewRecvAssembler(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
+	logger := env.logger
+
 	return func(state utils.Controller, args []interface{}) {
-		defer env.logger.Info("Assembler closing")
+		logger.Debug("RecvAssembler Opening")
+		defer logger.Debug("RecvAssembler Opening")
 
 		pending := NewPendingSegments(env.config.AssemblerLimit)
 
-		var outChan chan<- []byte
+		var chanRecvBuffer chan<- []byte
+		var chanRecvVerify chan<- wire.NumMessage
+
 		var outSegment []byte
+		var outVerify wire.NumMessage
 		for {
-			outSegment = pending.Next()
-			if outSegment == nil {
-				outChan = nil
+			if outSegment == nil && outVerify == nil {
+				if outSegment = pending.Take(); outSegment != nil {
+					outVerify = wire.NewNumMessage(pending.Offset())
+				}
+			}
+
+			if outSegment != nil {
+				chanRecvBuffer = channels.bufferer
 			} else {
-				outChan = channels.bufferer
+				chanRecvBuffer = nil
+			}
+
+			if outVerify != nil {
+				chanRecvVerify = channels.recvVerifier
+			} else {
+				chanRecvVerify = nil
 			}
 
 			select {
 			case <-state.Close():
 				return
-			case outChan <- outSegment:
+			case chanRecvBuffer <- outSegment:
+				outSegment = nil
+			case chanRecvVerify <- outVerify:
+				outVerify = nil
 			case curIn := <-channels.assembler:
 				pending.Add(curIn.Offset(), curIn.Data())
 			}
@@ -57,6 +78,10 @@ func NewPendingSegments(limit int) *PendingSegments {
 	return &PendingSegments{
 		sorted: treemap.NewWith(OffsetComparator),
 		limit:  limit}
+}
+
+func (a *PendingSegments) Offset() uint64 {
+	return a.offset
 }
 
 func (a *PendingSegments) Take() []byte {

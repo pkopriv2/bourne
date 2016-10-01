@@ -10,9 +10,11 @@ func NewRecvBuffer(env *tunnelEnv, channels *tunnelChannels) (*Stream, func(util
 	stream := NewStream(env.config.BuffererLimit)
 
 	return stream, func(state utils.Controller, args []interface{}) {
-		defer env.logger.Info("Bufferer closing")
+		env.logger.Debug("RecvBuffer Opened")
+		defer env.logger.Info("RecvBuffer Closed")
+
+		var cur []byte
 		for {
-			var cur []byte
 			select {
 			case <-state.Close():
 				return

@@ -14,7 +14,7 @@ import (
 
 const (
 	PacketVersion          = 0
-	PacketMaxSegmentLength = 1 << 12
+	PacketMaxSegmentLength = 1 << 15
 )
 
 var (

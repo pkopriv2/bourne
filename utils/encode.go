@@ -23,8 +23,7 @@ func (e OverflowError) Error() string {
 }
 
 // A simple encoding interface that normalizes the most common, low-level
-// is that once an encoding error occurs, this interface guarantees no
-// future side effects.
+// message encoding.
 type MessageWriter interface {
 	PutUUID(uuid.UUID)
 	PutUint64(uint64)

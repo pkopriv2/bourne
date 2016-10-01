@@ -10,6 +10,62 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestSendMain_Timeout(t *testing.T) {
+	env := newTunnelEnv(utils.NewEmptyConfig())
+	env.config.VerifyTimeout = time.Millisecond
+
+	sendMain := make(chan wire.Packet)
+	channels := &tunnelChannels{
+		recvVerifier: make(chan wire.NumMessage),
+		sendVerifier: make(chan wire.NumMessage),
+		sendMain:     sendMain}
+
+	l := wire.NewAddress(uuid.NewV4(), 0)
+	r := wire.NewAddress(uuid.NewV4(), 0)
+	route := wire.NewRemoteRoute(l, r)
+
+	stream, worker := NewSendMain(route, env, channels)
+
+	builder := utils.BuildStateMachine()
+	builder.AddState(1, worker)
+
+	machine := builder.Start(1)
+	defer utils.Terminate(machine)
+
+	stream.Write([]byte{1})
+	<-sendMain
+	assert.Error(t, <-machine.Control().Wait())
+}
+
+func TestSendMain_SingleTimeout(t *testing.T) {
+	env := newTunnelEnv(utils.NewEmptyConfig())
+	env.config.VerifyTimeout = 100 * time.Millisecond
+
+	sendMain := make(chan wire.Packet)
+	channels := &tunnelChannels{
+		recvVerifier: make(chan wire.NumMessage),
+		sendVerifier: make(chan wire.NumMessage),
+		sendMain:     sendMain}
+
+	l := wire.NewAddress(uuid.NewV4(), 0)
+	r := wire.NewAddress(uuid.NewV4(), 0)
+	route := wire.NewRemoteRoute(l, r)
+
+	stream, worker := NewSendMain(route, env, channels)
+
+	builder := utils.BuildStateMachine()
+	builder.AddState(1, worker)
+
+	machine := builder.Start(1)
+	defer utils.Terminate(machine)
+
+	stream.Write([]byte{1})
+
+	p1 := <-sendMain
+	p2 := <-sendMain
+	assert.Equal(t, p1, p2)
+}
+
 func TestSendMain_SingleSendVerify(t *testing.T) {
 	env := newTunnelEnv(utils.NewEmptyConfig())
 
@@ -34,7 +90,8 @@ func TestSendMain_SingleSendVerify(t *testing.T) {
 	defer utils.Terminate(machine)
 
 	assert.Equal(t, []byte{1}, stream.Data())
-	channels.sendVerifier <- wire.NewNumMessage(0)
+	channels.sendVerifier <- wire.NewNumMessage(1)
+
 	time.Sleep(10 * time.Millisecond)
 	assert.Equal(t, []byte{}, stream.Data())
 }

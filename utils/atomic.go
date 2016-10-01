@@ -52,7 +52,6 @@ func (v *AtomicRef) Update(fn func(unsafe.Pointer) interface{}) unsafe.Pointer {
 	}
 }
 
-
 type AtomicBool int32
 
 func NewAtomicBool() *AtomicBool {

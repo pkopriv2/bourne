@@ -1,7 +1,6 @@
 package tunnel
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/pkopriv2/bourne/msg/wire"
@@ -12,8 +11,8 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 	stream := NewStream(env.config.SenderLimit)
 
 	return stream, func(state utils.Controller, args []interface{}) {
-		defer env.logger.Info("Sender closing")
-		defer stream.Close()
+		env.logger.Debug("SendMain Starting")
+		defer env.logger.Info("SendMain Closing")
 
 		// wrap the stream in a channel
 		in := readStream(stream)
@@ -23,24 +22,33 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 		var timeoutCur time.Duration
 		var timeoutCnt int
 
+		resetTimeout := func() {
+			timeoutCnt = 0
+			timeoutCur = env.config.VerifyTimeout
+			timeout = time.After(timeoutCur)
+		}
+
 		var chanIn <-chan input
 		var chanOut chan<- wire.Packet
 
 		packet := wire.BuildPacket(route).Build()
 		for {
+
 			// timeouts only apply if we've sent data.
-			tail, cur, _, _ := stream.Snapshot()
-			if cur.offset == tail.offset {
+			tail, _, head, _ := stream.Snapshot()
+			if head.offset == tail.offset {
 				timeout = nil
 			}
 
 			// we can send any non-empty packet
 			if !packet.Empty() {
 				chanOut = channels.sendMain
+			} else {
+				chanOut = nil
 			}
 
 			// we can read input as long as we don't have a segment
-			if packet.Segment() == nil {
+			if segment := packet.Segment(); segment == nil {
 				chanIn = in
 			} else {
 				chanIn = nil
@@ -50,6 +58,7 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 			case <-state.Close():
 				return
 			case <-timeout:
+				stream.Reset()
 				if timeoutCnt++; timeoutCnt >= env.config.MaxRetries {
 					state.Fail(NewTimeoutError("Too many ack timeouts"))
 					return
@@ -63,11 +72,8 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 					state.Fail(err)
 					return
 				}
-				fmt.Println(stream.Data())
 
-				timeoutCnt = 0
-				timeoutCur = env.config.VerifyTimeout
-				timeout = time.After(timeoutCur)
+				resetTimeout()
 			case msg := <-channels.recvVerifier:
 				packet = packet.Update().SetVerify(msg.Val()).Build()
 			case input := <-chanIn:
@@ -79,6 +85,9 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 				packet = packet.Update().SetSegment(input.segment.offset, input.segment.data).Build()
 			case chanOut <- packet:
 				packet = wire.BuildPacket(route).Build()
+				if timeout == nil {
+					resetTimeout()
+				}
 			}
 		}
 	}
@@ -106,7 +115,15 @@ func readStream(stream *Stream) <-chan input {
 				return
 			}
 
-			data <- input{segment: &segment{ref.offset, buf[:num]}}
+			if num == 0 {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+
+			tmp := make([]byte, num)
+			copy(tmp, buf[:num])
+
+			data <- input{segment: &segment{ref.offset, tmp}}
 		}
 	}()
 

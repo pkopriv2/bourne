@@ -6,7 +6,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// A route simply describes the start and stop for a packet
 type Routable interface {
 	Route() Route
 }
@@ -19,7 +18,7 @@ type Route interface {
 	BuildPacket() PacketBuilder
 }
 
-// An endpoint is the tuple necessary to identify one side of a route
+// An address is the tuple necessary to identify one side of a route
 type Address interface {
 	MemberId() uuid.UUID
 	ChannelId() uint64

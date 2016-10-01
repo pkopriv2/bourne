@@ -12,7 +12,7 @@ var (
 )
 
 const (
-	StreamLockWait = 5 * time.Millisecond
+	StreamLockWait = 1 * time.Millisecond
 )
 
 // A ref represents a position within a stream at particular moment in time.

@@ -7,7 +7,8 @@ import (
 
 func NewRecvMain(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
 	return func(state utils.Controller, args []interface{}) {
-		defer env.logger.Info("Receiver closing")
+		env.logger.Debug("ReceiveMain Starting")
+		defer env.logger.Debug("ReceiveMain Closing")
 
 		var chanIn <-chan wire.Packet
 		var chanAssembler chan<- wire.SegmentMessage
@@ -39,8 +40,10 @@ func NewRecvMain(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller
 			case <-state.Close():
 				return
 			case chanAssembler <- msgSegment:
+				msgSegment = nil
 				break
 			case chanVerifier <- msgVerify:
+				msgVerify = nil
 				break
 			case p := <-chanIn:
 				// Handle: close

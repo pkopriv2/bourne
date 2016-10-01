@@ -11,8 +11,9 @@ import (
 // TODO: Due to quick refactor, these workers don't respond to controller signals yet.
 func NewOpenerInit(route wire.Route, env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
 	return func(state utils.Controller, args []interface{}) {
-		var err error
+		env.logger.Info("Opener Init Started")
 
+		var err error
 		for i := 0; i < env.config.MaxRetries; i++ {
 			if err = openInit(route, env, channels.recvMain, channels.sendMain); err == nil {
 				state.Next(TunnelOpened)
@@ -26,8 +27,9 @@ func NewOpenerInit(route wire.Route, env *tunnelEnv, channels *tunnelChannels) f
 
 func NewOpenerRecv(route wire.Route, env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
 	return func(state utils.Controller, args []interface{}) {
-		var err error
+		env.logger.Info("Opener Recv Started")
 
+		var err error
 		for i := 0; i < env.config.MaxRetries; i++ {
 			if err = openRecv(route, env, channels.recvMain, channels.sendMain); err == nil {
 				state.Next(TunnelOpened)

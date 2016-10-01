@@ -31,7 +31,7 @@ type standardLogger struct {
 }
 
 func NewStandardLogger(c Config) Logger {
-	return &standardLogger{LoggerLevel(c.OptionalInt(confLoggerLevel, int(Info)))}
+	return &standardLogger{LoggerLevel(c.OptionalInt(confLoggerLevel, int(Debug)))}
 }
 
 func (s *standardLogger) Debug(format string, vals ...interface{}) {

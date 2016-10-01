@@ -242,27 +242,26 @@ func (h *history) Append(t Transition) {
 }
 
 type machineController struct {
-	sharedHistory *history
-	sharedUpdate  chan<- Transition
+	parent *stateMachine
 
 	done chan []Transition
 	wait chan error
 }
 
-func newMachineController(history *history, update chan<- Transition) *machineController {
-	m := &machineController{history, update, make(chan []Transition, 1), make(chan error, 1)}
+func newMachineController(parent *stateMachine) *machineController {
+	m := &machineController{parent, make(chan []Transition, 1), make(chan error, 1)}
 	go func() {
 		select {
 		case <-m.done:
 		}
 
-		m.wait <- extractResult(m.sharedHistory.Get())
+		m.wait <- extractResult(m.parent.sharedHistory.Get())
 	}()
 	return m
 }
 
 func (m *machineController) Summary() []Transition {
-	return m.sharedHistory.Get()
+	return m.parent.sharedHistory.Get()
 }
 
 func (m *machineController) Current() int {
@@ -281,7 +280,7 @@ func (m *machineController) Wait() <-chan error {
 }
 
 func (m *machineController) Transition() chan<- Transition {
-	return m.sharedUpdate
+	return m.parent.sharedUpdate
 }
 
 type stateMachineFactory struct {
@@ -385,7 +384,7 @@ func (s *stateMachine) Control() MachineController {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	ret := newMachineController(s.sharedHistory, s.sharedUpdate)
+	ret := newMachineController(s)
 	s.controllers = append(s.controllers, ret)
 
 	if s.done {
