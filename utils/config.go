@@ -51,6 +51,10 @@ func newConfigParsingError(expected ConfigType, key string, val interface{}) Con
 	return ConfigParsingError{expected, key, val}
 }
 
+type Configured interface {
+	Config() Config
+}
+
 type Config interface {
 	OptionalInt(key string, def int) int
 	OptionalBool(key string, def bool) bool

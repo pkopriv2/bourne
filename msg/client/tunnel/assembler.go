@@ -2,21 +2,37 @@ package tunnel
 
 import (
 	"github.com/emirpasic/gods/maps/treemap"
+	"github.com/pkopriv2/bourne/msg/core"
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewRecvAssembler(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
-	logger := env.logger
+const (
+	confTunnelAssemblerLimit = "bourne.msg.client.tunnel.assembler.limit"
+)
 
-	return func(state utils.Controller, args []interface{}) {
+const (
+	defaultTunnelAssemblerLimit = 1024
+)
+
+type AssemblerSocket struct {
+	SegmentRx <-chan wire.SegmentMessage
+	SegmentTx chan<- []byte
+	VerifyTx  chan<- wire.NumMessage
+}
+
+func NewRecvAssembler(ctx core.Context, socket *AssemblerSocket) func(utils.WorkerController, []interface{}) {
+	logger := ctx.Logger()
+	config := ctx.Config()
+
+	return func(state utils.WorkerController, args []interface{}) {
 		logger.Debug("RecvAssembler Opening")
 		defer logger.Debug("RecvAssembler Opening")
 
-		pending := NewPendingSegments(env.config.AssemblerLimit)
+		pending := NewPendingSegments(config.OptionalInt(confTunnelAssemblerLimit, defaultTunnelAssemblerLimit))
 
-		var chanRecvBuffer chan<- []byte
-		var chanRecvVerify chan<- wire.NumMessage
+		var segmentTx chan<- []byte
+		var verifyTx chan<- wire.NumMessage
 
 		var outSegment []byte
 		var outVerify wire.NumMessage
@@ -28,25 +44,25 @@ func NewRecvAssembler(env *tunnelEnv, channels *tunnelChannels) func(utils.Contr
 			}
 
 			if outSegment != nil {
-				chanRecvBuffer = channels.bufferer
+				segmentTx = socket.SegmentTx
 			} else {
-				chanRecvBuffer = nil
+				segmentTx = nil
 			}
 
 			if outVerify != nil {
-				chanRecvVerify = channels.recvVerifier
+				verifyTx = socket.VerifyTx
 			} else {
-				chanRecvVerify = nil
+				verifyTx = nil
 			}
 
 			select {
 			case <-state.Close():
 				return
-			case chanRecvBuffer <- outSegment:
+			case segmentTx <- outSegment:
 				outSegment = nil
-			case chanRecvVerify <- outVerify:
+			case verifyTx <- outVerify:
 				outVerify = nil
-			case curIn := <-channels.assembler:
+			case curIn := <-socket.SegmentRx:
 				pending.Add(curIn.Offset(), curIn.Data())
 			}
 		}

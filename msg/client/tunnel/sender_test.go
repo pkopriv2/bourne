@@ -18,7 +18,7 @@ func TestSendMain_Timeout(t *testing.T) {
 	channels := &tunnelChannels{
 		recvVerifier: make(chan wire.NumMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		sendMain:     sendMain}
+		mainOut:      sendMain}
 
 	l := wire.NewAddress(uuid.NewV4(), 0)
 	r := wire.NewAddress(uuid.NewV4(), 0)
@@ -45,7 +45,7 @@ func TestSendMain_SingleTimeout(t *testing.T) {
 	channels := &tunnelChannels{
 		recvVerifier: make(chan wire.NumMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		sendMain:     sendMain}
+		mainOut:      sendMain}
 
 	l := wire.NewAddress(uuid.NewV4(), 0)
 	r := wire.NewAddress(uuid.NewV4(), 0)
@@ -73,7 +73,7 @@ func TestSendMain_SingleSendVerify(t *testing.T) {
 	channels := &tunnelChannels{
 		recvVerifier: make(chan wire.NumMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		sendMain:     sendMain}
+		mainOut:      sendMain}
 
 	l := wire.NewAddress(uuid.NewV4(), 0)
 	r := wire.NewAddress(uuid.NewV4(), 0)
@@ -102,7 +102,7 @@ func TestSendMain_SingleSegment(t *testing.T) {
 	sendMain := make(chan wire.Packet)
 	channels := &tunnelChannels{
 		sendVerifier: make(chan wire.NumMessage),
-		sendMain:     sendMain}
+		mainOut:      sendMain}
 
 	l := wire.NewAddress(uuid.NewV4(), 0)
 	r := wire.NewAddress(uuid.NewV4(), 0)
@@ -129,7 +129,7 @@ func TestSendMain_SingleRecvVerify(t *testing.T) {
 	channels := &tunnelChannels{
 		recvVerifier: make(chan wire.NumMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		sendMain:     sendMain}
+		mainOut:      sendMain}
 
 	l := wire.NewAddress(uuid.NewV4(), 0)
 	r := wire.NewAddress(uuid.NewV4(), 0)

@@ -3,19 +3,29 @@ package tunnel
 import (
 	"time"
 
+	"github.com/pkopriv2/bourne/msg/core"
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*Stream, func(utils.Controller, []interface{})) {
-	stream := NewStream(env.config.SenderLimit)
+type SendMainSocket struct {
+	PacketTx     chan<- wire.Packet
+	SendVerifyRx <-chan wire.NumMessage
+	RecvVerifyRx <-chan wire.NumMessage
+}
 
-	return stream, func(state utils.Controller, args []interface{}) {
-		env.logger.Debug("SendMain Starting")
-		defer env.logger.Info("SendMain Closing")
+func NewSendMain(route wire.Route, ctx core.Context, streamTx *Stream, socket *SendMainSocket) func(utils.WorkerController, []interface{}) {
+	logger := ctx.Logger()
+	config := ctx.Config()
+
+	confTimeout := config.OptionalDuration(confTunnelVerifyTimeout, defaultTunnelVerifyTimeout)
+	confTries := config.OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)
+	return func(state utils.WorkerController, args []interface{}) {
+		logger.Debug("SendMain Starting")
+		defer logger.Info("SendMain Closing")
 
 		// wrap the stream in a channel
-		in := readStream(stream)
+		in := readStream(streamTx)
 
 		// track time between send verifications.
 		var timeout <-chan time.Time
@@ -24,7 +34,7 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 
 		resetTimeout := func() {
 			timeoutCnt = 0
-			timeoutCur = env.config.VerifyTimeout
+			timeoutCur = confTimeout
 			timeout = time.After(timeoutCur)
 		}
 
@@ -35,14 +45,14 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 		for {
 
 			// timeouts only apply if we've sent data.
-			tail, _, head, _ := stream.Snapshot()
+			tail, _, head, _ := streamTx.Snapshot()
 			if head.offset == tail.offset {
 				timeout = nil
 			}
 
 			// we can send any non-empty packet
 			if !packet.Empty() {
-				chanOut = channels.sendMain
+				chanOut = socket.PacketTx
 			} else {
 				chanOut = nil
 			}
@@ -58,8 +68,8 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 			case <-state.Close():
 				return
 			case <-timeout:
-				stream.Reset()
-				if timeoutCnt++; timeoutCnt >= env.config.MaxRetries {
+				streamTx.Reset()
+				if timeoutCnt++; timeoutCnt >= confTries {
 					state.Fail(NewTimeoutError("Too many ack timeouts"))
 					return
 				}
@@ -67,14 +77,14 @@ func NewSendMain(route wire.Route, env *tunnelEnv, channels *tunnelChannels) (*S
 				// exponential backoff
 				timeoutCur *= 2
 				timeout = time.After(timeoutCur)
-			case msg := <-channels.sendVerifier:
-				if _, err := stream.Commit(msg.Val()); err != nil {
+			case msg := <-socket.SendVerifyRx:
+				if _, err := streamTx.Commit(msg.Val()); err != nil {
 					state.Fail(err)
 					return
 				}
 
 				resetTimeout()
-			case msg := <-channels.recvVerifier:
+			case msg := <-socket.RecvVerifyRx:
 				packet = packet.Update().SetVerify(msg.Val()).Build()
 			case input := <-chanIn:
 				if input.err != nil {

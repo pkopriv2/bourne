@@ -18,7 +18,7 @@ const (
 
 const (
 	defaultConnectionRetries = 3
-	defaultConnectionTimeout = 10 * time.Second
+	defaultConnectionTimeout = 30 * time.Second
 )
 
 var (
@@ -33,19 +33,15 @@ func (c ConnectionTimeoutError) Error() string {
 	return fmt.Sprintf("CONN:ERR:TIMEOUT(%v)", c.Duration)
 }
 
-func newConnectionTimeoutError(timeout time.Duration) ConnectionTimeoutError {
-	return ConnectionTimeoutError{timeout}
+type ConnectionError struct {
+	attempts []error
 }
 
-type ConnectorError struct {
-	errors []error
-}
-
-func (c ConnectorError) Error() string {
+func (c ConnectionError) Error() string {
 	buffer := new(bytes.Buffer)
 	buffer.WriteString("Errors: ")
 
-	for i, err := range c.errors {
+	for i, err := range c.attempts {
 		buffer.WriteString(fmt.Sprintf("\n\t[%v](%v)", i, err))
 	}
 
@@ -77,9 +73,9 @@ type ConnectionFactory func() (Connection, error)
 // the specified number of retries.
 //
 // This class is never truly dead until close is called on it, in which
-// case all read/writes will return ErrConnectionClosed.  This will always
+// case all read/writes will return ErrClosed.  This will always
 // attempt to reconnect on each read/write.
-type Connector struct {
+type connection struct {
 	Connection
 
 	lock    sync.RWMutex
@@ -90,17 +86,17 @@ type Connector struct {
 	timeout time.Duration
 }
 
-func NewConnector(factory ConnectionFactory, config utils.Config) *Connector {
+func NewConnector(factory ConnectionFactory, config utils.Config) *connection {
 	retries := config.OptionalInt(confConnectionRetries, defaultConnectionRetries)
 	timeout := config.OptionalDuration(confConnectionTimeout, defaultConnectionTimeout)
 
-	return &Connector{
+	return &connection{
 		factory: factory,
 		retries: retries,
 		timeout: timeout}
 }
 
-func (c *Connector) get(reset bool) (Connection, error) {
+func (c *connection) get(reset bool) (Connection, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	if c.closed {
@@ -116,7 +112,7 @@ func (c *Connector) get(reset bool) (Connection, error) {
 	return c.conn, err
 }
 
-func (c *Connector) Read(p []byte) (int, error) {
+func (c *connection) Read(p []byte) (int, error) {
 	var errors []error = make([]error, 1, c.retries)
 	var conn Connection
 	var err error
@@ -134,10 +130,10 @@ func (c *Connector) Read(p []byte) (int, error) {
 		conn, err = c.get(true)
 	}
 
-	return 0, ConnectorError{errors}
+	return 0, ConnectionError{errors}
 }
 
-func (c *Connector) Write(p []byte) (int, error) {
+func (c *connection) Write(p []byte) (int, error) {
 	var errors []error = make([]error, 1, c.retries)
 	var conn Connection
 	var err error
@@ -155,10 +151,10 @@ func (c *Connector) Write(p []byte) (int, error) {
 		conn, err = c.get(true)
 	}
 
-	return 0, ConnectorError{errors}
+	return 0, ConnectionError{errors}
 }
 
-func (c *Connector) Close() error {
+func (c *connection) Close() error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	if c.closed {
@@ -191,7 +187,7 @@ func connect(factory ConnectionFactory, timeout time.Duration) (Connection, erro
 	timer := time.NewTimer(timeout)
 	select {
 	case <-timer.C:
-		return nil, newConnectionTimeoutError(timeout)
+		return nil, ConnectionTimeoutError{timeout}
 	case attempt := <-out:
 		return attempt.conn, attempt.err
 	}

@@ -1,9 +1,10 @@
-package tunnel
+package client
 
 import (
 	"io"
 	"time"
 
+	"github.com/pkopriv2/bourne/msg/core"
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
@@ -69,7 +70,6 @@ import (
 //     3. Transition to Closed.
 //
 type Tunnel interface {
-	wire.Routable
 	io.Closer
 	io.Reader
 	io.Writer
@@ -102,7 +102,6 @@ const (
 // Config
 const (
 	confTunnelDebug          = "bourne.msg.client.tunnel.debug"
-	confTunnelAssemblerLimit = "bourne.msg.client.tunnel.assembler.limit"
 	confTunnelBuffererLimit  = "bourne.msg.client.tunnel.bufferer.limit"
 	confTunnelSenderLimit    = "bourne.msg.client.tunnel.sender.limit"
 	confTunnelVerifyTimeout  = "bourne.msg.client.tunnel.verify.timeout"
@@ -112,7 +111,6 @@ const (
 )
 
 const (
-	defaultTunnelAssemblerLimit = 1024
 	defaultTunnelBuffererLimit  = 1 << 20
 	defaultTunnelSenderLimit    = 1 << 18
 	defaultTunnelVerifyTimeout  = 5 * time.Second
@@ -142,35 +140,6 @@ func newTunnelConfig(conf utils.Config) *tunnelConfig {
 		RecvTimeout:    conf.OptionalDuration(confTunnelRecvTimeout, defaultTunnelRecvTimeout),
 		SendTimeout:    conf.OptionalDuration(confTunnelSendTimeout, defaultTunnelSendTimeout),
 		MaxRetries:     conf.OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)}
-}
-
-// Initialization Helpers
-type TunnelOptions struct {
-	Config utils.Config
-
-	// A listening channel
-	Listening bool
-
-	// lifecycle handlers
-	OnInit  TunnelTransitionHandler
-	OnOpen  TunnelTransitionHandler
-	OnClose TunnelTransitionHandler
-	OnFail  TunnelTransitionHandler
-}
-
-type TunnelOptionsHandler func(*TunnelOptions)
-
-type TunnelTransitionHandler func(Tunnel) error
-
-func defaultTunnelOptions() *TunnelOptions {
-	return &TunnelOptions{
-		Config: utils.NewEmptyConfig(),
-
-		// state handlers
-		OnInit:  func(Tunnel) error { return nil },
-		OnOpen:  func(Tunnel) error { return nil },
-		OnClose: func(Tunnel) error { return nil },
-		OnFail:  func(Tunnel) error { return nil }}
 }
 
 // the general dependency injector
@@ -206,22 +175,24 @@ func sendOrTimeout(e *tunnelEnv, out chan<- wire.Packet, p wire.Packet) error {
 }
 
 // complete listing of tunnel channels.
-type tunnelChannels struct {
-	recvMain chan wire.Packet
-	sendMain chan<- wire.Packet
+type tunnelDriver struct {
+	mainIn    chan wire.Packet
+	mainOut   chan<- wire.Packet
+	mainErr   chan error
+	mainClose chan struct{}
 
-	bufferer     chan []byte
-	assembler    chan wire.SegmentMessage
+	buffererIn   chan []byte
+	assemblerIn  chan wire.SegmentMessage
 	sendVerifier chan wire.NumMessage
 	recvVerifier chan wire.NumMessage
 }
 
-func newTunnelChannels(sendMain chan<- wire.Packet) *tunnelChannels {
-	return &tunnelChannels{
-		sendMain:     sendMain,
-		recvMain:     make(chan wire.Packet),
-		bufferer:     make(chan []byte),
-		assembler:    make(chan wire.SegmentMessage),
+func newTunnelChannels(sendMain chan<- wire.Packet) *tunnelDriver {
+	return &tunnelDriver{
+		mainOut:      sendMain,
+		mainIn:       make(chan wire.Packet),
+		buffererIn:   make(chan []byte),
+		assemblerIn:  make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
 		recvVerifier: make(chan wire.NumMessage)}
 }
@@ -230,65 +201,61 @@ func newTunnelChannels(sendMain chan<- wire.Packet) *tunnelChannels {
 type tunnel struct {
 	route    wire.Route
 	env      *tunnelEnv
-	channels *tunnelChannels
+	channels *tunnelDriver
 	machine  utils.StateMachine
 
 	streamRecv *Stream
 	streamSend *Stream
 }
 
-func NewTunnel(route wire.Route, mainSend chan<- wire.Packet, opts ...TunnelOptionsHandler) Tunnel {
-	// initialize the options.
-	defaultOpts := defaultTunnelOptions()
-	for _, opt := range opts {
-		opt(defaultOpts)
-	}
 
-	options := *defaultOpts
+func NewTunnel(route wire.Route, controls core.DuplexService) Tunnel {
+	return nil
 
-	// initialize the environment
-	env := newTunnelEnv(options.Config)
-
-	// initialize all the channels
-	channels := newTunnelChannels(mainSend)
-
-	// opening workers
-	openerInit := NewOpenerInit(route, env, channels)
-	openerRecv := NewOpenerRecv(route, env, channels)
-
-	// closing workers
-	closerInit := NewCloserInit(route, env, channels)
-	closerRecv := NewCloserRecv(route, env, channels)
-
-	// opened workers
-	streamSend, sendMain := NewSendMain(route, env, channels)
-	recvMain := NewRecvMain(env, channels)
-	recvAssembler := NewRecvAssembler(env, channels)
-	streamRecv, recvBuff := NewRecvBuffer(env, channels)
-
-	// build the machine
-	builder := utils.BuildStateMachine()
-	builder.AddState(TunnelOpeningInit, openerInit)
-	builder.AddState(TunnelOpeningRecv, openerRecv)
-	builder.AddState(TunnelOpened, sendMain, recvMain, recvAssembler, recvBuff)
-	builder.AddState(TunnelClosingInit, closerInit)
-	builder.AddState(TunnelClosingRecv, closerRecv)
-
-	// start the machine
-	var machine utils.StateMachine
-	if options.Listening {
-		machine = builder.Start(TunnelOpeningInit)
-	} else {
-		machine = builder.Start(TunnelOpeningRecv)
-	}
-
-	return &tunnel{
-		route:      route,
-		env:        env,
-		machine:    machine,
-		channels:   channels,
-		streamRecv: streamRecv,
-		streamSend: streamSend}
+	// var env tunnelEnv
+	// // initialize the environment
+	// // env := newTunnelEnv(sub.)
+//
+	// // initialize all the channels
+	// channels := newTunnelChannels(mainSend)
+//
+	// // opening workers
+	// openerInit := NewOpenerInit(route, env, channels)
+	// openerRecv := NewOpenerRecv(route, env, channels)
+//
+	// // closing workers
+	// closerInit := NewCloserInit(route, env, channels)
+	// closerRecv := NewCloserRecv(route, env, channels)
+//
+	// // opened workers
+	// streamSend, sendMain := NewSendMain(route, env, channels)
+	// recvMain := NewRecvMain(env, channels)
+	// recvAssembler := NewRecvAssembler(env, channels)
+	// streamRecv, recvBuff := NewRecvBuffer(env, channels)
+//
+	// // build the machine
+	// builder := utils.BuildStateMachine()
+	// builder.AddState(TunnelOpeningInit, openerInit)
+	// builder.AddState(TunnelOpeningRecv, openerRecv)
+	// builder.AddState(TunnelOpened, sendMain, recvMain, recvAssembler, recvBuff)
+	// builder.AddState(TunnelClosingInit, closerInit)
+	// builder.AddState(TunnelClosingRecv, closerRecv)
+//
+	// // start the machine
+	// var machine utils.StateMachine
+	// if options.Listening {
+		// machine = builder.Start(TunnelOpeningInit)
+	// } else {
+		// machine = builder.Start(TunnelOpeningRecv)
+	// }
+//
+	// return &tunnel{
+		// route:      route,
+		// env:        env,
+		// machine:    machine,
+		// channels:   channels,
+		// streamRecv: streamRecv,
+		// streamSend: streamSend}
 }
 
 func (t *tunnel) Route() wire.Route {

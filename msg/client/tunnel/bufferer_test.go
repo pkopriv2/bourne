@@ -12,7 +12,7 @@ func TestRecvBuffer_Close(t *testing.T) {
 	env := newTunnelEnv(utils.NewEmptyConfig())
 
 	channels := &tunnelChannels{
-		bufferer: make(chan []byte)}
+		buffererIn: make(chan []byte)}
 
 	stream, worker := NewRecvBuffer(env, channels)
 	machine := utils.BuildStateMachine().AddState(1, worker).Start(1)
@@ -22,7 +22,7 @@ func TestRecvBuffer_Close(t *testing.T) {
 
 	go func() {
 		for i := 0; i < 100; i++ {
-			channels.bufferer <- []byte{byte(i)}
+			channels.buffererIn <- []byte{byte(i)}
 		}
 	}()
 
@@ -36,7 +36,7 @@ func TestRecvBuffer(t *testing.T) {
 	env := newTunnelEnv(utils.NewEmptyConfig())
 
 	channels := &tunnelChannels{
-		bufferer: make(chan []byte)}
+		buffererIn: make(chan []byte)}
 
 	stream, worker := NewRecvBuffer(env, channels)
 	machine := utils.BuildStateMachine().AddState(1, worker).Start(1)
@@ -44,7 +44,7 @@ func TestRecvBuffer(t *testing.T) {
 
 	go func() {
 		for i := 0; i < 100; i++ {
-			channels.bufferer <- []byte{byte(i)}
+			channels.buffererIn <- []byte{byte(i)}
 		}
 	}()
 

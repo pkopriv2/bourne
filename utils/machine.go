@@ -35,7 +35,7 @@ func Terminate(machine StateMachine) {
 }
 
 // A worker is the runtime implementation of a particular state in the state machine.
-type Worker func(Controller, []interface{})
+type Worker func(c WorkerController, args []interface{})
 
 type Transition struct {
 	Target int
@@ -54,7 +54,7 @@ func State(target int, args ...interface{}) Transition {
 	return Transition{target, args}
 }
 
-type Controller interface {
+type WorkerController interface {
 	Close() <-chan struct{}
 	Transition() chan<- Transition
 	Next(int, ...interface{}) bool
@@ -211,7 +211,7 @@ func (s *state) run(args []interface{}) *stateController {
 
 	for _, w := range s.workers {
 		worker := w
-		child := controller.Spawn()
+		child := controller.Spawn() // race on controlle here???
 		go func() {
 			defer child.Done()
 			worker(child, args)

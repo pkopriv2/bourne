@@ -9,7 +9,7 @@ import (
 )
 
 func TestState_noTransition(t *testing.T) {
-	state := newState(1, func(c Controller, args []interface{}) {})
+	state := newState(1, func(c WorkerController, args []interface{}) {})
 
 	controller := state.run([]interface{}{})
 
@@ -21,7 +21,7 @@ func TestState_noTransition(t *testing.T) {
 func TestState_workerfail(t *testing.T) {
 	e := errors.New("error")
 
-	state := newState(1, func(c Controller, args []interface{}) {
+	state := newState(1, func(c WorkerController, args []interface{}) {
 		c.Fail(e)
 	})
 
@@ -36,7 +36,7 @@ func TestState_externalFail(t *testing.T) {
 	e := errors.New("error")
 
 	returned := false
-	state := newState(1, func(c Controller, args []interface{}) {
+	state := newState(1, func(c WorkerController, args []interface{}) {
 		<-c.Close()
 		returned = true
 	})
@@ -58,19 +58,19 @@ func TestState_multiWorker(t *testing.T) {
 	e := errors.New("error")
 
 	returned1 := false
-	worker1 := func(c Controller, args []interface{}) {
+	worker1 := func(c WorkerController, args []interface{}) {
 		c.Fail(e)
 		returned1 = true
 	}
 
 	returned2 := false
-	worker2 := func(c Controller, args []interface{}) {
+	worker2 := func(c WorkerController, args []interface{}) {
 		time.Sleep(1 * time.Second)
 		returned2 = true
 	}
 
 	returned3 := false
-	worker3 := func(c Controller, args []interface{}) {
+	worker3 := func(c WorkerController, args []interface{}) {
 		time.Sleep(1 * time.Second)
 		returned3 = true
 	}
@@ -107,7 +107,7 @@ func TestStateMachine_controlAfterResult(t *testing.T) {
 
 func TestStateMachine_IllegalTransition(t *testing.T) {
 	factory := BuildStateMachine()
-	factory.AddState(1, func(c Controller, args []interface{}) {
+	factory.AddState(1, func(c WorkerController, args []interface{}) {
 		c.Next(2)
 	})
 
@@ -119,7 +119,7 @@ func TestStateMachine_IllegalTransition(t *testing.T) {
 
 func TestStateMachine_SingleState(t *testing.T) {
 	factory := BuildStateMachine()
-	factory.AddState(1, func(c Controller, args []interface{}) {})
+	factory.AddState(1, func(c WorkerController, args []interface{}) {})
 
 	machine := factory.Start(1, "args")
 
@@ -131,13 +131,13 @@ func TestStateMachine_SingleState(t *testing.T) {
 func TestStateMachine_MultiState(t *testing.T) {
 	factory := BuildStateMachine()
 
-	factory.AddState(1, func(c Controller, args []interface{}) {
+	factory.AddState(1, func(c WorkerController, args []interface{}) {
 		c.Next(2, "2")
 	})
-	factory.AddState(2, func(c Controller, args []interface{}) {
+	factory.AddState(2, func(c WorkerController, args []interface{}) {
 		c.Next(3, "3")
 	})
-	factory.AddState(3, func(c Controller, args []interface{}) {
+	factory.AddState(3, func(c WorkerController, args []interface{}) {
 	})
 
 	machine := factory.Start(1, "1")
@@ -154,14 +154,14 @@ func TestStateMachine_MultiState(t *testing.T) {
 func TestStateMachine_ExternalTransition(t *testing.T) {
 	factory := BuildStateMachine()
 
-	factory.AddState(1, func(c Controller, args []interface{}) {
+	factory.AddState(1, func(c WorkerController, args []interface{}) {
 		time.Sleep(100 * time.Millisecond)
 		c.Next(2)
 	})
-	factory.AddState(2, func(c Controller, args []interface{}) {
+	factory.AddState(2, func(c WorkerController, args []interface{}) {
 		c.Next(3)
 	})
-	factory.AddState(3, func(c Controller, args []interface{}) {
+	factory.AddState(3, func(c WorkerController, args []interface{}) {
 	})
 
 	machine := factory.Start(1)
@@ -186,14 +186,14 @@ func TestStateMachine_ExternalTransition(t *testing.T) {
 func TestStateMachine_ExternalFailure(t *testing.T) {
 	factory := BuildStateMachine()
 
-	factory.AddState(1, func(c Controller, args []interface{}) {
+	factory.AddState(1, func(c WorkerController, args []interface{}) {
 		time.Sleep(100 * time.Millisecond)
 		c.Next(2)
 	})
-	factory.AddState(2, func(c Controller, args []interface{}) {
+	factory.AddState(2, func(c WorkerController, args []interface{}) {
 		c.Next(3)
 	})
-	factory.AddState(3, func(c Controller, args []interface{}) {
+	factory.AddState(3, func(c WorkerController, args []interface{}) {
 	})
 
 	machine := factory.Start(1)

@@ -1,14 +1,23 @@
 package tunnel
 
 import (
+	"github.com/pkopriv2/bourne/msg/core"
 	"github.com/pkopriv2/bourne/msg/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewRecvMain(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller, []interface{}) {
-	return func(state utils.Controller, args []interface{}) {
-		env.logger.Debug("ReceiveMain Starting")
-		defer env.logger.Debug("ReceiveMain Closing")
+type RecvMainSocket struct {
+	PacketRx  <-chan wire.Packet
+	SegmentTx chan<- wire.SegmentMessage
+	VerifyTx  chan<- wire.NumMessage
+}
+
+func NewRecvMain(ctx core.Context, socket *RecvMainSocket) func(utils.WorkerController, []interface{}) {
+	logger := ctx.Logger()
+
+	return func(state utils.WorkerController, args []interface{}) {
+		logger.Debug("ReceiveMain Starting")
+		defer logger.Debug("ReceiveMain Closing")
 
 		var chanIn <-chan wire.Packet
 		var chanAssembler chan<- wire.SegmentMessage
@@ -19,19 +28,19 @@ func NewRecvMain(env *tunnelEnv, channels *tunnelChannels) func(utils.Controller
 
 		for {
 			if msgVerify == nil && msgSegment == nil {
-				chanIn = channels.recvMain
+				chanIn = socket.PacketRx
 			} else {
 				chanIn = nil
 			}
 
 			if msgVerify != nil {
-				chanVerifier = channels.sendVerifier
+				chanVerifier = socket.VerifyTx
 			} else {
 				chanVerifier = nil
 			}
 
 			if msgSegment != nil {
-				chanAssembler = channels.assembler
+				chanAssembler = socket.SegmentTx
 			} else {
 				chanAssembler = nil
 			}

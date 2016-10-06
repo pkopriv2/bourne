@@ -15,15 +15,15 @@ func TestRecvMain_Close(t *testing.T) {
 
 	recvMain := make(chan wire.Packet)
 	channels := &tunnelChannels{
-		assembler:    make(chan wire.SegmentMessage),
+		assemblerIn:  make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		recvMain:     recvMain}
+		mainIn:       recvMain}
 
 	worker := NewRecvMain(env, channels)
 
 	builder := utils.BuildStateMachine()
 	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.Controller, _ []interface{}) {})
+	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
 
 	machine := builder.Start(1)
 	defer utils.Terminate(machine)
@@ -53,15 +53,15 @@ func TestRecvMain_Error(t *testing.T) {
 
 	recvMain := make(chan wire.Packet)
 	channels := &tunnelChannels{
-		assembler:    make(chan wire.SegmentMessage),
+		assemblerIn:  make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		recvMain:     recvMain}
+		mainIn:       recvMain}
 
 	worker := NewRecvMain(env, channels)
 
 	builder := utils.BuildStateMachine()
 	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.Controller, _ []interface{}) {})
+	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
 
 	machine := builder.Start(1)
 	defer utils.Terminate(machine)
@@ -91,15 +91,15 @@ func TestRecvMain_SingleVerify(t *testing.T) {
 
 	recvMain := make(chan wire.Packet)
 	channels := &tunnelChannels{
-		assembler:    make(chan wire.SegmentMessage),
+		assemblerIn:  make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		recvMain:     recvMain}
+		mainIn:       recvMain}
 
 	worker := NewRecvMain(env, channels)
 
 	builder := utils.BuildStateMachine()
 	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.Controller, _ []interface{}) {})
+	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
 
 	machine := builder.Start(1)
 	defer utils.Terminate(machine)
@@ -124,22 +124,22 @@ func TestRecvMain_SingleSegment(t *testing.T) {
 
 	recvMain := make(chan wire.Packet)
 	channels := &tunnelChannels{
-		assembler:    make(chan wire.SegmentMessage),
+		assemblerIn:  make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		recvMain:     recvMain}
+		mainIn:       recvMain}
 
 	worker := NewRecvMain(env, channels)
 
 	builder := utils.BuildStateMachine()
 	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.Controller, _ []interface{}) {})
+	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
 
 	machine := builder.Start(1)
 	defer utils.Terminate(machine)
 
 	l := wire.NewAddress(uuid.NewV4(), 0)
 	r := wire.NewAddress(uuid.NewV4(), 0)
-	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetSegment(100, []byte{0,1,2}).Build()
+	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetSegment(100, []byte{0, 1, 2}).Build()
 
 	done, timeout := utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
 	select {
@@ -149,7 +149,7 @@ func TestRecvMain_SingleSegment(t *testing.T) {
 		return
 	}
 
-	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0,1,2}), <-channels.assembler)
+	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0, 1, 2}), <-channels.assemblerIn)
 }
 
 func TestRecvMain_SegmentAndVerify(t *testing.T) {
@@ -157,22 +157,22 @@ func TestRecvMain_SegmentAndVerify(t *testing.T) {
 
 	recvMain := make(chan wire.Packet)
 	channels := &tunnelChannels{
-		assembler:    make(chan wire.SegmentMessage),
+		assemblerIn:  make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
-		recvMain:     recvMain}
+		mainIn:       recvMain}
 
 	worker := NewRecvMain(env, channels)
 
 	builder := utils.BuildStateMachine()
 	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.Controller, _ []interface{}) {})
+	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
 
 	machine := builder.Start(1)
 	defer utils.Terminate(machine)
 
 	l := wire.NewAddress(uuid.NewV4(), 0)
 	r := wire.NewAddress(uuid.NewV4(), 0)
-	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetVerify(200).SetSegment(100, []byte{0,1,2}).Build()
+	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetVerify(200).SetSegment(100, []byte{0, 1, 2}).Build()
 
 	done, timeout := utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
 	select {
@@ -182,7 +182,7 @@ func TestRecvMain_SegmentAndVerify(t *testing.T) {
 		return
 	}
 
-	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0,1,2}), <-channels.assembler)
+	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0, 1, 2}), <-channels.assemblerIn)
 
 	// this should timeout if properly working
 	done, timeout = utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })

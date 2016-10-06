@@ -3,8 +3,6 @@ package client
 import (
 	"errors"
 	"time"
-
-	"github.com/pkopriv2/bourne/msg/wire"
 )
 
 const (
@@ -33,29 +31,11 @@ var (
 )
 
 const (
-	ClientRouteErrorCode = 200
+	ClientOpened = iota
+	ClientClosed
+	ClientFailure
 )
 
-var (
-	NewRoutingError = wire.NewProtocolErrorFamily(ClientRouteErrorCode)
-)
-
-// const (
-// ClientOpened AtomicState = 1 << iota
-// ClientClosed
-// ClientFailure
-// )
-
-// type ClientOptions struct {
-// Config utils.Config
-//
-// Factory      net.ConnectionFactory
-// ListenerOpts ListenerOptionsHandler
-// ChannelOpts  ChannelOptionsHandler
-// }
-//
-// type ClientOptionsHandler func(*ClientOptions)
-//
 // // A client is responsible for taking a single data stream
 // // and splitting it into multiple logical streams.  Once split,
 // // these streams are referred to as "channels".  A channel represents

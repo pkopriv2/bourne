@@ -2,23 +2,29 @@ package tunnel
 
 import (
 	"time"
+	"fmt"
 
+	"github.com/pkopriv2/bourne/msg/core"
 	"github.com/pkopriv2/bourne/utils"
 )
 
-func NewRecvBuffer(env *tunnelEnv, channels *tunnelChannels) (*Stream, func(utils.Controller, []interface{})) {
-	stream := NewStream(env.config.BuffererLimit)
+type BuffererSocket struct {
+	SegmentTx <-chan []byte
+}
 
-	return stream, func(state utils.Controller, args []interface{}) {
-		env.logger.Debug("RecvBuffer Opened")
-		defer env.logger.Info("RecvBuffer Closed")
+func NewRecvBuffer(ctx core.Context, socket *BuffererSocket, stream *Stream) func(utils.WorkerController, []interface{}) {
+	logger := ctx.Logger()
+
+	return func(state utils.WorkerController, args []interface{}) {
+		logger.Debug("RecvBuffer Opened")
+		defer logger.Info("RecvBuffer Closed")
 
 		var cur []byte
 		for {
 			select {
 			case <-state.Close():
 				return
-			case cur = <-channels.bufferer:
+			case cur = <-socket.SegmentTx:
 			}
 
 			done, timer := utils.NewCircuitBreaker(365*24*time.Hour, func() { stream.Write(cur) })
@@ -28,7 +34,7 @@ func NewRecvBuffer(env *tunnelEnv, channels *tunnelChannels) (*Stream, func(util
 			case <-done:
 				continue
 			case <-timer:
-				state.Fail(NewTimeoutError("RecvBuffer(Timeout delivering data)"))
+				state.Fail(fmt.Errorf("Timeout delivering data to stream.  Consumer may have left"))
 				return
 			}
 		}

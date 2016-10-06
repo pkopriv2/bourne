@@ -37,7 +37,7 @@ const (
 type IdPool struct {
 	lock  sync.Mutex
 	avail *list.List
-	next  uint // used as a low watermark
+	next  uint64 // used as a low watermark
 }
 
 // Creates a new id pool.  The pool is initialized with
@@ -57,7 +57,7 @@ func NewIdPool() *IdPool {
 // Expands the available ids by numItems or until
 // it has reached maximum capacity.
 //
-func (self *IdPool) expand(numItems uint) error {
+func (self *IdPool) expand(numItems uint64) error {
 	log.Printf("Attemping to expand id pool [%v] by [%v] items\n", self.next, numItems)
 
 	i, prev := self.next, self.next
@@ -81,13 +81,13 @@ func (self *IdPool) expand(numItems uint) error {
 // In the event of a non-nil error, the consumer MUST not use the
 // returned value.
 //
-func (self *IdPool) Take() (uint, error) {
+func (self *IdPool) Take() (uint64, error) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 
 	// see if anything is available
 	if item := self.avail.Front(); item != nil {
-		return self.avail.Remove(item).(uint), nil
+		return self.avail.Remove(item).(uint64), nil
 	}
 
 	// try to expand the pool
@@ -96,7 +96,7 @@ func (self *IdPool) Take() (uint, error) {
 	}
 
 	// okay, the pool has been expanded
-	return self.avail.Remove(self.avail.Front()).(uint), nil
+	return self.avail.Remove(self.avail.Front()).(uint64), nil
 }
 
 // Returns an id to the pool.
@@ -106,7 +106,7 @@ func (self *IdPool) Take() (uint, error) {
 //  Only ids that have been loaned out should be returned to the
 //  pool.
 //
-func (self *IdPool) Return(id uint) {
+func (self *IdPool) Return(id uint64) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if id < self.next {
