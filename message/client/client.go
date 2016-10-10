@@ -134,28 +134,4 @@ const (
 // // // log.Println(fmt.Sprintf("client(%v) -- ", c.entityId) + fmt.Sprintf(format, vals...))
 // // }
 //
-// func readerWorker(c *client) {
-// defer c.workers.Done()
-// for {
-// // if state.Is(^ClientOpened) {
-// // return
-// // }
-// //
-// // packet, err := ReadPacket(c.conn)
-// // switch {
-// // case err = *err.(ConnectionErrors):
-// //
-// // }
-// // if err != nil {
-// //
-// // }
-// // if err != nil {
-// // log.Printf("Error parsing packet")
-// // time.Sleep(c.options.ReaderWait)
-// // continue
-// // }
-// //
-// // c.routerIn <- packet
 // }
-// }
-//

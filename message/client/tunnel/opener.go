@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/pkopriv2/bourne/msg/core"
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -15,7 +15,7 @@ type OpenerSocket struct {
 	PacketTx chan<- wire.Packet
 }
 
-func NewOpenerInit(route wire.Route, ctx core.Context, socket *OpenerSocket) func(utils.WorkerController, []interface{}) {
+func NewOpenerInit(route wire.Route, ctx common.Context, socket *OpenerSocket) func(utils.WorkerController, []interface{}) {
 	logger := ctx.Logger()
 	tries := ctx.Config().OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)
 	return func(state utils.WorkerController, args []interface{}) {
@@ -33,7 +33,7 @@ func NewOpenerInit(route wire.Route, ctx core.Context, socket *OpenerSocket) fun
 	}
 }
 
-func NewOpenerRecv(route wire.Route, ctx core.Context, socket *OpenerSocket) func(utils.WorkerController, []interface{}) {
+func NewOpenerRecv(route wire.Route, ctx common.Context, socket *OpenerSocket) func(utils.WorkerController, []interface{}) {
 	logger := ctx.Logger()
 	tries := ctx.Config().OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)
 
@@ -53,7 +53,7 @@ func NewOpenerRecv(route wire.Route, ctx core.Context, socket *OpenerSocket) fun
 }
 
 // Performs open handshake: send(open), recv(open,verify), send(verify)
-func openInit(route wire.Route, ctx core.Context, in <-chan wire.Packet, out chan<- wire.Packet) error {
+func openInit(route wire.Route, ctx common.Context, in <-chan wire.Packet, out chan<- wire.Packet) error {
 	ctx.Logger().Info("Initiating open request")
 
 	var p wire.Packet
@@ -99,7 +99,7 @@ func openInit(route wire.Route, ctx core.Context, in <-chan wire.Packet, out cha
 }
 
 // Performs receiver (ie listener) open handshake: recv(open), send(open,verify), recv(verify)
-func openRecv(route wire.Route, ctx core.Context, in <-chan wire.Packet, out chan<- wire.Packet) error {
+func openRecv(route wire.Route, ctx common.Context, in <-chan wire.Packet, out chan<- wire.Packet) error {
 	logger := ctx.Logger()
 
 	logger.Info("Waiting for open request")

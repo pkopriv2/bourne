@@ -3,8 +3,8 @@ package tunnel
 import (
 	"time"
 
-	"github.com/pkopriv2/bourne/msg/core"
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -14,7 +14,7 @@ type SendMainSocket struct {
 	RecvVerifyRx <-chan wire.NumMessage
 }
 
-func NewSendMain(route wire.Route, ctx core.Context, streamTx *Stream, socket *SendMainSocket) func(utils.WorkerController, []interface{}) {
+func NewSendMain(route wire.Route, ctx common.Context, streamTx *Stream, socket *SendMainSocket) func(utils.WorkerController, []interface{}) {
 	logger := ctx.Logger()
 	config := ctx.Config()
 

@@ -3,7 +3,7 @@ package tunnel
 import (
 	"fmt"
 
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/message/wire"
 	metrics "github.com/rcrowley/go-metrics"
 )
 

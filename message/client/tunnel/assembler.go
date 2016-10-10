@@ -2,8 +2,8 @@ package tunnel
 
 import (
 	"github.com/emirpasic/gods/maps/treemap"
-	"github.com/pkopriv2/bourne/msg/core"
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -21,7 +21,7 @@ type AssemblerSocket struct {
 	VerifyTx  chan<- wire.NumMessage
 }
 
-func NewRecvAssembler(ctx core.Context, socket *AssemblerSocket) func(utils.WorkerController, []interface{}) {
+func NewRecvAssembler(ctx common.Context, socket *AssemblerSocket) func(utils.WorkerController, []interface{}) {
 	logger := ctx.Logger()
 	config := ctx.Config()
 

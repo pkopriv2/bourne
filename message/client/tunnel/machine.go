@@ -3,8 +3,8 @@ package tunnel
 import (
 	"time"
 
-	"github.com/pkopriv2/bourne/msg/core"
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -113,7 +113,7 @@ const (
 	defaultTunnelMaxRetries    = 3
 )
 
-func recvOrTimeout(ctx core.Context, in <-chan wire.Packet) (wire.Packet, error) {
+func recvOrTimeout(ctx common.Context, in <-chan wire.Packet) (wire.Packet, error) {
 	timer := time.NewTimer(ctx.Config().OptionalDuration(confTunnelRecvTimeout, defaultTunnelRecvTimeout))
 
 	select {
@@ -124,7 +124,7 @@ func recvOrTimeout(ctx core.Context, in <-chan wire.Packet) (wire.Packet, error)
 	}
 }
 
-func sendOrTimeout(ctx core.Context, out chan<- wire.Packet, p wire.Packet) error {
+func sendOrTimeout(ctx common.Context, out chan<- wire.Packet, p wire.Packet) error {
 	timer := time.NewTimer(ctx.Config().OptionalDuration(confTunnelSendTimeout, defaultTunnelSendTimeout))
 
 	select {
@@ -137,8 +137,8 @@ func sendOrTimeout(ctx core.Context, out chan<- wire.Packet, p wire.Packet) erro
 
 // complete listing of tunnel channels.
 type tunnelChannels struct {
-	mainRx    <-chan wire.Packet
-	mainTx    chan<- wire.Packet
+	mainRx <-chan wire.Packet
+	mainTx chan<- wire.Packet
 
 	buffererIn   chan []byte
 	assemblerIn  chan wire.SegmentMessage
@@ -148,8 +148,8 @@ type tunnelChannels struct {
 
 func newTunnelChannels(conf utils.Config, mainTx chan<- wire.Packet, mainRx <-chan wire.Packet) *tunnelChannels {
 	return &tunnelChannels{
-		mainRx:      mainRx,
-		mainTx:      mainTx,
+		mainRx:       mainRx,
+		mainTx:       mainTx,
 		buffererIn:   make(chan []byte),
 		assemblerIn:  make(chan wire.SegmentMessage),
 		sendVerifier: make(chan wire.NumMessage),
@@ -161,7 +161,7 @@ type MachineSocket struct {
 	PacketTx chan<- wire.Packet
 }
 
-func NewTunnelMachine(ctx core.Context, route wire.Route, streamRx *Stream, streamTx *Stream, socket MachineSocket) utils.StateMachineFactory {
+func NewTunnelMachine(ctx common.Context, route wire.Route, streamRx *Stream, streamTx *Stream, socket MachineSocket) utils.StateMachineFactory {
 	// initialize all the channels
 	channels := newTunnelChannels(ctx.Config(), socket.PacketTx, socket.PacketRx)
 

@@ -1,10 +1,10 @@
 package tunnel
 
 import (
-	"time"
 	"fmt"
+	"time"
 
-	"github.com/pkopriv2/bourne/msg/core"
+	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -12,7 +12,7 @@ type BuffererSocket struct {
 	SegmentTx <-chan []byte
 }
 
-func NewRecvBuffer(ctx core.Context, socket *BuffererSocket, stream *Stream) func(utils.WorkerController, []interface{}) {
+func NewRecvBuffer(ctx common.Context, socket *BuffererSocket, stream *Stream) func(utils.WorkerController, []interface{}) {
 	logger := ctx.Logger()
 
 	return func(state utils.WorkerController, args []interface{}) {

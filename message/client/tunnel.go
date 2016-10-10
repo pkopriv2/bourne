@@ -4,8 +4,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/pkopriv2/bourne/msg/core"
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -101,78 +101,25 @@ const (
 
 // Config
 const (
-	confTunnelDebug          = "bourne.msg.client.tunnel.debug"
-	confTunnelBuffererLimit  = "bourne.msg.client.tunnel.bufferer.limit"
-	confTunnelSenderLimit    = "bourne.msg.client.tunnel.sender.limit"
-	confTunnelVerifyTimeout  = "bourne.msg.client.tunnel.verify.timeout"
-	confTunnelSendTimeout    = "bourne.msg.client.tunnel.send.timeout"
-	confTunnelRecvTimeout    = "bourne.msg.client.tunnel.recv.timeout"
-	confTunnelMaxRetries     = "bourne.msg.client.tunnel.max.retries"
+	confTunnelDebug         = "bourne.msg.client.tunnel.debug"
+	confTunnelBuffererLimit = "bourne.msg.client.tunnel.bufferer.limit"
+	confTunnelSenderLimit   = "bourne.msg.client.tunnel.sender.limit"
+	confTunnelVerifyTimeout = "bourne.msg.client.tunnel.verify.timeout"
+	confTunnelSendTimeout   = "bourne.msg.client.tunnel.send.timeout"
+	confTunnelRecvTimeout   = "bourne.msg.client.tunnel.recv.timeout"
+	confTunnelMaxRetries    = "bourne.msg.client.tunnel.max.retries"
 )
 
 const (
-	defaultTunnelBuffererLimit  = 1 << 20
-	defaultTunnelSenderLimit    = 1 << 18
-	defaultTunnelVerifyTimeout  = 5 * time.Second
-	defaultTunnelSendTimeout    = 5 * time.Second
-	defaultTunnelRecvTimeout    = 5 * time.Second
-	defaultTunnelMaxRetries     = 3
+	defaultTunnelBuffererLimit = 1 << 20
+	defaultTunnelSenderLimit   = 1 << 18
+	defaultTunnelVerifyTimeout = 5 * time.Second
+	defaultTunnelSendTimeout   = 5 * time.Second
+	defaultTunnelRecvTimeout   = 5 * time.Second
+	defaultTunnelMaxRetries    = 3
 )
 
-type tunnelConfig struct {
-	Debug          bool
-	AssemblerLimit int
-	BuffererLimit  int
-	SenderLimit    int
-	VerifyTimeout  time.Duration
-	RecvTimeout    time.Duration
-	SendTimeout    time.Duration
-	MaxRetries     int
-}
 
-func newTunnelConfig(conf utils.Config) *tunnelConfig {
-	return &tunnelConfig{
-		Debug:          conf.OptionalBool(confTunnelDebug, false),
-		AssemblerLimit: conf.OptionalInt(confTunnelAssemblerLimit, defaultTunnelAssemblerLimit),
-		BuffererLimit:  conf.OptionalInt(confTunnelBuffererLimit, defaultTunnelBuffererLimit),
-		SenderLimit:    conf.OptionalInt(confTunnelSenderLimit, defaultTunnelSenderLimit),
-		VerifyTimeout:  conf.OptionalDuration(confTunnelVerifyTimeout, defaultTunnelVerifyTimeout),
-		RecvTimeout:    conf.OptionalDuration(confTunnelRecvTimeout, defaultTunnelRecvTimeout),
-		SendTimeout:    conf.OptionalDuration(confTunnelSendTimeout, defaultTunnelSendTimeout),
-		MaxRetries:     conf.OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)}
-}
-
-// the general dependency injector
-type tunnelEnv struct {
-	logger utils.Logger
-	config *tunnelConfig
-}
-
-func newTunnelEnv(config utils.Config) *tunnelEnv {
-	return &tunnelEnv{logger: utils.NewStandardLogger(config), config: newTunnelConfig(config)}
-}
-
-func recvOrTimeout(e *tunnelEnv, in <-chan wire.Packet) (wire.Packet, error) {
-	timer := time.NewTimer(e.config.RecvTimeout)
-
-	select {
-	case <-timer.C:
-		return nil, NewTimeoutError("Timeout")
-	case p := <-in:
-		return p, nil
-	}
-}
-
-func sendOrTimeout(e *tunnelEnv, out chan<- wire.Packet, p wire.Packet) error {
-	timer := time.NewTimer(e.config.SendTimeout)
-
-	select {
-	case <-timer.C:
-		return NewTimeoutError("Timeout")
-	case out <- p:
-		return nil
-	}
-}
 
 // complete listing of tunnel channels.
 type tunnelDriver struct {
@@ -200,39 +147,37 @@ func newTunnelChannels(sendMain chan<- wire.Packet) *tunnelDriver {
 // the main tunnel abstraction
 type tunnel struct {
 	route    wire.Route
-	env      *tunnelEnv
 	channels *tunnelDriver
 	machine  utils.StateMachine
 
-	streamRecv *Stream
-	streamSend *Stream
+	streamRecv *concurrent.Stream
+	streamSend *concurrent.Stream
 }
 
-
-func NewTunnel(route wire.Route, controls core.DuplexService) Tunnel {
+func NewTunnel(socket TunnelSocket) Tunnel {
 	return nil
 
 	// var env tunnelEnv
 	// // initialize the environment
 	// // env := newTunnelEnv(sub.)
-//
+	//
 	// // initialize all the channels
 	// channels := newTunnelChannels(mainSend)
-//
+	//
 	// // opening workers
 	// openerInit := NewOpenerInit(route, env, channels)
 	// openerRecv := NewOpenerRecv(route, env, channels)
-//
+	//
 	// // closing workers
 	// closerInit := NewCloserInit(route, env, channels)
 	// closerRecv := NewCloserRecv(route, env, channels)
-//
+	//
 	// // opened workers
 	// streamSend, sendMain := NewSendMain(route, env, channels)
 	// recvMain := NewRecvMain(env, channels)
 	// recvAssembler := NewRecvAssembler(env, channels)
 	// streamRecv, recvBuff := NewRecvBuffer(env, channels)
-//
+	//
 	// // build the machine
 	// builder := utils.BuildStateMachine()
 	// builder.AddState(TunnelOpeningInit, openerInit)
@@ -240,22 +185,22 @@ func NewTunnel(route wire.Route, controls core.DuplexService) Tunnel {
 	// builder.AddState(TunnelOpened, sendMain, recvMain, recvAssembler, recvBuff)
 	// builder.AddState(TunnelClosingInit, closerInit)
 	// builder.AddState(TunnelClosingRecv, closerRecv)
-//
+	//
 	// // start the machine
 	// var machine utils.StateMachine
 	// if options.Listening {
-		// machine = builder.Start(TunnelOpeningInit)
+	// machine = builder.Start(TunnelOpeningInit)
 	// } else {
-		// machine = builder.Start(TunnelOpeningRecv)
+	// machine = builder.Start(TunnelOpeningRecv)
 	// }
-//
+	//
 	// return &tunnel{
-		// route:      route,
-		// env:        env,
-		// machine:    machine,
-		// channels:   channels,
-		// streamRecv: streamRecv,
-		// streamSend: streamSend}
+	// route:      route,
+	// env:        env,
+	// machine:    machine,
+	// channels:   channels,
+	// streamRecv: streamRecv,
+	// streamSend: streamSend}
 }
 
 func (t *tunnel) Route() wire.Route {

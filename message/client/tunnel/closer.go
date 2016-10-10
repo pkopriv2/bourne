@@ -4,18 +4,17 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/pkopriv2/bourne/msg/core"
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/utils"
 )
-
 
 type CloserSocket struct {
 	PacketRx <-chan wire.Packet
 	PacketTx chan<- wire.Packet
 }
 
-func NewCloserInit(route wire.Route, ctx core.Context, socket *CloserSocket) func(utils.WorkerController, []interface{}) {
+func NewCloserInit(route wire.Route, ctx common.Context, socket *CloserSocket) func(utils.WorkerController, []interface{}) {
 	return func(state utils.WorkerController, args []interface{}) {
 		if err := closeInit(route, ctx, socket.PacketRx, socket.PacketTx); err != nil {
 			state.Fail(err)
@@ -25,7 +24,7 @@ func NewCloserInit(route wire.Route, ctx core.Context, socket *CloserSocket) fun
 	}
 }
 
-func NewCloserRecv(route wire.Route, ctx core.Context, socket *CloserSocket) func(utils.WorkerController, []interface{}) {
+func NewCloserRecv(route wire.Route, ctx common.Context, socket *CloserSocket) func(utils.WorkerController, []interface{}) {
 	return func(state utils.WorkerController, args []interface{}) {
 		challenge := args[0].(uint64)
 
@@ -38,7 +37,7 @@ func NewCloserRecv(route wire.Route, ctx core.Context, socket *CloserSocket) fun
 }
 
 // Performs close handshake from initiator's perspective: send(close), recv(close, verify), send(verify)
-func closeInit(route wire.Route, ctx core.Context, in <-chan wire.Packet, out chan<- wire.Packet) error {
+func closeInit(route wire.Route, ctx common.Context, in <-chan wire.Packet, out chan<- wire.Packet) error {
 
 	// generate a new random value for the handshake.
 	offset := uint64(rand.Uint32())
@@ -74,7 +73,7 @@ func closeInit(route wire.Route, ctx core.Context, in <-chan wire.Packet, out ch
 }
 
 // Performs receiver (ie listener) close handshake: recv(close)[already received], send(close,verify), recv(verify)
-func closeRecv(route wire.Route, ctx core.Context, in <-chan wire.Packet, out chan<- wire.Packet, challenge uint64) error {
+func closeRecv(route wire.Route, ctx common.Context, in <-chan wire.Packet, out chan<- wire.Packet, challenge uint64) error {
 
 	// Send: close verify
 	offset := uint64(rand.Uint32())
