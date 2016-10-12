@@ -10,7 +10,6 @@ type List interface {
 type list struct {
 	lock  sync.RWMutex
 	inner []interface{}
-	idx int
 }
 
 func NewList(cap int) List {
@@ -20,17 +19,16 @@ func NewList(cap int) List {
 func (s *list) All() []interface{} {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	return Copylist(s.inner)
+	return CopyList(s.inner)
 }
 
 func (s *list) Append(v interface{}) {
 	s.lock.Lock()
-	defer s.lock.Lock()
-	s.inner[s.idx] = v
-	s.idx++
+	defer s.lock.Unlock()
+	s.inner = append(s.inner, v)
 }
 
-func Copylist(orig []interface{}) []interface{} {
+func CopyList(orig []interface{}) []interface{} {
 	ret := make([]interface{}, len(orig))
 	copy(ret, orig)
 	return ret

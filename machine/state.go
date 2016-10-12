@@ -1,14 +1,9 @@
-package circuit
+package machine
 
 import (
 	"fmt"
 
 	"github.com/pkopriv2/bourne/concurrent"
-)
-
-const (
-	TerminalState = -1
-	FailureState  = -2
 )
 
 // This class serves to simplify much of the concurrency issues that arise
@@ -18,6 +13,10 @@ const (
 // may have very different concurrency models.  Any shared state must be
 // be managed with extreme care.  This allows authors to bind each separate
 // concurrency model with a particule state in the lifecycle.
+const (
+	TerminalState = -1
+	FailureState  = -2
+)
 
 type Worker func(c WorkerSocket, args []interface{})
 
@@ -25,46 +24,64 @@ func NewStateMachine() StateMachineBuilder {
 	return NewStateMachineBuilder()
 }
 
-func To(target int, args ...interface{}) Transition {
+func Transition(target int, args ...interface{}) State {
 	return &transition{target, args}
 }
 
-func ToTerminal() Transition {
-	return To(TerminalState)
+func Terminal() State {
+	return Transition(TerminalState)
 }
 
-func ToFailure(e error) Transition {
-	return To(FailureState, e)
+func Failure(e error) State {
+	return Transition(FailureState, e)
 }
 
-func IsFailure(s Transition) bool {
-	return s.Target() == FailureState
+func IsFailure(t State) bool {
+	return t.Id() == FailureState
 }
 
-func IsTerminal(s Transition) bool {
-	return s.Target() == TerminalState
+func IsTerminal(t State) bool {
+	return t.Id() == TerminalState
 }
 
-func Latest(history []Transition) Transition {
-	return extractLatest(history)
+func ExtractNth(machine StateMachine, n int) State {
+	return extractNth(machine.History(), n)
 }
 
-func Failure(s Transition) error {
-	return extractFailure(s)
+func ExtractLatest(machine StateMachine) State {
+	return extractLatest(machine.History())
 }
 
-func Terminate(s StateMachine) {
+func ExtractFailure(machine StateMachine) error {
+	return extractFailure(extractLatest(machine.History()))
+}
+
+func Wait(m StateMachine) error {
+	<-m.Closed()
+	return ExtractFailure(m)
+}
+
+func Close(m StateMachine) error {
+	Update(m, TerminalState)
+	return ExtractFailure(m)
+}
+
+func Fail(m StateMachine, e error) error {
+	Update(m, FailureState, e)
+	return ExtractFailure(m)
+}
+
+func Update(m StateMachine, state int, args ...interface{}) bool {
 	select {
-	case <-s.Closed():
-		return
-	case s.Update() <- ToTerminal():
+	case <-m.Closed():
+		return false
+	case m.Update() <- Transition(state, args...):
+		return true
 	}
-
-	<-s.Closed()
 }
 
-type Transition interface {
-	Target() int
+type State interface {
+	Id() int
 	Args() []interface{}
 }
 
@@ -74,16 +91,18 @@ type StateMachineBuilder interface {
 }
 
 type StateMachine interface {
-	History() []Transition
+	History() []State
 	Closed() <-chan struct{}
-	Update() chan<- Transition
+	Update() chan<- State
+	Close() error
+	Wait() error
+	Fail(error) error
 }
 
 type WorkerSocket interface {
 	Closed() <-chan struct{}
 	Next(int, ...interface{})
 	Fail(error)
-	Done()
 }
 
 // Implementations
@@ -93,12 +112,12 @@ type transition struct {
 	args []interface{}
 }
 
-func (s *transition) Target() int {
-	return s.id
+func (t *transition) Id() int {
+	return t.id
 }
 
-func (s *transition) Args() []interface{} {
-	return s.args
+func (t *transition) Args() []interface{} {
+	return t.args
 }
 
 type workerSocket struct {
@@ -122,7 +141,7 @@ func (w *workerSocket) Fail(e error) {
 	select {
 	case <-w.parent.closed:
 		return
-	case w.parent.resultIn <- ToFailure(e):
+	case w.parent.resultIn <- Failure(e):
 		return
 	}
 }
@@ -131,7 +150,7 @@ func (w *workerSocket) Next(target int, args ...interface{}) {
 	select {
 	case <-w.parent.closed:
 		return
-	case w.parent.resultIn <- To(target, args):
+	case w.parent.resultIn <- Transition(target, args...):
 		return
 	}
 }
@@ -139,16 +158,16 @@ func (w *workerSocket) Next(target int, args ...interface{}) {
 type stageController struct {
 	wait      concurrent.Wait
 	closed    chan struct{}
-	resultIn  chan Transition
-	resultOut chan Transition
+	resultIn  chan State
+	resultOut chan State
 }
 
 func newStageController() *stageController {
 	s := &stageController{
 		concurrent.NewWait(),
 		make(chan struct{}),
-		make(chan Transition),
-		make(chan Transition, 1)}
+		make(chan State),
+		make(chan State, 1)}
 
 	go controlStage(s)
 	return s
@@ -158,19 +177,19 @@ func (s *stageController) NewWorkerSocket() *workerSocket {
 	return newWorkerSocket(s)
 }
 
-func (s *stageController) Result() <-chan Transition {
+func (s *stageController) Result() <-chan State {
 	return s.resultOut
 }
 
-func (s *stageController) Transition() chan<- Transition {
+func (s *stageController) Transition() chan<- State {
 	return s.resultIn
 }
 
 func controlStage(s *stageController) {
-	var result Transition
+	var result State
 	select {
 	case <-s.wait.Wait():
-		s.resultOut <- ToTerminal()
+		s.resultOut <- Terminal()
 		return
 	case result = <-s.resultIn:
 	}
@@ -185,7 +204,7 @@ type stage struct {
 	workers []Worker
 }
 
-func newState(id int, workers []Worker) *stage {
+func newStage(id int, workers ...Worker) *stage {
 	return &stage{id, workers}
 }
 
@@ -193,7 +212,12 @@ func (s *stage) run(args []interface{}) *stageController {
 	controller := newStageController()
 
 	for _, w := range s.workers {
-		go w(controller.NewWorkerSocket(), args)
+		work := w
+		ctrl := controller.NewWorkerSocket()
+		go func() {
+			work(ctrl, args)
+			ctrl.Done()
+		}()
 	}
 
 	return controller
@@ -208,7 +232,7 @@ func NewStateMachineBuilder() StateMachineBuilder {
 }
 
 func (s *stateMachineBuilder) AddState(id int, fn ...Worker) StateMachineBuilder {
-	s.states[id] = newState(id, fn)
+	s.states[id] = newStage(id, fn...)
 	return s
 }
 
@@ -224,7 +248,7 @@ func (s *stateMachineBuilder) Start(init int, args ...interface{}) StateMachine 
 type stateMachine struct {
 	states  map[int]*stage
 	closed  chan struct{}
-	update  chan Transition
+	update  chan State
 	history concurrent.List
 }
 
@@ -232,37 +256,50 @@ func newStateMachine(states map[int]*stage, init int, args []interface{}) StateM
 	s := &stateMachine{
 		states:  states,
 		closed:  make(chan struct{}),
-		update:  make(chan Transition),
+		update:  make(chan State),
 		history: concurrent.NewList(10)}
 
 	go controlStateMachine(s, init, args)
 	return s
 }
 
-func (s *stateMachine) History() []Transition {
-	return toTransitions(s.history.All())
+func (s *stateMachine) History() []State {
+	return toStates(s.history.All())
 }
 
 func (s *stateMachine) Closed() <-chan struct{} {
 	return s.closed
 }
 
-func (s *stateMachine) Update() chan<- Transition {
+func (s *stateMachine) Update() chan<- State {
 	return s.update
+}
+
+func (s *stateMachine) Wait() error {
+	return Wait(s)
+}
+
+func (s *stateMachine) Close() error {
+	return Close(s)
+}
+
+func (s *stateMachine) Fail(e error) error {
+	return Fail(s, e)
 }
 
 func controlStateMachine(s *stateMachine, init int, args []interface{}) {
 	cur := s.states[init]
 	if cur == nil {
-		s.history.Append(ToFailure(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
+		s.history.Append(Failure(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
 		close(s.closed)
+		return
 	}
 
-	s.history.Append(To(init, args...))
+	s.history.Append(Transition(init, args...))
 	for {
 		control := cur.run(args)
 
-		var next Transition
+		var next State
 		select {
 		case next = <-control.Result():
 		case next = <-s.update:
@@ -285,9 +322,9 @@ func controlStateMachine(s *stateMachine, init int, args []interface{}) {
 			return
 		}
 
-		cur = s.states[next.Target()]
+		cur = s.states[next.Id()]
 		if cur == nil {
-			s.history.Append(ToFailure(fmt.Errorf("State [%v] does not exist", next.Target())))
+			s.history.Append(Failure(fmt.Errorf("State [%v] does not exist", next.Id())))
 			close(s.closed)
 			return
 		}
@@ -296,16 +333,24 @@ func controlStateMachine(s *stateMachine, init int, args []interface{}) {
 	}
 }
 
-func toTransitions(raw []interface{}) []Transition {
-	ret := make([]Transition, len(raw))
+func toStates(raw []interface{}) []State {
+	ret := make([]State, len(raw))
 	for i, v := range raw {
-		ret[i] = v.(Transition)
+		ret[i] = v.(State)
 	}
 
 	return ret
 }
 
-func extractLatest(transitions []Transition) Transition {
+func extractNth(transitions []State, n int) State {
+	if len(transitions)-1 < n {
+		return nil
+	}
+
+	return transitions[n]
+}
+
+func extractLatest(transitions []State) State {
 	if len(transitions) == 0 {
 		return nil
 	}
@@ -313,8 +358,8 @@ func extractLatest(transitions []Transition) Transition {
 	return transitions[len(transitions)-1]
 }
 
-func extractFailure(latest Transition) error {
-	if latest.Target() != FailureState {
+func extractFailure(latest State) error {
+	if latest.Id() != FailureState {
 		return nil
 	}
 
