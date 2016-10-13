@@ -5,34 +5,32 @@ import (
 	"math/rand"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/machine"
+	"github.com/pkopriv2/bourne/message/core"
 	"github.com/pkopriv2/bourne/message/wire"
-	"github.com/pkopriv2/bourne/utils"
 )
 
-type CloserSocket struct {
-	PacketRx <-chan wire.Packet
-	PacketTx chan<- wire.Packet
-}
+// TODO: CLOSE SEND CHANNELS INDEPENDENTLY
 
-func NewCloserInit(route wire.Route, ctx common.Context, socket *CloserSocket) func(utils.WorkerController, []interface{}) {
-	return func(state utils.WorkerController, args []interface{}) {
-		if err := closeInit(route, ctx, socket.PacketRx, socket.PacketTx); err != nil {
-			state.Fail(err)
+func NewCloserInit(route wire.Route, ctx common.Context, socket core.DataSocket) func(machine.WorkerSocket, []interface{}) {
+	return func(worker machine.WorkerSocket, args []interface{}) {
+		if err := closeInit(route, ctx, socket.Rx(), socket.Tx()); err != nil {
+			worker.Fail(err)
 		}
 
-		state.Next(TunnelClosed)
+		worker.Next(TunnelClosed)
 	}
 }
 
-func NewCloserRecv(route wire.Route, ctx common.Context, socket *CloserSocket) func(utils.WorkerController, []interface{}) {
-	return func(state utils.WorkerController, args []interface{}) {
+func NewCloserRecv(route wire.Route, ctx common.Context, socket core.DataSocket) func(machine.WorkerSocket, []interface{}) {
+	return func(worker machine.WorkerSocket, args []interface{}) {
 		challenge := args[0].(uint64)
 
-		if err := closeRecv(route, ctx, socket.PacketRx, socket.PacketTx, challenge); err != nil {
-			state.Fail(err)
+		if err := closeRecv(route, ctx, socket.Rx(), socket.Tx(), challenge); err != nil {
+			worker.Fail(err)
 		}
 
-		state.Next(TunnelClosed)
+		worker.Next(TunnelClosed)
 	}
 }
 

@@ -16,11 +16,12 @@ const (
 )
 
 // TODO: NO LONGER NEED TIME AS PART OF REF!!
+// TODO: MOVE TO CONDITION VARIABLES WHEN READING!!!
 // A ref represents a position within a stream at particular moment in time.
 //
 type Ref struct {
-	offset uint64
-	time   time.Time
+	Offset uint64
+	Time   time.Time
 }
 
 // Generates a new ref from the offset.  Uses time.Now() for time of ref.
@@ -91,7 +92,7 @@ func (s *Stream) Reset() (*Ref, *Ref, error) {
 	prev := s.cur
 
 	// moves the read back to the start.
-	s.tail = NewRef(s.tail.offset)
+	s.tail = NewRef(s.tail.Offset)
 	s.cur = s.tail
 	return s.cur, prev, nil
 }
@@ -104,11 +105,11 @@ func (s *Stream) Commit(pos uint64) (*Ref, error) {
 		return nil, ErrStreamClosed
 	}
 
-	if pos > s.head.offset {
+	if pos > s.head.Offset {
 		return nil, ErrStreamInvalidCommit
 	}
 
-	if pos <= s.tail.offset {
+	if pos <= s.tail.Offset {
 		return nil, nil
 	}
 
@@ -116,7 +117,7 @@ func (s *Stream) Commit(pos uint64) (*Ref, error) {
 	s.tail = NewRef(pos)
 
 	// we may be committing beyond the current read pointer.  in that case, move it too
-	if pos > s.cur.offset {
+	if pos > s.cur.Offset {
 		s.cur = s.tail
 	}
 	return s.tail, nil
@@ -127,8 +128,8 @@ func (s *Stream) Data() []byte {
 	defer s.lock.RUnlock()
 
 	// grab their positions
-	r := s.tail.offset
-	w := s.head.offset
+	r := s.tail.Offset
+	w := s.head.Offset
 
 	len := uint64(len(s.buffer))
 	ret := make([]byte, w-r)
@@ -159,8 +160,8 @@ func (s *Stream) TryRead(in []byte, prune bool) (*Ref, uint64, error) {
 	start := s.cur
 
 	// grab current positions
-	r := start.offset
-	w := s.head.offset
+	r := start.Offset
+	w := s.head.Offset
 
 	var i uint64 = 0
 	for ; i < inLen && r+i < w; i++ {
@@ -190,8 +191,8 @@ func (s *Stream) TryWrite(val []byte) (uint64, *Ref, error) {
 	bufLen := uint64(len(s.buffer))
 
 	// grab current positions
-	r := s.tail.offset
-	w := s.head.offset
+	r := s.tail.Offset
+	w := s.head.Offset
 
 	// just write until we can't write anymore.
 	var i uint64 = 0

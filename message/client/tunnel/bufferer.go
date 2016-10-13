@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/machine"
 	"github.com/pkopriv2/bourne/utils"
 )
 
@@ -12,24 +14,24 @@ type BuffererSocket struct {
 	SegmentTx <-chan []byte
 }
 
-func NewRecvBuffer(ctx common.Context, socket *BuffererSocket, stream *Stream) func(utils.WorkerController, []interface{}) {
+func NewBufferer(ctx common.Context, socket *BuffererSocket, stream *concurrent.Stream) func(machine.WorkerSocket, []interface{}) {
 	logger := ctx.Logger()
 
-	return func(state utils.WorkerController, args []interface{}) {
+	return func(state machine.WorkerSocket, args []interface{}) {
 		logger.Debug("RecvBuffer Opened")
 		defer logger.Info("RecvBuffer Closed")
 
 		var cur []byte
 		for {
 			select {
-			case <-state.Close():
+			case <-state.Closed():
 				return
 			case cur = <-socket.SegmentTx:
 			}
 
 			done, timer := utils.NewCircuitBreaker(365*24*time.Hour, func() { stream.Write(cur) })
 			select {
-			case <-state.Close():
+			case <-state.Closed():
 				return
 			case <-done:
 				continue

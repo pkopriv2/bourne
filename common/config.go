@@ -158,5 +158,5 @@ func readDuration(m map[string]interface{}, key string) (time.Duration, error) {
 		return 0, newConfigParsingError(Duration, key, val)
 	}
 
-	return time.Duration(ret), nil
+	return time.Duration(ret)*time.Millisecond, nil
 }

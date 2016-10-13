@@ -2,20 +2,20 @@ package tunnel
 
 import (
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/machine"
 	"github.com/pkopriv2/bourne/message/wire"
-	"github.com/pkopriv2/bourne/utils"
 )
 
-type RecvMainSocket struct {
+type ReceiverSocket struct {
 	PacketRx  <-chan wire.Packet
 	SegmentTx chan<- wire.SegmentMessage
 	VerifyTx  chan<- wire.NumMessage
 }
 
-func NewRecvMain(ctx common.Context, socket *RecvMainSocket) func(utils.WorkerController, []interface{}) {
+func NewReceiver(ctx common.Context, socket *ReceiverSocket) func(machine.WorkerSocket, []interface{}) {
 	logger := ctx.Logger()
 
-	return func(state utils.WorkerController, args []interface{}) {
+	return func(state machine.WorkerSocket, args []interface{}) {
 		logger.Debug("ReceiveMain Starting")
 		defer logger.Debug("ReceiveMain Closing")
 
@@ -46,7 +46,7 @@ func NewRecvMain(ctx common.Context, socket *RecvMainSocket) func(utils.WorkerCo
 			}
 
 			select {
-			case <-state.Close():
+			case <-state.Closed():
 				return
 			case chanAssembler <- msgSegment:
 				msgSegment = nil

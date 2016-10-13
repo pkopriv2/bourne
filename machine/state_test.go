@@ -45,7 +45,7 @@ func TestStage_ExternalFail(t *testing.T) {
 	e := errors.New("error")
 
 	controller := state.run([]interface{}{})
-	controller.Transition() <- Failure(e)
+	controller.Transition() <- NewFailureState(e)
 
 	wait.Wait()
 
@@ -92,7 +92,7 @@ func TestStateMachine_Empty(t *testing.T) {
 	machine := builder.Start(1)
 
 	// should just close...
-	<-machine.Closed()
+	assert.NotNil(t, machine.Wait())
 }
 
 func TestStateMachine_IllegalTransition(t *testing.T) {
@@ -102,9 +102,7 @@ func TestStateMachine_IllegalTransition(t *testing.T) {
 	})
 
 	machine := builder.Start(1)
-
-	<-machine.Closed()
-	assert.Error(t, ExtractFailure(machine))
+	assert.NotNil(t, machine.Wait())
 }
 
 func TestStateMachine_SingleState(t *testing.T) {
@@ -113,10 +111,9 @@ func TestStateMachine_SingleState(t *testing.T) {
 
 	machine := builder.Start(1, "args")
 
-	<-machine.Closed()
-
-	assert.Equal(t, Transition(1, "args"), ExtractNth(machine, 0))
-	assert.Equal(t, Terminal(), ExtractNth(machine, 1))
+	assert.Nil(t, machine.Wait())
+	assert.Equal(t, NewState(1, "args"), ExtractNthState(machine, 0))
+	assert.Equal(t, NewTerminalState(), ExtractNthState(machine, 1))
 }
 
 func TestStateMachine_MultiState(t *testing.T) {
@@ -132,12 +129,12 @@ func TestStateMachine_MultiState(t *testing.T) {
 	})
 
 	machine := builder.Start(1, "1")
-	<-machine.Closed()
 
-	assert.Equal(t, Transition(1, "1"), ExtractNth(machine, 0))
-	assert.Equal(t, Transition(2, "2"), ExtractNth(machine, 1))
-	assert.Equal(t, Transition(3, "3"), ExtractNth(machine, 2))
-	assert.Equal(t, Terminal(), ExtractNth(machine, 3))
+	assert.Nil(t, machine.Wait())
+	assert.Equal(t, NewState(1, "1"), ExtractNthState(machine, 0))
+	assert.Equal(t, NewState(2, "2"), ExtractNthState(machine, 1))
+	assert.Equal(t, NewState(3, "3"), ExtractNthState(machine, 2))
+	assert.Equal(t, NewTerminalState(), ExtractNthState(machine, 3))
 }
 
 func TestStateMachine_ExternalTransition(t *testing.T) {
@@ -155,39 +152,31 @@ func TestStateMachine_ExternalTransition(t *testing.T) {
 
 	machine := builder.Start(1)
 	// susceptible to timing errors...
-	assert.True(t, Update(machine, 3))
-
-	assert.Equal(t, Transition(1), ExtractNth(machine, 0))
-	// assert.Equal(t, TransitionTo(3), ExtractNth(machine, 1))
-	// assert.Equal(t, TransitionToTerminal(), ExtractNth(machine, 2))
+	assert.Nil(t, machine.Move(3))
+	assert.Nil(t, machine.Wait())
+	assert.Nil(t, machine.Wait())
+	assert.Equal(t, NewState(1), ExtractNthState(machine, 0))
+	assert.Equal(t, NewState(3), ExtractNthState(machine, 1))
+	assert.Equal(t, NewTerminalState(), ExtractNthState(machine, 2))
 }
 
-//
-// func TestStateMachine_ExternalFailure(t *testing.T) {
-// builder := BuildStateMachine()
-//
-// builder.AddState(1, func(c WorkerSocket, args []interface{}) {
-// time.Sleep(100 * time.Millisecond)
-// c.Next(2)
-// })
-// builder.AddState(2, func(c WorkerSocket, args []interface{}) {
-// c.Next(3)
-// })
-// builder.AddState(3, func(c WorkerSocket, args []interface{}) {
-// })
-//
-// machine := builder.Start(1)
-//
-// c := machine.Control()
-//
-// // fail
-// e := errors.New("error")
-// select {
-// case <-c.Wait():
-// t.Fail()
-// return
-// case c.Transition() <- Fail(e):
-// }
-//
-// assert.Equal(t, e, <-c.Wait())
-// }
+func TestStateMachine_ExternalFailure(t *testing.T) {
+	builder := NewStateMachine()
+
+	builder.AddState(1, func(c WorkerSocket, args []interface{}) {
+		time.Sleep(100 * time.Millisecond)
+		c.Next(2)
+	})
+	builder.AddState(2, func(c WorkerSocket, args []interface{}) {
+		c.Next(3)
+	})
+	builder.AddState(3, func(c WorkerSocket, args []interface{}) {
+	})
+
+	machine := builder.Start(1)
+
+	// fail
+	e := errors.New("error")
+	machine.Fail(e)
+	assert.Equal(t, e, machine.Wait())
+}

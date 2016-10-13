@@ -2,196 +2,91 @@ package tunnel
 
 import (
 	"testing"
-	"time"
 
-	"github.com/pkopriv2/bourne/msg/wire"
-	"github.com/pkopriv2/bourne/utils"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/machine"
+	"github.com/pkopriv2/bourne/message/wire"
 	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRecvMain_Close(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
-
-	recvMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainIn:       recvMain}
-
-	worker := NewRecvMain(env, channels)
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	controller := machine.Control()
-
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetClose(100).Build()
-
-	done, timeout := utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
-	select {
-	case <-done:
-	case <-timeout:
-		t.Fail()
-		return
-	}
-
-	assert.Nil(t, <-controller.Wait())
-	assert.Equal(t, utils.State(1), controller.Summary()[0])
-	assert.Equal(t, utils.State(TunnelClosingRecv, uint64(100)), controller.Summary()[1])
-	assert.Equal(t, utils.Terminal(), controller.Summary()[2])
-}
-
-func TestRecvMain_Error(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
-
-	recvMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainIn:       recvMain}
-
-	worker := NewRecvMain(env, channels)
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	controller := machine.Control()
-
-	err := wire.NewProtocolErrorFamily(1)("msg")
-
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetError(err).Build()
-
-	done, timeout := utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
-	select {
-	case <-done:
-	case <-timeout:
-		t.Fail()
-		return
-	}
-
-	assert.Equal(t, err, <-controller.Wait())
-	assert.Equal(t, []utils.Transition{utils.State(1), utils.Fail(err)}, controller.Summary())
-}
-
 func TestRecvMain_SingleVerify(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+	driver, m := NewTestReceiver()
+	defer m.Close()
 
-	recvMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainIn:       recvMain}
-
-	worker := NewRecvMain(env, channels)
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetVerify(100).Build()
-
-	done, timeout := utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
-	select {
-	case <-done:
-	case <-timeout:
-		t.Fail()
-		return
-	}
-
-	assert.Equal(t, wire.NewNumMessage(100), <-channels.sendVerifier)
+	driver.PacketRx <- wire.BuildPacket(NewRoute()).SetVerify(100).Build()
+	assert.Equal(t, wire.NewNumMessage(100), <-driver.VerifyTx)
 }
 
 func TestRecvMain_SingleSegment(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+	driver, m := NewTestReceiver()
+	defer m.Close()
 
-	recvMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainIn:       recvMain}
-
-	worker := NewRecvMain(env, channels)
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetSegment(100, []byte{0, 1, 2}).Build()
-
-	done, timeout := utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
-	select {
-	case <-done:
-	case <-timeout:
-		t.Fail()
-		return
-	}
-
-	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0, 1, 2}), <-channels.assemblerIn)
+	driver.PacketRx <- wire.BuildPacket(NewRoute()).SetSegment(100, []byte{0, 1, 2}).Build()
+	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0, 1, 2}), <-driver.SegmentTx)
 }
 
 func TestRecvMain_SegmentAndVerify(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+	driver, m := NewTestReceiver()
+	defer m.Close()
 
-	recvMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainIn:       recvMain}
+	driver.PacketRx <- wire.BuildPacket(NewRoute()).SetVerify(99).SetSegment(100, []byte{0, 1, 2}).Build()
 
-	worker := NewRecvMain(env, channels)
+	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0, 1, 2}), <-driver.SegmentTx)
+	assert.Equal(t, wire.NewNumMessage(99), <-driver.VerifyTx)
+}
 
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-	builder.AddState(TunnelClosingRecv, func(_ utils.WorkerController, _ []interface{}) {})
+func TestRecvMain_Close(t *testing.T) {
+	driver, m := NewTestReceiver()
+	m.Close()
 
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
+	builder := m.Clone()
+	builder.AddState(TunnelClosingRecv, func(_ machine.WorkerSocket, _ []interface{}) {})
 
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	p := wire.BuildPacket(wire.NewRemoteRoute(l, r)).SetVerify(200).SetSegment(100, []byte{0, 1, 2}).Build()
+	m = builder.Start(TunnelOpened)
 
-	done, timeout := utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
-	select {
-	case <-done:
-	case <-timeout:
-		t.Fail()
-		return
-	}
+	driver.PacketRx <- wire.BuildPacket(NewRoute()).SetClose(100).Build()
 
-	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0, 1, 2}), <-channels.assemblerIn)
+	assert.Nil(t, m.Wait())
+	assert.Equal(t, machine.NewState(TunnelOpened), machine.ExtractNthState(m, 0))
+	assert.Equal(t, machine.NewState(TunnelClosingRecv, uint64(100)), machine.ExtractNthState(m, 1))
+}
 
-	// this should timeout if properly working
-	done, timeout = utils.NewCircuitBreaker(time.Second, func() { recvMain <- p })
-	select {
-	case <-done:
-		t.Fail()
-		return
-	case <-timeout:
-	}
+func TestRecvMain_Error(t *testing.T) {
+	driver, m := NewTestReceiver()
+	defer m.Close()
 
-	assert.Equal(t, wire.NewNumMessage(200), <-channels.sendVerifier)
+	err := wire.NewProtocolErrorFamily(1)("msg")
+	driver.PacketRx <- wire.BuildPacket(NewRoute()).SetError(err).Build()
+
+	assert.Equal(t, err, m.Wait())
+}
+
+type RecvMainDriver struct {
+	PacketRx  chan wire.Packet
+	SegmentTx chan wire.SegmentMessage
+	VerifyTx  chan wire.NumMessage
+}
+
+func NewRecvMainDriver() *RecvMainDriver {
+	return &RecvMainDriver{make(chan wire.Packet), make(chan wire.SegmentMessage), make(chan wire.NumMessage)}
+}
+
+func (s *RecvMainDriver) NewRecvMainSocket() *ReceiverSocket {
+	return &ReceiverSocket{s.PacketRx, s.SegmentTx, s.VerifyTx}
+}
+
+func NewTestReceiver() (*RecvMainDriver, machine.StateMachine) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+
+	driver := NewRecvMainDriver()
+
+	builder := machine.NewStateMachine()
+	builder.AddState(TunnelOpened, NewReceiver(ctx, driver.NewRecvMainSocket()))
+	machine := builder.Start(TunnelOpened)
+	return driver, machine
+}
+
+func NewRoute() wire.Route {
+	return wire.NewRemoteRoute(wire.NewAddress(uuid.NewV4(), 0), wire.NewAddress(uuid.NewV4(), 0))
 }

@@ -1,13 +1,16 @@
 package circuit
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/pkopriv2/bourne/concurrent"
 )
 
+var ControllerClosed = errors.New("CONTROLLER:CLOSED")
+
 type Controller interface {
-	Close()
+	Close() error
 	Fail(error)
 	NewControlSocket() (ControlSocket, error)
 }
@@ -48,28 +51,26 @@ func (c *controller) Wait() <-chan struct{} {
 	return c.wait.Wait()
 }
 
-func (c *controller) Close() {
-	if c.dead.Get() {
-		panic("Controller dead")
-	}
-
+func (c *controller) Close() error {
 	select {
 	case <-c.failed:
+		return ControllerClosed
 	case <-c.closed:
+		return ControllerClosed
 	case c.close <- struct{}{}:
 	}
 
 	<-c.Wait()
+	return nil
 }
 
 func (c *controller) Fail(e error) {
-	if c.dead.Get() {
-		panic("Controller dead")
-	}
 
 	select {
 	case <-c.failed:
+		return
 	case <-c.closed:
+		return
 	case c.fail <- e:
 	}
 
@@ -83,6 +84,20 @@ func (c *controller) Failure() error {
 	}
 
 	return err
+}
+
+func control(c *controller) {
+	defer c.wait.Done()
+
+	select {
+	case e := <-c.fail:
+		c.failure.Set(e)
+		close(c.failed)
+		c.dead.Set(true)
+	case <-c.close:
+		close(c.closed)
+		c.dead.Set(true)
+	}
 }
 
 func (c *controller) NewControlSocket() (ControlSocket, error) {
@@ -114,16 +129,3 @@ func (c *controlSocket) Done() {
 	c.parent.wait.Done()
 }
 
-func control(c *controller) {
-	defer c.wait.Done()
-
-	select {
-	case e := <-c.fail:
-		c.failure.Set(e)
-		close(c.failed)
-		c.dead.Set(true)
-	case <-c.close:
-		close(c.closed)
-		c.dead.Set(true)
-	}
-}

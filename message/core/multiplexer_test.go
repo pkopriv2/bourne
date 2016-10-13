@@ -46,9 +46,9 @@ func TestMux_Close_MultiSocket(t *testing.T) {
 
 	go mux.Close()
 
-	assert.NotNil(t, sock1.Closed())
-	assert.NotNil(t, sock1.Closed())
-	assert.NotNil(t, sock1.Closed())
+	assert.NotNil(t, <-sock1.Closed())
+	assert.NotNil(t, <-sock1.Closed())
+	assert.NotNil(t, <-sock1.Closed())
 }
 
 func TestMux_Fail_Empty(t *testing.T) {

@@ -4,144 +4,85 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkopriv2/bourne/msg/wire"
-	"github.com/pkopriv2/bourne/utils"
-	uuid "github.com/satori/go.uuid"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/machine"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSendMain_Timeout(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
-	env.config.VerifyTimeout = time.Millisecond
 
-	sendMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		recvVerifier: make(chan wire.NumMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainOut:      sendMain}
+	// ugh... maybe an actual class would be better....
+	_, driver, stream, machine := NewTestSender()
+	defer machine.Close()
 
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	route := wire.NewRemoteRoute(l, r)
-
-	stream, worker := NewSendMain(route, env, channels)
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
+	// need to write before we select on any channels
 	stream.Write([]byte{1})
-	<-sendMain
-	assert.Error(t, <-machine.Control().Wait())
+	<-driver.PacketTx
+
+	assert.NotNil(t, machine.Wait())
 }
 
 func TestSendMain_SingleTimeout(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
-	env.config.VerifyTimeout = 100 * time.Millisecond
-
-	sendMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		recvVerifier: make(chan wire.NumMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainOut:      sendMain}
-
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	route := wire.NewRemoteRoute(l, r)
-
-	stream, worker := NewSendMain(route, env, channels)
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
+	// ugh... maybe an actual class would be better....
+	_, driver, stream, machine := NewTestSender()
+	defer machine.Close()
 
 	stream.Write([]byte{1})
 
-	p1 := <-sendMain
-	p2 := <-sendMain
+	p1 := <-driver.PacketTx
+	p2 := <-driver.PacketTx
 	assert.Equal(t, p1, p2)
 }
 
 func TestSendMain_SingleSendVerify(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
-
-	sendMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		recvVerifier: make(chan wire.NumMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainOut:      sendMain}
-
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	route := wire.NewRemoteRoute(l, r)
-	stream, worker := NewSendMain(route, env, channels)
+	_, driver, stream, machine := NewTestSender()
+	defer machine.Close()
 
 	stream.Write([]byte{1})
-	stream.TryRead([]byte{0}, false)
 
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
+	p := <-driver.PacketTx
+	driver.SendVerifyRx <- wire.NewNumMessage(1)
 
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
+	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, []byte{1}, stream.Data())
-	channels.sendVerifier <- wire.NewNumMessage(1)
-
-	time.Sleep(10 * time.Millisecond)
+	assert.Equal(t, p.Segment(), wire.NewSegmentMessage(0, []byte{1}))
 	assert.Equal(t, []byte{}, stream.Data())
 }
 
-func TestSendMain_SingleSegment(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+func TestSendMain_SingleRecvVerify(t *testing.T) {
+	route, driver, stream, machine := NewTestSender()
+	defer machine.Close()
 
-	sendMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		sendVerifier: make(chan wire.NumMessage),
-		mainOut:      sendMain}
-
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	route := wire.NewRemoteRoute(l, r)
-	stream, worker := NewSendMain(route, env, channels)
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	num, err := stream.Write([]byte{0})
-	assert.Equal(t, 1, num)
-	assert.Nil(t, err)
-
-	assert.Equal(t, wire.BuildPacket(route).SetSegment(0, []byte{0}).Build(), <-sendMain)
+	stream.Write([]byte{1})
+	driver.RecvVerifyRx <- wire.NewNumMessage(1)
+	assert.Equal(t, wire.BuildPacket(route).SetVerify(1).Build(), <-driver.PacketTx)
 }
 
-func TestSendMain_SingleRecvVerify(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+type SendMainDriver struct {
+	PacketTx     chan wire.Packet
+	SendVerifyRx chan wire.NumMessage
+	RecvVerifyRx chan wire.NumMessage
+}
 
-	sendMain := make(chan wire.Packet)
-	channels := &tunnelChannels{
-		recvVerifier: make(chan wire.NumMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		mainOut:      sendMain}
+func newSendMainDriver() *SendMainDriver {
+	return &SendMainDriver{make(chan wire.Packet), make(chan wire.NumMessage), make(chan wire.NumMessage)}
+}
 
-	l := wire.NewAddress(uuid.NewV4(), 0)
-	r := wire.NewAddress(uuid.NewV4(), 0)
-	route := wire.NewRemoteRoute(l, r)
-	_, worker := NewSendMain(route, env, channels)
+func (s *SendMainDriver) NewSendMainSocket() *SenderSocket {
+	return &SenderSocket{s.PacketTx, s.SendVerifyRx, s.RecvVerifyRx}
+}
 
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, worker)
+func NewTestSender() (wire.Route, *SendMainDriver, *concurrent.Stream, machine.StateMachine) {
+	conf := common.NewConfig(map[string]interface{}{confTunnelVerifyTimeout: 100})
+	ctx := common.NewContext(conf)
 
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
+	route := NewRoute()
+	driver := newSendMainDriver()
+	stream := concurrent.NewStream(10)
 
-	channels.recvVerifier <- wire.NewNumMessage(1)
-	assert.Equal(t, wire.BuildPacket(route).SetVerify(1).Build(), <-sendMain)
+	builder := machine.NewStateMachine()
+	builder.AddState(TunnelOpened, NewSender(route, ctx, stream, driver.NewSendMainSocket()))
+	return route, driver, stream, builder.Start(TunnelOpened)
 }

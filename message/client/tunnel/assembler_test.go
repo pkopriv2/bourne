@@ -3,11 +3,11 @@ package tunnel
 import (
 	"testing"
 
-	"github.com/pkopriv2/bourne/msg/wire"
-	"github.com/pkopriv2/bourne/utils"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/machine"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/stretchr/testify/assert"
 )
-
 
 func TestPendingSegments_Next_Empty(t *testing.T) {
 	pend := NewPendingSegments(10)
@@ -63,79 +63,60 @@ func TestPendingSegments_Take_MultipleItems_Contiguous(t *testing.T) {
 }
 
 func TestAssembler_SingleByte(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+	driver, machine := NewTestAssembler()
+	defer machine.Close()
 
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		recvVerifier: make(chan wire.NumMessage),
-		buffererIn:   make(chan []byte)}
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, NewRecvAssembler(env, channels))
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	channels.assemblerIn <- wire.NewSegmentMessage(0, []byte{0})
-	assert.Equal(t, wire.NewNumMessage(1), <-channels.recvVerifier)
-	assert.Equal(t, []byte{0}, <-channels.buffererIn)
+	driver.SegmentRx <- wire.NewSegmentMessage(0, []byte{0})
+	assert.Equal(t, wire.NewNumMessage(1), <-driver.VerifyTx)
+	assert.Equal(t, []byte{0}, <-driver.SegmentTx)
 }
 
 func TestAssembler_MultiByte(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+	driver, machine := NewTestAssembler()
+	defer machine.Close()
 
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		recvVerifier: make(chan wire.NumMessage),
-		buffererIn:   make(chan []byte)}
-
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, NewRecvAssembler(env, channels))
-
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	channels.assemblerIn <- wire.NewSegmentMessage(0, []byte{0, 1})
-	assert.Equal(t, wire.NewNumMessage(2), <-channels.recvVerifier)
-	assert.Equal(t, []byte{0, 1}, <-channels.buffererIn)
+	driver.SegmentRx <- wire.NewSegmentMessage(0, []byte{0, 1})
+	assert.Equal(t, wire.NewNumMessage(2), <-driver.VerifyTx)
+	assert.Equal(t, []byte{0, 1}, <-driver.SegmentTx)
 }
 
 func TestAssembler_OutOfOrder(t *testing.T) {
-	env := newTunnelEnv(utils.NewEmptyConfig())
+	driver, machine := NewTestAssembler()
+	defer machine.Close()
 
-	channels := &tunnelChannels{
-		assemblerIn:  make(chan wire.SegmentMessage),
-		recvVerifier: make(chan wire.NumMessage),
-		buffererIn:   make(chan []byte)}
+	driver.SegmentRx <- wire.NewSegmentMessage(0, []byte{0, 1})
+	driver.SegmentRx <- wire.NewSegmentMessage(3, []byte{3, 4, 5})
+	driver.SegmentRx <- wire.NewSegmentMessage(2, []byte{2})
 
-	builder := utils.BuildStateMachine()
-	builder.AddState(1, NewRecvAssembler(env, channels))
+	assert.Equal(t, wire.NewNumMessage(2), <-driver.VerifyTx)
+	assert.Equal(t, []byte{0, 1}, <-driver.SegmentTx)
+	assert.Equal(t, []byte{2, 3, 4, 5}, <-driver.SegmentTx)
+	assert.Equal(t, wire.NewNumMessage(6), <-driver.VerifyTx)
 
-	machine := builder.Start(1)
-	defer utils.Terminate(machine)
-
-	channels.assemblerIn <- wire.NewSegmentMessage(0, []byte{0, 1})
-	channels.assemblerIn <- wire.NewSegmentMessage(3, []byte{3, 4, 5})
-	channels.assemblerIn <- wire.NewSegmentMessage(2, []byte{2})
-	assert.Equal(t, wire.NewNumMessage(2), <-channels.recvVerifier)
-	assert.Equal(t, []byte{0, 1}, <-channels.buffererIn)
-	assert.Equal(t, []byte{2, 3, 4, 5}, <-channels.buffererIn)
-	assert.Equal(t, wire.NewNumMessage(6), <-channels.recvVerifier)
 }
 
 type AssemblerDriver struct {
-	segmentTx chan wire.SegmentMessage
-	segmentRx chan []byte
-	verifyRx  chan  wire.NumMessage
+	SegmentRx chan wire.SegmentMessage
+	SegmentTx chan []byte
+	VerifyTx  chan wire.NumMessage
 }
 
-func NewTestAssemblerDriver() *AssemblerDriver {
-	return &AssemblerDriver{
-		make(chan wire.SegmentMessage),
-		make(chan []byte),
-		make(chan wire.NumMessage)}
+func newAssemblerDriver() *AssemblerDriver {
+	return &AssemblerDriver{make(chan wire.SegmentMessage), make(chan []byte), make(chan wire.NumMessage)}
 }
 
-func (a *AssemblerDriver) Socket() *AssemblerSocket {
-	return &AssemblerSocket{a.segmentTx, a.segmentRx, a.verifyRx}
+func (s *AssemblerDriver) NewAssemblerSocket() *AssemblerSocket {
+	return &AssemblerSocket{s.SegmentRx, s.SegmentTx, s.VerifyTx}
+}
+
+func NewTestAssembler() (*AssemblerDriver, machine.StateMachine) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+
+	driver := newAssemblerDriver()
+
+	builder := machine.NewStateMachine()
+	builder.AddState(1, NewAssembler(ctx, driver.NewAssemblerSocket()))
+	machine := builder.Start(1)
+
+	return driver, machine
 }

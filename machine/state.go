@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/pkopriv2/bourne/concurrent"
@@ -18,66 +19,52 @@ const (
 	FailureState  = -2
 )
 
+var MachineClosed = errors.New("MACHINE:CLOSED")
+
 type Worker func(c WorkerSocket, args []interface{})
 
 func NewStateMachine() StateMachineBuilder {
-	return NewStateMachineBuilder()
+	return NewStateMachineBuilder(make(map[int]*stage))
 }
 
-func Transition(target int, args ...interface{}) State {
-	return &transition{target, args}
+func NewState(target int, args ...interface{}) State {
+	return &state{target, args}
 }
 
-func Terminal() State {
-	return Transition(TerminalState)
+func NewTerminalState() State {
+	return NewState(TerminalState)
 }
 
-func Failure(e error) State {
-	return Transition(FailureState, e)
+func NewFailureState(e error) State {
+	return NewState(FailureState, e)
 }
 
-func IsFailure(t State) bool {
+func IsFailureState(t State) bool {
 	return t.Id() == FailureState
 }
 
-func IsTerminal(t State) bool {
+func IsTerminalState(t State) bool {
 	return t.Id() == TerminalState
 }
 
-func ExtractNth(machine StateMachine, n int) State {
+func ExtractNthState(machine StateMachine, n int) State {
 	return extractNth(machine.History(), n)
 }
 
-func ExtractLatest(machine StateMachine) State {
-	return extractLatest(machine.History())
-}
-
-func ExtractFailure(machine StateMachine) error {
-	return extractFailure(extractLatest(machine.History()))
+func Close(m StateMachine) error {
+	return m.Close()
 }
 
 func Wait(m StateMachine) error {
-	<-m.Closed()
-	return ExtractFailure(m)
-}
-
-func Close(m StateMachine) error {
-	Update(m, TerminalState)
-	return ExtractFailure(m)
+	return m.Wait()
 }
 
 func Fail(m StateMachine, e error) error {
-	Update(m, FailureState, e)
-	return ExtractFailure(m)
+	return m.Fail(e)
 }
 
-func Update(m StateMachine, state int, args ...interface{}) bool {
-	select {
-	case <-m.Closed():
-		return false
-	case m.Update() <- Transition(state, args...):
-		return true
-	}
+func Move(m StateMachine, state int, args ...interface{}) error {
+	return m.Move(state, args)
 }
 
 type State interface {
@@ -92,11 +79,11 @@ type StateMachineBuilder interface {
 
 type StateMachine interface {
 	History() []State
-	Closed() <-chan struct{}
-	Update() chan<- State
 	Close() error
+	Move(int, ...interface{}) error
 	Wait() error
 	Fail(error) error
+	Clone() StateMachineBuilder
 }
 
 type WorkerSocket interface {
@@ -107,17 +94,21 @@ type WorkerSocket interface {
 
 // Implementations
 
-type transition struct {
+type state struct {
 	id   int
 	args []interface{}
 }
 
-func (t *transition) Id() int {
+func (t *state) Id() int {
 	return t.id
 }
 
-func (t *transition) Args() []interface{} {
+func (t *state) Args() []interface{} {
 	return t.args
+}
+
+func (t *state) String() string {
+	return fmt.Sprintf("(%v)%v", t.id, t.args)
 }
 
 type workerSocket struct {
@@ -141,7 +132,7 @@ func (w *workerSocket) Fail(e error) {
 	select {
 	case <-w.parent.closed:
 		return
-	case w.parent.resultIn <- Failure(e):
+	case w.parent.resultIn <- NewFailureState(e):
 		return
 	}
 }
@@ -150,7 +141,7 @@ func (w *workerSocket) Next(target int, args ...interface{}) {
 	select {
 	case <-w.parent.closed:
 		return
-	case w.parent.resultIn <- Transition(target, args...):
+	case w.parent.resultIn <- NewState(target, args...):
 		return
 	}
 }
@@ -189,7 +180,7 @@ func controlStage(s *stageController) {
 	var result State
 	select {
 	case <-s.wait.Wait():
-		s.resultOut <- Terminal()
+		s.resultOut <- NewTerminalState()
 		return
 	case result = <-s.resultIn:
 	}
@@ -227,8 +218,8 @@ type stateMachineBuilder struct {
 	states map[int]*stage
 }
 
-func NewStateMachineBuilder() StateMachineBuilder {
-	return &stateMachineBuilder{make(map[int]*stage)}
+func NewStateMachineBuilder(states map[int]*stage) StateMachineBuilder {
+	return &stateMachineBuilder{states}
 }
 
 func (s *stateMachineBuilder) AddState(id int, fn ...Worker) StateMachineBuilder {
@@ -263,6 +254,10 @@ func newStateMachine(states map[int]*stage, init int, args []interface{}) StateM
 	return s
 }
 
+func (s *stateMachine) Clone() StateMachineBuilder {
+	return NewStateMachineBuilder(copyStages(s.states))
+}
+
 func (s *stateMachine) History() []State {
 	return toStates(s.history.All())
 }
@@ -271,31 +266,43 @@ func (s *stateMachine) Closed() <-chan struct{} {
 	return s.closed
 }
 
-func (s *stateMachine) Update() chan<- State {
+func (s *stateMachine) Transition() chan<- State {
 	return s.update
 }
 
 func (s *stateMachine) Wait() error {
-	return Wait(s)
+	<-s.closed
+	return extractFailure(extractLatest(s.History()))
+}
+
+func (s *stateMachine) Move(state int, args ...interface{}) error {
+	select {
+	case <-s.Closed():
+		return MachineClosed
+	case s.Transition() <- NewState(state, args...):
+		return nil
+	}
 }
 
 func (s *stateMachine) Close() error {
-	return Close(s)
+	s.Move(TerminalState)
+	return extractFailure(extractLatest(s.History()))
 }
 
 func (s *stateMachine) Fail(e error) error {
-	return Fail(s, e)
+	s.Move(FailureState, e)
+	return extractFailure(extractLatest(s.History()))
 }
 
 func controlStateMachine(s *stateMachine, init int, args []interface{}) {
 	cur := s.states[init]
 	if cur == nil {
-		s.history.Append(Failure(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
+		s.history.Append(NewFailureState(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
 		close(s.closed)
 		return
 	}
 
-	s.history.Append(Transition(init, args...))
+	s.history.Append(NewState(init, args...))
 	for {
 		control := cur.run(args)
 
@@ -305,18 +312,18 @@ func controlStateMachine(s *stateMachine, init int, args []interface{}) {
 		case next = <-s.update:
 			select {
 			case tmp := <-control.Result():
-				if IsFailure(tmp) {
+				if IsFailureState(tmp) {
 					next = tmp
 				}
 			case control.Transition() <- next:
 				tmp := <-control.Result()
-				if IsFailure(tmp) {
+				if IsFailureState(tmp) {
 					next = tmp
 				}
 			}
 		}
 
-		if IsFailure(next) || IsTerminal(next) {
+		if IsFailureState(next) || IsTerminalState(next) {
 			s.history.Append(next)
 			close(s.closed)
 			return
@@ -324,7 +331,7 @@ func controlStateMachine(s *stateMachine, init int, args []interface{}) {
 
 		cur = s.states[next.Id()]
 		if cur == nil {
-			s.history.Append(Failure(fmt.Errorf("State [%v] does not exist", next.Id())))
+			s.history.Append(NewFailureState(fmt.Errorf("State [%v] does not exist", next.Id())))
 			close(s.closed)
 			return
 		}
@@ -364,4 +371,13 @@ func extractFailure(latest State) error {
 	}
 
 	return latest.Args()[0].(error)
+}
+
+func copyStages(m map[int]*stage) map[int]*stage {
+	ret := make(map[int]*stage)
+	for k, v := range m {
+		ret[k] = v
+	}
+
+	return ret
 }

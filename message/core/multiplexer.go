@@ -1,9 +1,9 @@
 package core
 
 import (
+	"github.com/pkopriv2/bourne/circuit"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
-	"github.com/pkopriv2/bourne/circuit"
 	"github.com/pkopriv2/bourne/message/wire"
 )
 
@@ -24,11 +24,16 @@ const (
 )
 
 type Multiplexer interface {
-	circuit.Controller
-	DataSocket
-	Return() <-chan wire.Packet
 	Context() common.Context
+
+	Rx() <-chan wire.Packet
+	Tx() chan<- wire.Packet
+	Return() <-chan wire.Packet
+
 	AddSocket(addr interface{}) (StandardSocket, error)
+
+	Close() error
+	Fail(error)
 }
 
 type mux struct {
@@ -68,8 +73,8 @@ func (m *mux) Context() common.Context {
 	return m.ctx
 }
 
-func (m *mux) Close() {
-	m.ctrl.Close()
+func (m *mux) Close() error {
+	return m.ctrl.Close()
 }
 
 func (m *mux) Fail(e error) {
@@ -103,8 +108,6 @@ func (m *mux) AddSocket(addr interface{}) (StandardSocket, error) {
 
 func multiplexerReturn(m *mux, ctrl circuit.ControlSocket, p wire.Packet) bool {
 	select {
-	default:
-		return true
 	case <-ctrl.Failed():
 		return false
 	case <-ctrl.Closed():

@@ -5,25 +5,20 @@ import (
 	"math/rand"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/machine"
+	"github.com/pkopriv2/bourne/message/core"
 	"github.com/pkopriv2/bourne/message/wire"
-	"github.com/pkopriv2/bourne/utils"
 )
 
-// TODO: Due to quick refactor, these workers don't respond to controller signals yet.
-type OpenerSocket struct {
-	PacketRx <-chan wire.Packet
-	PacketTx chan<- wire.Packet
-}
-
-func NewOpenerInit(route wire.Route, ctx common.Context, socket *OpenerSocket) func(utils.WorkerController, []interface{}) {
+func NewOpenerInit(route wire.Route, ctx common.Context, socket core.DataSocket) func(machine.WorkerSocket, []interface{}) {
 	logger := ctx.Logger()
 	tries := ctx.Config().OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)
-	return func(state utils.WorkerController, args []interface{}) {
+	return func(state machine.WorkerSocket, args []interface{}) {
 		logger.Info("Opener Init Started")
 
 		var err error
 		for i := 0; i < tries; i++ {
-			if err = openInit(route, ctx, socket.PacketRx, socket.PacketTx); err == nil {
+			if err = openInit(route, ctx, socket.Rx(), socket.Tx()); err == nil {
 				state.Next(TunnelOpened)
 				return
 			}
@@ -33,16 +28,16 @@ func NewOpenerInit(route wire.Route, ctx common.Context, socket *OpenerSocket) f
 	}
 }
 
-func NewOpenerRecv(route wire.Route, ctx common.Context, socket *OpenerSocket) func(utils.WorkerController, []interface{}) {
+func NewOpenerRecv(route wire.Route, ctx common.Context, socket core.DataSocket) func(machine.WorkerSocket, []interface{}) {
 	logger := ctx.Logger()
 	tries := ctx.Config().OptionalInt(confTunnelMaxRetries, defaultTunnelMaxRetries)
 
-	return func(state utils.WorkerController, args []interface{}) {
+	return func(state machine.WorkerSocket, args []interface{}) {
 		logger.Info("Opener Recv Started")
 
 		var err error
 		for i := 0; i < tries; i++ {
-			if err = openRecv(route, ctx, socket.PacketRx, socket.PacketTx); err == nil {
+			if err = openRecv(route, ctx, socket.Rx(), socket.Tx()); err == nil {
 				state.Next(TunnelOpened)
 				return
 			}

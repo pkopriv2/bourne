@@ -3,8 +3,8 @@ package tunnel
 import (
 	"github.com/emirpasic/gods/maps/treemap"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/machine"
 	"github.com/pkopriv2/bourne/message/wire"
-	"github.com/pkopriv2/bourne/utils"
 )
 
 const (
@@ -21,11 +21,11 @@ type AssemblerSocket struct {
 	VerifyTx  chan<- wire.NumMessage
 }
 
-func NewRecvAssembler(ctx common.Context, socket *AssemblerSocket) func(utils.WorkerController, []interface{}) {
+func NewAssembler(ctx common.Context, socket *AssemblerSocket) func(machine.WorkerSocket, []interface{}) {
 	logger := ctx.Logger()
 	config := ctx.Config()
 
-	return func(state utils.WorkerController, args []interface{}) {
+	return func(state machine.WorkerSocket, args []interface{}) {
 		logger.Debug("RecvAssembler Opening")
 		defer logger.Debug("RecvAssembler Opening")
 
@@ -56,7 +56,7 @@ func NewRecvAssembler(ctx common.Context, socket *AssemblerSocket) func(utils.Wo
 			}
 
 			select {
-			case <-state.Close():
+			case <-state.Closed():
 				return
 			case segmentTx <- outSegment:
 				outSegment = nil

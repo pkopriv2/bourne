@@ -3,7 +3,6 @@ package client
 import (
 	"fmt"
 
-	"github.com/pkopriv2/bourne/circuit"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/message/core"
 	"github.com/pkopriv2/bourne/message/wire"
@@ -11,12 +10,17 @@ import (
 )
 
 type Dispatcher interface {
-	core.DataSocket
-	circuit.Controller
-
 	MemberId() uuid.UUID
-	NewListener(id uint64) (ListenerSocket, error)
-	NewTunnel(remote wire.Address) (TunnelSocket, error)
+
+	Rx() <-chan wire.Packet
+	Tx() chan<- wire.Packet
+	Return() <-chan wire.Packet
+
+	Close() error
+	Fail(error)
+
+	NewListenerSocket(id uint64) (ListenerSocket, error)
+	NewTunnelSocket(remote wire.Address) (TunnelSocket, error)
 }
 
 type TunnelSocket interface {
@@ -45,6 +49,10 @@ func NewDispatcher(ctx common.Context, memberId uuid.UUID) Dispatcher {
 	return &dispatcher{core.NewMultiplexer(ctx, DispatchRouter), memberId, NewIdPool()}
 }
 
+func (d *dispatcher) MemberId() uuid.UUID {
+	return d.uuid
+}
+
 func (d *dispatcher) Return() <-chan wire.Packet {
 	return d.mux.Return()
 }
@@ -57,24 +65,15 @@ func (d *dispatcher) Tx() chan<- wire.Packet {
 	return d.mux.Tx()
 }
 
-func (d *dispatcher) Close() {
-	d.mux.Close()
+func (d *dispatcher) Close() error {
+	return d.mux.Close()
 }
 
 func (d *dispatcher) Fail(e error) {
 	d.mux.Fail(e)
 }
 
-func (d *dispatcher) NewControlSocket() (circuit.ControlSocket, error) {
-	return d.mux.NewControlSocket()
-}
-
-
-func (d *dispatcher) MemberId() uuid.UUID {
-	return d.uuid
-}
-
-func (d *dispatcher) NewTunnel(remote wire.Address) (TunnelSocket, error) {
+func (d *dispatcher) NewTunnelSocket(remote wire.Address) (TunnelSocket, error) {
 	id, err := d.pool.Take()
 	if err != nil {
 		return nil, err
@@ -90,7 +89,7 @@ func (d *dispatcher) NewTunnel(remote wire.Address) (TunnelSocket, error) {
 	return &tunnelSocket{d, route, socket}, nil
 }
 
-func (d *dispatcher) NewListener(id uint64) (ListenerSocket, error) {
+func (d *dispatcher) NewListenerSocket(id uint64) (ListenerSocket, error) {
 	if id > 255 {
 		return nil, fmt.Errorf("Invalid tunnel id [%v].  Must be in the range [0,255]", id)
 	}
@@ -120,7 +119,7 @@ func (l *listenerSocket) Route() wire.Route {
 }
 
 func (l *listenerSocket) NewTunnel(remote wire.Address) (TunnelSocket, error) {
-	return l.dispatcher.NewTunnel(remote)
+	return l.dispatcher.NewTunnelSocket(remote)
 }
 
 func (l *listenerSocket) Closed() <-chan struct{} {
