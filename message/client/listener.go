@@ -1,9 +1,9 @@
 package client
 
 import (
-	"fmt"
-	"sync"
+	"io"
 
+	"github.com/pkopriv2/bourne/errors"
 	"github.com/pkopriv2/bourne/message/wire"
 )
 
@@ -17,9 +17,14 @@ import (
 //
 // *Implementations must be thread-safe*
 //
-type Listener interface {
-	wire.Routable
+var (
+	NewListenerClosedError = errors.NewWrappedError("LISTENER:CLOSED[reason=%v]")
+)
 
+type Listener interface {
+	io.Closer
+
+	Route() wire.Route
 	Accept() (Tunnel, error)
 }
 
@@ -28,9 +33,10 @@ type Listener interface {
 // *This object is thread safe.*
 //
 type listener struct {
-	lock   sync.RWMutex
 	socket ListenerSocket
-	closed bool
+	close  chan struct{}
+	closed chan struct{}
+	result error
 }
 
 func newListener(socket ListenerSocket) Listener {
@@ -41,13 +47,35 @@ func (l *listener) Route() wire.Route {
 	return l.socket.Route()
 }
 
+func (t *listener) Close() error {
+	select {
+	case <-t.closed:
+		return NewListenerClosedError(t.result)
+	case t.close <- struct{}{}:
+	}
+
+	<-t.closed
+	return nil
+}
+
+func controlListener(l *listener) {
+	defer l.socket.Done()
+
+	select {
+	case <-l.close:
+	case <-l.socket.Closed():
+	case <-l.socket.Failed():
+		l.result = l.socket.Failure()
+	}
+
+	close(l.closed)
+}
+
 func (l *listener) Accept() (Tunnel, error) {
 	var p wire.Packet
 	select {
-	case <-l.socket.Closed():
-		return nil, fmt.Errorf("Socket closed")
-	case <-l.socket.Failed():
-		return nil, l.socket.Failure()
+	case <-l.closed:
+		return nil, NewListenerClosedError(l.result)
 	case p = <-l.socket.Rx():
 	}
 
@@ -56,6 +84,13 @@ func (l *listener) Accept() (Tunnel, error) {
 		return nil, err
 	}
 
-	tunnelSocket.Tx() <- p
-	return nil, nil
+	tunnel := NewTunnel(tunnelSocket)
+	select {
+	case <-tunnelSocket.Closed():
+		return nil, NewListenerClosedError(tunnelSocket.Failure())
+	case <-tunnelSocket.Failed():
+		return nil, NewListenerClosedError(tunnelSocket.Failure())
+	case tunnelSocket.Tx() <- p:
+		return tunnel, nil
+	}
 }

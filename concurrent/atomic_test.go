@@ -22,5 +22,5 @@ func TestAtomicRef_Counter(t *testing.T) {
 	}
 
 	wait.Wait()
-	assert.Equal(t, 10000, ctr.Get())
+	assert.Equal(t, uint64(10000), ctr.Get())
 }

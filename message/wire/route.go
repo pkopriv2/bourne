@@ -16,6 +16,7 @@ type Route interface {
 	Dst() Address
 	Reverse() Route
 	BuildPacket() PacketBuilder
+	String() string
 }
 
 // An address is the tuple necessary to identify one side of a route

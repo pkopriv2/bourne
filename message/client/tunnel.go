@@ -1,12 +1,13 @@
 package client
 
 import (
+	"fmt"
 	"io"
-	"time"
 
 	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/machine"
+	"github.com/pkopriv2/bourne/message/client/tunnel"
 	"github.com/pkopriv2/bourne/message/wire"
-	"github.com/pkopriv2/bourne/utils"
 )
 
 // Much of this was inspired by the following papers:
@@ -69,159 +70,127 @@ import (
 //         * Listener:  recv(close), send(close,verify), recv(verify)
 //     3. Transition to Closed.
 //
+func NewTunnelClosedError(reason error) error {
+	return fmt.Errorf("TUNNEL:CLOSED[error=%v]", reason)
+}
+
 type Tunnel interface {
 	io.Closer
 	io.Reader
 	io.Writer
-}
 
-// Errors
-const (
-	TunnelOpeningErrorCode = 100
-	TunnelClosingErrorCode = 101
-	TunnelTimeoutErrorCode = 102
-)
-
-var (
-	NewOpeningError = wire.NewProtocolErrorFamily(TunnelOpeningErrorCode)
-	NewClosingError = wire.NewProtocolErrorFamily(TunnelClosingErrorCode)
-	NewTimeoutError = wire.NewProtocolErrorFamily(TunnelTimeoutErrorCode)
-)
-
-// Tunnel States
-const (
-	TunnelInit = iota
-	TunnelOpeningInit
-	TunnelOpeningRecv
-	TunnelOpened
-	TunnelClosingInit
-	TunnelClosingRecv
-	TunnelClosed
-)
-
-// Config
-const (
-	confTunnelDebug         = "bourne.msg.client.tunnel.debug"
-	confTunnelBuffererLimit = "bourne.msg.client.tunnel.bufferer.limit"
-	confTunnelSenderLimit   = "bourne.msg.client.tunnel.sender.limit"
-	confTunnelVerifyTimeout = "bourne.msg.client.tunnel.verify.timeout"
-	confTunnelSendTimeout   = "bourne.msg.client.tunnel.send.timeout"
-	confTunnelRecvTimeout   = "bourne.msg.client.tunnel.recv.timeout"
-	confTunnelMaxRetries    = "bourne.msg.client.tunnel.max.retries"
-)
-
-const (
-	defaultTunnelBuffererLimit = 1 << 20
-	defaultTunnelSenderLimit   = 1 << 18
-	defaultTunnelVerifyTimeout = 5 * time.Second
-	defaultTunnelSendTimeout   = 5 * time.Second
-	defaultTunnelRecvTimeout   = 5 * time.Second
-	defaultTunnelMaxRetries    = 3
-)
-
-
-
-// complete listing of tunnel channels.
-type tunnelDriver struct {
-	mainIn    chan wire.Packet
-	mainOut   chan<- wire.Packet
-	mainErr   chan error
-	mainClose chan struct{}
-
-	buffererIn   chan []byte
-	assemblerIn  chan wire.SegmentMessage
-	sendVerifier chan wire.NumMessage
-	recvVerifier chan wire.NumMessage
-}
-
-func newTunnelChannels(sendMain chan<- wire.Packet) *tunnelDriver {
-	return &tunnelDriver{
-		mainOut:      sendMain,
-		mainIn:       make(chan wire.Packet),
-		buffererIn:   make(chan []byte),
-		assemblerIn:  make(chan wire.SegmentMessage),
-		sendVerifier: make(chan wire.NumMessage),
-		recvVerifier: make(chan wire.NumMessage)}
+	Route() wire.Route
 }
 
 // the main tunnel abstraction
-type tunnel struct {
-	route    wire.Route
-	channels *tunnelDriver
-	machine  utils.StateMachine
+type tunnelImpl struct {
+	socket  TunnelSocket
+	machine machine.StateMachine
 
-	streamRecv *concurrent.Stream
-	streamSend *concurrent.Stream
+	streamRx *concurrent.Stream
+	streamTx *concurrent.Stream
+
+	close  chan struct{}
+	closed chan struct{}
 }
 
 func NewTunnel(socket TunnelSocket) Tunnel {
-	return nil
+	config := socket.Context().Config()
 
-	// var env tunnelEnv
-	// // initialize the environment
-	// // env := newTunnelEnv(sub.)
-	//
-	// // initialize all the channels
-	// channels := newTunnelChannels(mainSend)
-	//
+	rx := concurrent.NewStream(1 << 20)
+	tx := concurrent.NewStream(1 << 20)
+
+	network := tunnel.NewTunnelNetwork(config, socket)
+
 	// // opening workers
-	// openerInit := NewOpenerInit(route, env, channels)
-	// openerRecv := NewOpenerRecv(route, env, channels)
-	//
+	openerInit := tunnel.NewOpenerInit(socket.Route(), socket.Context(), network.MainSocket())
+	openerRecv := tunnel.NewOpenerRecv(socket.Route(), socket.Context(), network.MainSocket())
+
 	// // closing workers
-	// closerInit := NewCloserInit(route, env, channels)
-	// closerRecv := NewCloserRecv(route, env, channels)
-	//
-	// // opened workers
-	// streamSend, sendMain := NewSendMain(route, env, channels)
-	// recvMain := NewRecvMain(env, channels)
-	// recvAssembler := NewRecvAssembler(env, channels)
-	// streamRecv, recvBuff := NewRecvBuffer(env, channels)
-	//
-	// // build the machine
-	// builder := utils.BuildStateMachine()
-	// builder.AddState(TunnelOpeningInit, openerInit)
-	// builder.AddState(TunnelOpeningRecv, openerRecv)
-	// builder.AddState(TunnelOpened, sendMain, recvMain, recvAssembler, recvBuff)
-	// builder.AddState(TunnelClosingInit, closerInit)
-	// builder.AddState(TunnelClosingRecv, closerRecv)
-	//
-	// // start the machine
-	// var machine utils.StateMachine
-	// if options.Listening {
-	// machine = builder.Start(TunnelOpeningInit)
-	// } else {
-	// machine = builder.Start(TunnelOpeningRecv)
-	// }
-	//
-	// return &tunnel{
-	// route:      route,
-	// env:        env,
-	// machine:    machine,
-	// channels:   channels,
-	// streamRecv: streamRecv,
-	// streamSend: streamSend}
+	closerInit := tunnel.NewCloserInit(socket.Route(), socket.Context(), network.MainSocket())
+	closerRecv := tunnel.NewCloserRecv(socket.Route(), socket.Context(), network.MainSocket())
+
+	// opened workers
+	sender := tunnel.NewSender(socket.Route(), socket.Context(), tx, network.SenderSocket())
+	receiver := tunnel.NewReceiver(socket.Context(), network.ReceiverSocket())
+	assembler := tunnel.NewAssembler(socket.Context(), network.AssemblerSocket())
+	bufferer := tunnel.NewBufferer(socket.Context(), network.BuffererSocket(), rx)
+	verifier := tunnel.NewVerifier(socket.Route(), socket.Context(), network.VerifierSocket())
+
+	// build the machine
+	builder := machine.NewStateMachine()
+	builder.AddState(tunnel.TunnelOpeningInit, openerInit)
+	builder.AddState(tunnel.TunnelOpeningRecv, openerRecv)
+	builder.AddState(tunnel.TunnelOpened, sender, verifier, receiver, assembler, bufferer)
+	builder.AddState(tunnel.TunnelClosingInit, closerInit)
+	builder.AddState(tunnel.TunnelClosingRecv, closerRecv)
+
+	// start the machine
+	var machine machine.StateMachine
+	if socket.Listening() {
+		machine = builder.Start(tunnel.TunnelOpeningRecv)
+	} else {
+		machine = builder.Start(tunnel.TunnelOpeningInit)
+	}
+
+	t := &tunnelImpl{
+		machine:  machine,
+		socket:   socket,
+		closed:   make(chan struct{}),
+		close:    make(chan struct{}),
+		streamRx: rx,
+		streamTx: tx}
+	go controlTunnel(t)
+	return t
 }
 
-func (t *tunnel) Route() wire.Route {
-	return t.route
-}
-
-func (t *tunnel) Read(p []byte) (n int, err error) {
-	return t.streamRecv.Read(p)
-}
-
-func (t *tunnel) Write(p []byte) (n int, err error) {
-	return t.streamSend.Write(p)
-}
-
-func (t *tunnel) Close() error {
-	control := t.machine.Control()
+func controlTunnel(t *tunnelImpl) {
+	defer t.socket.Done()
 
 	select {
-	case control.Transition() <- utils.State(TunnelClosingInit):
-		return nil
-	case err := <-control.Wait():
-		return err
+	case <-t.close:
+		t.machine.Move(tunnel.TunnelClosingInit)
+	case <-t.socket.Closed():
+		t.machine.Move(tunnel.TunnelClosingInit)
+	case <-t.socket.Failed():
+		t.machine.Fail(t.socket.Failure())
 	}
+
+	t.machine.Wait()
+	t.streamRx.Close()
+	t.streamTx.Close()
+	close(t.closed)
+}
+
+func (t *tunnelImpl) Route() wire.Route {
+	return t.socket.Route()
+}
+
+func (t *tunnelImpl) Read(p []byte) (int, error) {
+	n, err := t.streamRx.Read(p)
+	if err == concurrent.ErrStreamClosed {
+		return 0, NewTunnelClosedError(t.machine.Result())
+	}
+
+	return n, err
+}
+
+func (t *tunnelImpl) Write(p []byte) (int, error) {
+	n, err := t.streamTx.Write(p)
+	if err == concurrent.ErrStreamClosed {
+		return 0, NewTunnelClosedError(t.machine.Result())
+	}
+
+	return n, err
+}
+
+func (t *tunnelImpl) Close() error {
+	select {
+	case <-t.closed:
+		return NewTunnelClosedError(t.machine.Result())
+	case t.close <- struct{}{}:
+	}
+
+	<-t.closed
+	return t.machine.Result()
 }

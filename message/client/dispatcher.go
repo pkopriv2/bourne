@@ -10,14 +10,12 @@ import (
 )
 
 type Dispatcher interface {
-	MemberId() uuid.UUID
-
-	Rx() <-chan wire.Packet
-	Tx() chan<- wire.Packet
-	Return() <-chan wire.Packet
+	core.ReliableDataSocket
 
 	Close() error
 	Fail(error)
+
+	MemberId() uuid.UUID
 
 	NewListenerSocket(id uint64) (ListenerSocket, error)
 	NewTunnelSocket(remote wire.Address) (TunnelSocket, error)
@@ -26,12 +24,16 @@ type Dispatcher interface {
 type TunnelSocket interface {
 	core.StandardSocket
 
+	Listening() bool
 	Route() wire.Route
 	Context() common.Context
 }
 
 type ListenerSocket interface {
-	TunnelSocket
+	core.StandardSocket
+
+	Route() wire.Route
+	Context() common.Context
 	NewTunnel(wire.Address) (TunnelSocket, error)
 }
 
@@ -74,6 +76,10 @@ func (d *dispatcher) Fail(e error) {
 }
 
 func (d *dispatcher) NewTunnelSocket(remote wire.Address) (TunnelSocket, error) {
+	return d.newTunnelSocket(remote, false)
+}
+
+func (d *dispatcher) newTunnelSocket(remote wire.Address, listener bool) (TunnelSocket, error) {
 	id, err := d.pool.Take()
 	if err != nil {
 		return nil, err
@@ -86,7 +92,7 @@ func (d *dispatcher) NewTunnelSocket(remote wire.Address) (TunnelSocket, error) 
 		return nil, err
 	}
 
-	return &tunnelSocket{d, route, socket}, nil
+	return &tunnelSocket{d, route, socket, listener}, nil
 }
 
 func (d *dispatcher) NewListenerSocket(id uint64) (ListenerSocket, error) {
@@ -119,7 +125,7 @@ func (l *listenerSocket) Route() wire.Route {
 }
 
 func (l *listenerSocket) NewTunnel(remote wire.Address) (TunnelSocket, error) {
-	return l.dispatcher.NewTunnelSocket(remote)
+	return l.dispatcher.newTunnelSocket(remote, true)
 }
 
 func (l *listenerSocket) Closed() <-chan struct{} {
@@ -150,6 +156,11 @@ type tunnelSocket struct {
 	dispatcher *dispatcher
 	route      wire.Route
 	raw        core.StandardSocket
+	listening  bool
+}
+
+func (t *tunnelSocket) Listening() bool {
+	return t.listening
 }
 
 func (t *tunnelSocket) Context() common.Context {

@@ -86,29 +86,35 @@ func (ab *AtomicBool) Swap(e bool, t bool) bool {
 
 }
 
-type AtomicCounter struct {
-	val *AtomicRef
-}
+type AtomicCounter uint64
 
 func NewAtomicCounter() *AtomicCounter {
-	var zero int
-	return &AtomicCounter{NewAtomicRef(zero)}
+	var ret AtomicCounter
+	return &ret
 }
 
-func (a *AtomicCounter) Get() int {
-	return *(*int)(a.val.Get())
+func (ac *AtomicCounter) Get() uint64 {
+	return atomic.LoadUint64((*uint64)(ac))
 }
 
-func (a *AtomicCounter) Inc() int {
-	return *(*int)(a.val.Update(func(val unsafe.Pointer) interface{} {
-		cur := (*int)(val)
-		return *cur + 1
-	}))
+func (ac *AtomicCounter) Inc() uint64 {
+	return ac.Update(func(i uint64) uint64 {
+		return i+1
+	})
 }
 
-func (a *AtomicCounter) Dec() int {
-	return *(*int)(a.val.Update(func(val unsafe.Pointer) interface{} {
-		cur := (*int)(val)
-		return *cur - 1
-	}))
+func (ac *AtomicCounter) Dec() uint64 {
+	return ac.Update(func(i uint64) uint64 {
+		return i-1
+	})
+}
+
+func (ac *AtomicCounter) Update(fn func(val uint64) uint64) uint64 {
+	for {
+		c := ac.Get()
+		u := fn(c)
+		if atomic.CompareAndSwapUint64((*uint64)(ac), c, u) {
+			return u
+		}
+	}
 }

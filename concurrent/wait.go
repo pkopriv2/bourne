@@ -3,9 +3,9 @@ package concurrent
 import "sync"
 
 type Wait interface {
-	Add()
-	Done()
-	Wait() <- chan struct{}
+	Inc()
+	Dec()
+	Wait() <-chan struct{}
 }
 
 type wait struct {
@@ -16,19 +16,19 @@ func NewWait() Wait {
 	return &wait{}
 }
 
-func (w *wait) Done() {
+func (w *wait) Dec() {
 	w.inner.Done()
 }
 
-func (w *wait) Add() {
+func (w *wait) Inc() {
 	w.inner.Add(1)
 }
 
 func (w *wait) Wait() <-chan struct{} {
-	done := make(chan struct{}, 1)
+	done := make(chan struct{})
 	go func() {
 		w.inner.Wait()
-		done <- struct{}{}
+		close(done)
 	}()
 	return done
 }

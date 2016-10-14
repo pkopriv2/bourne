@@ -29,28 +29,37 @@ type DataDriver interface {
 	TxDriver() <-chan wire.Packet
 }
 
-type dataDriver struct {
-	rx chan wire.Packet
-	tx chan wire.Packet
+type standardSocket struct {
+	ctrl circuit.ControlSocket
+	rx <-chan wire.Packet
+	tx chan<- wire.Packet
 }
 
-func NewDataDriver(rxBuf int, txBuf int) DataDriver {
-	return &dataDriver{make(chan wire.Packet), make(chan wire.Packet)}
+func NewStandardSocket(ctrl circuit.ControlSocket, rx <-chan wire.Packet, tx chan<- wire.Packet) StandardSocket {
+	return &standardSocket{ctrl, rx, tx}
 }
 
-func (d *dataDriver) Rx() <-chan wire.Packet {
-	return d.rx
+func (s *standardSocket) Closed() <-chan struct{} {
+	return s.ctrl.Closed()
 }
 
-func (d *dataDriver) Tx() chan<- wire.Packet {
-	return d.tx
+func (s *standardSocket) Failed() <-chan struct{} {
+	return s.ctrl.Failed()
 }
 
-func (d *dataDriver) RxDriver() chan<- wire.Packet {
-	return d.rx
+func (s *standardSocket) Failure() error {
+	return s.ctrl.Failure()
 }
 
-func (d *dataDriver) TxDriver() <-chan wire.Packet {
-	return d.tx
+func (s *standardSocket) Done() {
+	s.ctrl.Done()
+}
+
+func (s *standardSocket) Rx() <-chan wire.Packet {
+	return s.rx
+}
+
+func (s *standardSocket) Tx() chan<- wire.Packet {
+	return s.tx
 }
 

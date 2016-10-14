@@ -60,6 +60,7 @@ func TestMux_Fail_Empty(t *testing.T) {
 func TestMux_Fail_NotDone(t *testing.T) {
 	mux := NewMultiplexer(common.NewContext(common.NewEmptyConfig()), NoRoute)
 	sock, _ := mux.AddSocket("1")
+	defer mux.Close()
 	defer sock.Done()
 
 	assert.Nil(t, sock.Failure())
@@ -106,6 +107,7 @@ func TestMux_Route_Empty(t *testing.T) {
 	p := wire.BuildPacket(wire.NewRemoteRoute(src, dst)).Build()
 
 	mux := NewMultiplexer(ctx, NoRoute)
+    defer mux.Close()
 	mux.Tx() <- p
 
 	assert.Equal(t, p, <-mux.Return())
@@ -120,6 +122,7 @@ func TestMux_Route_NoExist(t *testing.T) {
 	mux := NewMultiplexer(ctx, func(wire.Packet) interface{} {
 		return "noexist"
 	})
+    defer mux.Close()
 	mux.Tx() <- p
 
 	assert.Equal(t, p, <-mux.Return())
@@ -134,8 +137,10 @@ func TestMux_Route_Simple(t *testing.T) {
 	mux := NewMultiplexer(ctx, func(wire.Packet) interface{} {
 		return "1"
 	})
+    defer mux.Close()
 
 	sock, _ := mux.AddSocket("1")
+    defer sock.Done()
 
 	mux.Tx() <- p
 
@@ -151,15 +156,18 @@ func TestMux_Route_Multi(t *testing.T) {
 	mux := NewMultiplexer(ctx, func(wire.Packet) interface{} {
 		return "1"
 	})
+    defer mux.Close()
 
 	sock1, _ := mux.AddSocket("1")
 	sock2, _ := mux.AddSocket("2")
+    defer sock1.Done()
+    defer sock2.Done()
 
 	mux.Tx() <- p
 
-	assert.Equal(t, p, <-sock1.Rx())
 	select {
-	default:
+	case actual := <-sock1.Rx():
+		assert.Equal(t, p, actual)
 	case <-sock2.Rx():
 		assert.Fail(t, "Erroneously received packet")
 	}

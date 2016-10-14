@@ -16,8 +16,8 @@ func NewReceiver(ctx common.Context, socket *ReceiverSocket) func(machine.Worker
 	logger := ctx.Logger()
 
 	return func(state machine.WorkerSocket, args []interface{}) {
-		logger.Debug("ReceiveMain Starting")
-		defer logger.Debug("ReceiveMain Closing")
+		logger.Debug("Receiver Starting")
+		defer logger.Debug("Receiver Closing")
 
 		var chanIn <-chan wire.Packet
 		var chanAssembler chan<- wire.SegmentMessage
@@ -55,6 +55,7 @@ func NewReceiver(ctx common.Context, socket *ReceiverSocket) func(machine.Worker
 				msgVerify = nil
 				break
 			case p := <-chanIn:
+				logger.Debug("Received packet: %v", p)
 				// Handle: close
 				if close := p.Close(); close != nil {
 					state.Next(TunnelClosingRecv, p.Close().Val())

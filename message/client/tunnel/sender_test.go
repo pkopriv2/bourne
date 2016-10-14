@@ -16,6 +16,7 @@ func TestSendMain_Timeout(t *testing.T) {
 	// ugh... maybe an actual class would be better....
 	_, driver, stream, machine := NewTestSender()
 	defer machine.Close()
+	defer stream.Close()
 
 	// need to write before we select on any channels
 	stream.Write([]byte{1})
@@ -51,27 +52,17 @@ func TestSendMain_SingleSendVerify(t *testing.T) {
 	assert.Equal(t, []byte{}, stream.Data())
 }
 
-func TestSendMain_SingleRecvVerify(t *testing.T) {
-	route, driver, stream, machine := NewTestSender()
-	defer machine.Close()
-
-	stream.Write([]byte{1})
-	driver.RecvVerifyRx <- wire.NewNumMessage(1)
-	assert.Equal(t, wire.BuildPacket(route).SetVerify(1).Build(), <-driver.PacketTx)
-}
-
 type SendMainDriver struct {
 	PacketTx     chan wire.Packet
 	SendVerifyRx chan wire.NumMessage
-	RecvVerifyRx chan wire.NumMessage
 }
 
 func newSendMainDriver() *SendMainDriver {
-	return &SendMainDriver{make(chan wire.Packet), make(chan wire.NumMessage), make(chan wire.NumMessage)}
+	return &SendMainDriver{make(chan wire.Packet), make(chan wire.NumMessage)}
 }
 
 func (s *SendMainDriver) NewSendMainSocket() *SenderSocket {
-	return &SenderSocket{s.PacketTx, s.SendVerifyRx, s.RecvVerifyRx}
+	return &SenderSocket{s.PacketTx, s.SendVerifyRx}
 }
 
 func NewTestSender() (wire.Route, *SendMainDriver, *concurrent.Stream, machine.StateMachine) {

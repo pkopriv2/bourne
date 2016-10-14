@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRecvMain_SingleVerify(t *testing.T) {
+func TestReceiver_SingleVerify(t *testing.T) {
 	driver, m := NewTestReceiver()
 	defer m.Close()
 
@@ -18,7 +18,7 @@ func TestRecvMain_SingleVerify(t *testing.T) {
 	assert.Equal(t, wire.NewNumMessage(100), <-driver.VerifyTx)
 }
 
-func TestRecvMain_SingleSegment(t *testing.T) {
+func TestReceiver_SingleSegment(t *testing.T) {
 	driver, m := NewTestReceiver()
 	defer m.Close()
 
@@ -26,7 +26,7 @@ func TestRecvMain_SingleSegment(t *testing.T) {
 	assert.Equal(t, wire.NewSegmentMessage(100, []byte{0, 1, 2}), <-driver.SegmentTx)
 }
 
-func TestRecvMain_SegmentAndVerify(t *testing.T) {
+func TestReceiver_SegmentAndVerify(t *testing.T) {
 	driver, m := NewTestReceiver()
 	defer m.Close()
 
@@ -36,23 +36,17 @@ func TestRecvMain_SegmentAndVerify(t *testing.T) {
 	assert.Equal(t, wire.NewNumMessage(99), <-driver.VerifyTx)
 }
 
-func TestRecvMain_Close(t *testing.T) {
+func TestReceiver_Close(t *testing.T) {
 	driver, m := NewTestReceiver()
-	m.Close()
-
-	builder := m.Clone()
-	builder.AddState(TunnelClosingRecv, func(_ machine.WorkerSocket, _ []interface{}) {})
-
-	m = builder.Start(TunnelOpened)
 
 	driver.PacketRx <- wire.BuildPacket(NewRoute()).SetClose(100).Build()
 
-	assert.Nil(t, m.Wait())
+	assert.NotNil(t, m.Wait())
 	assert.Equal(t, machine.NewState(TunnelOpened), machine.ExtractNthState(m, 0))
-	assert.Equal(t, machine.NewState(TunnelClosingRecv, uint64(100)), machine.ExtractNthState(m, 1))
+	assert.True(t, machine.IsFailureState(machine.ExtractNthState(m, 1)))
 }
 
-func TestRecvMain_Error(t *testing.T) {
+func TestReceiver_Error(t *testing.T) {
 	driver, m := NewTestReceiver()
 	defer m.Close()
 
@@ -62,27 +56,27 @@ func TestRecvMain_Error(t *testing.T) {
 	assert.Equal(t, err, m.Wait())
 }
 
-type RecvMainDriver struct {
+type ReceiverDriver struct {
 	PacketRx  chan wire.Packet
 	SegmentTx chan wire.SegmentMessage
 	VerifyTx  chan wire.NumMessage
 }
 
-func NewRecvMainDriver() *RecvMainDriver {
-	return &RecvMainDriver{make(chan wire.Packet), make(chan wire.SegmentMessage), make(chan wire.NumMessage)}
+func NewReceiverDriver() *ReceiverDriver {
+	return &ReceiverDriver{make(chan wire.Packet), make(chan wire.SegmentMessage), make(chan wire.NumMessage)}
 }
 
-func (s *RecvMainDriver) NewRecvMainSocket() *ReceiverSocket {
+func (s *ReceiverDriver) NewReceiverSocket() *ReceiverSocket {
 	return &ReceiverSocket{s.PacketRx, s.SegmentTx, s.VerifyTx}
 }
 
-func NewTestReceiver() (*RecvMainDriver, machine.StateMachine) {
+func NewTestReceiver() (*ReceiverDriver, machine.StateMachine) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 
-	driver := NewRecvMainDriver()
+	driver := NewReceiverDriver()
 
 	builder := machine.NewStateMachine()
-	builder.AddState(TunnelOpened, NewReceiver(ctx, driver.NewRecvMainSocket()))
+	builder.AddState(TunnelOpened, NewReceiver(ctx, driver.NewReceiverSocket()))
 	machine := builder.Start(TunnelOpened)
 	return driver, machine
 }

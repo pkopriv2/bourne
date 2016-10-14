@@ -1,0 +1,235 @@
+2016/10/14 11:42:52 RecvBuffer Closed
+2016/10/14 11:42:52 Receiver Closing
+2016/10/14 11:42:52 SendMain Closing
+2016/10/14 11:42:52 Assembler Closing
+2016/10/14 11:42:52 Verifier Closing
+2016/10/14 11:42:52 Received packet: [channel(d8e0:0)->channel(f768:0)] Messages: [Close(2212821389)]
+panic: test timed out after 5s
+
+goroutine 214 [running]:
+panic(0x2c3840, 0xc4235f0040)
+	/usr/local/go/src/runtime/panic.go:500 +0x1a1
+testing.startAlarm.func1()
+	/usr/local/go/src/testing/testing.go:918 +0x10b
+created by time.goFunc
+	/usr/local/go/src/time/sleep.go:154 +0x44
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0xc4200920c0, 0x33a9a3, 0x1b, 0x35b190, 0x5e501)
+	/usr/local/go/src/testing/testing.go:647 +0x316
+testing.RunTests.func1(0xc4200920c0)
+	/usr/local/go/src/testing/testing.go:793 +0x6d
+testing.tRunner(0xc4200920c0, 0xc420115e30)
+	/usr/local/go/src/testing/testing.go:610 +0x81
+testing.RunTests(0x35b218, 0x4a6860, 0x6, 0x6, 0xf92b)
+	/usr/local/go/src/testing/testing.go:799 +0x2f5
+testing.(*M).Run(0xc420115ef8, 0xfaa6d)
+	/usr/local/go/src/testing/testing.go:743 +0x85
+main.main()
+	github.com/pkopriv2/bourne/message/client/_test/_testmain.go:64 +0xc6
+
+goroutine 17 [syscall, locked to thread]:
+runtime.goexit()
+	/usr/local/go/src/runtime/asm_amd64.s:2086 +0x1
+
+goroutine 108 [chan receive]:
+github.com/pkopriv2/bourne/message/client.(*tunnelImpl).Close(0xc4236026c0, 0xc423602540, 0x48daa0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel.go:194 +0x15e
+github.com/pkopriv2/bourne/message/client.TestTunnel_sendDuplexStream(0xc4235d80c0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel_test.go:89 +0x759
+testing.tRunner(0xc4235d80c0, 0x35b190)
+	/usr/local/go/src/testing/testing.go:610 +0x81
+created by testing.(*T).Run
+	/usr/local/go/src/testing/testing.go:646 +0x2ec
+
+goroutine 7 [select]:
+github.com/pkopriv2/bourne/circuit.control(0xc420012960)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/circuit/controller.go:92 +0x1ff
+created by github.com/pkopriv2/bourne/circuit.NewController
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/circuit/controller.go:46 +0x277
+
+goroutine 8 [select]:
+github.com/pkopriv2/bourne/message/core.multiplexerRoute(0xc4200129b0, 0x48da20, 0xc420030058, 0x35b168)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:122 +0x4ca
+created by github.com/pkopriv2/bourne/message/core.NewMultiplexer
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:60 +0x38a
+
+goroutine 9 [select]:
+github.com/pkopriv2/bourne/message/core.multiplexerRoute(0xc4200129b0, 0x48da20, 0xc420030060, 0x35b168)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:122 +0x4ca
+created by github.com/pkopriv2/bourne/message/core.NewMultiplexer
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:60 +0x38a
+
+goroutine 10 [select]:
+github.com/pkopriv2/bourne/message/core.multiplexerRoute(0xc4200129b0, 0x48da20, 0xc420030068, 0x35b168)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:122 +0x4ca
+created by github.com/pkopriv2/bourne/message/core.NewMultiplexer
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:60 +0x38a
+
+goroutine 12 [select]:
+github.com/pkopriv2/bourne/circuit.control(0xc420012aa0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/circuit/controller.go:92 +0x1ff
+created by github.com/pkopriv2/bourne/circuit.NewController
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/circuit/controller.go:46 +0x277
+
+goroutine 13 [select]:
+github.com/pkopriv2/bourne/message/core.multiplexerRoute(0xc420012af0, 0x48da20, 0xc420030080, 0x35b168)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:122 +0x4ca
+created by github.com/pkopriv2/bourne/message/core.NewMultiplexer
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:60 +0x38a
+
+goroutine 14 [select]:
+github.com/pkopriv2/bourne/message/core.multiplexerRoute(0xc420012af0, 0x48da20, 0xc420030088, 0x35b168)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:122 +0x4ca
+created by github.com/pkopriv2/bourne/message/core.NewMultiplexer
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:60 +0x38a
+
+goroutine 15 [select]:
+github.com/pkopriv2/bourne/message/core.multiplexerRoute(0xc420012af0, 0x48da20, 0xc420030090, 0x35b168)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:122 +0x4ca
+created by github.com/pkopriv2/bourne/message/core.NewMultiplexer
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/core/multiplexer.go:60 +0x38a
+
+goroutine 165 [select]:
+github.com/pkopriv2/bourne/message/client/tunnel.NewSender.func1(0x48d060, 0xc4250320a8, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:62 +0x982
+github.com/pkopriv2/bourne/machine.(*stage).run.func1(0xc42501c7d0, 0xc4250320a8, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:210 +0x5a
+created by github.com/pkopriv2/bourne/machine.(*stage).run
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:212 +0xb7
+
+goroutine 167 [select]:
+github.com/pkopriv2/bourne/machine.(*workerSocket).Next(0xc4250320b8, 0x5, 0xc421b78240, 0x1, 0x1)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:142 +0x145
+github.com/pkopriv2/bourne/message/client/tunnel.NewReceiver.func1(0x48d060, 0xc4250320b8, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/receiver.go:61 +0x5b2
+github.com/pkopriv2/bourne/machine.(*stage).run.func1(0xc4200da460, 0xc4250320b8, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:210 +0x5a
+created by github.com/pkopriv2/bourne/machine.(*stage).run
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:212 +0xb7
+
+goroutine 109 [select]:
+github.com/pkopriv2/bourne/circuit.control(0xc42501c5f0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/circuit/controller.go:92 +0x1ff
+created by github.com/pkopriv2/bourne/circuit.NewController
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/circuit/controller.go:46 +0x277
+
+goroutine 112 [select]:
+github.com/pkopriv2/bourne/machine.controlMachine(0xc4200de6f0, 0x2, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:324 +0x7d2
+created by github.com/pkopriv2/bourne/machine.newStateMachine
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:254 +0x1ed
+
+goroutine 213 [select]:
+github.com/pkopriv2/bourne/message/client/tunnel.recvOrTimeout(0x48b660, 0xc4200da360, 0xc4235fad20, 0x48faa0, 0xc420168780, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/common.go:63 +0x1f1
+github.com/pkopriv2/bourne/message/client/tunnel.closeInit(0x48e6c0, 0xc4200da340, 0x48b660, 0xc4200da360, 0xc4235fad20, 0xc4235facc0, 0xc4235cb788, 0x619e)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/closer.go:52 +0x17b
+github.com/pkopriv2/bourne/message/client/tunnel.NewCloserInit.func1(0x48d060, 0xc4235fc018, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/closer.go:17 +0xc3
+github.com/pkopriv2/bourne/machine.(*stage).run.func1(0xc423602600, 0xc4235fc018, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:210 +0x5a
+created by github.com/pkopriv2/bourne/machine.(*stage).run
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:212 +0xb7
+
+goroutine 116 [chan send]:
+github.com/pkopriv2/bourne/message/client/tunnel.readStream.func1(0xc42011c870, 0xc42502a000, 0x8000, 0x8000, 0xc420168000)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:110 +0x27d
+created by github.com/pkopriv2/bourne/message/client/tunnel.readStream
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:124 +0xb0
+
+goroutine 92 [chan send]:
+github.com/pkopriv2/bourne/message/client/tunnel.readStream.func1(0xc42012c2d0, 0xc4235d0000, 0x8000, 0x8000, 0xc420073140)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:110 +0x27d
+created by github.com/pkopriv2/bourne/message/client/tunnel.readStream
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:124 +0xb0
+
+goroutine 39 [chan send]:
+github.com/pkopriv2/bourne/message/client/tunnel.readStream.func1(0xc42011c190, 0xc423606000, 0x8000, 0x8000, 0xc423604060)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:110 +0x27d
+created by github.com/pkopriv2/bourne/message/client/tunnel.readStream
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:124 +0xb0
+
+goroutine 111 [select]:
+github.com/pkopriv2/bourne/message/client.controlTunnel(0xc423602540)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel.go:150 +0x2c7
+created by github.com/pkopriv2/bourne/message/client.NewTunnel
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel.go:143 +0xc64
+
+goroutine 113 [chan receive]:
+github.com/pkopriv2/bourne/machine.(*stateMachine).Wait(0xc4200de6f0, 0x4, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:275 +0x44
+github.com/pkopriv2/bourne/message/client.controlTunnel(0xc4236026c0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel.go:159 +0x181
+created by github.com/pkopriv2/bourne/message/client.NewTunnel
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel.go:143 +0xc64
+
+goroutine 24 [chan send]:
+github.com/pkopriv2/bourne/message/client/tunnel.readStream.func1(0xc42501c1e0, 0xc421c9e000, 0x8000, 0x8000, 0xc423604240)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:110 +0x27d
+created by github.com/pkopriv2/bourne/message/client/tunnel.readStream
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:124 +0xb0
+
+goroutine 178 [select]:
+github.com/pkopriv2/bourne/message/client/tunnel.NewBufferer.func1(0x48d060, 0xc4200300a8, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/bufferer.go:26 +0x513
+github.com/pkopriv2/bourne/machine.(*stage).run.func1(0xc4200de2d0, 0xc4200300a8, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:210 +0x5a
+created by github.com/pkopriv2/bourne/machine.(*stage).run
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:212 +0xb7
+
+goroutine 145 [select]:
+github.com/pkopriv2/bourne/message/client/tunnel.NewAssembler.func1(0x48d060, 0xc420030070, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/assembler.go:50 +0x603
+github.com/pkopriv2/bourne/machine.(*stage).run.func1(0xc4200de2a0, 0xc420030070, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:210 +0x5a
+created by github.com/pkopriv2/bourne/machine.(*stage).run
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:212 +0xb7
+
+goroutine 166 [select]:
+github.com/pkopriv2/bourne/message/client/tunnel.NewVerifier.func1(0x48d060, 0xc4250320b0, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/verifier.go:55 +0x540
+github.com/pkopriv2/bourne/machine.(*stage).run.func1(0xc423602500, 0xc4250320b0, 0x0, 0x0, 0x0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:210 +0x5a
+created by github.com/pkopriv2/bourne/machine.(*stage).run
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:212 +0xb7
+
+goroutine 212 [select]:
+github.com/pkopriv2/bourne/machine.controlStage(0xc420019140)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:182 +0x21d
+created by github.com/pkopriv2/bourne/machine.newStageController
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/machine/state.go:164 +0x154
+
+goroutine 196 [semacquire]:
+sync.runtime_Semacquire(0xc421b7817c)
+	/usr/local/go/src/runtime/sema.go:47 +0x30
+sync.(*WaitGroup).Wait(0xc421b78170)
+	/usr/local/go/src/sync/waitgroup.go:131 +0x97
+github.com/pkopriv2/bourne/concurrent.(*wait).Wait.func1(0xc421b78170, 0xc420072420)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/concurrent/wait.go:30 +0x2d
+created by github.com/pkopriv2/bourne/concurrent.(*wait).Wait
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/concurrent/wait.go:32 +0x67
+
+goroutine 76 [sleep]:
+time.Sleep(0x989680)
+	/usr/local/go/src/runtime/time.go:59 +0xe1
+github.com/pkopriv2/bourne/message/client/tunnel.readStream.func1(0xc42501c870, 0xc42805a000, 0x8000, 0x8000, 0xc428052360)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:115 +0xa5
+created by github.com/pkopriv2/bourne/message/client/tunnel.readStream
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:124 +0xb0
+
+goroutine 210 [sleep]:
+time.Sleep(0x989680)
+	/usr/local/go/src/runtime/time.go:59 +0xe1
+github.com/pkopriv2/bourne/message/client/tunnel.readStream.func1(0xc42501c6e0, 0xc428062000, 0x8000, 0x8000, 0xc420168120)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:115 +0xa5
+created by github.com/pkopriv2/bourne/message/client/tunnel.readStream
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/sender.go:124 +0xb0
+
+goroutine 195 [select]:
+github.com/pkopriv2/bourne/message/client/tunnel.(*VerifyReceiver).Run(0xc42804e100, 0xc421b9c300, 0xc4235faea0)
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/verifier.go:108 +0x1fb
+created by github.com/pkopriv2/bourne/message/client/tunnel.NewVerifier.func1
+	/Users/pkopriv2/git/go/src/github.com/pkopriv2/bourne/message/client/tunnel/verifier.go:27 +0x26f
+exit status 2
+FAIL	github.com/pkopriv2/bourne/message/client	5.025s

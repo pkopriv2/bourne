@@ -91,7 +91,7 @@ func TestStateMachine_Empty(t *testing.T) {
 	builder := NewStateMachine()
 	machine := builder.Start(1)
 
-	// should just close...
+	// should just close...with an error!
 	assert.NotNil(t, machine.Wait())
 }
 
@@ -120,12 +120,15 @@ func TestStateMachine_MultiState(t *testing.T) {
 	builder := NewStateMachine()
 
 	builder.AddState(1, func(c WorkerSocket, args []interface{}) {
+		assert.Equal(t, "1", args[0].(string))
 		c.Next(2, "2")
 	})
 	builder.AddState(2, func(c WorkerSocket, args []interface{}) {
+		assert.Equal(t, "2", args[0].(string))
 		c.Next(3, "3")
 	})
 	builder.AddState(3, func(c WorkerSocket, args []interface{}) {
+		assert.Equal(t, "3", args[0].(string))
 	})
 
 	machine := builder.Start(1, "1")

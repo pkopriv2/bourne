@@ -30,8 +30,8 @@ func (v *val) Get() interface{} {
 }
 
 func (v *val) Swap(e interface{}, t interface{}) bool {
-	v.lock.RLock()
-	defer v.lock.RUnlock()
+	v.lock.Lock()
+	defer v.lock.Unlock()
 	if v.inner != e {
 		return false
 	}

@@ -42,7 +42,7 @@ func NewController() Controller {
 		wait:    concurrent.NewWait(),
 	}
 
-	ret.wait.Add()
+	ret.wait.Inc()
 	go control(ret)
 	return ret
 }
@@ -87,7 +87,7 @@ func (c *controller) Failure() error {
 }
 
 func control(c *controller) {
-	defer c.wait.Done()
+	defer c.wait.Dec()
 
 	select {
 	case e := <-c.fail:
@@ -105,7 +105,7 @@ func (c *controller) NewControlSocket() (ControlSocket, error) {
 		return nil, fmt.Errorf("Controller dead")
 	}
 
-	c.wait.Add()
+	c.wait.Inc()
 	return &controlSocket{c}, nil
 }
 
@@ -126,6 +126,5 @@ func (c *controlSocket) Failure() error {
 }
 
 func (c *controlSocket) Done() {
-	c.parent.wait.Done()
+	c.parent.wait.Dec()
 }
-

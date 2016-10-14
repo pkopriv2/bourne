@@ -7,14 +7,6 @@ import (
 	"github.com/pkopriv2/bourne/message/wire"
 )
 
-const (
-	confTunnelAssemblerLimit = "bourne.msg.client.tunnel.assembler.limit"
-)
-
-const (
-	defaultTunnelAssemblerLimit = 1024
-)
-
 type AssemblerSocket struct {
 	SegmentRx <-chan wire.SegmentMessage
 	SegmentTx chan<- []byte
@@ -26,8 +18,8 @@ func NewAssembler(ctx common.Context, socket *AssemblerSocket) func(machine.Work
 	config := ctx.Config()
 
 	return func(state machine.WorkerSocket, args []interface{}) {
-		logger.Debug("RecvAssembler Opening")
-		defer logger.Debug("RecvAssembler Opening")
+		logger.Debug("Assembler Opening")
+		defer logger.Debug("Assembler Closing")
 
 		pending := NewPendingSegments(config.OptionalInt(confTunnelAssemblerLimit, defaultTunnelAssemblerLimit))
 

@@ -12,7 +12,6 @@ import (
 type SenderSocket struct {
 	PacketTx     chan<- wire.Packet
 	SendVerifyRx <-chan wire.NumMessage
-	RecvVerifyRx <-chan wire.NumMessage
 }
 
 func NewSender(route wire.Route, ctx common.Context, stream *concurrent.Stream, socket *SenderSocket) func(machine.WorkerSocket, []interface{}) {
@@ -25,93 +24,86 @@ func NewSender(route wire.Route, ctx common.Context, stream *concurrent.Stream, 
 		logger.Debug("SendMain Starting")
 		defer logger.Info("SendMain Closing")
 
-		// wrap the stream in a channel
-		in := readStream(stream)
-
 		// track time between send verifications.
-		var timeout <-chan time.Time
-		var timeoutCur time.Duration
-		var timeoutCnt int
-
-		resetTimeout := func() {
-			timeoutCnt = 0
-			timeoutCur = confTimeout
-			timeout = time.After(timeoutCur)
+		var sendTimeout <-chan time.Time
+		var sendTimeoutCur time.Duration
+		var sendTimeoutCnt int
+		sendTimerReset := func() {
+			sendTimeoutCnt = 0
+			sendTimeoutCur = confTimeout
+			sendTimeout = time.After(confTimeout)
+		}
+		sendTimerBackoff := func() {
+			sendTimeoutCnt += 1
+			sendTimeoutCur *= 2
+			sendTimeout = time.After(sendTimeoutCur)
+		}
+		sendTimerDisable := func() {
+			sendTimeoutCnt = 0
+			sendTimeoutCur = confTimeout
+			sendTimeout = nil
 		}
 
-		var chanIn <-chan input
-		var chanOut chan<- wire.Packet
+		in := readStream(stream)
+		chanIn := in
+		chanOut := socket.PacketTx
 
 		packet := wire.BuildPacket(route).Build()
 		for {
-			// timeouts only apply if we've sent data.
+			// send timeouts only apply if we've sent data.
 			tail, _, head, _ := stream.Snapshot()
 			if head.Offset == tail.Offset {
-				timeout = nil
-			}
-
-			// we can send any non-empty packet
-			if !packet.Empty() {
-				chanOut = socket.PacketTx
-			} else {
-				chanOut = nil
+				sendTimerDisable()
 			}
 
 			// we can read input as long as we don't have a segment
 			if segment := packet.Segment(); segment == nil {
 				chanIn = in
+				chanOut = nil
 			} else {
 				chanIn = nil
+				chanOut = socket.PacketTx
 			}
 
 			select {
 			case <-state.Closed():
 				return
-			case <-timeout:
-				stream.Reset()
-				if timeoutCnt++; timeoutCnt >= confTries {
-					state.Fail(NewTimeoutError("Too many ack timeouts"))
+			case <-sendTimeout:
+				if _,_,err := stream.Reset(); err != nil {
+					state.Fail(err)
 					return
 				}
 
-				// exponential backoff
-				timeoutCur *= 2
-				timeout = time.After(timeoutCur)
+				sendTimerBackoff()
+				if sendTimeoutCnt >= confTries {
+					state.Fail(NewTimeoutError("Too many ack timeouts"))
+					return
+				}
 			case msg := <-socket.SendVerifyRx:
 				if _, err := stream.Commit(msg.Val()); err != nil {
 					state.Fail(err)
 					return
 				}
 
-				resetTimeout()
-			case msg := <-socket.RecvVerifyRx:
-				packet = packet.Update().SetVerify(msg.Val()).Build()
+				sendTimerReset()
 			case input := <-chanIn:
 				if input.err != nil {
 					state.Fail(input.err)
 					return
 				}
 
-				packet = packet.Update().SetSegment(input.segment.offset, input.segment.data).Build()
-				resetTimeout()
+				packet = packet.Update().SetSegment(input.segment.Offset(), input.segment.Data()).Build()
 			case chanOut <- packet:
 				packet = wire.BuildPacket(route).Build()
-				if timeout == nil {
-					resetTimeout()
-				}
+				sendTimerReset()
 			}
 		}
 	}
 }
 
-type segment struct {
-	offset uint64
-	data   []byte
-}
-
 type input struct {
 	err     error
-	segment *segment
+	segment wire.SegmentMessage
 }
 
 func readStream(stream *concurrent.Stream) <-chan input {
@@ -134,7 +126,7 @@ func readStream(stream *concurrent.Stream) <-chan input {
 			tmp := make([]byte, num)
 			copy(tmp, buf[:num])
 
-			data <- input{segment: &segment{ref.Offset, tmp}}
+			data <- input{segment: wire.NewSegmentMessage(ref.Offset, tmp)}
 		}
 	}()
 

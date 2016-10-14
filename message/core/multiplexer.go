@@ -8,11 +8,11 @@ import (
 )
 
 const (
-	confMuxTxSize       = "bourne.msg.mux.tx.size"
-	confMuxRxSize       = "bourne.msg.mux.rx.size"
-	confMuxRetSize      = "bourne.msg.mux.ret.size"
-	confMuxSocketRxSize = "bourne.msg.mux.socket.size"
-	confMuxNumRouters   = "bourne.msg.mux.num.routers"
+	confMuxTxSize       = "bourne.message.mux.tx.size"
+	confMuxRxSize       = "bourne.message.mux.rx.size"
+	confMuxRetSize      = "bourne.message.ret.size"
+	confMuxSocketRxSize = "bourne.message.mux.socket.size"
+	confMuxNumRouters   = "bourne.message.mux.num.routers"
 )
 
 const (
@@ -24,11 +24,9 @@ const (
 )
 
 type Multiplexer interface {
-	Context() common.Context
+	ReliableDataSocket
 
-	Rx() <-chan wire.Packet
-	Tx() chan<- wire.Packet
-	Return() <-chan wire.Packet
+	Context() common.Context
 
 	AddSocket(addr interface{}) (StandardSocket, error)
 
@@ -178,7 +176,6 @@ func newMuxSocket(mux *mux, addr interface{}) (*muxSocket, error) {
 		addr: addr,
 		ctrl: ctrl,
 		rx:   make(chan wire.Packet, conf.OptionalInt(confMuxSocketRxSize, defaultMuxSocketRxSize))}, nil
-
 }
 
 func (m *muxSocket) Closed() <-chan struct{} {

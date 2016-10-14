@@ -72,24 +72,25 @@ type State interface {
 	Args() []interface{}
 }
 
-type StateMachineBuilder interface {
-	AddState(int, ...Worker) StateMachineBuilder
-	Start(int, ...interface{}) StateMachine
-}
-
-type StateMachine interface {
-	History() []State
-	Close() error
-	Move(int, ...interface{}) error
-	Wait() error
-	Fail(error) error
-	Clone() StateMachineBuilder
-}
-
 type WorkerSocket interface {
 	Closed() <-chan struct{}
 	Next(int, ...interface{})
 	Fail(error)
+}
+
+type StateMachine interface {
+	History() []State
+	Move(int, ...interface{}) error
+	Wait() error
+	Close() error
+	Fail(error) error
+	Running() bool
+	Result() error
+}
+
+type StateMachineBuilder interface {
+	AddState(int, ...Worker) StateMachineBuilder
+	Start(int, ...interface{}) StateMachine
 }
 
 // Implementations
@@ -116,12 +117,12 @@ type workerSocket struct {
 }
 
 func newWorkerSocket(parent *stageController) *workerSocket {
-	parent.wait.Add()
+	parent.wait.Inc()
 	return &workerSocket{parent}
 }
 
 func (w *workerSocket) Done() {
-	w.parent.wait.Done()
+	w.parent.wait.Dec()
 }
 
 func (w *workerSocket) Closed() <-chan struct{} {
@@ -250,7 +251,7 @@ func newStateMachine(states map[int]*stage, init int, args []interface{}) StateM
 		update:  make(chan State),
 		history: concurrent.NewList(10)}
 
-	go controlStateMachine(s, init, args)
+	go controlMachine(s, init, args)
 	return s
 }
 
@@ -271,7 +272,20 @@ func (s *stateMachine) Transition() chan<- State {
 }
 
 func (s *stateMachine) Wait() error {
-	<-s.closed
+	<-s.Closed()
+	return s.Result()
+}
+
+func (s *stateMachine) Running() bool {
+	select {
+	default:
+		return true
+	case <-s.Closed():
+		return false
+	}
+}
+
+func (s *stateMachine) Result() error {
 	return extractFailure(extractLatest(s.History()))
 }
 
@@ -286,15 +300,15 @@ func (s *stateMachine) Move(state int, args ...interface{}) error {
 
 func (s *stateMachine) Close() error {
 	s.Move(TerminalState)
-	return extractFailure(extractLatest(s.History()))
+	return s.Result()
 }
 
 func (s *stateMachine) Fail(e error) error {
 	s.Move(FailureState, e)
-	return extractFailure(extractLatest(s.History()))
+	return s.Result()
 }
 
-func controlStateMachine(s *stateMachine, init int, args []interface{}) {
+func controlMachine(s *stateMachine, init int, args []interface{}) {
 	cur := s.states[init]
 	if cur == nil {
 		s.history.Append(NewFailureState(fmt.Errorf("Could not start machine. State [%v] does not exist", init)))
@@ -329,7 +343,7 @@ func controlStateMachine(s *stateMachine, init int, args []interface{}) {
 			return
 		}
 
-		cur = s.states[next.Id()]
+		cur, args = s.states[next.Id()], next.Args()
 		if cur == nil {
 			s.history.Append(NewFailureState(fmt.Errorf("State [%v] does not exist", next.Id())))
 			close(s.closed)
