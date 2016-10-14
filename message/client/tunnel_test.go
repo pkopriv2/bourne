@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 
 	"github.com/pkopriv2/bourne/common"
@@ -14,10 +15,8 @@ import (
 
 func TestTunnel_sendSinglePacket(t *testing.T) {
 	fmt.Println("---TestTunnel_sendSinglePacket---")
-	control, tunnelL, tunnelR := NewTestTunnelPair()
-	defer control.Close()
+	_, tunnelL, tunnelR := NewTestTunnelPair()
 	defer tunnelL.Close()
-	defer tunnelR.Close()
 
 	tunnelR.Write([]byte{1})
 
@@ -37,7 +36,6 @@ func TestTunnel_sendSingleStream(t *testing.T) {
 	control, tunnelL, tunnelR := NewTestTunnelPair()
 	defer control.Close()
 	defer tunnelL.Close()
-	defer tunnelR.Close()
 
 	go func() {
 		for i := 0; i < 100; i++ {
@@ -61,7 +59,6 @@ func TestTunnel_sendDuplexStream(t *testing.T) {
 	control, tunnelL, tunnelR := NewTestTunnelPair()
 	defer control.Close()
 	defer tunnelL.Close()
-	defer tunnelR.Close()
 
 	go func() {
 		for i := 0; i < 100; i++ {
@@ -97,30 +94,81 @@ func TestTunnel_sendSingleLargeStream(t *testing.T) {
 	control, tunnelL, tunnelR := NewTestTunnelPair()
 	defer control.Close()
 	defer tunnelL.Close()
-	defer tunnelR.Close()
 
-	buf := make([]byte, 4096)
-	for i := 0; i < 4096; i++ {
+	buf := make([]byte, 1024)
+	for i := 0; i < 1024; i++ {
 		buf[i] = byte(i)
 	}
 
 	go func() {
-		for i := 0; i < 1<<12; i++ {
+		for i := 0; i < 1<<10; i++ {
 			tunnelR.Write(buf)
 		}
 	}()
 
-	actual := make([]byte, 4096)
+	actual := make([]byte, 1024)
 
-	for i := 0; i < 1<<12; i++ {
-		num, _ := io.ReadFull(tunnelL, actual)
-		// assert.Nil(t, err)
+	for i := 0; i < 1<<10; i++ {
+		num, err := io.ReadFull(tunnelL, actual)
+		assert.Nil(t, err)
 
-		assert.Equal(t, 4096, num)
-		// for i := 0; i < 1024; i++ {
-		// assert.Equal(t, byte(i), actual[i])
-		// }
+		assert.Equal(t, 1024, num)
+		for i := 0; i < 1024; i++ {
+			assert.Equal(t, byte(i), actual[i])
+		}
 	}
+}
+
+func TestTunnel_sendLargeDuplexStream(t *testing.T) {
+	fmt.Println("---TestTunnel_sendLargeDuplexStream---")
+	control, tunnelL, tunnelR := NewTestTunnelPair()
+	defer control.Close()
+	defer tunnelL.Close()
+
+	bufL := make([]byte, 1024)
+	bufR := make([]byte, 1024)
+	for i := 0; i < 1024; i++ {
+		bufL[i] = byte(i)
+		bufR[i] = byte(i)
+	}
+
+	var wait sync.WaitGroup
+	wait.Add(4)
+	go func() {
+		defer wait.Done()
+		for i := 0; i < 1<<10; i++ {
+			tunnelL.Write(bufL)
+		}
+	}()
+
+	go func() {
+		defer wait.Done()
+		for i := 0; i < 1<<10; i++ {
+			tunnelR.Write(bufR)
+		}
+	}()
+
+	actualL := make([]byte, 1024)
+	actualR := make([]byte, 1024)
+	go func() {
+		defer wait.Done()
+
+		for i := 0; i < 1<<10; i++ {
+			io.ReadFull(tunnelL, actualL)
+			assert.Equal(t, bufR, actualL)
+		}
+	}()
+
+	go func() {
+		defer wait.Done()
+
+		for i := 0; i < 1<<10; i++ {
+			io.ReadFull(tunnelR, actualR)
+			assert.Equal(t, bufL, actualR)
+		}
+	}()
+
+	wait.Wait()
 }
 
 func NewTestTunnelPair() (core.DirectTopology, Tunnel, Tunnel) {

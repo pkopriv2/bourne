@@ -2,12 +2,13 @@ package circuit
 
 import (
 	"errors"
-	"fmt"
+	"time"
 
 	"github.com/pkopriv2/bourne/concurrent"
 )
 
-var ControllerClosed = errors.New("CONTROLLER:CLOSED")
+var ControllerClosedError = errors.New("ERR:CONTROLLER:CLOSED")
+var ControllerShutdownError = errors.New("ERR:CONTROLLER:SHUTDOWN")
 
 type Controller interface {
 	Close() error
@@ -27,7 +28,6 @@ type controller struct {
 	failed  chan struct{}
 	close   chan struct{}
 	fail    chan error
-	dead    concurrent.AtomicBool
 	failure concurrent.Val
 	wait    concurrent.Wait
 }
@@ -51,17 +51,26 @@ func (c *controller) Wait() <-chan struct{} {
 	return c.wait.Wait()
 }
 
+func (c *controller) WaitForShutdown() error {
+	timer := time.After(5 * time.Second)
+	select {
+	case <-c.Wait():
+		return nil
+	case <-timer:
+		return ControllerShutdownError
+	}
+}
+
 func (c *controller) Close() error {
 	select {
 	case <-c.failed:
-		return ControllerClosed
+		return ControllerClosedError
 	case <-c.closed:
-		return ControllerClosed
+		return ControllerClosedError
 	case c.close <- struct{}{}:
 	}
 
-	<-c.Wait()
-	return nil
+	return c.WaitForShutdown()
 }
 
 func (c *controller) Fail(e error) {
@@ -74,7 +83,7 @@ func (c *controller) Fail(e error) {
 	case c.fail <- e:
 	}
 
-	<-c.Wait()
+	c.WaitForShutdown()
 }
 
 func (c *controller) Failure() error {
@@ -93,16 +102,18 @@ func control(c *controller) {
 	case e := <-c.fail:
 		c.failure.Set(e)
 		close(c.failed)
-		c.dead.Set(true)
 	case <-c.close:
 		close(c.closed)
-		c.dead.Set(true)
 	}
 }
 
 func (c *controller) NewControlSocket() (ControlSocket, error) {
-	if c.dead.Get() {
-		return nil, fmt.Errorf("Controller dead")
+	select {
+	default:
+	case <-c.failed:
+		return nil, ControllerClosedError
+	case <-c.closed:
+		return nil, ControllerClosedError
 	}
 
 	c.wait.Inc()

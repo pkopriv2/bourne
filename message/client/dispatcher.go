@@ -34,7 +34,7 @@ type ListenerSocket interface {
 
 	Route() wire.Route
 	Context() common.Context
-	NewTunnel(wire.Address) (TunnelSocket, error)
+	NewTunnelSocket(wire.Address) (TunnelSocket, error)
 }
 
 func DispatchRouter(p wire.Packet) interface{} {
@@ -124,7 +124,7 @@ func (l *listenerSocket) Route() wire.Route {
 	return l.route
 }
 
-func (l *listenerSocket) NewTunnel(remote wire.Address) (TunnelSocket, error) {
+func (l *listenerSocket) NewTunnelSocket(remote wire.Address) (TunnelSocket, error) {
 	return l.dispatcher.newTunnelSocket(remote, true)
 }
 

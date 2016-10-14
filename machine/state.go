@@ -76,6 +76,7 @@ type WorkerSocket interface {
 	Closed() <-chan struct{}
 	Next(int, ...interface{})
 	Fail(error)
+	Terminate()
 }
 
 type StateMachine interface {
@@ -127,6 +128,15 @@ func (w *workerSocket) Done() {
 
 func (w *workerSocket) Closed() <-chan struct{} {
 	return w.parent.closed
+}
+
+func (w *workerSocket) Terminate() {
+	select {
+	case <-w.parent.closed:
+		return
+	case w.parent.resultIn <- NewTerminalState():
+		return
+	}
 }
 
 func (w *workerSocket) Fail(e error) {
@@ -326,12 +336,12 @@ func controlMachine(s *stateMachine, init int, args []interface{}) {
 		case next = <-s.update:
 			select {
 			case tmp := <-control.Result():
-				if IsFailureState(tmp) {
+				if IsFailureState(tmp) || IsTerminalState(tmp) {
 					next = tmp
 				}
 			case control.Transition() <- next:
 				tmp := <-control.Result()
-				if IsFailureState(tmp) {
+				if IsFailureState(tmp) || IsTerminalState(tmp) {
 					next = tmp
 				}
 			}

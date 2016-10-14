@@ -28,19 +28,11 @@ type direct struct {
 }
 
 func NewDirectTopology(ctx common.Context) DirectTopology {
-	c := &direct{
+	return &direct{
 		ctx:   ctx,
 		ctrl:  circuit.NewController(),
 		chanL: make(chan wire.Packet),
 		chanR: make(chan wire.Packet)}
-
-	// ctrlRouteL, _ := c.ctrl.NewControlSocket()
-	// ctrlRouteR, _ := c.ctrl.NewControlSocket()
-//
-	// go route(c.chanL, c.chanR, ctrlRouteL)
-	// go route(c.chanR, c.chanL, ctrlRouteR)
-//
-	return c
 }
 
 func route(rx <-chan wire.Packet, tx chan<- wire.Packet, ctrl circuit.ControlSocket) {

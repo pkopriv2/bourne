@@ -119,7 +119,7 @@ func readStream(stream *concurrent.Stream) <-chan input {
 			}
 
 			if num == 0 {
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(50 * time.Millisecond)
 				continue
 			}
 

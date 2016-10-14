@@ -13,24 +13,32 @@ import (
 // TODO: CLOSE SEND CHANNELS INDEPENDENTLY
 
 func NewCloserInit(route wire.Route, ctx common.Context, socket core.DataSocket) func(machine.WorkerSocket, []interface{}) {
+	logger := common.FormatLogger(ctx.Logger(), route)
+
 	return func(worker machine.WorkerSocket, args []interface{}) {
+		logger.Info("Closing init")
 		if err := closeInit(route, ctx, socket.Rx(), socket.Tx()); err != nil {
+			logger.Error(err.Error())
 			worker.Fail(err)
 		}
 
-		worker.Next(TunnelClosed)
+		worker.Terminate()
 	}
 }
 
 func NewCloserRecv(route wire.Route, ctx common.Context, socket core.DataSocket) func(machine.WorkerSocket, []interface{}) {
+	logger := common.FormatLogger(ctx.Logger(), route)
+
 	return func(worker machine.WorkerSocket, args []interface{}) {
+		logger.Info("Closing recv")
 		challenge := args[0].(uint64)
 
 		if err := closeRecv(route, ctx, socket.Rx(), socket.Tx(), challenge); err != nil {
+			logger.Error(err.Error())
 			worker.Fail(err)
 		}
 
-		worker.Next(TunnelClosed)
+		worker.Terminate()
 	}
 }
 
@@ -65,7 +73,9 @@ func closeInit(route wire.Route, ctx common.Context, in <-chan wire.Packet, out 
 	}
 
 	// Send: verify
-	out <- wire.BuildPacket(route).SetClose(p.Close().Val()).Build()
+	if err := sendOrTimeout(ctx, out, wire.BuildPacket(route).SetVerify(p.Close().Val()).Build()); err != nil {
+		return NewClosingError(fmt.Sprintf("Failed: send(verify): %v", err.Error()))
+	}
 
 	return nil
 }

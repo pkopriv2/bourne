@@ -23,7 +23,6 @@ var (
 
 type Listener interface {
 	io.Closer
-
 	Route() wire.Route
 	Accept() (Tunnel, error)
 }
@@ -36,7 +35,6 @@ type listener struct {
 	socket ListenerSocket
 	close  chan struct{}
 	closed chan struct{}
-	result error
 }
 
 func newListener(socket ListenerSocket) Listener {
@@ -50,7 +48,7 @@ func (l *listener) Route() wire.Route {
 func (t *listener) Close() error {
 	select {
 	case <-t.closed:
-		return NewListenerClosedError(t.result)
+		return NewListenerClosedError(t.socket.Failure())
 	case t.close <- struct{}{}:
 	}
 
@@ -65,7 +63,6 @@ func controlListener(l *listener) {
 	case <-l.close:
 	case <-l.socket.Closed():
 	case <-l.socket.Failed():
-		l.result = l.socket.Failure()
 	}
 
 	close(l.closed)
@@ -75,11 +72,11 @@ func (l *listener) Accept() (Tunnel, error) {
 	var p wire.Packet
 	select {
 	case <-l.closed:
-		return nil, NewListenerClosedError(l.result)
+		return nil, NewListenerClosedError(l.socket.Failure())
 	case p = <-l.socket.Rx():
 	}
 
-	tunnelSocket, err := l.socket.NewTunnel(p.Route().Src())
+	tunnelSocket, err := l.socket.NewTunnelSocket(p.Route().Src())
 	if err != nil {
 		return nil, err
 	}

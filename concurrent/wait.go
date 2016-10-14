@@ -9,25 +9,39 @@ type Wait interface {
 }
 
 type wait struct {
-	inner sync.WaitGroup
+	refs int
+	cond *sync.Cond
 }
 
 func NewWait() Wait {
-	return &wait{}
+	return &wait{cond: sync.NewCond(&sync.Mutex{})}
 }
 
 func (w *wait) Dec() {
-	w.inner.Done()
+	w.cond.L.Lock()
+	defer w.cond.Broadcast()
+	defer w.cond.L.Unlock()
+	if w.refs == 0 {
+		panic("Negative reference counter")
+	}
+
+	w.refs--
 }
 
 func (w *wait) Inc() {
-	w.inner.Add(1)
+	w.cond.L.Lock()
+	defer w.cond.L.Unlock()
+	w.refs++
 }
 
 func (w *wait) Wait() <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
-		w.inner.Wait()
+		w.cond.L.Lock()
+		for w.refs > 0 {
+			w.cond.Wait()
+		}
+		w.cond.L.Unlock()
 		close(done)
 	}()
 	return done

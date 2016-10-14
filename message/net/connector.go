@@ -2,110 +2,152 @@ package net
 
 import (
 	"bufio"
-	"sync"
+	"errors"
+	"io"
 
-	"github.com/pkopriv2/bourne/msg/core"
-	"github.com/pkopriv2/bourne/msg/wire"
+	"github.com/pkopriv2/bourne/circuit"
+	"github.com/pkopriv2/bourne/message/core"
+	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/utils"
 )
+
+var ConnectorClosedError = errors.New("ERR:CONNECTOR:CLOSED")
 
 type Connector interface {
 	core.StandardSocket
+	io.Closer
 }
 
 type connector struct {
-	connection  net.Connection
-	rx    chan wire.Packet
-	tx    chan wire.Packet
-	err   chan error
-	wait  sync.WaitGroup
+	raw    net.Connection
+	ctrl   circuit.Controller
+	socket circuit.ControlSocket
+	rx     chan wire.Packet
+	tx     chan wire.Packet
+	fail   chan error
+	close  chan struct{}
+}
+
+func NewConnector(raw net.Connection) Connector {
+	ctrl := circuit.NewController()
+	sock, _ := ctrl.NewControlSocket()
+
+	c := &connector{
+		raw:    raw,
+		socket: sock,
+		rx:     make(chan wire.Packet),
+		tx:     make(chan wire.Packet),
+		fail:   make(chan error),
+		close:  make(chan struct{})}
+
+	r, _ := c.ctrl.NewControlSocket()
+	w, _ := c.ctrl.NewControlSocket()
+	go connectorControl(c)
+	go connectorReader(c, r)
+	go connectorWriter(c, w)
+
+	return c
+}
+
+func (c *connector) Close() error {
+	select {
+	case <-c.socket.Closed():
+		return ConnectorClosedError
+	case <-c.socket.Failed():
+		return ConnectorClosedError
+	case c.close <- struct{}{}:
+	}
+
+	return c.socket.Failure()
 }
 
 func (c *connector) Closed() <-chan struct{} {
-	return c.ctrl.Closed()
+	return c.socket.Closed()
 }
 
 func (c *connector) Failed() <-chan struct{} {
-	return c.ctrl.Failed()
+	return c.socket.Failed()
 }
 
 func (c *connector) Failure() error {
-	return c.
-	panic("not implemented")
+	return c.socket.Failure()
 }
 
 func (c *connector) Done() {
-	panic("not implemented")
-}
-
-func (c *connector) Return() <-chan wire.Packet {
-	panic("not implemented")
+	c.socket.Done()
 }
 
 func (c *connector) Rx() <-chan wire.Packet {
-	panic("not implemented")
+	return c.rx
 }
 
 func (c *connector) Tx() chan<- wire.Packet {
-	panic("not implemented")
+	return c.tx
 }
 
-func NewConnector(config utils.Config, conn net.Connection) Connector {
-	c := &connector{
-		conn: conn,
-		rx:   make(chan wire.Packet),
-		tx:   make(chan wire.Packet),
-		err:  make(chan error, 2)}
+func connectorControl(c *connector) {
+	select {
+	case <-c.close:
+		c.ctrl.Close()
+		c.raw.Close() // TODO: should close raw on error too?
+	case err := <-c.fail:
+		c.ctrl.Fail(err)
+	}
+}
 
-	// start reader
-	c.wait.Add(1)
-	go func() {
-		defer c.wait.Done()
-		reader := bufio.NewReader(c.conn)
+func fail(c *connector, ctrl circuit.ControlSocket, err error) {
+	select {
+	case <-ctrl.Closed():
+	case <-ctrl.Failed():
+	case c.fail <- err:
+	}
+}
 
-		for {
-			p, err := wire.ReadPacket(reader)
-			if err != nil {
-				switch t := err.(type) {
-				case net.ConnectionError:
-					c.err <- t
-					return
-				}
-			}
+func connectorReader(c *connector, ctrl circuit.ControlSocket) {
+	defer ctrl.Done()
 
-			select {
-			case <-c.close:
+	reader := bufio.NewReader(c.raw)
+	for {
+		p, err := wire.ReadPacket(reader)
+		if err != nil {
+			switch t := err.(type) {
+			case net.ConnectionError:
+				fail(c, ctrl, t)
 				return
-			case c.rx <- p:
 			}
 		}
-	}()
 
-	// start writer
-	c.wait.Add(1)
-	go func() {
-		defer c.wait.Done()
-		writer := bufio.NewWriter(c.conn)
+		select {
+		case <-ctrl.Closed():
+			return
+		case <-ctrl.Failed():
+			return
+		case c.rx <- p:
+		}
+	}
+}
 
-		for {
-			var p wire.Packet
+func connectorWriter(c *connector, ctrl circuit.ControlSocket) {
+	defer ctrl.Done()
 
-			select {
-			case <-c.close:
+	writer := bufio.NewWriter(c.raw)
+	for {
+		var p wire.Packet
+
+		select {
+		case <-ctrl.Closed():
+			return
+		case <-ctrl.Failed():
+			return
+		case p = <-c.tx:
+		}
+
+		if err := p.Write(writer); err != nil {
+			switch e := err.(type) {
+			case net.ConnectionError:
+				fail(c, ctrl, e)
 				return
-			case p = <-c.tx:
-			}
-
-			if err := p.Write(writer); err != nil {
-				switch t := err.(type) {
-				case net.ConnectionError:
-					c.err <- t
-					return
-				}
 			}
 		}
-	}()
-
-	return c
+	}
 }

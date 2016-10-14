@@ -55,7 +55,7 @@ func NewReceiver(ctx common.Context, socket *ReceiverSocket) func(machine.Worker
 				msgVerify = nil
 				break
 			case p := <-chanIn:
-				logger.Debug("Received packet: %v", p)
+				logger.Debug("%v: Received packet: %v", p.Route(), p)
 				// Handle: close
 				if close := p.Close(); close != nil {
 					state.Next(TunnelClosingRecv, p.Close().Val())

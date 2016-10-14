@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkopriv2/bourne/utils"
+	"github.com/pkopriv2/bourne/common"
 )
 
 const (
@@ -86,7 +86,7 @@ type connection struct {
 	timeout time.Duration
 }
 
-func NewConnector(factory ConnectionFactory, config utils.Config) *connection {
+func NewConnector(factory ConnectionFactory, config common.Config) *connection {
 	retries := config.OptionalInt(confConnectionRetries, defaultConnectionRetries)
 	timeout := config.OptionalDuration(confConnectionTimeout, defaultConnectionTimeout)
 

@@ -23,6 +23,7 @@ func TestDispatcher_Tx_NoRoute(t *testing.T) {
 	routeL := wire.NewRemoteRoute(addrL, addrR)
 
 	dispatcher := NewDispatcher(ctx, memberL)
+	// defer dispatcher.Close()
 
 	packet := wire.BuildPacket(routeL.Reverse()).Build()
 
@@ -41,6 +42,9 @@ func TestDispatcher_Tx(t *testing.T) {
 	dispatcher := NewDispatcher(ctx, memberL)
 	tunnelL,_ := dispatcher.NewTunnelSocket(addrR)
 	tunnelR,_ := dispatcher.NewTunnelSocket(addrR)
+	defer dispatcher.Close()
+	defer tunnelL.Done()
+	defer tunnelR.Done()
 
 	packet := wire.BuildPacket(tunnelL.Route().Reverse()).Build()
 	dispatcher.Tx() <- packet
