@@ -86,10 +86,11 @@ func (c *connector) Tx() chan<- wire.Packet {
 }
 
 func connectorControl(c *connector) {
+	defer c.raw.Close()
+
 	select {
 	case <-c.close:
 		c.ctrl.Close()
-		c.raw.Close() // TODO: should close raw on error too?
 	case err := <-c.fail:
 		c.ctrl.Fail(err)
 	}

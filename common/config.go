@@ -25,6 +25,17 @@ const (
 	Duration = "int(milliseconds)"
 )
 
+type Configured interface {
+	Config() Config
+}
+
+type Config interface {
+	OptionalInt(key string, def int) int
+	OptionalBool(key string, def bool) bool
+	OptionalDuration(key string, def time.Duration) time.Duration
+}
+
+
 type ConfigMissingError struct {
 	key string
 }
@@ -49,16 +60,6 @@ func newConfigMissingError(key string) ConfigMissingError {
 
 func newConfigParsingError(expected ConfigType, key string, val interface{}) ConfigParsingError {
 	return ConfigParsingError{expected, key, val}
-}
-
-type Configured interface {
-	Config() Config
-}
-
-type Config interface {
-	OptionalInt(key string, def int) int
-	OptionalBool(key string, def bool) bool
-	OptionalDuration(key string, def time.Duration) time.Duration
 }
 
 func NewEmptyConfig() Config {
