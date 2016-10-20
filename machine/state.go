@@ -214,12 +214,10 @@ func (s *stage) run(args []interface{}) *stageController {
 	controller := newStageController()
 
 	for _, w := range s.workers {
-		work := w
-		ctrl := controller.NewWorkerSocket()
-		go func() {
+		go func(work Worker, ctrl *workerSocket) {
 			work(ctrl, args)
 			ctrl.Done()
-		}()
+		}(w, controller.NewWorkerSocket())
 	}
 
 	return controller

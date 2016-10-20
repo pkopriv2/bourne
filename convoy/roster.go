@@ -7,16 +7,20 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// Building a roster is basically indexing a sequence of updates.
-// There are currently NO limitations on the ordering of updates.
-// Reconciliation manages
+func newPut(member Member) Update {
+	return &put{member}
+}
+
+func newDelete(memberId uuid.UUID, version int) Update {
+	return &delete{memberId, version}
+}
 
 type roster struct {
 	lock    sync.RWMutex
 	updates map[uuid.UUID]Update
 }
 
-func NewRoster() Roster {
+func newRoster() Roster {
 	return &roster{updates: make(map[uuid.UUID]Update)}
 }
 
@@ -24,30 +28,24 @@ func (r *roster) Iterator() Iterator {
 	return NewIterator(r)
 }
 
-func (r *roster) Updates() []Update {
-	r.lock.RLock()
-	defer r.lock.RUnlock()
-	return extractValues(r.updates)
-}
-
-func (r *roster) All() []Member {
-	r.lock.RLock()
-	defer r.lock.RUnlock()
-	return extractMembers(r.updates)
-}
-
 func (r *roster) Get(id uuid.UUID) Member {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
-	return extractMember(r.updates[id])
+	return updateToMember(r.updates[id])
 }
 
-func (r *roster) Apply(updates []Update) error {
+func (r *roster) log() []Update {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
-	applyUpdates(r.updates, updates)
-	return nil
+	return indexedUpdatesToUpdates(r.updates)
 }
+
+func (r *roster) apply(u Update) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	applyUpdate(r.updates, u)
+}
+
 
 // A basic randomized iterator.  The goal of this is to avoid
 // returning revoked members, while still guaranteeing that active
@@ -61,7 +59,7 @@ type iterator struct {
 func NewIterator(roster *roster) *iterator {
 	return &iterator{
 		roster: roster,
-		order:  shuffleIds(extractIds(roster.All()))}
+		order:  shuffleIds(updatesToIds(roster.log()))}
 }
 
 func (i *iterator) Next() Member {
@@ -86,34 +84,35 @@ func (i *iterator) SetIndex(val int) {
 	i.idx = val
 }
 
-func extractMember(update Update) Member {
-	return update.Member()
-}
-
-func extractMembers(raw map[uuid.UUID]Update) []Member {
-	ret := make([]Member, 0, len(raw))
-
-	for _, update := range raw {
-		member := update.Member()
-		if member == nil {
-			continue
-		}
-
-		ret = append(ret, member)
+func updateToMember(u Update) Member {
+	switch t := u.(type) {
+	case *delete:
+		return nil
+	case *put:
+		return t.member
 	}
 
-	return ret
+	panic("Unknown update type!")
 }
 
-func extractIds(members []Member) []uuid.UUID {
-	ret := make([]uuid.UUID, 0, len(members))
-
-	for _, m := range members {
-		ret = append(ret, m.Id())
+func indexedUpdatesToUpdates(index map[uuid.UUID]Update) []Update {
+	values := make([]Update, 0, len(index))
+	for _, v := range index {
+		values = append(values, v)
 	}
 
-	return ret
+	return values
 }
+
+func updatesToIds(updates []Update) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(updates))
+	for _, u := range updates {
+		ids = append(ids, u.Re())
+	}
+
+	return ids
+}
+
 
 func shuffleIds(ids []uuid.UUID) []uuid.UUID {
 	perm := rand.Perm(len(ids))
@@ -126,48 +125,54 @@ func shuffleIds(ids []uuid.UUID) []uuid.UUID {
 	return ret
 }
 
-func applyUpdates(init map[uuid.UUID]Update, updates []Update) {
-	for _, u := range updates {
-		cur := init[u.MemberId()]
-		if cur == nil {
-			init[u.MemberId()] = u
-			continue
-		}
+func applyUpdate(init map[uuid.UUID]Update, u Update) {
+	memberId := u.Re()
 
-		if cur.Version() < u.Version() {
-			init[u.MemberId()] = u
-			continue
-		}
+	cur := init[memberId]
+	if cur == nil {
+		init[memberId] = u
+		return
+	}
 
-		// in the event of a collision, deletes win
-		if u.Type() == Del {
-			init[u.MemberId()] = u
-		}
+	if cur.Version() < u.Version() {
+		init[memberId] = u
+		return
+	}
+
+	if _, ok := u.(*delete); ok  {
+		init[memberId] = u
 	}
 }
 
-func extractKeys(raw map[uuid.UUID]Update) []uuid.UUID {
-	keys := make([]uuid.UUID, 0, len(raw))
-	for k, _ := range raw {
-		keys = append(keys, k)
-	}
-
-	return keys
+type delete struct {
+	memberId uuid.UUID
+	version  int
 }
 
-func extractValues(raw map[uuid.UUID]Update) []Update {
-	values := make([]Update, 0, len(raw))
-	for _, v := range raw {
-		values = append(values, v)
-	}
-
-	return values
+func (d *delete) Re() uuid.UUID {
+	return d.memberId
 }
 
-func copyRoster(m map[uuid.UUID]Update) map[uuid.UUID]Update {
-	ret := make(map[uuid.UUID]Update)
-	for k, v := range m {
-		ret[k] = v
-	}
-	return ret
+func (d *delete) Version() int {
+	return d.version
+}
+
+func (d *delete) Apply(r Roster) {
+	r.apply(d)
+}
+
+type put struct {
+	member Member
+}
+
+func (p *put) Re() uuid.UUID {
+	return p.member.Id()
+}
+
+func (p *put) Version() int {
+	return p.member.Version()
+}
+
+func (p *put) Apply(r Roster) {
+	r.apply(p)
 }
