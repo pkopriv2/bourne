@@ -8,16 +8,17 @@ import (
 
 var PoolClosedError = errors.New("Pool closed")
 
-type Work func() interface{}
+type Response chan<-interface{}
+type Work func(Response)
 
 type WorkPool interface {
-	Submit(chan<- interface{}, Work) error
+	Submit(Response, Work) error
 	Close()
 }
 
 type pool struct {
 	workers Stack
-	work    chan workItem
+	work    chan submission
 	close   chan struct{}
 	wait    sync.WaitGroup
 }
@@ -25,7 +26,7 @@ type pool struct {
 func NewWorkPool(size int, depth int) WorkPool {
 	p := &pool{
 		workers: NewArrayStack(),
-		work:    make(chan workItem, depth),
+		work:    make(chan submission, depth),
 		close:   make(chan struct{})}
 
 	p.wait.Add(1)
@@ -44,11 +45,16 @@ func (p *pool) ReturnWorker(w *worker) {
 	p.workers.Push(w)
 }
 
-func (p *pool) Submit(res chan<- interface{}, w Work) error {
+type submission struct {
+	ret Response
+	fn Work
+}
+
+func (p *pool) Submit(ret Response, fn Work) error {
 	select {
 	case <-p.close:
 		return PoolClosedError
-	case p.work <- workItem{w, res}:
+	case p.work <- submission{ret, fn}:
 		return nil
 	}
 }
@@ -60,7 +66,7 @@ func (p *pool) Close() {
 
 func poolDispatch(b *pool) {
 	defer b.wait.Done()
-	var work workItem
+	var work submission
 	for {
 		select {
 		case <-b.close:
@@ -68,7 +74,7 @@ func poolDispatch(b *pool) {
 		case work = <-b.work:
 		}
 
-		worker := poolSchedule(b)
+		worker := poolGetWorker(b)
 		if worker == nil {
 			return
 		}
@@ -77,7 +83,7 @@ func poolDispatch(b *pool) {
 	}
 }
 
-func poolSchedule(b *pool) *worker {
+func poolGetWorker(b *pool) *worker {
 	// TODO: Replace with condition variable!
 	timer := time.Tick(50 * time.Millisecond)
 	for {
@@ -94,42 +100,37 @@ func poolSchedule(b *pool) *worker {
 	}
 }
 
-type workItem struct {
-	fn  Work
-	ret chan<- interface{}
-}
-
 type worker struct {
 	parent *pool
-	queue  chan workItem
+	queue  chan submission
 }
 
 func newWorker(parent *pool) *worker {
-	w := &worker{parent, make(chan workItem, 1)}
+	w := &worker{parent, make(chan submission, 1)}
 	go workerWork(w)
 	return w
 }
 
-func (w *worker) Run(req workItem) {
+func (w *worker) Run(s submission) {
 	select {
 	case <-w.parent.close:
-	case w.queue <- req:
+	case w.queue <- s:
 	}
 }
 
 func workerWork(w *worker) {
 	defer w.parent.wait.Done()
 
-	var order workItem
+	var submission submission
 	for {
 		select {
 		case <-w.parent.close:
 			return
-		case order = <-w.queue:
+		case submission = <-w.queue:
 		}
 
 		// do NOT block the worker because the consumer isn't ready!
-		order.ret <- order.fn()
+		submission.fn(submission.ret)
 		w.parent.ReturnWorker(w)
 	}
 }

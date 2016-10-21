@@ -7,12 +7,12 @@ import (
 )
 
 // Implements a round robin, random permutation over
-type Generator interface {
+type generator interface {
 	Members() <-chan Member // not thread safe!
 	Close() error
 }
 
-type generator struct {
+type gen struct {
 	roster  Roster
 	members chan Member
 	wait    sync.WaitGroup
@@ -20,22 +20,22 @@ type generator struct {
 	closed  bool
 }
 
-func NewGenerator(r Roster, p time.Duration) Generator {
-	d := &generator{
+func NewGenerator(r Roster, p time.Duration) generator {
+	d := &gen{
 		roster:  r,
 		members: make(chan Member),
 		close:   make(chan struct{})}
 
 	d.wait.Add(1)
-	go generatorRun(d)
+	go genRun(d)
 	return d
 }
 
-func (d *generator) Members() <-chan Member {
+func (d *gen) Members() <-chan Member {
 	return d.members
 }
 
-func (d *generator) Close() error {
+func (d *gen) Close() error {
 	if d.closed {
 		return fmt.Errorf("Already closed")
 	}
@@ -46,7 +46,7 @@ func (d *generator) Close() error {
 	return nil
 }
 
-func generatorRun(d *generator) {
+func genRun(d *gen) {
 	defer d.wait.Done()
 
 	iter := d.roster.Iterator()

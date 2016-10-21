@@ -83,16 +83,9 @@ func (c *client) Send(u Update, timeout time.Duration) (bool, error) {
 
 	select {
 	case <-done:
-		return resp.Accepted, err
+		return resp.Success, err
 	case <-timer:
 		return false, circuit.NewTimeoutError(timeout, fmt.Sprintf("Sending update [%v] to member [%v]", u, c.member))
 	}
 }
 
-type UpdateRequest struct {
-	Update Update
-}
-
-type UpdateResponse struct {
-	Accepted bool
-}

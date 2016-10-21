@@ -9,7 +9,7 @@ import (
 
 type Pinger interface {
 	Ping(Member, time.Duration) (bool, error)
-	PingViaProxies([]Member, uuid.UUID, time.Duration) (bool, error)
+	ProxyPing([]Member, uuid.UUID, time.Duration) (bool, error)
 }
 
 type pinger struct {
@@ -20,48 +20,74 @@ func newPinger(pool concurrent.WorkPool) Pinger {
 	return &pinger{pool}
 }
 
-func (p *pinger) Ping(m Member, timeout time.Duration) (bool, error) {
-	ret := make(chan interface{})
-	if err := p.pool.Submit(ret, Ping(m, timeout)); err != nil {
+func (p *pinger) Ping(m Member, t time.Duration) (bool, error) {
+	val := make(chan interface{})
+	if err := p.pool.Submit(val, ping(m, t)); err != nil {
 		return false, err
 	}
 
-	val := (<-ret).(struct{val bool; err error})
-	return val.val, val.err
+	switch t := (<-val).(type) {
+	default:
+		panic("Unknown type")
+	case bool:
+		return t, nil
+	case error:
+		return false, t
+	}
 }
 
-func (p *pinger) PingViaProxies(proxies []Member, id uuid.UUID, timeout time.Duration) (bool, error) {
-	ret := make(chan interface{}, len(proxies))
+func (p *pinger) ProxyPing(proxies []Member, memberId uuid.UUID, timeout time.Duration) (bool, error) {
+	val := make(chan interface{}, len(proxies))
 	for _, m := range proxies {
-		if err := p.pool.Submit(ret, PingViaProxy(m, id, timeout)); err != nil {
+		if err := p.pool.Submit(val, proxyPing(m, memberId, timeout)); err != nil {
 			return false, err
 		}
 	}
 
-	val := (<-ret).(struct{val bool; err error})
-	return val.val, val.err
-}
-
-func Ping(m Member, timeout time.Duration) func() interface{} {
-	return func() interface{} {
-		client, err := m.Client()
-		if err != nil {
-			return false
-		}
-
-		success, err := client.Ping(timeout)
-		return struct {val bool; err error}{success, err}
+	switch t := (<-val).(type) {
+	default:
+		panic("Unknown type")
+	case bool:
+		return t, nil
+	case error:
+		return false, t
 	}
 }
 
-func PingViaProxy(proxy Member, target uuid.UUID, timeout time.Duration) func() interface{} {
-	return func() interface{} {
-		client, err := proxy.Client()
+
+func ping(m Member, timeout time.Duration) concurrent.Work {
+	return func(resp concurrent.Response) {
+		client, err := m.Client()
 		if err != nil {
-			return false
+			resp<-err
+			return
 		}
 
-		success, err := client.ProxyPing(target, timeout)
-		return struct {val bool; err error}{success, err}
+		success, err := client.Ping(timeout)
+		if err != nil {
+			resp<-err
+			return
+		}
+
+		resp<-success
+	}
+}
+
+
+func proxyPing(proxy Member, memberId uuid.UUID, timeout time.Duration) concurrent.Work {
+	return func(resp concurrent.Response) {
+		client, err := proxy.Client()
+		if err != nil {
+			resp<-err
+			return
+		}
+
+		success, err := client.ProxyPing(memberId, timeout)
+		if err != nil {
+			resp<-err
+			return
+		}
+
+		resp<-success
 	}
 }

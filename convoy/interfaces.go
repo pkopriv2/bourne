@@ -47,7 +47,8 @@ type Client interface {
 // appropriate version for the data!
 type Peer interface {
 	Roster() Roster
-	Update(Update)
+	Update(Update) bool
+	Ping(uuid.UUID) (bool, error)
 }
 
 // An update is the basic unit of change.  In practical terms, an
@@ -79,3 +80,33 @@ type Roster interface {
 type Iterator interface {
 	Next() Member
 }
+
+
+type PingRequest struct {
+}
+
+type ProxyPingRequest struct {
+	Target uuid.UUID
+}
+
+type UpdateRequest struct {
+	Update Update
+}
+
+type PingResponse struct {
+}
+
+type ProxyPingResponse struct {
+	Success bool
+	Err error
+}
+
+type UpdateResponse struct {
+	Success bool
+}
+
+type ErrorResponse struct {
+	Err error
+}
+
+
