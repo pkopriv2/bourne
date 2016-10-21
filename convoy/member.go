@@ -11,47 +11,58 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-type member struct {
-	id      uuid.UUID
-	factory net.ConnectionFactory
-	version int
+// TODO: members must be gob encodable!  connection factory can't be encoded!
+type memberImpl struct {
+	id  uuid.UUID
+	fac net.ConnectionFactory
+	ver int
 }
 
-func (m *member) Id() uuid.UUID {
+func newMember(id uuid.UUID, fac net.ConnectionFactory, ver int) Member {
+	return &memberImpl{id, fac, ver}
+}
+
+func (m *memberImpl) Id() uuid.UUID {
 	return m.id
 }
 
-func (m *member) Version() int {
-	return m.version
+func (m *memberImpl) Conn() (net.Connection, error) {
+	return m.fac.Conn()
 }
 
-func (m *member) Client() (Client, error) {
+func (m *memberImpl) Version() int {
+	return m.ver
+}
+
+func (m *memberImpl) client() (client, error) {
 	return newClient(m)
 }
 
-type client struct {
-	member *member
+type clientImpl struct {
+	member *memberImpl
 	conn   net.Connection
 	enc    *gob.Encoder
 	dec    *gob.Decoder
 	lock   sync.Mutex
 }
 
-func newClient(m *member) (Client, error) {
-	conn, err := m.factory()
+func newClient(m *memberImpl) (client, error) {
+	conn, err := m.Conn()
 	if err != nil {
 		return nil, err
 	}
 
-	return &client{
+	return &clientImpl{
 		member: m, conn: conn, enc: gob.NewEncoder(conn), dec: gob.NewDecoder(conn)}, nil
 }
 
-func (c *client) Conn() net.Connection {
-	return c.conn
+func (c *clientImpl) Close() error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	return c.conn.Close()
 }
 
-func (c *client) ping(timeout time.Duration) (bool, error) {
+func (c *clientImpl) Ping(timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -89,7 +100,7 @@ func (c *client) ping(timeout time.Duration) (bool, error) {
 	}
 }
 
-func (c *client) pingProxy(id uuid.UUID, timeout time.Duration) (bool, error) {
+func (c *clientImpl) PingProxy(id uuid.UUID, timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -132,7 +143,7 @@ func (c *client) pingProxy(id uuid.UUID, timeout time.Duration) (bool, error) {
 	}
 }
 
-func (c *client) update(u Update, timeout time.Duration) (bool, error) {
+func (c *clientImpl) Update(u update, timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 

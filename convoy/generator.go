@@ -3,50 +3,49 @@ package convoy
 import (
 	"fmt"
 	"sync"
-	"time"
 )
 
-// Implements a round robin, random permutation over
+// Implements a round robin, random permutation over a roster.
 type generator interface {
 	Members() <-chan Member // not thread safe!
 	Close() error
 }
 
-type gen struct {
+type generatorImpl struct {
 	roster  Roster
 	members chan Member
 	wait    sync.WaitGroup
 	close   chan struct{}
-	closed  bool
+	closed  chan struct{}
 }
 
-func NewGenerator(r Roster, p time.Duration) generator {
-	d := &gen{
+func NewGenerator(r Roster) generator {
+	d := &generatorImpl{
 		roster:  r,
 		members: make(chan Member),
 		close:   make(chan struct{})}
 
 	d.wait.Add(1)
-	go genRun(d)
+	go generate(d)
 	return d
 }
 
-func (d *gen) Members() <-chan Member {
+func (d *generatorImpl) Members() <-chan Member {
 	return d.members
 }
 
-func (d *gen) Close() error {
-	if d.closed {
+func (d *generatorImpl) Close() error {
+	select {
+	case <-d.closed:
 		return fmt.Errorf("Already closed")
+	case d.close <- struct{}{}:
+		d.wait.Wait()
+		close(d.members)
 	}
-
-	close(d.close)
-	d.wait.Wait()
-	close(d.members)
 	return nil
 }
 
-func genRun(d *gen) {
+func generate(d *generatorImpl) {
 	defer d.wait.Done()
 
 	iter := d.roster.Iterator()

@@ -1,135 +1,69 @@
 package concurrent
 
-import (
-	"errors"
-	"sync"
-	"time"
-)
+import "errors"
 
 var PoolClosedError = errors.New("Pool closed")
 
-type Work func(chan<-interface{})
+type Work func(chan<- interface{})
 
 type WorkPool interface {
 	Submit(chan<- interface{}, Work) error
-	Close()
+	Close() error
 }
 
 type pool struct {
-	workers Stack
-	work    chan submission
-	close   chan struct{}
-	wait    sync.WaitGroup
+	size   int
+	active chan struct{}
+	closed chan struct{}
+	closer chan struct{}
 }
 
-func NewWorkPool(size int, depth int) WorkPool {
-	p := &pool{
-		workers: NewArrayStack(),
-		work:    make(chan submission, depth),
-		close:   make(chan struct{})}
-
-	p.wait.Add(1)
-	go poolDispatch(p)
-
-	p.wait.Add(size)
-	for i := 0; i < size; i++ {
-		w := newWorker(p)
-		p.workers.Push(w)
+func NewWorkPool(size int) WorkPool {
+	if size <= 0 {
+		panic("Cannot initialize an empty work pool.")
 	}
 
-	return p
+	return &pool{
+		size:   size,
+		active: make(chan struct{}, size),
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}
 }
 
-func (p *pool) ReturnWorker(w *worker) {
-	p.workers.Push(w)
-}
-
-type submission struct {
-	ret chan<- interface{}
-	fn Work
-}
-
-func (p *pool) Submit(ret chan<- interface{}, fn Work) error {
+func (p *pool) push() error {
 	select {
-	case <-p.close:
+	case <-p.closed:
 		return PoolClosedError
-	case p.work <- submission{ret, fn}:
+	case p.active <- struct{}{}:
 		return nil
 	}
 }
 
-func (p *pool) Close() {
-	close(p.close)
-	p.wait.Wait()
+func (p *pool) pop() {
+	<-p.active
 }
 
-func poolDispatch(b *pool) {
-	defer b.wait.Done()
-	var work submission
-	for {
-		select {
-		case <-b.close:
-			return
-		case work = <-b.work:
-		}
-
-		worker := poolGetWorker(b)
-		if worker == nil {
-			return
-		}
-
-		worker.Run(work)
-	}
+func (p *pool) Submit(ret chan<- interface{}, fn Work) error {
+	p.push()
+	go func() {
+		defer p.pop()
+		fn(ret)
+	}()
+	return nil
 }
 
-func poolGetWorker(b *pool) *worker {
-	// TODO: Replace with condition variable!
-	timer := time.Tick(50 * time.Millisecond)
-	for {
-		select {
-		case <-b.close:
-			return nil
-		case <-timer:
-		}
-
-		w := b.workers.Pop()
-		if w != nil {
-			return w.(*worker)
-		}
-	}
-}
-
-type worker struct {
-	parent *pool
-	queue  chan submission
-}
-
-func newWorker(parent *pool) *worker {
-	w := &worker{parent, make(chan submission, 1)}
-	go workerWork(w)
-	return w
-}
-
-func (w *worker) Run(s submission) {
+func (p *pool) Close() error {
 	select {
-	case <-w.parent.close:
-	case w.queue <- s:
+	case <-p.closed:
+		return PoolClosedError
+	case p.closer <- struct{}{}:
 	}
-}
 
-func workerWork(w *worker) {
-	defer w.parent.wait.Done()
-
-	var submission submission
-	for {
-		select {
-		case <-w.parent.close:
-			return
-		case submission = <-w.queue:
-		}
-
-		// do NOT block the worker because the consumer isn't ready!
-		submission.fn(submission.ret)
-		w.parent.ReturnWorker(w)
+	// wait on the active routines
+	for i := 0; i < p.size; i++ {
+		p.push()
 	}
+
+	close(p.closed)
+	return nil
 }

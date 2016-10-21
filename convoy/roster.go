@@ -7,21 +7,21 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-func newPut(member Member) Update {
+func newPut(member Member) update {
 	return &put{member}
 }
 
-func newDelete(memberId uuid.UUID, version int) Update {
+func newDelete(memberId uuid.UUID, version int) update {
 	return &delete{memberId, version}
 }
 
 type roster struct {
 	lock    sync.RWMutex
-	updates map[uuid.UUID]Update
+	updates map[uuid.UUID]update
 }
 
 func newRoster() Roster {
-	return &roster{updates: make(map[uuid.UUID]Update)}
+	return &roster{updates: make(map[uuid.UUID]update)}
 }
 
 func (r *roster) Iterator() Iterator {
@@ -34,7 +34,7 @@ func (r *roster) Get(id uuid.UUID) Member {
 	return updateToMember(r.updates[id])
 }
 
-func (r *roster) log() []Update {
+func (r *roster) log() []update {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
 	return indexedUpdatesToUpdates(r.updates)
@@ -89,7 +89,7 @@ func (i *iterator) SetIndex(val int) {
 	i.idx = val
 }
 
-func updateToMember(u Update) Member {
+func updateToMember(u update) Member {
 	switch t := u.(type) {
 	case *delete:
 		return nil
@@ -100,8 +100,8 @@ func updateToMember(u Update) Member {
 	panic("Unknown update type!")
 }
 
-func indexedUpdatesToUpdates(index map[uuid.UUID]Update) []Update {
-	values := make([]Update, 0, len(index))
+func indexedUpdatesToUpdates(index map[uuid.UUID]update) []update {
+	values := make([]update, 0, len(index))
 	for _, v := range index {
 		values = append(values, v)
 	}
@@ -109,7 +109,7 @@ func indexedUpdatesToUpdates(index map[uuid.UUID]Update) []Update {
 	return values
 }
 
-func updatesToIds(updates []Update) []uuid.UUID {
+func updatesToIds(updates []update) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(updates))
 	for _, u := range updates {
 		ids = append(ids, u.Re())
@@ -117,7 +117,6 @@ func updatesToIds(updates []Update) []uuid.UUID {
 
 	return ids
 }
-
 
 func shuffleIds(ids []uuid.UUID) []uuid.UUID {
 	perm := rand.Perm(len(ids))
@@ -130,7 +129,7 @@ func shuffleIds(ids []uuid.UUID) []uuid.UUID {
 	return ret
 }
 
-func applyUpdate(init map[uuid.UUID]Update, u Update) bool {
+func applyUpdate(init map[uuid.UUID]update, u update) bool {
 	memberId := u.Re()
 
 	cur := init[memberId]
@@ -144,7 +143,7 @@ func applyUpdate(init map[uuid.UUID]Update, u Update) bool {
 		return true
 	}
 
-	if _, ok := u.(*delete); ok  {
+	if _, ok := u.(*delete); ok {
 		init[memberId] = u
 		return true
 	}

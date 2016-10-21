@@ -64,7 +64,9 @@ type Connection interface {
 // highly resilient multiplexer.
 //
 // Consumers should not retain any references to the created connection.
-type ConnectionFactory func() (Connection, error)
+type ConnectionFactory interface {
+	Conn() (Connection, error)
+}
 
 // A connector is a thread-safe, highly resilient connection.
 //
@@ -180,7 +182,7 @@ func connect(factory ConnectionFactory, timeout time.Duration) (Connection, erro
 	// this will necessarily leak a go routine for each timeout.
 	out := make(chan attempt)
 	go func() {
-		conn, err := factory()
+		conn, err := factory.Conn()
 		out <- attempt{conn, err}
 	}()
 

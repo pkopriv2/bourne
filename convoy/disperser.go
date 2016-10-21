@@ -8,20 +8,25 @@ import (
 
 // Sends an update to a randomly chosen recipient.
 type disperser interface {
-	Send(Update) (bool, error)
+	Send(update, time.Duration) (bool, error)
 }
 
-type disp struct {
+type disperserImpl struct {
 	gen  generator
 	pool concurrent.WorkPool
 }
 
-func (d *disp) Send(u Update, timeout time.Duration) (bool, error) {
-	member := <-d.gen.Members()
+func newDisperser(g generator, p concurrent.WorkPool) disperser {
+	return &disperserImpl{g, p}
+}
+
+func (d *disperserImpl) Send(u update, t time.Duration) (bool, error) {
+	// selects a random member
+	m := <-d.gen.Members()
 
 	// go ahead and run the client.
 	val := make(chan interface{})
-	if err := d.pool.Submit(val, SendUpdate(member, u, timeout)); err != nil {
+	if err := d.pool.Submit(val, sendUpdate(m, u, t)); err != nil {
 		return false, err
 	}
 
@@ -35,15 +40,15 @@ func (d *disp) Send(u Update, timeout time.Duration) (bool, error) {
 	}
 }
 
-func SendUpdate(member Member, update Update, timeout time.Duration) concurrent.Work {
+func sendUpdate(m Member, u update, t time.Duration) concurrent.Work {
 	return func(resp chan<- interface{}) {
-		client, err := member.Client()
+		client, err := m.client()
 		if err != nil {
 			resp <- err
 			return
 		}
 
-		success, err := client.update(update, timeout)
+		success, err := client.Update(u, t)
 		if err != nil {
 			resp <- err
 			return

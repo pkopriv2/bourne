@@ -1,7 +1,6 @@
 package convoy
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/pkopriv2/bourne/net"
@@ -23,47 +22,23 @@ const (
 	defaultUpdateTimeout = time.Second
 )
 
-type TimeoutError struct {
-	timeout time.Duration
-	message string
-}
-
-func (e TimeoutError) Error() string {
-	return fmt.Sprintf("Timeout[%v]: %v", e.timeout, e.message)
-}
-
-type NoSuchMemberError struct {
-	id uuid.UUID
-}
-
-func (e NoSuchMemberError) Error() string {
-	return fmt.Sprintf("No such member [%v]", e.id)
-}
-
-// the primary reconciliation technique will involve a "globally unique"
-// counter for each member.  Luckily, we can distribute the counter to
-// the members themselves, allowing us no consistency issues.
-type Clock interface {
-	Cur() int
-	Inc() int
-}
-
 // A member represents the fundamental unit of identity within a group.
 // These will typically align with
 type Member interface {
 	Id() uuid.UUID
 	Version() int
-	Client() (Client, error)
+	Conn() (net.Connection, error)
+	client() (client, error)
 }
 
 // A service exposes the standard actions to be taken on members.
 // For the purposes of inventory management, these will provide
 // the standard ping and proxy ping actions.
-type Client interface {
-	Conn() net.Connection
-	ping(time.Duration) (bool, error)
-	pingProxy(uuid.UUID, time.Duration) (bool, error)
-	update(Update, time.Duration) (bool, error)
+type client interface {
+	Close() error
+	Ping(time.Duration) (bool, error)
+	PingProxy(uuid.UUID, time.Duration) (bool, error)
+	Update(update, time.Duration) (bool, error)
 }
 
 // A peer is a service that hosts the distributed roster.  A group
@@ -73,13 +48,24 @@ type Client interface {
 // or at least must coordinate with the member to determine an
 // appropriate version for the data!
 type Peer interface {
+	Close() error
 	Roster() Roster
-	update(Update) bool
+	// clock() Clock
+	update(update) bool
 }
 
-// An update is the basic unit of change.  In practical terms, an
-// update is either a put or a delete.
-type Update interface {
+// the primary reconciliation technique will involve a "globally unique"
+// counter for each member.  Luckily, we can distribute the counter to
+// the members themselves, allowing us no consistency issues.
+type clock interface {
+	Cur() int
+	Inc() int
+}
+
+
+// An update is the basic unit of change.  In practical terms, an update
+// is either a put or a delete.
+type update interface {
 	Re() uuid.UUID
 	Version() int
 	Apply(Roster) bool
@@ -99,37 +85,9 @@ type Roster interface {
 
 	put(Member) bool
 	del(uuid.UUID, int) bool
-
-	log() []Update
+	log() []update
 }
 
 type Iterator interface {
 	Next() Member
-}
-
-type PingRequest struct {
-}
-
-type ProxyPingRequest struct {
-	Target uuid.UUID
-}
-
-type UpdateRequest struct {
-	Update Update
-}
-
-type PingResponse struct {
-}
-
-type ProxyPingResponse struct {
-	Success bool
-	Err     error
-}
-
-type UpdateResponse struct {
-	Success bool
-}
-
-type ErrorResponse struct {
-	Err error
 }

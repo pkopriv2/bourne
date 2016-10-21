@@ -51,14 +51,14 @@ func (s *server) handleProxyPing(req ProxyPingRequest, res chan<- interface{}) {
 		return
 	}
 
-	client, err := member.Client()
+	client, err := member.client()
 	if err != nil {
 		s.peer.update(newDelete(member.Id(), member.Version()))
 		res <- ProxyPingResponse{false, err}
 		return
 	}
 
-	success, err := client.ping(s.timeoutPing)
+	success, err := client.Ping(s.timeoutPing)
 	res <- ProxyPingResponse{success, err}
 }
 

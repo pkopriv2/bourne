@@ -7,20 +7,20 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-type Pinger interface {
+type pinger interface {
 	Ping(Member, time.Duration) (bool, error)
 	ProxyPing([]Member, uuid.UUID, time.Duration) (bool, error)
 }
 
-type pinger struct {
+type pingerImpl struct {
 	pool concurrent.WorkPool
 }
 
-func newPinger(pool concurrent.WorkPool) Pinger {
-	return &pinger{pool}
+func newPinger(pool concurrent.WorkPool) pinger {
+	return &pingerImpl{pool}
 }
 
-func (p *pinger) Ping(m Member, t time.Duration) (bool, error) {
+func (p *pingerImpl) Ping(m Member, t time.Duration) (bool, error) {
 	val := make(chan interface{})
 	if err := p.pool.Submit(val, ping(m, t)); err != nil {
 		return false, err
@@ -36,7 +36,7 @@ func (p *pinger) Ping(m Member, t time.Duration) (bool, error) {
 	}
 }
 
-func (p *pinger) ProxyPing(proxies []Member, memberId uuid.UUID, timeout time.Duration) (bool, error) {
+func (p *pingerImpl) ProxyPing(proxies []Member, memberId uuid.UUID, timeout time.Duration) (bool, error) {
 	val := make(chan interface{}, len(proxies))
 	for _, m := range proxies {
 		if err := p.pool.Submit(val, proxyPing(m, memberId, timeout)); err != nil {
@@ -44,25 +44,27 @@ func (p *pinger) ProxyPing(proxies []Member, memberId uuid.UUID, timeout time.Du
 		}
 	}
 
-	switch t := (<-val).(type) {
-	default:
-		panic("Unknown type")
-	case bool:
-		return t, nil
-	case error:
-		return false, t
+	var cur interface{}
+	for {
+		cur := <-val
+		if _, ok := cur.(bool); ok {
+			return true, nil
+		}
 	}
+
+	return false, cur.(error)
 }
 
 func ping(m Member, timeout time.Duration) concurrent.Work {
 	return func(resp chan<- interface{}) {
-		client, err := m.Client()
+		client, err := m.client()
 		if err != nil {
 			resp <- err
 			return
 		}
 
-		success, err := client.ping(timeout)
+		defer client.Close()
+		success, err := client.Ping(timeout)
 		if err != nil {
 			resp <- err
 			return
@@ -74,13 +76,14 @@ func ping(m Member, timeout time.Duration) concurrent.Work {
 
 func proxyPing(proxy Member, memberId uuid.UUID, timeout time.Duration) concurrent.Work {
 	return func(resp chan<- interface{}) {
-		client, err := proxy.Client()
+		client, err := proxy.client()
 		if err != nil {
 			resp <- err
 			return
 		}
 
-		success, err := client.pingProxy(memberId, timeout)
+		defer client.Close()
+		success, err := client.PingProxy(memberId, timeout)
 		if err != nil {
 			resp <- err
 			return
