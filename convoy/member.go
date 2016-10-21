@@ -54,13 +54,82 @@ func (c *client) Conn() net.Connection {
 func (c *client) ping(timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	panic("not implemented")
+
+	ret, timer := concurrent.NewBreaker(timeout, func(res chan<- interface{}) {
+		var err error
+		if err = c.enc.Encode(PingRequest{}); err != nil {
+			res <- err
+			return
+		}
+
+		var resp PingResponse
+
+		if err = c.dec.Decode(&resp); err != nil {
+			res <- err
+			return
+		}
+
+		res <- true
+	})
+
+	var raw interface{}
+	select {
+	case <-timer:
+		return false, TimeoutError{timeout, fmt.Sprintf("Ping [%v] to member [%v]", c.member.id, c.member)}
+	case raw = <-ret:
+	}
+
+	switch val := raw.(type) {
+	default:
+		panic(fmt.Sprintf("Unknown type [%v]", val))
+	case error:
+		return false, val
+	case bool:
+		return val, nil
+	}
 }
 
 func (c *client) pingProxy(id uuid.UUID, timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	panic("not implemented")
+
+	ret, timer := concurrent.NewBreaker(timeout, func(res chan<- interface{}) {
+		var err error
+		if err = c.enc.Encode(ProxyPingRequest{id}); err != nil {
+			res <- err
+			return
+		}
+
+		var resp ProxyPingResponse
+
+		if err = c.dec.Decode(&resp); err != nil {
+			res <- err
+			return
+		}
+
+		if err = resp.Err; err != nil {
+			res <- err
+			return
+		}
+
+		res <- resp.Success
+	})
+
+	var raw interface{}
+	select {
+	case <-timer:
+		return false, TimeoutError{timeout, fmt.Sprintf("Proxy ping [%v] to member [%v]", id, c.member)}
+	case raw = <-ret:
+	}
+
+	switch val := raw.(type) {
+	default:
+		panic(fmt.Sprintf("Unknown type [%v]", val))
+	case error:
+		return false, val
+	case bool:
+		return val, nil
+	}
 }
 
 func (c *client) update(u Update, timeout time.Duration) (bool, error) {
