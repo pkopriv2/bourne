@@ -6,54 +6,52 @@ import (
 	"time"
 )
 
-// Implements a round robin
-type Driver interface {
+// Implements a round robin, random permutation over
+type Generator interface {
 	Members() <-chan Member // not thread safe!
 	Close() error
 }
 
-type driver struct {
+type generator struct {
 	roster  Roster
-	ticker  <-chan time.Time
 	members chan Member
 	wait    sync.WaitGroup
 	close   chan struct{}
 	closed  bool
 }
 
-func NewDriver(r Roster, p time.Duration) Driver {
-	d := &driver{
+func NewGenerator(r Roster, p time.Duration) Generator {
+	d := &generator{
 		roster:  r,
-		ticker:  time.Tick(p),
 		members: make(chan Member),
 		close:   make(chan struct{})}
 
 	d.wait.Add(1)
-	go driverRun(d)
+	go generatorRun(d)
 	return d
 }
 
-func (d *driver) Members() <-chan Member {
+func (d *generator) Members() <-chan Member {
 	return d.members
 }
 
-func (d *driver) Close() error {
+func (d *generator) Close() error {
 	if d.closed {
 		return fmt.Errorf("Already closed")
 	}
 
 	close(d.close)
 	d.wait.Wait()
+	close(d.members)
 	return nil
 }
 
-func driverRun(d *driver) {
+func generatorRun(d *generator) {
 	defer d.wait.Done()
 
 	iter := d.roster.Iterator()
 	for {
 		select {
-		case <-d.ticker:
 		case <-d.close:
 			return
 		}

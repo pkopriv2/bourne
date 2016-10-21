@@ -11,7 +11,7 @@ var PoolClosedError = errors.New("Pool closed")
 type Work func() interface{}
 
 type WorkPool interface {
-	Submit(Work, chan<- interface{}) error
+	Submit(chan<- interface{}, Work) error
 	Close()
 }
 
@@ -44,7 +44,7 @@ func (p *pool) ReturnWorker(w *worker) {
 	p.workers.Push(w)
 }
 
-func (p *pool) Submit(w Work, res chan<- interface{}) error {
+func (p *pool) Submit(res chan<- interface{}, w Work) error {
 	select {
 	case <-p.close:
 		return PoolClosedError

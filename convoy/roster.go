@@ -40,12 +40,17 @@ func (r *roster) log() []Update {
 	return indexedUpdatesToUpdates(r.updates)
 }
 
-func (r *roster) apply(u Update) {
+func (r *roster) put(m Member) bool {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	applyUpdate(r.updates, u)
+	return applyUpdate(r.updates, newPut(m))
 }
 
+func (r *roster) del(id uuid.UUID, version int) bool {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return applyUpdate(r.updates, newDelete(id, version))
+}
 
 // A basic randomized iterator.  The goal of this is to avoid
 // returning revoked members, while still guaranteeing that active
@@ -125,23 +130,26 @@ func shuffleIds(ids []uuid.UUID) []uuid.UUID {
 	return ret
 }
 
-func applyUpdate(init map[uuid.UUID]Update, u Update) {
+func applyUpdate(init map[uuid.UUID]Update, u Update) bool {
 	memberId := u.Re()
 
 	cur := init[memberId]
 	if cur == nil {
 		init[memberId] = u
-		return
+		return true
 	}
 
 	if cur.Version() < u.Version() {
 		init[memberId] = u
-		return
+		return true
 	}
 
 	if _, ok := u.(*delete); ok  {
 		init[memberId] = u
+		return true
 	}
+
+	return false
 }
 
 type delete struct {
@@ -157,8 +165,8 @@ func (d *delete) Version() int {
 	return d.version
 }
 
-func (d *delete) Apply(r Roster) {
-	r.apply(d)
+func (d *delete) Apply(r Roster) bool {
+	return r.del(d.memberId, d.version)
 }
 
 type put struct {
@@ -173,6 +181,6 @@ func (p *put) Version() int {
 	return p.member.Version()
 }
 
-func (p *put) Apply(r Roster) {
-	r.apply(p)
+func (p *put) Apply(r Roster) bool {
+	return r.put(p.member)
 }

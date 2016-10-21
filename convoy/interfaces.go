@@ -3,6 +3,7 @@ package convoy
 import (
 	"time"
 
+	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -25,15 +26,17 @@ type Clock interface {
 type Member interface {
 	Id() uuid.UUID
 	Version() int
-	service() Service
+	Client() (Client, error)
 }
 
 // A service exposes the standard actions to be taken on members.
 // For the purposes of inventory management, these will provide
 // the standard ping and proxy ping actions.
-type Service interface {
-	Ping(time.Duration) bool
-	ProxyPing(uuid.UUID, time.Duration) bool
+type Client interface {
+	Conn() net.Connection
+	Ping(time.Duration) (bool, error)
+	ProxyPing(uuid.UUID, time.Duration) (bool, error)
+	Send(Update, time.Duration) (bool, error)
 }
 
 // A peer is a service that hosts the distributed roster.  A group
@@ -43,11 +46,8 @@ type Service interface {
 // or at least must coordinate with the member to determine an
 // appropriate version for the data!
 type Peer interface {
-	Peers() (Roster, error)
-	Members() (Roster, error)
-
-	UpdatePeers([]Update) error
-	UpdateMembers([]Update) error
+	Roster() Roster
+	Update(Update)
 }
 
 // An update is the basic unit of change.  In practical terms, an
@@ -55,7 +55,7 @@ type Peer interface {
 type Update interface {
 	Re() uuid.UUID
 	Version() int
-	Apply(Roster)
+	Apply(Roster) bool
 }
 
 // The roster is the database of members.  The roster can be obtained
@@ -70,7 +70,9 @@ type Roster interface {
 	// in the event of concurrent updates to the roster
 	Iterator() Iterator
 
-	apply(Update)
+	put(Member) bool
+	del(uuid.UUID, int) bool
+
 	log() []Update
 }
 

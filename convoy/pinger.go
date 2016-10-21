@@ -22,33 +22,46 @@ func newPinger(pool concurrent.WorkPool) Pinger {
 
 func (p *pinger) Ping(m Member, timeout time.Duration) (bool, error) {
 	ret := make(chan interface{})
-	if err := p.pool.Submit(Ping(m, timeout), ret); err != nil {
+	if err := p.pool.Submit(ret, Ping(m, timeout)); err != nil {
 		return false, err
 	}
 
-	return (<-ret).(bool), nil
+	val := (<-ret).(struct{val bool; err error})
+	return val.val, val.err
 }
 
 func (p *pinger) PingViaProxies(proxies []Member, id uuid.UUID, timeout time.Duration) (bool, error) {
 	ret := make(chan interface{}, len(proxies))
-
 	for _, m := range proxies {
-		if err := p.pool.Submit(PingViaProxy(m, id, timeout), ret); err != nil {
+		if err := p.pool.Submit(ret, PingViaProxy(m, id, timeout)); err != nil {
 			return false, err
 		}
 	}
 
-	return (<-ret).(bool), nil
+	val := (<-ret).(struct{val bool; err error})
+	return val.val, val.err
 }
 
 func Ping(m Member, timeout time.Duration) func() interface{} {
 	return func() interface{} {
-		return m.service().Ping(timeout)
+		client, err := m.Client()
+		if err != nil {
+			return false
+		}
+
+		success, err := client.Ping(timeout)
+		return struct {val bool; err error}{success, err}
 	}
 }
 
 func PingViaProxy(proxy Member, target uuid.UUID, timeout time.Duration) func() interface{} {
 	return func() interface{} {
-		return proxy.service().ProxyPing(target, timeout)
+		client, err := proxy.Client()
+		if err != nil {
+			return false
+		}
+
+		success, err := client.ProxyPing(target, timeout)
+		return struct {val bool; err error}{success, err}
 	}
 }
