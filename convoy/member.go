@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkopriv2/bourne/circuit"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -51,41 +51,51 @@ func (c *client) Conn() net.Connection {
 	return c.conn
 }
 
-func (c *client) Ping(timeout time.Duration) (bool, error) {
+func (c *client) ping(timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	panic("not implemented")
 }
 
-func (c *client) ProxyPing(id uuid.UUID, timeout time.Duration) (bool, error) {
+func (c *client) pingProxy(id uuid.UUID, timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	panic("not implemented")
 }
 
-func (c *client) Send(u Update, timeout time.Duration) (bool, error) {
+func (c *client) update(u Update, timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	var err error
-	var resp UpdateResponse
-	done, timer := circuit.NewBreaker(timeout, func() {
-		err = c.enc.Encode(UpdateRequest{u})
+	ret, timer := concurrent.NewBreaker(timeout, func(res chan<- interface{}) {
+		err := c.enc.Encode(UpdateRequest{u})
 		if err != nil {
+			res <- err
 			return
 		}
 
+		var resp UpdateResponse
 		err = c.dec.Decode(&resp)
 		if err != nil {
-			return
+			res <- err
 		}
+
+		res <- resp.Success
 	})
 
+	var raw interface{}
 	select {
-	case <-done:
-		return resp.Success, err
 	case <-timer:
-		return false, circuit.NewTimeoutError(timeout, fmt.Sprintf("Sending update [%v] to member [%v]", u, c.member))
+		return false, TimeoutError{timeout, fmt.Sprintf("Sending update [%v] to member [%v]", u, c.member)}
+	case raw = <-ret:
+	}
+
+	switch val := raw.(type) {
+	default:
+		panic(fmt.Sprintf("Unknown type [%v]", val))
+	case error:
+		return false, val
+	case bool:
+		return val, nil
 	}
 }
-

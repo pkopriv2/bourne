@@ -7,32 +7,21 @@ import (
 	"github.com/pkopriv2/bourne/concurrent"
 )
 
-const (
-	confPingTimeout   = "convoy.ping.timeout"
-	confUpdateTimeout = "convoy.update.timeout"
-)
-
-const (
-	defaultPingTimeout   = time.Second
-	defaultUpdateTimeout = time.Second
-)
-
 type Server interface {
 	Serve(chan<- interface{}, interface{})
 }
 
 type server struct {
-	ctx    common.Context
-	pool   concurrent.WorkPool
-	pinger Pinger
-	peer   Peer
+	ctx  common.Context
+	pool concurrent.WorkPool
+	peer Peer
 
 	timeoutPing   time.Duration
 	timeoutUpdate time.Duration
 }
 
 func (s *server) Serve(res chan<- interface{}, raw interface{}) {
-	err := s.pool.Submit(res, func(resp concurrent.Response) {
+	err := s.pool.Submit(res, func(resp chan<- interface{}) {
 		switch req := raw.(type) {
 		case PingRequest:
 			s.handlePing(req, res)
@@ -47,19 +36,32 @@ func (s *server) Serve(res chan<- interface{}, raw interface{}) {
 	})
 
 	if err != nil {
-		res <- ErrorResponse{}
+		res <- ErrorResponse{err}
 	}
 }
 
-func (s *server) handlePing(req PingRequest, res concurrent.Response) {
+func (s *server) handlePing(req PingRequest, res chan<- interface{}) {
 	res <- PingResponse{}
 }
 
-func (s *server) handleProxyPing(req ProxyPingRequest, res concurrent.Response) {
-	success, err := s.peer.Ping(req.Target)
+func (s *server) handleProxyPing(req ProxyPingRequest, res chan<- interface{}) {
+	member := s.peer.Roster().Get(req.Target)
+	if member == nil {
+		res <- ProxyPingResponse{false, NoSuchMemberError{req.Target}}
+		return
+	}
+
+	client, err := member.Client()
+	if err != nil {
+		s.peer.update(newDelete(member.Id(), member.Version()))
+		res <- ProxyPingResponse{false, err}
+		return
+	}
+
+	success, err := client.ping(s.timeoutPing)
 	res <- ProxyPingResponse{success, err}
 }
 
-func (s *server) handleUpdate(req UpdateRequest, res concurrent.Response) {
-	res <- UpdateResponse{s.peer.Update(req.Update)}
+func (s *server) handleUpdate(req UpdateRequest, res chan<- interface{}) {
+	res <- UpdateResponse{s.peer.update(req.Update)}
 }

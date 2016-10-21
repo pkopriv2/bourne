@@ -1,6 +1,7 @@
 package convoy
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/pkopriv2/bourne/net"
@@ -12,6 +13,32 @@ import (
 //  * https://www.cs.cornell.edu/~asdas/research/dsn02-swim.pdf
 //  * http://bitsavers.informatik.uni-stuttgart.de/pdf/xerox/parc/techReports/CSL-89-1_Epidemic_Algorithms_for_Replicated_Database_Maintenance.pdf
 //
+const (
+	confPingTimeout   = "convoy.ping.timeout"
+	confUpdateTimeout = "convoy.update.timeout"
+)
+
+const (
+	defaultPingTimeout   = time.Second
+	defaultUpdateTimeout = time.Second
+)
+
+type TimeoutError struct {
+	timeout time.Duration
+	message string
+}
+
+func (e TimeoutError) Error() string {
+	return fmt.Sprintf("Timeout[%v]: %v", e.timeout, e.message)
+}
+
+type NoSuchMemberError struct {
+	id uuid.UUID
+}
+
+func (e NoSuchMemberError) Error() string {
+	return fmt.Sprintf("No such member [%v]", e.id)
+}
 
 // the primary reconciliation technique will involve a "globally unique"
 // counter for each member.  Luckily, we can distribute the counter to
@@ -34,9 +61,9 @@ type Member interface {
 // the standard ping and proxy ping actions.
 type Client interface {
 	Conn() net.Connection
-	Ping(time.Duration) (bool, error)
-	ProxyPing(uuid.UUID, time.Duration) (bool, error)
-	Send(Update, time.Duration) (bool, error)
+	ping(time.Duration) (bool, error)
+	pingProxy(uuid.UUID, time.Duration) (bool, error)
+	update(Update, time.Duration) (bool, error)
 }
 
 // A peer is a service that hosts the distributed roster.  A group
@@ -47,8 +74,7 @@ type Client interface {
 // appropriate version for the data!
 type Peer interface {
 	Roster() Roster
-	Update(Update) bool
-	Ping(uuid.UUID) (bool, error)
+	update(Update) bool
 }
 
 // An update is the basic unit of change.  In practical terms, an
@@ -81,7 +107,6 @@ type Iterator interface {
 	Next() Member
 }
 
-
 type PingRequest struct {
 }
 
@@ -98,7 +123,7 @@ type PingResponse struct {
 
 type ProxyPingResponse struct {
 	Success bool
-	Err error
+	Err     error
 }
 
 type UpdateResponse struct {
@@ -108,5 +133,3 @@ type UpdateResponse struct {
 type ErrorResponse struct {
 	Err error
 }
-
-

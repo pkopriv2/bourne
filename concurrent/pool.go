@@ -8,11 +8,10 @@ import (
 
 var PoolClosedError = errors.New("Pool closed")
 
-type Response chan<-interface{}
-type Work func(Response)
+type Work func(chan<-interface{})
 
 type WorkPool interface {
-	Submit(Response, Work) error
+	Submit(chan<- interface{}, Work) error
 	Close()
 }
 
@@ -46,11 +45,11 @@ func (p *pool) ReturnWorker(w *worker) {
 }
 
 type submission struct {
-	ret Response
+	ret chan<- interface{}
 	fn Work
 }
 
-func (p *pool) Submit(ret Response, fn Work) error {
+func (p *pool) Submit(ret chan<- interface{}, fn Work) error {
 	select {
 	case <-p.close:
 		return PoolClosedError

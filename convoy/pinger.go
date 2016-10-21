@@ -54,40 +54,38 @@ func (p *pinger) ProxyPing(proxies []Member, memberId uuid.UUID, timeout time.Du
 	}
 }
 
-
 func ping(m Member, timeout time.Duration) concurrent.Work {
-	return func(resp concurrent.Response) {
+	return func(resp chan<- interface{}) {
 		client, err := m.Client()
 		if err != nil {
-			resp<-err
+			resp <- err
 			return
 		}
 
-		success, err := client.Ping(timeout)
+		success, err := client.ping(timeout)
 		if err != nil {
-			resp<-err
+			resp <- err
 			return
 		}
 
-		resp<-success
+		resp <- success
 	}
 }
 
-
 func proxyPing(proxy Member, memberId uuid.UUID, timeout time.Duration) concurrent.Work {
-	return func(resp concurrent.Response) {
+	return func(resp chan<- interface{}) {
 		client, err := proxy.Client()
 		if err != nil {
-			resp<-err
+			resp <- err
 			return
 		}
 
-		success, err := client.ProxyPing(memberId, timeout)
+		success, err := client.pingProxy(memberId, timeout)
 		if err != nil {
-			resp<-err
+			resp <- err
 			return
 		}
 
-		resp<-success
+		resp <- success
 	}
 }

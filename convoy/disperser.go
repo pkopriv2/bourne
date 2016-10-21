@@ -36,14 +36,14 @@ func (d *disp) Send(u Update, timeout time.Duration) (bool, error) {
 }
 
 func SendUpdate(member Member, update Update, timeout time.Duration) concurrent.Work {
-	return func(resp concurrent.Response) {
+	return func(resp chan<- interface{}) {
 		client, err := member.Client()
 		if err != nil {
 			resp <- err
 			return
 		}
 
-		success, err := client.Send(update, timeout)
+		success, err := client.update(update, timeout)
 		if err != nil {
 			resp <- err
 			return
