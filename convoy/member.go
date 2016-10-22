@@ -66,21 +66,19 @@ func (c *clientImpl) Ping(timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	ret, timer := concurrent.NewBreaker(timeout, func(res chan<- interface{}) {
+	ret, timer := concurrent.NewBreaker(timeout, func() interface{} {
 		var err error
 		if err = c.enc.Encode(PingRequest{}); err != nil {
-			res <- err
-			return
+			return err
 		}
 
 		var resp PingResponse
 
 		if err = c.dec.Decode(&resp); err != nil {
-			res <- err
-			return
+			return err
 		}
 
-		res <- true
+		return true
 	})
 
 	var raw interface{}
@@ -104,26 +102,23 @@ func (c *clientImpl) PingProxy(id uuid.UUID, timeout time.Duration) (bool, error
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	ret, timer := concurrent.NewBreaker(timeout, func(res chan<- interface{}) {
+	ret, timer := concurrent.NewBreaker(timeout, func() interface{} {
 		var err error
 		if err = c.enc.Encode(ProxyPingRequest{id}); err != nil {
-			res <- err
-			return
+			return err
 		}
 
 		var resp ProxyPingResponse
 
 		if err = c.dec.Decode(&resp); err != nil {
-			res <- err
-			return
+			return err
 		}
 
 		if err = resp.Err; err != nil {
-			res <- err
-			return
+			return err
 		}
 
-		res <- resp.Success
+		return resp.Success
 	})
 
 	var raw interface{}
@@ -147,20 +142,19 @@ func (c *clientImpl) Update(u update, timeout time.Duration) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	ret, timer := concurrent.NewBreaker(timeout, func(res chan<- interface{}) {
+	ret, timer := concurrent.NewBreaker(timeout, func() interface{} {
 		err := c.enc.Encode(UpdateRequest{u})
 		if err != nil {
-			res <- err
-			return
+			return err
 		}
 
 		var resp UpdateResponse
 		err = c.dec.Decode(&resp)
 		if err != nil {
-			res <- err
+			return err
 		}
 
-		res <- resp.Success
+		return resp.Success
 	})
 
 	var raw interface{}

@@ -21,7 +21,7 @@ type server struct {
 }
 
 func (s *server) Serve(res chan<- interface{}, raw interface{}) {
-	err := s.pool.Submit(res, func(resp chan<- interface{}) {
+	err := s.pool.Submit(func() {
 		switch req := raw.(type) {
 		case PingRequest:
 			s.handlePing(req, res)

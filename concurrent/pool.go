@@ -4,10 +4,8 @@ import "errors"
 
 var PoolClosedError = errors.New("Pool closed")
 
-type Work func(chan<- interface{})
-
 type WorkPool interface {
-	Submit(chan<- interface{}, Work) error
+	Submit(func()) error
 	Close() error
 }
 
@@ -43,11 +41,11 @@ func (p *pool) pop() {
 	<-p.active
 }
 
-func (p *pool) Submit(ret chan<- interface{}, fn Work) error {
+func (p *pool) Submit(fn func()) error {
 	p.push()
 	go func() {
 		defer p.pop()
-		fn(ret)
+		fn()
 	}()
 	return nil
 }
