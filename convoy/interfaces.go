@@ -8,19 +8,12 @@ import (
 )
 
 // References:
+//  * Mathematical Analysis: http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
+//  * Mathematical Analysis: http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.557.1902&rep=rep1&type=pdf
 //  * https://www.cs.cornell.edu/home/rvr/papers/flowgossip.pdf
 //  * https://www.cs.cornell.edu/~asdas/research/dsn02-swim.pdf
-//  * http://bitsavers.informatik.uni-stuttgart.de/pdf/xerox/parc/techReports/CSL-89-1_Epidemic_Algorithms_for_Replicated_Database_Maintenance.pdf
+//  * Basic Design: http://bitsavers.informatik.uni-stuttgart.de/pdf/xerox/parc/techReports/CSL-89-1_Epidemic_Algorithms_for_Replicated_Database_Maintenance.pdf
 //
-const (
-	confPingTimeout   = "convoy.ping.timeout"
-	confUpdateTimeout = "convoy.update.timeout"
-)
-
-const (
-	defaultPingTimeout   = time.Second
-	defaultUpdateTimeout = time.Second
-)
 
 // A member represents the fundamental unit of identity within a group.
 // These will typically align with
@@ -46,7 +39,8 @@ type client interface {
 // each other.  A word regarding implementation:  Updates to a
 // peer MUST originate from the member they are addressed to update
 // or at least must coordinate with the member to determine an
-// appropriate version for the data!
+// appropriate version for the data!  Otherwise, inconsisentcies
+// can and most likely WILL happen!!!!!
 type Peer interface {
 	Close() error
 	Roster() Roster
@@ -62,7 +56,6 @@ type clock interface {
 	Inc() int
 }
 
-
 // An update is the basic unit of change.  In practical terms, an update
 // is either a put or a delete.
 type update interface {
@@ -74,6 +67,9 @@ type update interface {
 // The roster is the database of members.  The roster can be obtained
 // via a single peer.
 type Roster interface {
+	// Returns the number of active members of the group.
+	Size() int
+
 	Get(uuid.UUID) Member
 
 	// Returns an iterator that provides a random permutation over the
@@ -83,8 +79,9 @@ type Roster interface {
 	// in the event of concurrent updates to the roster
 	Iterator() Iterator
 
-	put(Member) bool
-	del(uuid.UUID, int) bool
+	join(Member) bool
+	fail(uuid.UUID, int) bool
+	leave(uuid.UUID, int) bool
 	log() []update
 }
 

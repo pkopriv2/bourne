@@ -7,12 +7,16 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-func newPut(member Member) update {
-	return &put{member}
+func newJoin(member Member) update {
+	return &join{member}
 }
 
-func newDelete(memberId uuid.UUID, version int) update {
-	return &delete{memberId, version}
+func newLeave(memberId uuid.UUID, version int) update {
+	return &leave{memberId, version}
+}
+
+func newFail(memberId uuid.UUID, version int) update {
+	return &fail{memberId, version}
 }
 
 type roster struct {
@@ -28,6 +32,17 @@ func (r *roster) Iterator() Iterator {
 	return NewIterator(r)
 }
 
+func (r *roster) Size() int {
+	count := 0
+
+	iter := r.Iterator()
+	for iter.Next() != nil {
+		count++
+	}
+
+	return count
+}
+
 func (r *roster) Get(id uuid.UUID) Member {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
@@ -40,16 +55,22 @@ func (r *roster) log() []update {
 	return indexedUpdatesToUpdates(r.updates)
 }
 
-func (r *roster) put(m Member) bool {
+func (r *roster) join(m Member) bool {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	return applyUpdate(r.updates, newPut(m))
+	return applyUpdate(r.updates, newJoin(m))
 }
 
-func (r *roster) del(id uuid.UUID, version int) bool {
+func (r *roster) leave(id uuid.UUID, version int) bool {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	return applyUpdate(r.updates, newDelete(id, version))
+	return applyUpdate(r.updates, newLeave(id, version))
+}
+
+func (r *roster) fail(id uuid.UUID, version int) bool {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return applyUpdate(r.updates, newFail(id, version))
 }
 
 // A basic randomized iterator.  The goal of this is to avoid
@@ -91,9 +112,9 @@ func (i *iterator) SetIndex(val int) {
 
 func updateToMember(u update) Member {
 	switch t := u.(type) {
-	case *delete:
+	case *leave:
 		return nil
-	case *put:
+	case *join:
 		return t.member
 	}
 
@@ -143,7 +164,7 @@ func applyUpdate(init map[uuid.UUID]update, u update) bool {
 		return true
 	}
 
-	if _, ok := u.(*delete); ok {
+	if _, ok := u.(*leave); ok {
 		init[memberId] = u
 		return true
 	}
@@ -151,35 +172,52 @@ func applyUpdate(init map[uuid.UUID]update, u update) bool {
 	return false
 }
 
-type delete struct {
+type fail struct {
 	memberId uuid.UUID
 	version  int
 }
 
-func (d *delete) Re() uuid.UUID {
+func (f *fail) Re() uuid.UUID {
+	return f.memberId
+}
+
+func (f *fail) Version() int {
+	return f.version
+}
+
+func (f *fail) Apply(r Roster) bool {
+	return r.fail(f.memberId, f.version)
+}
+
+type leave struct {
+	memberId uuid.UUID
+	version  int
+}
+
+func (d *leave) Re() uuid.UUID {
 	return d.memberId
 }
 
-func (d *delete) Version() int {
+func (d *leave) Version() int {
 	return d.version
 }
 
-func (d *delete) Apply(r Roster) bool {
-	return r.del(d.memberId, d.version)
+func (d *leave) Apply(r Roster) bool {
+	return r.leave(d.memberId, d.version)
 }
 
-type put struct {
+type join struct {
 	member Member
 }
 
-func (p *put) Re() uuid.UUID {
+func (p *join) Re() uuid.UUID {
 	return p.member.Id()
 }
 
-func (p *put) Version() int {
+func (p *join) Version() int {
 	return p.member.Version()
 }
 
-func (p *put) Apply(r Roster) bool {
-	return r.put(p.member)
+func (p *join) Apply(r Roster) bool {
+	return r.join(p.member)
 }

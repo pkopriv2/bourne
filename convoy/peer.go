@@ -9,7 +9,7 @@ import (
 type peer struct {
 	roster  Roster
 	updates Updates
-	diss    disseminator
+	diss    Disseminator
 	pool    concurrent.WorkPool
 
 	closer chan struct{}

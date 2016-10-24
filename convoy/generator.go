@@ -5,6 +5,28 @@ import (
 	"sync"
 )
 
+func Generate(r Roster) <-chan Member {
+	out := make(chan Member)
+	go func() {
+		iter := r.Iterator()
+		for {
+			var next Member
+			for {
+				next = iter.Next()
+				if next == nil {
+					iter = r.Iterator()
+					continue
+				}
+			}
+
+			out <- next
+		}
+	}()
+
+	return out
+}
+
+
 // Implements a round robin, random permutation over a roster.
 type generator interface {
 	Members() <-chan Member // not thread safe!
@@ -25,49 +47,49 @@ func NewGenerator(r Roster) generator {
 		members: make(chan Member),
 		close:   make(chan struct{})}
 
-	d.wait.Add(1)
-	go generate(d)
-	return d
-}
-
-func (d *generatorImpl) Members() <-chan Member {
-	return d.members
-}
-
-func (d *generatorImpl) Close() error {
-	select {
-	case <-d.closed:
-		return fmt.Errorf("Already closed")
-	case d.close <- struct{}{}:
-		d.wait.Wait()
-		close(d.members)
+		d.wait.Add(1)
+		go generate(d)
+		return d
 	}
-	return nil
-}
 
-func generate(d *generatorImpl) {
-	defer d.wait.Done()
+	func (d *generatorImpl) Members() <-chan Member {
+		return d.members
+	}
 
-	iter := d.roster.Iterator()
-	for {
+	func (d *generatorImpl) Close() error {
 		select {
-		case <-d.close:
-			return
+		case <-d.closed:
+			return fmt.Errorf("Already closed")
+		case d.close <- struct{}{}:
+			d.wait.Wait()
+			close(d.members)
 		}
+		return nil
+	}
 
-		var next Member
+	func generate(d *generatorImpl) {
+		defer d.wait.Done()
+
+		iter := d.roster.Iterator()
 		for {
-			next = iter.Next()
-			if next == nil {
-				iter = d.roster.Iterator()
-				continue
+			select {
+			case <-d.close:
+				return
+			}
+
+			var next Member
+			for {
+				next = iter.Next()
+				if next == nil {
+					iter = d.roster.Iterator()
+					continue
+				}
+			}
+
+			select {
+			case d.members <- next:
+			case <-d.close:
+				return
 			}
 		}
-
-		select {
-		case d.members <- next:
-		case <-d.close:
-			return
-		}
 	}
-}
