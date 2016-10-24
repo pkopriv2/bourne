@@ -18,11 +18,11 @@ type ProxyPingResponse struct {
 }
 
 type UpdateRequest struct {
-	Update update
+	Updates []update
 }
 
 type UpdateResponse struct {
-	Success bool
+	Accepted []bool
 }
 
 type ErrorResponse struct {

@@ -138,12 +138,12 @@ func (c *clientImpl) PingProxy(id uuid.UUID, timeout time.Duration) (bool, error
 	}
 }
 
-func (c *clientImpl) Update(u update, timeout time.Duration) (bool, error) {
+func (c *clientImpl) Update(updates []update, timeout time.Duration) ([]bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	ret, timer := concurrent.NewBreaker(timeout, func() interface{} {
-		err := c.enc.Encode(UpdateRequest{u})
+		err := c.enc.Encode(UpdateRequest{updates})
 		if err != nil {
 			return err
 		}
@@ -154,13 +154,13 @@ func (c *clientImpl) Update(u update, timeout time.Duration) (bool, error) {
 			return err
 		}
 
-		return resp.Success
+		return resp.Accepted
 	})
 
 	var raw interface{}
 	select {
 	case <-timer:
-		return false, TimeoutError{timeout, fmt.Sprintf("Sending update [%v] to member [%v]", u, c.member)}
+		return nil, TimeoutError{timeout, fmt.Sprintf("Sending updates [%v] to member [%v]", updates, c.member)}
 	case raw = <-ret:
 	}
 
@@ -168,8 +168,8 @@ func (c *clientImpl) Update(u update, timeout time.Duration) (bool, error) {
 	default:
 		panic(fmt.Sprintf("Unknown type [%v]", val))
 	case error:
-		return false, val
-	case bool:
+		return nil, val
+	case []bool:
 		return val, nil
 	}
 }

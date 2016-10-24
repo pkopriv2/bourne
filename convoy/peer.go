@@ -8,7 +8,6 @@ import (
 
 type peer struct {
 	roster  Roster
-	updates Updates
 	diss    Disseminator
 	pool    concurrent.WorkPool
 
@@ -23,7 +22,7 @@ func (p *peer) Roster() Roster {
 
 func (p *peer) Update(u update) bool {
 	ret := u.Apply(p.roster)
-	p.updates.Push() <- pending{u, 0}
+	p.diss.Push(u)
 	return ret
 }
 

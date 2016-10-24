@@ -7,18 +7,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-func newJoin(member Member) update {
-	return &join{member}
-}
-
-func newLeave(memberId uuid.UUID, version int) update {
-	return &leave{memberId, version}
-}
-
-func newFail(memberId uuid.UUID, version int) update {
-	return &fail{memberId, version}
-}
-
 type roster struct {
 	lock    sync.RWMutex
 	updates map[uuid.UUID]update
@@ -29,7 +17,7 @@ func newRoster() Roster {
 }
 
 func (r *roster) Iterator() Iterator {
-	return NewIterator(r)
+	return newMemberIterator(r)
 }
 
 func (r *roster) Size() int {
@@ -44,9 +32,13 @@ func (r *roster) Size() int {
 }
 
 func (r *roster) Get(id uuid.UUID) Member {
+	return updateToMember(r.get(id))
+}
+
+func (r *roster) get(id uuid.UUID) update {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
-	return updateToMember(r.updates[id])
+	return r.updates[id]
 }
 
 func (r *roster) log() []update {
@@ -67,53 +59,63 @@ func (r *roster) leave(id uuid.UUID, version int) bool {
 	return applyUpdate(r.updates, newLeave(id, version))
 }
 
-func (r *roster) fail(id uuid.UUID, version int) bool {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-	return applyUpdate(r.updates, newFail(id, version))
-}
+// func (r *roster) fail(m Member) bool {
+	// r.lock.Lock()
+	// defer r.lock.Unlock()
+	// return applyUpdate(r.updates, newFail(m))
+// }
 
-// A basic randomized iterator.  The goal of this is to avoid
-// returning revoked members, while still guaranteeing that active
-// members are visited at least once for every 2 complete iterations
+// A basic randomized iterator.
 type iterator struct {
 	roster *roster
 	order  []uuid.UUID
 	idx    int
 }
 
-func NewIterator(roster *roster) *iterator {
+func newIterator(roster *roster) *iterator {
 	return &iterator{
 		roster: roster,
 		order:  shuffleIds(updatesToIds(roster.log()))}
 }
 
-func (i *iterator) Next() Member {
-	idx := i.idx
-	defer i.SetIndex(idx)
+func (i *iterator) Next() update {
+	defer func() {i.idx++}()
 
-	if idx == len(i.order) {
+	if i.idx == len(i.order) {
 		return nil
 	}
 
-	for ; idx < len(i.order); idx++ {
-		member := i.roster.Get(i.order[idx])
-		if member != nil {
-			return member
+	return i.roster.get(i.order[i.idx])
+}
+
+type memberIterator struct {
+	inner *iterator
+}
+
+func newMemberIterator(roster *roster) *memberIterator {
+	return &memberIterator{newIterator(roster)}
+}
+
+func (m *memberIterator) Next() Member {
+	for {
+		u := m.inner.Next()
+		if u == nil {
+			return nil
+		}
+
+		if m := updateToMember(u); m != nil {
+			return m
 		}
 	}
-
-	return nil
 }
 
-func (i *iterator) SetIndex(val int) {
-	i.idx = val
-}
 
 func updateToMember(u update) Member {
 	switch t := u.(type) {
 	case *leave:
 		return nil
+	// case *fail:
+		// return t.member
 	case *join:
 		return t.member
 	}
@@ -170,54 +172,4 @@ func applyUpdate(init map[uuid.UUID]update, u update) bool {
 	}
 
 	return false
-}
-
-type fail struct {
-	memberId uuid.UUID
-	version  int
-}
-
-func (f *fail) Re() uuid.UUID {
-	return f.memberId
-}
-
-func (f *fail) Version() int {
-	return f.version
-}
-
-func (f *fail) Apply(r Roster) bool {
-	return r.fail(f.memberId, f.version)
-}
-
-type leave struct {
-	memberId uuid.UUID
-	version  int
-}
-
-func (d *leave) Re() uuid.UUID {
-	return d.memberId
-}
-
-func (d *leave) Version() int {
-	return d.version
-}
-
-func (d *leave) Apply(r Roster) bool {
-	return r.leave(d.memberId, d.version)
-}
-
-type join struct {
-	member Member
-}
-
-func (p *join) Re() uuid.UUID {
-	return p.member.Id()
-}
-
-func (p *join) Version() int {
-	return p.member.Version()
-}
-
-func (p *join) Apply(r Roster) bool {
-	return r.join(p.member)
 }

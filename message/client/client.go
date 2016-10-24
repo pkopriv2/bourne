@@ -115,11 +115,11 @@ func clientRead(c *client) {
 }
 
 
-func clientControl(c *client) {
-	select {
-		c.closed
-	}
-}
+// func clientControl(c *client) {
+	// select {
+		// c.closed
+	// }
+// }
 
 func (c *client) Close() error {
 	panic("not implemented")

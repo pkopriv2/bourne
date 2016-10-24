@@ -16,11 +16,10 @@ import (
 //
 
 // A member represents the fundamental unit of identity within a group.
-// These will typically align with
 type Member interface {
 	Id() uuid.UUID
-	Version() int
 	Conn() (net.Connection, error)
+	Version() int
 	client() (client, error)
 }
 
@@ -31,7 +30,7 @@ type client interface {
 	Close() error
 	Ping(time.Duration) (bool, error)
 	PingProxy(uuid.UUID, time.Duration) (bool, error)
-	Update(update, time.Duration) (bool, error)
+	Update([]update, time.Duration) ([]bool, error)
 }
 
 // A peer is a service that hosts the distributed roster.  A group
@@ -45,7 +44,7 @@ type Peer interface {
 	Close() error
 	Roster() Roster
 	// clock() Clock
-	update(update) bool
+	update([]update) []bool
 }
 
 // the primary reconciliation technique will involve a "globally unique"
@@ -80,8 +79,9 @@ type Roster interface {
 	Iterator() Iterator
 
 	join(Member) bool
-	fail(uuid.UUID, int) bool
 	leave(uuid.UUID, int) bool
+	// NOTE: leaving failed status out for now...not sure if it's necessary!
+	// fail(Member) bool
 	log() []update
 }
 

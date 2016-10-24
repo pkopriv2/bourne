@@ -5,8 +5,8 @@ import (
 	"sync"
 )
 
-func Generate(r Roster) <-chan Member {
-	out := make(chan Member)
+func Generate(r Roster, done <-chan struct{}) <-chan Member {
+	out:= make(chan Member)
 	go func() {
 		iter := r.Iterator()
 		for {
@@ -15,11 +15,20 @@ func Generate(r Roster) <-chan Member {
 				next = iter.Next()
 				if next == nil {
 					iter = r.Iterator()
-					continue
+					select {
+					default:
+						continue
+					case <-done:
+						return
+					}
 				}
 			}
 
-			out <- next
+			select {
+			case <-done:
+				return
+			case out <- next:
+			}
 		}
 	}()
 
