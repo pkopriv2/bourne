@@ -28,21 +28,21 @@ type Client interface {
 	Send(Request) (Response, error)
 }
 
-type RequestType int
+// type int int
 
 type Request struct {
-	Type RequestType
-	Body interface{}
+	Type int
+	Body []byte
 }
 
 type Response struct {
 	Success bool
 	Message string
-	Body    interface{}
+	Body    []byte
 }
 
 type UnknownRequestError struct {
-	request RequestType
+	request int
 }
 
 func (u *UnknownRequestError) Error() string {
@@ -65,11 +65,11 @@ type ServerOptionsFn func(*ServerOptions)
 
 type ClientOptionsFn func(*ClientOptions)
 
-func NewRequest(t RequestType, body interface{}) Request {
-	return Request{Type: t, Body: body}
+func NewRequest(requestType int, body []byte) Request {
+	return Request{Type: requestType, Body: body}
 }
 
-func NewSuccessResponse(body interface{}) Response {
+func NewSuccessResponse(body []byte) Response {
 	return Response{Success: true, Body: body}
 }
 
@@ -85,7 +85,7 @@ func DefaultClientOptions() *ClientOptions {
 	return &ClientOptions{5 * time.Second, 5 * time.Second}
 }
 
-func NewUnknownRequestError(request RequestType) *UnknownRequestError {
+func NewUnknownRequestError(request int) *UnknownRequestError {
 	return &UnknownRequestError{request}
 }
 
@@ -111,8 +111,8 @@ func NewServer(listener Listener, handler Handler, fns ...ServerOptionsFn) Serve
 
 	s := &server{
 		listener:    listener,
-		pool:        concurrent.NewWorkPool(opts.WorkPoolSize),
 		handler:     handler,
+		pool:        concurrent.NewWorkPool(opts.WorkPoolSize),
 		sendTimeout: opts.SendTimeout,
 		recvTimeout: opts.RecvTimeout,
 		closed:      make(chan struct{}),
