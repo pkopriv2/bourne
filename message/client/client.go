@@ -5,9 +5,9 @@ import (
 	"io"
 	"time"
 
+	"github.com/pkopriv2/bourne/circuit"
 	"github.com/pkopriv2/bourne/common"
 	mnet "github.com/pkopriv2/bourne/message/net"
-	"github.com/pkopriv2/bourne/message/wire"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -77,80 +77,79 @@ type client struct {
 	dispatcher Dispatcher
 	connector  mnet.Connector
 	ctrl       circuit.Controller
-	closed    chan struct{}
-	close     chan struct{}
+	closed     chan struct{}
+	close      chan struct{}
 }
 
 func NewClient(ctx common.Context, factory net.ConnectionFactory, memberId uuid.UUID) {
-	c := &client{
-		ctx:        ctx,
-		memberId:   memberId,
-		dispatcher: NewDispatcher(ctx, memberId),
-		connector:  mnet.NewConnector(net.NewConnector(factory, ctx.Config())),
-		closed:     make(chan struct{})}
+	// c := &client{
+		// ctx:        ctx,
+		// memberId:   memberId,
+		// dispatcher: NewDispatcher(ctx, memberId),
+		// connector:  mnet.NewConnector(net.NewConnector(factory, ctx.Config())),
+		// closed:     make(chan struct{})}
 }
 
-func clientRead(c *client) {
-	for {
-		select {
-		case <-c.closed:
-			return
-		case <-c.connector.Failed():
-			return
-		case <-c.connector.Closed():
-			return
-		case p := <-c.connector.Rx():
-		}
-
-		select {
-		case <-c.closed:
-			return
-		case <-c.connector.Failed():
-			return
-		case <-c.connector.Closed():
-			return
-		case c.dispatcher.Tx() <- p:
-		}
-	}
-}
-
-
-// func clientControl(c *client) {
-	// select {
-		// c.closed
-	// }
+// func clientRead(c *client) {
+// for {
+// select {
+// case <-c.closed:
+// return
+// case <-c.connector.Failed():
+// return
+// case <-c.connector.Closed():
+// return
+// case p := <-c.connector.Rx():
 // }
-
-func (c *client) Close() error {
-	panic("not implemented")
-}
-
-func (c *client) MemberId() uuid.UUID {
-	return c.memberId
-}
-
-func (c *client) NewTunnel(memberId uuid.UUID, tunnelId uint64) (Tunnel, error) {
-	return newDispatchedTunnel(c.dispatcher, wire.NewAddress(memberId, tunnelId))
-}
-
-func (c *client) NewListener(tunnelId uint64) (Listener, error) {
-	return newDispatchedListener(c.dispatcher, tunnelId)
-}
-
-func newDispatchedTunnel(dispatcher Dispatcher, addr wire.Address) (Tunnel, error) {
-	tunnelSocket, err := dispatcher.NewTunnelSocket(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewTunnel(tunnelSocket), nil
-}
-
-func newDispatchedListener(dispatcher Dispatcher, id uint64) (Listener, error) {
-	listenerSocket, err := dispatcher.NewListenerSocket(id)
-	if err != nil {
-		return nil, err
-	}
-
-	return newListener(listenerSocket), nil
-}
+//
+// select {
+// case <-c.closed:
+// return
+// case <-c.connector.Failed():
+// return
+// case <-c.connector.Closed():
+// return
+// case c.dispatcher.Tx() <- p:
+// }
+// }
+// }
+//
+// // func clientControl(c *client) {
+// // select {
+// // c.closed
+// // }
+// // }
+//
+// func (c *client) Close() error {
+// panic("not implemented")
+// }
+//
+// func (c *client) MemberId() uuid.UUID {
+// return c.memberId
+// }
+//
+// func (c *client) NewTunnel(memberId uuid.UUID, tunnelId uint64) (Tunnel, error) {
+// return newDispatchedTunnel(c.dispatcher, wire.NewAddress(memberId, tunnelId))
+// }
+//
+// func (c *client) NewListener(tunnelId uint64) (Listener, error) {
+// return newDispatchedListener(c.dispatcher, tunnelId)
+// }
+//
+// func newDispatchedTunnel(dispatcher Dispatcher, addr wire.Address) (Tunnel, error) {
+// tunnelSocket, err := dispatcher.NewTunnelSocket(addr)
+// if err != nil {
+// return nil, err
+// }
+//
+// return NewTunnel(tunnelSocket), nil
+// }
+//
+// func newDispatchedListener(dispatcher Dispatcher, id uint64) (Listener, error) {
+// listenerSocket, err := dispatcher.NewListenerSocket(id)
+// if err != nil {
+// return nil, err
+// }
+//
+// return newListener(listenerSocket), nil
+// }

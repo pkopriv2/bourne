@@ -1,12 +1,8 @@
 package convoy
 
 import (
-	"encoding/gob"
-	"fmt"
 	"sync"
-	"time"
 
-	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -40,9 +36,7 @@ func (m *memberImpl) client() (client, error) {
 
 type clientImpl struct {
 	member *memberImpl
-	conn   net.Connection
-	enc    *gob.Encoder
-	dec    *gob.Decoder
+	client net.Client
 	lock   sync.Mutex
 }
 
@@ -53,123 +47,48 @@ func newClient(m *memberImpl) (client, error) {
 	}
 
 	return &clientImpl{
-		member: m, conn: conn, enc: gob.NewEncoder(conn), dec: gob.NewDecoder(conn)}, nil
+		member: m,
+		client: net.NewClient(conn)}, nil
 }
 
 func (c *clientImpl) Close() error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	return c.conn.Close()
+	return c.client.Close()
 }
 
-func (c *clientImpl) Ping(timeout time.Duration) (bool, error) {
+func (c *clientImpl) Ping() (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	ret, timer := concurrent.NewBreaker(timeout, func() interface{} {
-		var err error
-		if err = c.enc.Encode(PingRequest{}); err != nil {
-			return err
-		}
-
-		var resp PingResponse
-
-		if err = c.dec.Decode(&resp); err != nil {
-			return err
-		}
-
-		return true
-	})
-
-	var raw interface{}
-	select {
-	case <-timer:
-		return false, TimeoutError{timeout, fmt.Sprintf("Ping [%v] to member [%v]", c.member.id, c.member)}
-	case raw = <-ret:
+	_, err := c.client.Send(newPingRequest())
+	if err != nil {
+		return false, err
 	}
 
-	switch val := raw.(type) {
-	default:
-		panic(fmt.Sprintf("Unknown type [%v]", val))
-	case error:
-		return false, val
-	case bool:
-		return val, nil
-	}
+	return true, nil
 }
 
-func (c *clientImpl) PingProxy(id uuid.UUID, timeout time.Duration) (bool, error) {
+func (c *clientImpl) PingProxy(id uuid.UUID) (bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	ret, timer := concurrent.NewBreaker(timeout, func() interface{} {
-		var err error
-		if err = c.enc.Encode(ProxyPingRequest{id}); err != nil {
-			return err
-		}
-
-		var resp ProxyPingResponse
-
-		if err = c.dec.Decode(&resp); err != nil {
-			return err
-		}
-
-		if err = resp.Err; err != nil {
-			return err
-		}
-
-		return resp.Success
-	})
-
-	var raw interface{}
-	select {
-	case <-timer:
-		return false, TimeoutError{timeout, fmt.Sprintf("Proxy ping [%v] to member [%v]", id, c.member)}
-	case raw = <-ret:
+	resp, err := c.client.Send(newPingProxyRequest(id))
+	if err != nil {
+		return false, err
 	}
 
-	switch val := raw.(type) {
-	default:
-		panic(fmt.Sprintf("Unknown type [%v]", val))
-	case error:
-		return false, val
-	case bool:
-		return val, nil
-	}
+	return parsePingProxyResponse(resp)
 }
 
-func (c *clientImpl) Update(updates []update, timeout time.Duration) ([]bool, error) {
+func (c *clientImpl) Update(updates []update) ([]bool, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	ret, timer := concurrent.NewBreaker(timeout, func() interface{} {
-		err := c.enc.Encode(UpdateRequest{updates})
-		if err != nil {
-			return err
-		}
-
-		var resp UpdateResponse
-		err = c.dec.Decode(&resp)
-		if err != nil {
-			return err
-		}
-
-		return resp.Accepted
-	})
-
-	var raw interface{}
-	select {
-	case <-timer:
-		return nil, TimeoutError{timeout, fmt.Sprintf("Sending updates [%v] to member [%v]", updates, c.member)}
-	case raw = <-ret:
+	resp, err := c.client.Send(newUpdateRequest(updates))
+	if err != nil {
+		return nil, err
 	}
 
-	switch val := raw.(type) {
-	default:
-		panic(fmt.Sprintf("Unknown type [%v]", val))
-	case error:
-		return nil, val
-	case []bool:
-		return val, nil
-	}
+	return parseUpdateResponse(resp)
 }

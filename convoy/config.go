@@ -7,6 +7,7 @@ const (
 	confUpdateTimeout       = "convoy.update.timeout"
 	confUpdateBatchSize     = "convoy.update.batch.size"
 	confDisseminationPeriod = "convoy.dissemination.period"
+	confServerPoolSize      = "convoy.server.pool.size"
 )
 
 const (
@@ -14,4 +15,5 @@ const (
 	defaultUpdateTimeout       = time.Second
 	defaultUpdateBatchSize     = 50
 	defaultDisseminationPeriod = 5 * time.Second
+	defaultServerPoolSize      = 10
 )

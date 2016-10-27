@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -46,26 +45,6 @@ func (c ConnectionError) Error() string {
 	}
 
 	return buffer.String()
-}
-
-// A connection is a full-duplex streaming abstraction.
-//
-// Implementations are expected to be thread-safe, with
-// respect to concurrent reads and writes.
-type Connection interface {
-	io.Reader
-	io.Writer
-	io.Closer
-}
-
-// Connection factories are used to create the underlying streams.  In
-// the event of failure, this allows streams to be "recreated", without
-// leaking how the streams are generated.  The intent is to create a
-// highly resilient multiplexer.
-//
-// Consumers should not retain any references to the created connection.
-type ConnectionFactory interface {
-	Conn() (Connection, error)
 }
 
 // A connector is a thread-safe, highly resilient connection.

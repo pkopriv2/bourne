@@ -124,6 +124,7 @@ func disseminate(d *disseminatorImpl) {
 
 	timer := time.NewTimer(d.period)
 	for range timer.C  {
+
 		// var m Member
 		select {
 		case <-d.closed:

@@ -42,7 +42,10 @@ func (p *pool) pop() {
 }
 
 func (p *pool) Submit(fn func()) error {
-	p.push()
+	if err := p.push(); err != nil {
+		return err
+	}
+
 	go func() {
 		defer p.pop()
 		fn()

@@ -1,8 +1,6 @@
 package convoy
 
 import (
-	"time"
-
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -28,9 +26,9 @@ type Member interface {
 // the standard ping and proxy ping actions.
 type client interface {
 	Close() error
-	Ping(time.Duration) (bool, error)
-	PingProxy(uuid.UUID, time.Duration) (bool, error)
-	Update([]update, time.Duration) ([]bool, error)
+	Ping() (bool, error)
+	PingProxy(uuid.UUID) (bool, error)
+	Update([]update) ([]bool, error)
 }
 
 // A peer is a service that hosts the distributed roster.  A group
@@ -43,8 +41,8 @@ type client interface {
 type Peer interface {
 	Close() error
 	Roster() Roster
-	// clock() Clock
-	update([]update) []bool
+	ping(uuid.UUID) (bool, error)
+	update([]update) ([]bool, error)
 }
 
 // the primary reconciliation technique will involve a "globally unique"
