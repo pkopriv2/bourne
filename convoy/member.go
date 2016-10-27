@@ -31,24 +31,21 @@ func (m *memberImpl) Version() int {
 }
 
 func (m *memberImpl) client() (client, error) {
-	return newClient(m)
-}
-
-type clientImpl struct {
-	member *memberImpl
-	client net.Client
-	lock   sync.Mutex
-}
-
-func newClient(m *memberImpl) (client, error) {
 	conn, err := m.Conn()
 	if err != nil {
 		return nil, err
 	}
 
-	return &clientImpl{
-		member: m,
-		client: net.NewClient(conn)}, nil
+	return newClient(net.NewClient(conn)), nil
+}
+
+type clientImpl struct {
+	client net.Client
+	lock   sync.Mutex
+}
+
+func newClient(client net.Client) client {
+	return &clientImpl{client: client}
 }
 
 func (c *clientImpl) Close() error {

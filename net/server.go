@@ -16,14 +16,6 @@ var (
 	ServerClosedError = errors.New("NET:SERVER:CLOSED")
 )
 
-type UnknownRequestError struct {
-	request RequestType
-}
-
-func (u *UnknownRequestError) Error() string {
-	return fmt.Sprintf("Unknown request type [%v]", u.request)
-}
-
 type Handler func(Request) Response
 
 type Server interface {
@@ -49,9 +41,13 @@ type Response struct {
 	Body    interface{}
 }
 
-type ServerOptionsFn func(*ServerOptions)
+type UnknownRequestError struct {
+	request RequestType
+}
 
-type ClientOptionsFn func(*ClientOptions)
+func (u *UnknownRequestError) Error() string {
+	return fmt.Sprintf("Unknown request type [%v]", u.request)
+}
 
 type ServerOptions struct {
 	WorkPoolSize int
@@ -65,6 +61,9 @@ type ClientOptions struct {
 	RecvTimeout time.Duration
 }
 
+type ServerOptionsFn func(*ServerOptions)
+
+type ClientOptionsFn func(*ClientOptions)
 
 func NewRequest(t RequestType, body interface{}) Request {
 	return Request{Type: t, Body: body}
@@ -279,7 +278,6 @@ func (s *server) newWorker(conn Connection) func() {
 
 			res, err := s.handle(req)
 			if err != nil {
-				s.send(enc, NewErrorResponse(err))
 				return
 			}
 
