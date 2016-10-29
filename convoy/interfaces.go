@@ -19,6 +19,7 @@ type Member interface {
 	Conn() (net.Connection, error)
 	Version() int
 	client() (client, error)
+	serialize() interface{}
 }
 
 // A service exposes the standard actions to be taken on members.

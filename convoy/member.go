@@ -7,6 +7,21 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// func ParseMemberFromJson(bytes []byte) (Member, error) {
+// m := MemberData{}
+// // if err := json.Unmarshal(bytes, data); err != nil {
+// // return nil, err
+// // }
+// //
+// // return newMember(m.Id, m.Factory)
+// }
+
+type MemberData struct {
+	Id      string
+	Version int
+	Factory []byte
+}
+
 // TODO: members must be gob encodable!  connection factory can't be encoded!
 type memberImpl struct {
 	id  uuid.UUID
@@ -28,6 +43,10 @@ func (m *memberImpl) Conn() (net.Connection, error) {
 
 func (m *memberImpl) Version() int {
 	return m.ver
+}
+
+func (m *memberImpl) serialize() interface{} {
+	return nil
 }
 
 func (m *memberImpl) client() (client, error) {

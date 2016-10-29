@@ -16,23 +16,27 @@ func newPingRequest() net.Request {
 }
 
 func newPingProxyRequest(target uuid.UUID) net.Request {
-	return net.NewRequest(pingProxyType, target)
+	return net.NewRequest(pingProxyType, body)
 }
 
 func newUpdateRequest(updates []update) net.Request {
-	return net.NewRequest(updateType, updates)
+	// return net.NewRequest(updateType, updates)
+	return net.NewRequest(0, nil)
 }
 
 func newPingResponse() net.Response {
-	return net.NewSuccessResponse(true)
+	// return net.NewSuccessResponse(true)
+	return net.NewSuccessResponse(nil)
 }
 
 func newPingProxyResponse(success bool) net.Response {
-	return net.NewSuccessResponse(success)
+	// return net.NewSuccessResponse(success)
+	return net.NewSuccessResponse(nil)
 }
 
 func newUpdateResponse(success []bool) net.Response {
-	return net.NewSuccessResponse(success)
+	// return net.NewSuccessResponse(success)
+	return net.NewSuccessResponse(nil)
 }
 
 func parsePingProxyResponse(resp net.Response) (bool, error) {

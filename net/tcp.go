@@ -58,6 +58,10 @@ func (u *TCPListener) Close() error {
 }
 
 func (u *TCPListener) Conn() (Connection, error) {
+	if !u.closed.Get() {
+		return nil, ListenerClosedError
+	}
+
 	return ConnectTCP(u.listener.Addr().String())
 }
 

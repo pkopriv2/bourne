@@ -1,10 +1,11 @@
 package utils
 
 import (
+	"bufio"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
-	"bufio"
 
 	uuid "github.com/satori/go.uuid"
 )
@@ -21,6 +22,8 @@ type OverflowError struct {
 func (e OverflowError) Error() string {
 	return fmt.Sprintf("That value [%v] overflows [%v]", e.actual, e.target)
 }
+
+
 
 // A simple encoding interface that normalizes the most common, low-level
 // message encoding.
@@ -118,7 +121,7 @@ func ReadUint16(r *bufio.Reader) (uint16, error) {
 	return ret, nil
 }
 
-func PutUint8(w *bufio.Writer, val uint8) (error) {
+func PutUint8(w *bufio.Writer, val uint8) error {
 	return binary.Write(w, binary.BigEndian, val)
 }
 
@@ -131,7 +134,7 @@ func ReadUint8(r *bufio.Reader) (uint8, error) {
 	return ret, nil
 }
 
-func PutBytes(w *bufio.Writer, val []byte) (error) {
+func PutBytes(w *bufio.Writer, val []byte) error {
 	if err := PutUint64(w, uint64(len(val))); err != nil {
 		return err
 	}
@@ -154,7 +157,7 @@ func ReadBytes(r *bufio.Reader) ([]byte, error) {
 	return tmp, nil
 }
 
-func PutString(w *bufio.Writer, val string) (error) {
+func PutString(w *bufio.Writer, val string) error {
 	return PutBytes(w, []byte(val))
 }
 
@@ -173,7 +176,6 @@ type StandardMessageReader struct {
 	reader *bufio.Reader
 	err    error
 }
-
 
 func (s *StandardMessageReader) ReadUUID() (ret uuid.UUID) {
 	if s.err != nil {

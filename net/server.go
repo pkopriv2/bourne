@@ -3,18 +3,20 @@ package net
 import (
 	"encoding/gob"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/enc"
 )
 
 var (
 	ServerError       = errors.New("NET:SERVER:ERROR")
 	ServerClosedError = errors.New("NET:SERVER:CLOSED")
 )
+
+// A very simple request/response server.
 
 type Handler func(Request) Response
 
@@ -28,25 +30,18 @@ type Client interface {
 	Send(Request) (Response, error)
 }
 
-// type int int
+type Request interface {
+	enc.Writable
 
-type Request struct {
-	Type int
-	Body []byte
+	Type() int
+	Body() enc.Message
 }
 
-type Response struct {
-	Success bool
-	Message string
-	Body    []byte
-}
+type Response interface {
+	enc.Writable
 
-type UnknownRequestError struct {
-	request int
-}
-
-func (u *UnknownRequestError) Error() string {
-	return fmt.Sprintf("Unknown request type [%v]", u.request)
+	Error() error
+	Body() enc.Message
 }
 
 type ServerOptions struct {
@@ -65,16 +60,16 @@ type ServerOptionsFn func(*ServerOptions)
 
 type ClientOptionsFn func(*ClientOptions)
 
-func NewRequest(requestType int, body []byte) Request {
-	return Request{Type: requestType, Body: body}
+func NewRequest(typ int, body enc.Message) Request {
+	return &request{typ, body}
 }
 
-func NewSuccessResponse(body []byte) Response {
-	return Response{Success: true, Body: body}
+func NewSuccessResponse(body enc.Message) Response {
+	return &response{body: body}
 }
 
 func NewErrorResponse(err error) Response {
-	return Response{Message: err.Error()}
+	return &response{err: err}
 }
 
 func DefaultServerOptions() *ServerOptions {
@@ -83,10 +78,6 @@ func DefaultServerOptions() *ServerOptions {
 
 func DefaultClientOptions() *ClientOptions {
 	return &ClientOptions{5 * time.Second, 5 * time.Second}
-}
-
-func NewUnknownRequestError(request int) *UnknownRequestError {
-	return &UnknownRequestError{request}
 }
 
 func NewClient(conn Connection, fns ...ClientOptionsFn) Client {
@@ -138,6 +129,42 @@ func NewTCPServer(port int, handler Handler, fns ...ServerOptionsFn) (Server, er
 	}
 
 	return NewServer(listener, handler, fns...), nil
+}
+
+type request struct {
+	typ  int
+	body enc.Message
+}
+
+func (r *request) Type() int {
+	return r.typ
+}
+
+func (r *request) Body() enc.Message {
+	return r.body
+}
+
+func (r *request) Write(w enc.Writer) {
+	w.Write("type", r.typ)
+	w.Write("body", r.body)
+}
+
+type response struct {
+	err error
+	body enc.Message
+}
+
+func (r *response) Error() error {
+	return r.err
+}
+
+func (r *response) Body() enc.Message {
+	return r.body
+}
+
+func (r *response) Write(w enc.Writer) {
+	w.Write("error", r.err)
+	w.Write("body", r.body)
 }
 
 type client struct {

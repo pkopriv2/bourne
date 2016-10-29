@@ -62,3 +62,8 @@ func (p *join) Version() int {
 func (p *join) Apply(r Roster) bool {
 	return r.join(p.member)
 }
+
+func parseUpdate(data map[string]interface{}) (update, error) {
+	return nil, nil
+
+}
