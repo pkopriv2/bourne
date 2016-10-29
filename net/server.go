@@ -86,6 +86,18 @@ func NewResponse(err error, body enc.Message) Response {
 	return &response{err, body}
 }
 
+func NewEmptyResponse() Response {
+	return NewResponse(nil, nil)
+}
+
+func NewSuccessResponse(body enc.Message) Response {
+	return NewResponse(nil, body)
+}
+
+func NewErrorResponse(err error) Response {
+	return NewResponse(err, nil)
+}
+
 func DecodeRequest(dec enc.Decoder) (Request, error) {
 	msg, err := enc.DecodeMessage(dec)
 	if err != nil {
@@ -124,13 +136,6 @@ func DecodeResponse(dec enc.Decoder) (Response, error) {
 	return NewResponse(enc.ParseError(erro), body), nil
 }
 
-func NewSuccessResponse(body enc.Message) Response {
-	return NewResponse(nil, body)
-}
-
-func NewErrorResponse(err error) Response {
-	return NewResponse(err, nil)
-}
 
 func DefaultServerOptions() *ServerOptions {
 	return &ServerOptions{10, 5 * time.Second, 5 * time.Second}
@@ -160,8 +165,22 @@ func NewClient(ctx common.Context, conn Connection, fns ...ClientOptionsFn) (Cli
 		fn(opts)
 	}
 
-	var encoder enc.Encoder = json.NewEncoder(conn)
-	var decoder enc.Decoder = json.NewDecoder(conn)
+	var encoder enc.Encoder
+	var decoder enc.Decoder
+	switch opts.Encoding {
+	default:
+		return nil, &UnsupportedEncodingError{opts.Encoding}
+	case Json:
+		decoder = json.NewDecoder(conn)
+		encoder = json.NewEncoder(conn)
+	case Gob:
+		decoder = gob.NewDecoder(conn)
+		encoder = gob.NewEncoder(conn)
+	}
+
+	if err := WriteEncoding(conn, opts.Encoding); err != nil {
+		return nil, err
+	}
 
 	return &client{
 		logger:      ctx.Logger(),
@@ -302,7 +321,7 @@ func (s *client) recv() (Response, error) {
 	var resp Response
 	var err error
 	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
-		err = s.dec.Decode(&resp)
+		resp, err = DecodeResponse(s.dec)
 		return nil
 	})
 
@@ -391,23 +410,24 @@ func (s *server) newWorker(conn Connection) func() {
 		defer conn.Close()
 		s.logger.Debug("Processing connection: %v", conn)
 
-		// encoding, err := ReadEncoding(conn)
-		// if err != nil {
-		// return
-		// }
-
 		var encoder enc.Encoder
 		var decoder enc.Decoder
-		decoder = json.NewDecoder(conn)
-		encoder = json.NewEncoder(conn)
-		// switch encoding {
-		// default:
-		// return // TODO: respond with error!
-		// case Json:
-		// case Gob:
-		// decoder = gob.NewDecoder(conn)
-		// encoder = gob.NewEncoder(conn)
-		// }
+
+		encoding, err := ReadEncoding(conn)
+		if err != nil {
+			return
+		}
+
+		switch encoding {
+		default:
+		return // TODO: respond with error!
+		case Json:
+			decoder = json.NewDecoder(conn)
+			encoder = json.NewEncoder(conn)
+		case Gob:
+			decoder = gob.NewDecoder(conn)
+			encoder = gob.NewEncoder(conn)
+		}
 
 		for {
 			req, err := s.recv(decoder)
