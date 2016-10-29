@@ -14,41 +14,63 @@ import (
 	"github.com/pkopriv2/bourne/enc"
 )
 
+// These set of classes implement a very simple "embeddable", protocol
+// agnostic request/response server.
+//
+// Currently provides implementation over tcp. Considering udp support.
+//
+// Currently has support for json/gob encoding. Future versions should
+// see the encoding implementations externalized, but leaving out for now.
+//
+// To create a TCP server, simply invoke:
+//
+// server, err := NewTcpServer(ctx, 8080, myHandler)
+// defer server.Close()
+//
 var (
 	ServerError       = errors.New("NET:SERVER:ERROR")
 	ServerClosedError = errors.New("NET:SERVER:CLOSED")
 )
 
 const (
-	ConfServerSendTimeout    = "bourne.net.server.send.timeout"
-	DefaultServerSendTimeout = 30 * time.Second
-	ConfServerRecvTimeout    = "bourne.net.server.recv.timeout"
-	DefaultServerRecvTimeout = 30 * time.Second
-	ConfServerPoolSize       = "bourne.net.server.pool.size"
-	DefaultServerPoolSize    = 10
+	ConfServerSendTimeout = "bourne.net.server.send.timeout"
+	ConfServerRecvTimeout = "bourne.net.server.recv.timeout"
+	ConfServerPoolSize    = "bourne.net.server.pool.size"
+	ConfClientSendTimeout = "bourne.net.client.send.timeout"
+	ConfClientRecvTimeout = "bourne.net.client.recv.timeout"
+	ConfClientEncoding    = "bourne.net.client.encoding"
+)
 
-	ConfClientSendTimeout    = "bourne.net.client.send.timeout"
+const (
+	DefaultServerSendTimeout = 30 * time.Second
+	DefaultServerRecvTimeout = 30 * time.Second
+	DefaultServerPoolSize    = 10
 	DefaultClientSendTimeout = 30 * time.Second
-	ConfClientRecvTimeout    = "bourne.net.client.recv.timeout"
 	DefaultClientRecvTimeout = 30 * time.Second
-	ConfClientEncoding       = "bourne.net.client.encoding"
 	DefaultClientEncoding    = "json"
 )
 
-// A very simple request/response server.
 
+// Each server manages a single handler and invokes the handler for
+// each request it receives.  Handler implementations must be
+// thread-safe if they have access to any external resources.
 type Handler func(Request) Response
 
+// A server manages the resources used to serve requests in the
+// background.  Clients may be spawned from the server implementation.
+// This is extremely useful in testing scenarios.
 type Server interface {
 	io.Closer
 	Client() (Client, error)
 }
 
+// A client gives consumers access to invoke a server's handlers.
 type Client interface {
 	io.Closer
 	Send(Request) (Response, error)
 }
 
+// A request is a writable message asking the server to invoke a handler.
 type Request interface {
 	enc.Writable
 
@@ -56,6 +78,8 @@ type Request interface {
 	Body() enc.Message
 }
 
+// A response is a writable message telling the consumer the result of
+// invoking the handler.
 type Response interface {
 	enc.Writable
 
@@ -63,7 +87,105 @@ type Response interface {
 	Body() enc.Message
 }
 
-// Multiple encoding support (intended to help troubleshoot live systems)
+// Request/response intiailization functions.
+func NewRequest(typ int, body enc.Message) Request {
+	return &request{typ, body}
+}
+
+func NewResponse(err error, body enc.Message) Response {
+	return &response{err, body}
+}
+
+func NewEmptyResponse() Response {
+	return NewResponse(nil, nil)
+}
+
+func NewStandardResponse(body enc.Message) Response {
+	return NewResponse(nil, body)
+}
+
+func NewErrorResponse(err error) Response {
+	return NewResponse(err, nil)
+}
+
+func decodeRequest(dec enc.Decoder) (Request, error) {
+	msg, err := enc.DecodeMessage(dec)
+	if err != nil {
+		return nil, err
+	}
+
+	var typ int
+	if err := msg.Read("type", &typ); err != nil {
+		return nil, err
+	}
+
+	var body enc.Message
+	if _, err := msg.ReadOptional("body", &body); err != nil {
+		return nil, err
+	}
+
+	return NewRequest(typ, body), nil
+}
+
+func decodeResponse(dec enc.Decoder) (Response, error) {
+	msg, err := enc.DecodeMessage(dec)
+	if err != nil {
+		return nil, err
+	}
+
+	var erro string
+	if _, err := msg.ReadOptional("error", &erro); err != nil {
+		return nil, err
+	}
+
+	var body enc.Message
+	if _, err := msg.ReadOptional("body", &body); err != nil {
+		return nil, err
+	}
+
+	return NewResponse(enc.ParseError(erro), body), nil
+}
+
+// request/response structs
+type request struct {
+	typ  int
+	body enc.Message
+}
+
+func (r *request) Type() int {
+	return r.typ
+}
+
+func (r *request) Body() enc.Message {
+	return r.body
+}
+
+func (r *request) Write(w enc.Writer) {
+	w.Write("type", r.typ)
+	w.Write("body", r.body)
+}
+
+type response struct {
+	err  error
+	body enc.Message
+}
+
+func (r *response) Error() error {
+	return r.err
+}
+
+func (r *response) Body() enc.Message {
+	return r.body
+}
+
+func (r *response) Write(w enc.Writer) {
+	w.Write("body", r.body)
+	if r.err != nil {
+		w.Write("error", r.err.Error())
+	}
+}
+
+// Support for multiple encodings (intended to help troubleshoot live systems)
 type Encoding byte
 
 const (
@@ -101,67 +223,7 @@ func EncodingFromString(name string) (Encoding, error) {
 	}
 }
 
-
-
-func NewRequest(typ int, body enc.Message) Request {
-	return &request{typ, body}
-}
-
-func NewResponse(err error, body enc.Message) Response {
-	return &response{err, body}
-}
-
-func NewEmptyResponse() Response {
-	return NewResponse(nil, nil)
-}
-
-func NewStandardResponse(body enc.Message) Response {
-	return NewResponse(nil, body)
-}
-
-func NewErrorResponse(err error) Response {
-	return NewResponse(err, nil)
-}
-
-func DecodeRequest(dec enc.Decoder) (Request, error) {
-	msg, err := enc.DecodeMessage(dec)
-	if err != nil {
-		return nil, err
-	}
-
-	var typ int
-	if err := msg.Read("type", &typ); err != nil {
-		return nil, err
-	}
-
-	var body enc.Message
-	if _, err := msg.ReadOptional("body", &body); err != nil {
-		return nil, err
-	}
-
-	return NewRequest(typ, body), nil
-}
-
-func DecodeResponse(dec enc.Decoder) (Response, error) {
-	msg, err := enc.DecodeMessage(dec)
-	if err != nil {
-		return nil, err
-	}
-
-	var erro string
-	if _, err := msg.ReadOptional("error", &erro); err != nil {
-		return nil, err
-	}
-
-	var body enc.Message
-	if _, err := msg.ReadOptional("body", &body); err != nil {
-		return nil, err
-	}
-
-	return NewResponse(enc.ParseError(erro), body), nil
-}
-
-func ReadEncoding(conn Connection) (Encoding, error) {
+func readEncoding(conn Connection) (Encoding, error) {
 	var buf = []byte{0}
 	if _, err := conn.Read(buf); err != nil {
 		return 0, err
@@ -170,10 +232,12 @@ func ReadEncoding(conn Connection) (Encoding, error) {
 	return Encoding(buf[0]), nil
 }
 
-func WriteEncoding(conn Connection, enc Encoding) error {
+func writeEncoding(conn Connection, enc Encoding) error {
 	_, err := conn.Write([]byte{byte(enc)})
 	return err
 }
+
+// Client implementation
 
 func NewClient(ctx common.Context, conn Connection) (Client, error) {
 	config := ctx.Config()
@@ -195,7 +259,7 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 		encoder = gob.NewEncoder(conn)
 	}
 
-	if err := WriteEncoding(conn, encoding); err != nil {
+	if err := writeEncoding(conn, encoding); err != nil {
 		return nil, err
 	}
 
@@ -206,83 +270,6 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 		dec:         decoder,
 		sendTimeout: config.OptionalDuration(ConfClientSendTimeout, DefaultClientSendTimeout),
 		recvTimeout: config.OptionalDuration(ConfClientRecvTimeout, DefaultClientRecvTimeout)}, nil
-}
-
-func NewServer(ctx common.Context, listener Listener, handler Handler) (Server, error) {
-	config := ctx.Config()
-	logger := ctx.Logger()
-
-	sendTimeout := config.OptionalDuration(ConfServerSendTimeout, DefaultServerSendTimeout)
-	recvTimeout := config.OptionalDuration(ConfServerRecvTimeout, sendTimeout)
-	s := &server{
-		context:     ctx,
-		logger:      logger,
-		listener:    listener,
-		handler:     handler,
-		pool:        concurrent.NewWorkPool(config.OptionalInt(ConfServerPoolSize, DefaultServerPoolSize)),
-		sendTimeout: sendTimeout,
-		recvTimeout: recvTimeout,
-		closed:      make(chan struct{}),
-		closer:      make(chan struct{}, 1)}
-
-	s.startListener()
-	return s, nil
-}
-
-func NewTcpClient(ctx common.Context, addr string) (Client, error) {
-	conn, err := ConnectTcp(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewClient(ctx, conn)
-}
-
-func NewTcpServer(ctx common.Context, port int, handler Handler) (Server, error) {
-	listener, err := ListenTcp(port)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewServer(ctx, listener, handler)
-}
-
-type request struct {
-	typ  int
-	body enc.Message
-}
-
-func (r *request) Type() int {
-	return r.typ
-}
-
-func (r *request) Body() enc.Message {
-	return r.body
-}
-
-func (r *request) Write(w enc.Writer) {
-	w.Write("type", r.typ)
-	w.Write("body", r.body)
-}
-
-type response struct {
-	err  error
-	body enc.Message
-}
-
-func (r *response) Error() error {
-	return r.err
-}
-
-func (r *response) Body() enc.Message {
-	return r.body
-}
-
-func (r *response) Write(w enc.Writer) {
-	w.Write("body", r.body)
-	if r.err != nil {
-		w.Write("error", r.err.Error())
-	}
 }
 
 type client struct {
@@ -338,7 +325,7 @@ func (s *client) recv() (Response, error) {
 	var resp Response
 	var err error
 	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
-		resp, err = DecodeResponse(s.dec)
+		resp, err = decodeResponse(s.dec)
 		return nil
 	})
 
@@ -349,6 +336,28 @@ func (s *client) recv() (Response, error) {
 	case <-timeout:
 		return resp, concurrent.NewTimeoutError(s.sendTimeout, "client:recv")
 	}
+}
+
+// Server implementation
+func NewServer(ctx common.Context, listener Listener, handler Handler) (Server, error) {
+	config := ctx.Config()
+	logger := ctx.Logger()
+
+	sendTimeout := config.OptionalDuration(ConfServerSendTimeout, DefaultServerSendTimeout)
+	recvTimeout := config.OptionalDuration(ConfServerRecvTimeout, sendTimeout)
+	s := &server{
+		context:     ctx,
+		logger:      logger,
+		listener:    listener,
+		handler:     handler,
+		pool:        concurrent.NewWorkPool(config.OptionalInt(ConfServerPoolSize, DefaultServerPoolSize)),
+		sendTimeout: sendTimeout,
+		recvTimeout: recvTimeout,
+		closed:      make(chan struct{}),
+		closer:      make(chan struct{}, 1)}
+
+	s.startListener()
+	return s, nil
 }
 
 type server struct {
@@ -430,7 +439,7 @@ func (s *server) newWorker(conn Connection) func() {
 		var encoder enc.Encoder
 		var decoder enc.Decoder
 
-		encoding, err := ReadEncoding(conn)
+		encoding, err := readEncoding(conn)
 		if err != nil {
 			return
 		}
@@ -486,7 +495,7 @@ func (s *server) recv(dec enc.Decoder) (Request, error) {
 	var req Request
 	var err error
 	done, timer := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
-		req, err = DecodeRequest(dec)
+		req, err = decodeRequest(dec)
 		return nil
 	})
 
@@ -516,3 +525,24 @@ func (s *server) send(encoder enc.Encoder, res Response) error {
 		return err
 	}
 }
+
+// Tcp support
+func NewTcpClient(ctx common.Context, addr string) (Client, error) {
+	conn, err := ConnectTcp(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewClient(ctx, conn)
+}
+
+func NewTcpServer(ctx common.Context, port int, handler Handler) (Server, error) {
+	listener, err := ListenTcp(port)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewServer(ctx, listener, handler)
+}
+
+

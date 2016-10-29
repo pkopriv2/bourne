@@ -26,7 +26,7 @@ import (
 // encodable/decodable on a standard encoding scheme.  So far, this seems
 // like a good balance between verbosity and future proofing.
 //
-// Messages support the full complement of data types for values of, and are fully
+// Messages support the full complement of data types for values, and are fully
 // nestable.
 //
 //   * int
@@ -40,6 +40,7 @@ import (
 //   * bool
 //
 //
+// To enable conversion to Messages, objects must implement the writer interface.
 // ```
 //  type MyObject struct {
 //    field int
@@ -111,7 +112,7 @@ type Writable interface {
 // An immutable data object.  A message may be embedded in other messages
 // or serialized onto data streams as desired.  They may also be passed
 // to parsing functions for populating internal data fields.  This does
-// force consumers to make public where an implementation is required
+// force consumers to make public parsers where an implementation is required
 type Message interface {
 	Reader
 	Streamable
