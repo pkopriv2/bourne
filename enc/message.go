@@ -103,6 +103,15 @@ func (m *message) String() string {
 	return fmt.Sprintf("%s", m.data)
 }
 
+func (m *message) ReadOptional(field string, target interface{}) (bool, error) {
+	actual, ok := m.data[field]
+	if !ok {
+		return false, nil
+	}
+
+	return true, assignPointer(actual, target)
+}
+
 func (m *message) Read(field string, target interface{}) error {
 	actual, ok := m.data[field]
 	if !ok {

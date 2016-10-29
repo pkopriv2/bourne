@@ -5,23 +5,19 @@ import (
 	"net"
 	"strings"
 
-	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/enc"
 )
 
-func NewTCPConnectionFactory(addr string) ConnectionFactory {
-	return &TCPConnectionFactory{addr}
-}
-
-func ListenTCP(port int) (Listener, error) {
+func ListenTcp(port int) (Listener, error) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%v", port))
 	if err != nil {
 		return nil, err
 	}
 
-	return &TCPListener{listener: listener}, nil
+	return &TcpListener{listener: listener}, nil
 }
 
-func ConnectTCP(addr string) (Connection, error) {
+func ConnectTcp(addr string) (Connection, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -30,42 +26,51 @@ func ConnectTCP(addr string) (Connection, error) {
 	return conn, nil
 }
 
+func ReadTcpConnectionFactory(r enc.Reader) (ConnectionFactory, error) {
+	var addr string
+	if err := r.Read("addr", &addr); err != nil {
+		return nil, err
+	}
+
+	return NewTcpConnectionFactory(addr), nil
+}
+
+func NewTcpConnectionFactory(addr string) ConnectionFactory {
+	return &TcpConnectionFactory{addr}
+}
+
 func LocalAddress(conn net.Conn) string {
 	localAddr := conn.LocalAddr().String()
 	idx := strings.LastIndex(localAddr, ":")
 	return localAddr[0:idx]
 }
 
-type TCPConnectionFactory struct {
+type TcpConnectionFactory struct {
 	addr string
 }
 
-func (u *TCPConnectionFactory) Conn() (Connection, error) {
-	return ConnectTCP(u.addr)
+func (t *TcpConnectionFactory) Write(w enc.Writer) {
+	w.Write("type", "tcp")
+	w.Write("addr", t.addr)
 }
 
-type TCPListener struct {
+func (u *TcpConnectionFactory) Conn() (Connection, error) {
+	return ConnectTcp(u.addr)
+}
+
+type TcpListener struct {
 	listener net.Listener
-	closed   concurrent.AtomicBool
 }
 
-func (u *TCPListener) Close() error {
-	if !u.closed.Swap(false, true) {
-		return ListenerClosedError
-	}
-
+func (u *TcpListener) Close() error {
 	return u.listener.Close()
 }
 
-func (u *TCPListener) Conn() (Connection, error) {
-	if !u.closed.Get() {
-		return nil, ListenerClosedError
-	}
-
-	return ConnectTCP(u.listener.Addr().String())
+func (u *TcpListener) Conn() (Connection, error) {
+	return ConnectTcp(u.listener.Addr().String())
 }
 
-func (u *TCPListener) Accept() (Connection, error) {
+func (u *TcpListener) Accept() (Connection, error) {
 	conn, err := u.listener.Accept()
 	if err != nil {
 		return nil, err

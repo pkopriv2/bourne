@@ -97,6 +97,7 @@ type Writer interface {
 // the fields of an object.
 type Reader interface {
 	Read(field string, value interface{}) error
+	ReadOptional(field string, value interface{}) (bool, error)
 }
 
 // A primary consumer abstraction.  Consumers wishing to define a simple

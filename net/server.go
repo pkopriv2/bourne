@@ -2,11 +2,14 @@ package net
 
 import (
 	"encoding/gob"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
 
+	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/enc"
 )
@@ -15,6 +18,21 @@ var (
 	ServerError       = errors.New("NET:SERVER:ERROR")
 	ServerClosedError = errors.New("NET:SERVER:CLOSED")
 )
+
+type Encoding byte
+
+const (
+	Json Encoding = 1
+	Gob           = 2
+)
+
+type UnsupportedEncodingError struct {
+	encoding Encoding
+}
+
+func (m *UnsupportedEncodingError) Error() string {
+	return fmt.Sprintf("Unsupported encoding", m.encoding)
+}
 
 // A very simple request/response server.
 
@@ -46,12 +64,12 @@ type Response interface {
 
 type ServerOptions struct {
 	WorkPoolSize int
-
-	SendTimeout time.Duration
-	RecvTimeout time.Duration
+	SendTimeout  time.Duration
+	RecvTimeout  time.Duration
 }
 
 type ClientOptions struct {
+	Encoding    Encoding
 	SendTimeout time.Duration
 	RecvTimeout time.Duration
 }
@@ -64,12 +82,54 @@ func NewRequest(typ int, body enc.Message) Request {
 	return &request{typ, body}
 }
 
+func NewResponse(err error, body enc.Message) Response {
+	return &response{err, body}
+}
+
+func DecodeRequest(dec enc.Decoder) (Request, error) {
+	msg, err := enc.DecodeMessage(dec)
+	if err != nil {
+		return nil, err
+	}
+
+	var typ int
+	if err := msg.Read("type", &typ); err != nil {
+		return nil, err
+	}
+
+	var body enc.Message
+	if _, err := msg.ReadOptional("body", &body); err != nil {
+		return nil, err
+	}
+
+	return NewRequest(typ, body), nil
+}
+
+func DecodeResponse(dec enc.Decoder) (Response, error) {
+	msg, err := enc.DecodeMessage(dec)
+	if err != nil {
+		return nil, err
+	}
+
+	var erro string
+	if _, err := msg.ReadOptional("error", &erro); err != nil {
+		return nil, err
+	}
+
+	var body enc.Message
+	if _, err := msg.ReadOptional("body", &body); err != nil {
+		return nil, err
+	}
+
+	return NewResponse(enc.ParseError(erro), body), nil
+}
+
 func NewSuccessResponse(body enc.Message) Response {
-	return &response{body: body}
+	return NewResponse(nil, body)
 }
 
 func NewErrorResponse(err error) Response {
-	return &response{err: err}
+	return NewResponse(err, nil)
 }
 
 func DefaultServerOptions() *ServerOptions {
@@ -77,30 +137,50 @@ func DefaultServerOptions() *ServerOptions {
 }
 
 func DefaultClientOptions() *ClientOptions {
-	return &ClientOptions{5 * time.Second, 5 * time.Second}
+	return &ClientOptions{Gob, 5 * time.Second, 5 * time.Second}
 }
 
-func NewClient(conn Connection, fns ...ClientOptionsFn) Client {
+func ReadEncoding(conn Connection) (Encoding, error) {
+	var buf = []byte{0}
+	if _, err := conn.Read(buf); err != nil {
+		return 0, err
+	}
+
+	return Encoding(buf[0]), nil
+}
+
+func WriteEncoding(conn Connection, enc Encoding) error {
+	_, err := conn.Write([]byte{byte(enc)})
+	return err
+}
+
+func NewClient(ctx common.Context, conn Connection, fns ...ClientOptionsFn) (Client, error) {
 	opts := DefaultClientOptions()
 	for _, fn := range fns {
 		fn(opts)
 	}
 
+	var encoder enc.Encoder = json.NewEncoder(conn)
+	var decoder enc.Decoder = json.NewDecoder(conn)
+
 	return &client{
+		logger:      ctx.Logger(),
 		conn:        conn,
-		enc:         gob.NewEncoder(conn),
-		dec:         gob.NewDecoder(conn),
+		enc:         encoder,
+		dec:         decoder,
 		sendTimeout: opts.SendTimeout,
-		recvTimeout: opts.RecvTimeout}
+		recvTimeout: opts.RecvTimeout}, nil
 }
 
-func NewServer(listener Listener, handler Handler, fns ...ServerOptionsFn) Server {
+func NewServer(ctx common.Context, listener Listener, handler Handler, fns ...ServerOptionsFn) (Server, error) {
 	opts := DefaultServerOptions()
 	for _, fn := range fns {
 		fn(opts)
 	}
 
 	s := &server{
+		context:     ctx,
+		logger:      ctx.Logger(),
 		listener:    listener,
 		handler:     handler,
 		pool:        concurrent.NewWorkPool(opts.WorkPoolSize),
@@ -110,25 +190,25 @@ func NewServer(listener Listener, handler Handler, fns ...ServerOptionsFn) Serve
 		closer:      make(chan struct{}, 1)}
 
 	s.startListener()
-	return s
+	return s, nil
 }
 
-func NewTCPClient(addr string) (Client, error) {
-	conn, err := ConnectTCP(addr)
+func NewTcpClient(ctx common.Context, addr string) (Client, error) {
+	conn, err := ConnectTcp(addr)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewClient(conn), nil
+	return NewClient(ctx, conn)
 }
 
-func NewTCPServer(port int, handler Handler, fns ...ServerOptionsFn) (Server, error) {
-	listener, err := ListenTCP(port)
+func NewTcpServer(ctx common.Context, port int, handler Handler, fns ...ServerOptionsFn) (Server, error) {
+	listener, err := ListenTcp(port)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewServer(listener, handler, fns...), nil
+	return NewServer(ctx, listener, handler, fns...)
 }
 
 type request struct {
@@ -150,7 +230,7 @@ func (r *request) Write(w enc.Writer) {
 }
 
 type response struct {
-	err error
+	err  error
 	body enc.Message
 }
 
@@ -163,15 +243,19 @@ func (r *response) Body() enc.Message {
 }
 
 func (r *response) Write(w enc.Writer) {
-	w.Write("error", r.err)
 	w.Write("body", r.body)
+	if r.err != nil {
+		w.Write("error", r.err.Error())
+	}
 }
 
 type client struct {
 	conn Connection
 
-	enc *gob.Encoder
-	dec *gob.Decoder
+	enc enc.Encoder
+	dec enc.Decoder
+
+	logger common.Logger
 
 	sendTimeout time.Duration
 	recvTimeout time.Duration
@@ -182,18 +266,27 @@ func (s *client) Close() error {
 }
 
 func (s *client) Send(req Request) (Response, error) {
+
 	var res Response
-	if err := s.send(req); err != nil {
+	var err error
+
+	if err = s.send(req); err != nil {
+		s.logger.Error("Error sending request: %v", err)
 		return res, err
 	}
 
-	return s.recv()
+	if res, err = s.recv(); err != nil {
+		s.logger.Error("Error receiving response: %v", err)
+		return res, err
+	}
+
+	return res, err
 }
 
 func (s *client) send(req Request) error {
 	var err error
 	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
-		err = s.enc.Encode(req)
+		err = enc.EncodeWritable(s.enc, req)
 		return nil
 	})
 
@@ -215,6 +308,7 @@ func (s *client) recv() (Response, error) {
 
 	select {
 	case <-done:
+		s.logger.Debug("Received response: %v", resp)
 		return resp, err
 	case <-timeout:
 		return resp, concurrent.NewTimeoutError(s.sendTimeout, "client:recv")
@@ -224,6 +318,8 @@ func (s *client) recv() (Response, error) {
 type server struct {
 	handler  Handler
 	listener Listener
+	context  common.Context
+	logger   common.Logger
 
 	pool   concurrent.WorkPool
 	closer chan struct{}
@@ -246,7 +342,7 @@ func (s *server) Client(fns ...ClientOptionsFn) (Client, error) {
 		return nil, err
 	}
 
-	return NewClient(conn, fns...), nil
+	return NewClient(s.context, conn, fns...)
 }
 
 func (s *server) Close() error {
@@ -293,22 +389,41 @@ func (s *server) killConnection(conn Connection, err error) error {
 func (s *server) newWorker(conn Connection) func() {
 	return func() {
 		defer conn.Close()
+		s.logger.Debug("Processing connection: %v", conn)
 
-		dec := gob.NewDecoder(conn)
-		enc := gob.NewEncoder(conn)
+		// encoding, err := ReadEncoding(conn)
+		// if err != nil {
+		// return
+		// }
+
+		var encoder enc.Encoder
+		var decoder enc.Decoder
+		decoder = json.NewDecoder(conn)
+		encoder = json.NewEncoder(conn)
+		// switch encoding {
+		// default:
+		// return // TODO: respond with error!
+		// case Json:
+		// case Gob:
+		// decoder = gob.NewDecoder(conn)
+		// encoder = gob.NewEncoder(conn)
+		// }
 
 		for {
-			req, err := s.recv(dec)
+			req, err := s.recv(decoder)
 			if err != nil {
+				s.logger.Error("Error receiving request [%v]", err)
 				return
 			}
 
 			res, err := s.handle(req)
 			if err != nil {
+				s.logger.Error("Error handling request [%v]", err)
 				return
 			}
 
-			if err = s.send(enc, res); err != nil {
+			if err = s.send(encoder, res); err != nil {
+				s.logger.Error("Error sending response [%v]", res)
 				return
 			}
 		}
@@ -330,11 +445,11 @@ func (s *server) handle(req Request) (Response, error) {
 	}
 }
 
-func (s *server) recv(dec *gob.Decoder) (Request, error) {
-	var err error
+func (s *server) recv(dec enc.Decoder) (Request, error) {
 	var req Request
+	var err error
 	done, timer := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
-		err = dec.Decode(&req)
+		req, err = DecodeRequest(dec)
 		return nil
 	})
 
@@ -348,10 +463,10 @@ func (s *server) recv(dec *gob.Decoder) (Request, error) {
 	}
 }
 
-func (s *server) send(enc *gob.Encoder, res Response) error {
+func (s *server) send(encoder enc.Encoder, res Response) error {
 	var err error
 	done, timer := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
-		err = enc.Encode(res)
+		err = enc.EncodeWritable(encoder, res)
 		return nil
 	})
 

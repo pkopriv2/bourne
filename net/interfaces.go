@@ -2,7 +2,10 @@ package net
 
 import (
 	"errors"
+	"fmt"
 	"io"
+
+	"github.com/pkopriv2/bourne/enc"
 )
 
 var ConnectionClosedError = errors.New("CONN:CLOSED")
@@ -33,25 +36,24 @@ type Listener interface {
 //
 // Consumers should not retain any references to the created connection.
 type ConnectionFactory interface {
-	// encoding.Encodable
+	enc.Writable
 	Conn() (Connection, error)
 }
 
 // Returns a connection factory from the raw serlialized data, the input
 // of which is expected to be in the format produced via ConnectionFactory#Serialize()
-func ParseConnectionFactory(data []byte) (ConnectionFactory, error) {
-	return nil, nil
-	// data, ok := raw.(ConnectionFactoryData)
-	// if ! ok {
-	// return nil, fmt.Errorf("Cannot parse connection factory [%v].  Wrong data type", data)
-	// }
-	//
-	// switch data.Type {
-	// default:
-	// return nil, fmt.Errorf("Cannot parse connection factory [%v]  Missing 'type' field.", data)
-	// case "tcp":
-	// return NewTCPConnectionFactory(data.Addr), nil
-	// }
+func ReadConnectionFactory(m enc.Reader) (ConnectionFactory, error) {
+	var typ string
+	if err := m.Read("type", &typ); err != nil {
+		return nil, err
+	}
+
+	switch typ {
+	default:
+		return nil, fmt.Errorf("Cannot parse connection factory [%v]  Unknown connection 'type' field.", typ)
+	case "tcp":
+		return ReadTcpConnectionFactory(m)
+	}
 }
 
 type SerialiedConnectionFactory struct {

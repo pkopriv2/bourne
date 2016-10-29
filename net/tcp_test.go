@@ -1,39 +1,20 @@
 package net
 
 import (
-	"encoding/json"
 	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-// func TestTCPConnectionFactory_Serialize(t *testing.T) {
-	// factory1 := NewTCPConnectionFactory("localhost:9000")
-	// // factory2, err := ParseConnectionFactory(factory1.Serialize())
-	// // assert.Nil(t, err)
-	// // assert.Equal(t, factory1, factory2)
-// }
-
-func TestTCPConnectionFactory_Serialize_JSON(t *testing.T) {
-	factory1 := NewTCPConnectionFactory("localhost:9000")
-	bytes, err := json.Marshal(factory1.Serialize())
-
-	var ret interface{}
-	err = json.Unmarshal(bytes, &ret)
-
-	assert.Nil(t, err)
-	assert.Equal(t, "hello", ret)
-}
-
 // TODO: randomize port assignment.
-func TestTCPListener_Close(t *testing.T) {
-	listener, _ := ListenTCP(0)
+func TestTcpListener_Close(t *testing.T) {
+	listener, _ := ListenTcp(0)
 	assert.Nil(t, listener.Close())
 }
 
-func TestTCPListener_Accept(t *testing.T) {
-	listener, _ := ListenTCP(0)
+func TestTcpListener_Accept(t *testing.T) {
+	listener, _ := ListenTcp(0)
 	defer listener.Close()
 
 	go func() {
@@ -49,8 +30,8 @@ func TestTCPListener_Accept(t *testing.T) {
 	conn.Close()
 }
 
-func TestTCPListener_Read_Write(t *testing.T) {
-	listener, _ := ListenTCP(9000)
+func TestTcpListener_Read_Write(t *testing.T) {
+	listener, _ := ListenTcp(9000)
 	defer listener.Close()
 
 	go func() {

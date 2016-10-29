@@ -183,6 +183,7 @@ func TestEncode_JSON_Complex(t *testing.T) {
 	err := EncodeWritable(enc, val)
 	assert.Nil(t, err)
 
+	fmt.Println(string(buf.Bytes()))
 	msg, err := DecodeMessage(dec)
 	assert.Nil(t, err)
 
@@ -199,6 +200,7 @@ func TestEncode_JSON_Complex_Nil(t *testing.T) {
 	err := EncodeWritable(enc, val)
 	assert.Nil(t, err)
 
+	fmt.Println(string(buf.Bytes()))
 	msg, err := DecodeMessage(dec)
 	assert.Nil(t, err)
 
