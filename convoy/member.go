@@ -3,6 +3,7 @@ package convoy
 import (
 	"sync"
 
+	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -24,13 +25,14 @@ type MemberData struct {
 
 // TODO: members must be gob encodable!  connection factory can't be encoded!
 type memberImpl struct {
+	ctx common.Context
 	id  uuid.UUID
 	fac net.ConnectionFactory
 	ver int
 }
 
-func newMember(id uuid.UUID, fac net.ConnectionFactory, ver int) Member {
-	return &memberImpl{id, fac, ver}
+func newMember(ctx common.Context, id uuid.UUID, fac net.ConnectionFactory, ver int) Member {
+	return &memberImpl{ctx, id, fac, ver}
 }
 
 func (m *memberImpl) Id() uuid.UUID {
@@ -45,17 +47,13 @@ func (m *memberImpl) Version() int {
 	return m.ver
 }
 
-func (m *memberImpl) serialize() interface{} {
-	return nil
-}
-
 func (m *memberImpl) client() (client, error) {
 	conn, err := m.Conn()
 	if err != nil {
 		return nil, err
 	}
 
-	return newClient(net.NewClient(conn)), nil
+	return newClient(net.NewClient(m.ctx, conn)), nil
 }
 
 type clientImpl struct {

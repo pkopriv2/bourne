@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -9,7 +10,6 @@ import (
 // consideration.  In many instances, functions which return errors, will
 // have analogous "panicking" methods.  This is to (and rightfully so)
 // terminate the program as soon as possible.
-
 
 // In order to support a more robust configuration system, some config
 // values will be encoded as different types than what is returned.
@@ -20,6 +20,7 @@ import (
 type ConfigType string
 
 const (
+	String   = "string"
 	Bool     = "bool"
 	Int      = "int"
 	Duration = "int(milliseconds)"
@@ -30,11 +31,11 @@ type Configured interface {
 }
 
 type Config interface {
+	Optional(key string, def string) string
 	OptionalInt(key string, def int) int
 	OptionalBool(key string, def bool) bool
 	OptionalDuration(key string, def time.Duration) time.Duration
 }
-
 
 type ConfigMissingError struct {
 	key string
@@ -59,7 +60,7 @@ func newConfigMissingError(key string) ConfigMissingError {
 }
 
 func newConfigParsingError(expected ConfigType, key string, val interface{}) ConfigParsingError {
-	return ConfigParsingError{expected, key, val}
+	return ConfigParsingError{expected, key, reflect.ValueOf(val).Kind()}
 }
 
 func NewEmptyConfig() Config {
@@ -78,14 +79,26 @@ type config struct {
 	internal map[string]interface{}
 }
 
+func (c *config) Optional(key string, def string) string {
+	val, err := readString(c.internal, key)
+	if err == nil {
+		return val
+	}
+
+	if _, ok := err.(ConfigMissingError); ok {
+		return def
+	}
+
+	panic(err)
+}
+
 func (c *config) OptionalInt(key string, def int) int {
 	val, err := readInt(c.internal, key)
 	if err == nil {
 		return val
 	}
 
-	switch err.(type) {
-	case ConfigMissingError:
+	if _, ok := err.(ConfigMissingError); ok {
 		return def
 	}
 
@@ -98,8 +111,7 @@ func (c *config) OptionalBool(key string, def bool) bool {
 		return val
 	}
 
-	switch err.(type) {
-	case ConfigMissingError:
+	if _, ok := err.(ConfigMissingError); ok {
 		return def
 	}
 
@@ -112,22 +124,35 @@ func (c *config) OptionalDuration(key string, def time.Duration) time.Duration {
 		return val
 	}
 
-	switch err.(type) {
-	case ConfigMissingError:
+	if _, ok := err.(ConfigMissingError); ok {
 		return def
 	}
 
 	panic(err)
 }
 
+func readString(m map[string]interface{}, key string) (string, error) {
+	val, ok := m[key]
+	if !ok {
+		return "", newConfigMissingError(key)
+	}
+
+	ret, ok := val.(string)
+	if !ok {
+		return "", newConfigParsingError(String, key, val)
+	}
+
+	return ret, nil
+}
+
 func readInt(m map[string]interface{}, key string) (int, error) {
 	val, ok := m[key]
-	if ! ok {
+	if !ok {
 		return 0, newConfigMissingError(key)
 	}
 
 	ret, ok := val.(int)
-	if ! ok {
+	if !ok {
 		return 0, newConfigParsingError(Int, key, val)
 	}
 
@@ -136,12 +161,12 @@ func readInt(m map[string]interface{}, key string) (int, error) {
 
 func readBool(m map[string]interface{}, key string) (bool, error) {
 	val, ok := m[key]
-	if ! ok {
+	if !ok {
 		return false, newConfigMissingError(key)
 	}
 
 	ret, ok := val.(bool)
-	if ! ok {
+	if !ok {
 		return false, newConfigParsingError(Bool, key, val)
 	}
 
@@ -150,14 +175,14 @@ func readBool(m map[string]interface{}, key string) (bool, error) {
 
 func readDuration(m map[string]interface{}, key string) (time.Duration, error) {
 	val, ok := m[key]
-	if ! ok {
+	if !ok {
 		return 0, newConfigMissingError(key)
 	}
 
 	ret, ok := val.(int)
-	if ! ok {
+	if !ok {
 		return 0, newConfigParsingError(Duration, key, val)
 	}
 
-	return time.Duration(ret)*time.Millisecond, nil
+	return time.Duration(ret) * time.Millisecond, nil
 }

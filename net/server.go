@@ -19,20 +19,21 @@ var (
 	ServerClosedError = errors.New("NET:SERVER:CLOSED")
 )
 
-type Encoding byte
-
 const (
-	Json Encoding = 1
-	Gob           = 2
+	ConfServerSendTimeout    = "bourne.net.server.send.timeout"
+	DefaultServerSendTimeout = 30 * time.Second
+	ConfServerRecvTimeout    = "bourne.net.server.recv.timeout"
+	DefaultServerRecvTimeout = 30 * time.Second
+	ConfServerPoolSize       = "bourne.net.server.pool.size"
+	DefaultServerPoolSize    = 10
+
+	ConfClientSendTimeout    = "bourne.net.client.send.timeout"
+	DefaultClientSendTimeout = 30 * time.Second
+	ConfClientRecvTimeout    = "bourne.net.client.recv.timeout"
+	DefaultClientRecvTimeout = 30 * time.Second
+	ConfClientEncoding       = "bourne.net.client.encoding"
+	DefaultClientEncoding    = "json"
 )
-
-type UnsupportedEncodingError struct {
-	encoding Encoding
-}
-
-func (m *UnsupportedEncodingError) Error() string {
-	return fmt.Sprintf("Unsupported encoding", m.encoding)
-}
 
 // A very simple request/response server.
 
@@ -40,7 +41,7 @@ type Handler func(Request) Response
 
 type Server interface {
 	io.Closer
-	Client(...ClientOptionsFn) (Client, error)
+	Client() (Client, error)
 }
 
 type Client interface {
@@ -62,21 +63,45 @@ type Response interface {
 	Body() enc.Message
 }
 
-type ServerOptions struct {
-	WorkPoolSize int
-	SendTimeout  time.Duration
-	RecvTimeout  time.Duration
+// Multiple encoding support (intended to help troubleshoot live systems)
+type Encoding byte
+
+const (
+	Json Encoding = 0
+	Gob           = 2
+)
+
+type UnsupportedEncodingError struct {
+	encoding string
 }
 
-type ClientOptions struct {
-	Encoding    Encoding
-	SendTimeout time.Duration
-	RecvTimeout time.Duration
+func (m *UnsupportedEncodingError) Error() string {
+	return fmt.Sprintf("Unsupported encoding", m.encoding)
 }
 
-type ServerOptionsFn func(*ServerOptions)
+func EncodingToString(encoding Encoding) string {
+	switch encoding {
+	default:
+		return fmt.Sprintf("%v", encoding)
+	case Json:
+		return "json"
+	case Gob:
+		return "gob"
+	}
+}
 
-type ClientOptionsFn func(*ClientOptions)
+func EncodingFromString(name string) (Encoding, error) {
+	switch name {
+	default:
+		return 0, &UnsupportedEncodingError{name}
+	case "json":
+		return Json, nil
+	case "gob":
+		return Gob, nil
+	}
+}
+
+
 
 func NewRequest(typ int, body enc.Message) Request {
 	return &request{typ, body}
@@ -90,7 +115,7 @@ func NewEmptyResponse() Response {
 	return NewResponse(nil, nil)
 }
 
-func NewSuccessResponse(body enc.Message) Response {
+func NewStandardResponse(body enc.Message) Response {
 	return NewResponse(nil, body)
 }
 
@@ -136,15 +161,6 @@ func DecodeResponse(dec enc.Decoder) (Response, error) {
 	return NewResponse(enc.ParseError(erro), body), nil
 }
 
-
-func DefaultServerOptions() *ServerOptions {
-	return &ServerOptions{10, 5 * time.Second, 5 * time.Second}
-}
-
-func DefaultClientOptions() *ClientOptions {
-	return &ClientOptions{Gob, 5 * time.Second, 5 * time.Second}
-}
-
 func ReadEncoding(conn Connection) (Encoding, error) {
 	var buf = []byte{0}
 	if _, err := conn.Read(buf); err != nil {
@@ -159,17 +175,18 @@ func WriteEncoding(conn Connection, enc Encoding) error {
 	return err
 }
 
-func NewClient(ctx common.Context, conn Connection, fns ...ClientOptionsFn) (Client, error) {
-	opts := DefaultClientOptions()
-	for _, fn := range fns {
-		fn(opts)
+func NewClient(ctx common.Context, conn Connection) (Client, error) {
+	config := ctx.Config()
+	encoding, err := EncodingFromString(config.Optional(ConfClientEncoding, DefaultClientEncoding))
+	if err != nil {
+		return nil, err
 	}
 
 	var encoder enc.Encoder
 	var decoder enc.Decoder
-	switch opts.Encoding {
+	switch encoding {
 	default:
-		return nil, &UnsupportedEncodingError{opts.Encoding}
+		return nil, &UnsupportedEncodingError{EncodingToString(encoding)}
 	case Json:
 		decoder = json.NewDecoder(conn)
 		encoder = json.NewEncoder(conn)
@@ -178,7 +195,7 @@ func NewClient(ctx common.Context, conn Connection, fns ...ClientOptionsFn) (Cli
 		encoder = gob.NewEncoder(conn)
 	}
 
-	if err := WriteEncoding(conn, opts.Encoding); err != nil {
+	if err := WriteEncoding(conn, encoding); err != nil {
 		return nil, err
 	}
 
@@ -187,24 +204,24 @@ func NewClient(ctx common.Context, conn Connection, fns ...ClientOptionsFn) (Cli
 		conn:        conn,
 		enc:         encoder,
 		dec:         decoder,
-		sendTimeout: opts.SendTimeout,
-		recvTimeout: opts.RecvTimeout}, nil
+		sendTimeout: config.OptionalDuration(ConfClientSendTimeout, DefaultClientSendTimeout),
+		recvTimeout: config.OptionalDuration(ConfClientRecvTimeout, DefaultClientRecvTimeout)}, nil
 }
 
-func NewServer(ctx common.Context, listener Listener, handler Handler, fns ...ServerOptionsFn) (Server, error) {
-	opts := DefaultServerOptions()
-	for _, fn := range fns {
-		fn(opts)
-	}
+func NewServer(ctx common.Context, listener Listener, handler Handler) (Server, error) {
+	config := ctx.Config()
+	logger := ctx.Logger()
 
+	sendTimeout := config.OptionalDuration(ConfServerSendTimeout, DefaultServerSendTimeout)
+	recvTimeout := config.OptionalDuration(ConfServerRecvTimeout, sendTimeout)
 	s := &server{
 		context:     ctx,
-		logger:      ctx.Logger(),
+		logger:      logger,
 		listener:    listener,
 		handler:     handler,
-		pool:        concurrent.NewWorkPool(opts.WorkPoolSize),
-		sendTimeout: opts.SendTimeout,
-		recvTimeout: opts.RecvTimeout,
+		pool:        concurrent.NewWorkPool(config.OptionalInt(ConfServerPoolSize, DefaultServerPoolSize)),
+		sendTimeout: sendTimeout,
+		recvTimeout: recvTimeout,
 		closed:      make(chan struct{}),
 		closer:      make(chan struct{}, 1)}
 
@@ -221,13 +238,13 @@ func NewTcpClient(ctx common.Context, addr string) (Client, error) {
 	return NewClient(ctx, conn)
 }
 
-func NewTcpServer(ctx common.Context, port int, handler Handler, fns ...ServerOptionsFn) (Server, error) {
+func NewTcpServer(ctx common.Context, port int, handler Handler) (Server, error) {
 	listener, err := ListenTcp(port)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewServer(ctx, listener, handler, fns...)
+	return NewServer(ctx, listener, handler)
 }
 
 type request struct {
@@ -349,7 +366,7 @@ type server struct {
 	recvTimeout time.Duration
 }
 
-func (s *server) Client(fns ...ClientOptionsFn) (Client, error) {
+func (s *server) Client() (Client, error) {
 	select {
 	case <-s.closed:
 		return nil, ServerClosedError
@@ -361,7 +378,7 @@ func (s *server) Client(fns ...ClientOptionsFn) (Client, error) {
 		return nil, err
 	}
 
-	return NewClient(s.context, conn, fns...)
+	return NewClient(s.context, conn)
 }
 
 func (s *server) Close() error {
@@ -420,7 +437,7 @@ func (s *server) newWorker(conn Connection) func() {
 
 		switch encoding {
 		default:
-		return // TODO: respond with error!
+			return // TODO: respond with error!
 		case Json:
 			decoder = json.NewDecoder(conn)
 			encoder = json.NewEncoder(conn)
