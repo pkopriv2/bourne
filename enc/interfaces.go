@@ -26,19 +26,6 @@ import (
 // encodable/decodable on a standard encoding scheme.  So far, this seems
 // like a good balance between verbosity and future proofing.
 //
-// Messages support the full complement of data types for values, and are fully
-// nestable.
-//
-//   * int
-//   * int8
-//   * int16
-//   * int32
-//   * int64
-//   * uint
-//   * ...
-//   * string
-//   * bool
-//
 //
 // To enable conversion to Messages, objects must implement the writer interface.
 // ```
@@ -62,26 +49,13 @@ func (m *MissingFieldError) Error() string {
 }
 
 // To be returned when a requested field does not exist.
-type UnsupportedTypeError struct {
-	actual string
-}
-
-func NewUnsupportedTypeError(e reflect.Type) *UnsupportedTypeError {
-	return &UnsupportedTypeError{e.String()}
-}
-
-func (m *UnsupportedTypeError) Error() string {
-	return fmt.Sprintf("Unsupported type [%v]", m.actual)
-}
-
-// To be returned when a requested field does not exist.
 type IncompatibleTypeError struct {
 	expected string
 	actual   string
 }
 
-func NewIncompatibleTypeError(e reflect.Type, a reflect.Type) *IncompatibleTypeError {
-	return &IncompatibleTypeError{e.String(), a.String()}
+func NewIncompatibleTypeError(e interface{}, a interface{}) *IncompatibleTypeError {
+	return &IncompatibleTypeError{reflect.TypeOf(e).String(), reflect.TypeOf(e).String()}
 }
 
 func (m *IncompatibleTypeError) Error() string {
@@ -91,14 +65,14 @@ func (m *IncompatibleTypeError) Error() string {
 // The primary encoding interface. Consumers use the writer to populate
 // the fields of a message
 type Writer interface {
-	Write(field string, value interface{})
+	Write(field string, val interface{})
 }
 
 // The primary decoding interface. Consumers use the reader to populate
 // the fields of an object.
 type Reader interface {
-	Read(field string, value interface{}) error
-	ReadOptional(field string, value interface{}) (bool, error)
+	Read(field string, ptr interface{}) error
+	ReadOptional(field string, ptr interface{}) (bool, error)
 }
 
 // A primary consumer abstraction.  Consumers wishing to define a simple
