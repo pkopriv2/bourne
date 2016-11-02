@@ -3,7 +3,6 @@ package net
 import (
 	"fmt"
 	"net"
-	"strings"
 
 	"github.com/pkopriv2/bourne/enc"
 )
@@ -23,7 +22,7 @@ func ConnectTcp(addr string) (Connection, error) {
 		return nil, err
 	}
 
-	return conn, nil
+	return &TcpConnection{conn}, nil
 }
 
 func ReadTcpConnectionFactory(r enc.Reader) (ConnectionFactory, error) {
@@ -37,12 +36,6 @@ func ReadTcpConnectionFactory(r enc.Reader) (ConnectionFactory, error) {
 
 func NewTcpConnectionFactory(addr string) ConnectionFactory {
 	return &TcpConnectionFactory{addr}
-}
-
-func LocalAddress(conn net.Conn) string {
-	localAddr := conn.LocalAddr().String()
-	idx := strings.LastIndex(localAddr, ":")
-	return localAddr[0:idx]
 }
 
 type TcpConnectionFactory struct {
@@ -76,5 +69,25 @@ func (u *TcpListener) Accept() (Connection, error) {
 		return nil, err
 	}
 
-	return conn, nil
+	return &TcpConnection{conn}, nil
+}
+
+type TcpConnection struct {
+	conn net.Conn
+}
+
+func (u *TcpConnection) Close() error {
+	return u.conn.Close()
+}
+
+func (t *TcpConnection) Read(p []byte) (n int, err error) {
+	return t.conn.Read(p)
+}
+
+func (t *TcpConnection) Write(p []byte) (n int, err error) {
+	return t.conn.Write(p)
+}
+
+func (t *TcpConnection) Factory() ConnectionFactory {
+	return NewTcpConnectionFactory(t.conn.RemoteAddr().String())
 }

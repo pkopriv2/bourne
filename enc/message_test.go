@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +22,7 @@ func TestReadOptional_Empty(t *testing.T) {
 	})
 
 	var field string
-    ok, err := msg.ReadOptional("field", &field)
+	ok, err := msg.ReadOptional("field", &field)
 	assert.False(t, ok)
 	assert.Nil(t, err)
 }
@@ -39,6 +38,108 @@ func TestBuild_String(t *testing.T) {
 	assert.Equal(t, val, field)
 }
 
+func TestBuild_Bool(t *testing.T) {
+	msg := Build(func(w Writer) {
+		w.Write("field", true)
+	})
+
+	var field bool
+	assert.Nil(t, msg.Read("field", &field))
+	assert.Equal(t, true, field)
+}
+
+func TestRead_Composite(t *testing.T) {
+	sub := Build(func(w Writer) {
+		w.Write("field1", true)
+		w.Write("field2", "hello")
+	})
+
+	msg := Build(func(w Writer) {
+		w.Write("field", sub)
+	})
+
+	var actual Message
+	assert.Nil(t, msg.Read("field", &actual))
+	assert.Equal(t, sub, actual)
+}
+
+func TestRead_Composite_Array(t *testing.T) {
+	sub1 := Build(func(w Writer) {
+		w.Write("field1", true)
+	})
+	sub2 := Build(func(w Writer) {
+		w.Write("field1", true)
+	})
+
+	val := []Message{sub1, sub2}
+	msg := Build(func(w Writer) {
+		w.Write("field", val)
+	})
+
+	var actual []Message
+	assert.Nil(t, msg.Read("field", &actual))
+	assert.Equal(t, val, actual)
+}
+
+func TestEncode_JSON_String(t *testing.T) {
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
+	dec := json.NewDecoder(buf)
+
+	msg := Build(func(w Writer) {
+		w.Write("field", "hello, world")
+	})
+
+	err := StreamWrite(enc, msg)
+	assert.Nil(t, err)
+
+	actual, err := StreamRead(dec)
+	assert.Nil(t, err)
+
+	assert.Equal(t, msg, actual)
+}
+
+func TestEncode_JSON_Bool(t *testing.T) {
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
+	dec := json.NewDecoder(buf)
+
+	msg := Build(func(w Writer) {
+		w.Write("field", true)
+	})
+
+	err := StreamWrite(enc, msg)
+	assert.Nil(t, err)
+
+	actual, err := StreamRead(dec)
+	assert.Nil(t, err)
+
+	assert.Equal(t, msg, actual)
+}
+
+func TestEncode_JSON_Composite(t *testing.T) {
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
+	dec := json.NewDecoder(buf)
+
+	msg1 := Build(func(w Writer) {
+		w.Write("field", true)
+		w.Write("field2", "hello, world")
+	})
+
+	msg2 := Build(func(w Writer) {
+		w.Write("field", msg1)
+	})
+
+	err := StreamWrite(enc, msg2)
+	assert.Nil(t, err)
+
+	actual, err := StreamRead(dec)
+	assert.Nil(t, err)
+
+	assert.Equal(t, msg2, actual)
+}
+
 func TestBuild_Strings(t *testing.T) {
 	val := []string{"hello", "world"}
 	msg := Build(func(w Writer) {
@@ -50,16 +151,6 @@ func TestBuild_Strings(t *testing.T) {
 	assert.Equal(t, val, field)
 }
 
-func TestBuild_Bool(t *testing.T) {
-	msg := Build(func(w Writer) {
-		w.Write("field", true)
-	})
-
-	var field bool
-	assert.Nil(t, msg.Read("field", &field))
-	assert.Equal(t, true, field)
-}
-
 func TestBuild_Bools(t *testing.T) {
 	val := []bool{true, false, true}
 	msg := Build(func(w Writer) {
@@ -69,6 +160,56 @@ func TestBuild_Bools(t *testing.T) {
 	var field []bool
 	assert.Nil(t, msg.Read("field", &field))
 	assert.Equal(t, val, field)
+}
+
+func TestBuild_Strings_Composite(t *testing.T) {
+	sub := Build(func(w Writer) {
+		w.Write("field", []string{"hello", "world"})
+	})
+
+	msg := Build(func(w Writer) {
+		w.Write("field", sub)
+	})
+
+	var field Message
+	assert.Nil(t, msg.Read("field", &field))
+	assert.Equal(t, sub, field)
+}
+
+func TestEncode_JSON_Strings(t *testing.T) {
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
+	dec := json.NewDecoder(buf)
+
+	msg := Build(func(w Writer) {
+		w.Write("field", []string{"hello", "world"})
+	})
+
+	err := StreamWrite(enc, msg)
+	assert.Nil(t, err)
+
+	actual, err := StreamRead(dec)
+	assert.Nil(t, err)
+
+	assert.Equal(t, msg, actual)
+}
+
+func TestEncode_GOB_Strings(t *testing.T) {
+	buf := new(bytes.Buffer)
+	enc := gob.NewEncoder(buf)
+	dec := gob.NewDecoder(buf)
+
+	msg := Build(func(w Writer) {
+		w.Write("field", []string{"hello", "world"})
+	})
+
+	err := StreamWrite(enc, msg)
+	assert.Nil(t, err)
+
+	actual, err := StreamRead(dec)
+	assert.Nil(t, err)
+
+	assert.Equal(t, msg, actual)
 }
 
 func TestBuild_Int(t *testing.T) {
@@ -92,52 +233,6 @@ func TestBuild_Ints(t *testing.T) {
 	assert.Equal(t, val, field)
 }
 
-func TestBuild_Read(t *testing.T) {
-	sub := Build(func(w Writer) {
-		w.Write("field", int(1))
-	})
-
-	msg := Build(func(w Writer) {
-		w.Write("sub", sub)
-	})
-
-	var field Reader
-	assert.Nil(t, msg.Read("sub", &field))
-	assert.Equal(t, sub, field)
-}
-
-func TestEncode_JSON_Simple(t *testing.T) {
-	buf := new(bytes.Buffer)
-	enc := json.NewEncoder(buf)
-	dec := json.NewDecoder(buf)
-
-	val := &TestWritable{1, "2"}
-	err := StreamWrite(enc, val)
-	assert.Nil(t, err)
-
-	msg, err := StreamRead(dec)
-	assert.Nil(t, err)
-
-	actual, err := ParseTestWritable(msg)
-	assert.Equal(t, val, actual)
-}
-
-func TestEncode_GOB_Simple(t *testing.T) {
-	buf := new(bytes.Buffer)
-	enc := gob.NewEncoder(buf)
-	dec := gob.NewDecoder(buf)
-
-	val := &TestWritable{1, "2"}
-	err := StreamWrite(enc, val)
-	assert.Nil(t, err)
-
-	msg, err := StreamRead(dec)
-	assert.Nil(t, err)
-
-	actual, err := ParseTestWritable(msg)
-	assert.Equal(t, val, actual)
-}
-
 func TestEncode_JSON_Complex(t *testing.T) {
 	buf := new(bytes.Buffer)
 	enc := json.NewEncoder(buf)
@@ -151,6 +246,7 @@ func TestEncode_JSON_Complex(t *testing.T) {
 	assert.Nil(t, err)
 
 	actual, err := ParseTestWritableComplex(msg)
+	assert.Nil(t, err)
 	assert.Equal(t, val, actual)
 }
 
@@ -166,7 +262,6 @@ func TestEncode_JSON_Complex_Nil(t *testing.T) {
 	msg, err := StreamRead(dec)
 	assert.Nil(t, err)
 
-	fmt.Println(msg)
 	actual, err := ParseTestWritableComplex(msg)
 	assert.Nil(t, err)
 	assert.Equal(t, val, actual)

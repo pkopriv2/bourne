@@ -1,47 +1,91 @@
 package convoy
 
 import (
-	"errors"
 	"testing"
 
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/net"
+	uuid "github.com/satori/go.uuid"
+	"github.com/stretchr/testify/assert"
 )
 
-var failure = errors.New("failure")
+func TestMember_WriteRead(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	member := newMember(ctx, uuid.NewV4(), net.NewTcpConnectionFactory("localhost:8000"), 1)
 
-// var successHandler = func(Request) Response {
-// return NewSuccessResponse(nil)
-// }
-//
-// var failureHandler = func(Request) Response {
-// return NewErrorResponse(failure)
-// }
-//
-func TestMember_Conn(t *testing.T) {
-	server, _ := net.NewTCPServer(0, func(req net.Request) net.Response {
-		return net.NewSuccessResponse(nil)
-	})
-	defer server.Close()
+	actual, err := readMember(ctx, enc.Write(member))
+	assert.Nil(t, err)
+
+	assert.Equal(t, member, actual)
 }
 
-//
-// conn := conn.NewTCPConnectionFactory("localhost", 9000)
-// member := newMember(uuid.NewV4(), net.NewMemConnectionFactory(), 0)
-// conn, err := member.Conn()
-// assert.NotNil(t, conn)
-// assert.Nil(t, err)
-// }
-//
-// func TestMember_Client(t *testing.T) {
-// member := newMember(uuid.NewV4(), net.NewMemConnectionFactory(), 0)
-// client, err := member.client()
-// assert.NotNil(t, client)
-// assert.Nil(t, err)
-// }
-//
-// func TestMember_Client_Ping_Timeout(t *testing.T) {
-// member := newMember(uuid.NewV4(), net.NewMemConnectionFactory(), 0)
-// client, _ := member.client()
-//
-// success, err := client.Ping(10 * time.Millisecond)
-// }
+func TestClient_Ping(t *testing.T) {
+	called := concurrent.NewAtomicBool()
+	server, _ := net.NewTcpServer(common.NewContext(common.NewEmptyConfig()), 0, func(req net.Request) net.Response {
+		called.Set(true)
+		return net.NewEmptyResponse()
+	})
+	defer server.Close()
+
+	rawClient, err := server.Client()
+	assert.Nil(t, err)
+
+	client := newClient(rawClient)
+	defer client.Close()
+	success, err := client.Ping()
+
+	assert.Nil(t, err)
+	assert.True(t, called.Get())
+	assert.True(t, success)
+}
+
+func TestClient_PingProxy(t *testing.T) {
+	id := uuid.NewV4()
+	server, _ := net.NewTcpServer(common.NewContext(common.NewEmptyConfig()), 0, func(req net.Request) net.Response {
+		actual, err := readPingProxyRequest(req)
+		assert.Nil(t, err)
+		assert.Equal(t, id, actual)
+		return newPingProxyResponse(true)
+	})
+	defer server.Close()
+
+	rawClient, err := server.Client()
+	assert.Nil(t, err)
+
+	client := newClient(rawClient)
+	defer client.Close()
+	success, err := client.PingProxy(id)
+
+	assert.Nil(t, err)
+	assert.True(t, success)
+}
+
+func TestClient_Update(t *testing.T) {
+	updates := []update{newLeave(uuid.NewV4(), 0), newLeave(uuid.NewV4(), 0)}
+
+	server, _ := net.NewTcpServer(common.NewContext(common.NewEmptyConfig()), 0, func(req net.Request) net.Response {
+		actual, err := readUpdateRequest(common.NewContext(common.NewEmptyConfig()), req)
+		assert.Nil(t, err)
+		assert.Equal(t, updates, actual)
+
+		success := make([]bool, 0, len(updates))
+		for range updates {
+			success = append(success, true)
+		}
+
+		return newUpdateResponse(success)
+	})
+	defer server.Close()
+
+	rawClient, err := server.Client()
+	assert.Nil(t, err)
+
+	client := newClient(rawClient)
+	defer client.Close()
+	success, err := client.Update(updates)
+
+	assert.Nil(t, err)
+	assert.Equal(t, []bool{true, true}, success)
+}

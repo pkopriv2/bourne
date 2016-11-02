@@ -1,6 +1,7 @@
 package convoy
 
 import (
+	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -15,11 +16,11 @@ import (
 
 // A member represents the fundamental unit of identity within a group.
 type Member interface {
+	enc.Writable
 	Id() uuid.UUID
 	Conn() (net.Connection, error)
 	Version() int
 	client() (client, error)
-	serialize() interface{}
 }
 
 // A service exposes the standard actions to be taken on members.
@@ -57,6 +58,8 @@ type clock interface {
 // An update is the basic unit of change.  In practical terms, an update
 // is either a put or a delete.
 type update interface {
+	enc.Writable
+
 	Re() uuid.UUID
 	Version() int
 	Apply(Roster) bool

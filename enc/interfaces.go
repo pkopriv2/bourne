@@ -55,12 +55,25 @@ type IncompatibleTypeError struct {
 }
 
 func NewIncompatibleTypeError(e interface{}, a interface{}) *IncompatibleTypeError {
-	return &IncompatibleTypeError{reflect.TypeOf(e).String(), reflect.TypeOf(e).String()}
+	return &IncompatibleTypeError{reflect.TypeOf(e).String(), reflect.TypeOf(a).String()}
 }
 
 func (m *IncompatibleTypeError) Error() string {
 	return fmt.Sprintf("Incompatible types. Expected [%v]; Actual [%v]", m.expected, m.actual)
 }
+
+type UnsupportedTypeError struct {
+	actual   string
+}
+
+func NewUnsupportedTypeError(e interface{}) *UnsupportedTypeError {
+	return &UnsupportedTypeError{reflect.TypeOf(e).String()}
+}
+
+func (u *UnsupportedTypeError) Error() string {
+	return fmt.Sprintf("Unsupported type: %v", u.actual)
+}
+
 
 // The primary encoding interface. Consumers use the writer to populate
 // the fields of a message

@@ -19,6 +19,8 @@ type Connection interface {
 	io.Reader
 	io.Writer
 	io.Closer
+
+	Factory() ConnectionFactory
 }
 
 // A simple listener abstraction.  This will be the basis of
@@ -40,8 +42,8 @@ type ConnectionFactory interface {
 	Conn() (Connection, error)
 }
 
-// Returns a connection factory from the raw serlialized data, the input
-// of which is expected to be in the format produced via ConnectionFactory#Serialize()
+// Returns a connection factory from the raw message data, the input
+// of which is expected to be in the format produced via ConnectionFactory#Write()
 func ReadConnectionFactory(m enc.Reader) (ConnectionFactory, error) {
 	var typ string
 	if err := m.Read("type", &typ); err != nil {
@@ -54,9 +56,4 @@ func ReadConnectionFactory(m enc.Reader) (ConnectionFactory, error) {
 	case "tcp":
 		return ReadTcpConnectionFactory(m)
 	}
-}
-
-type SerialiedConnectionFactory struct {
-	Type string
-	Addr string
 }

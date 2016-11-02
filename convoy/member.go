@@ -1,108 +1,119 @@
 package convoy
 
 import (
-	"sync"
+	"github.com/go-errors/errors"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
 
-// func ParseMemberFromJson(bytes []byte) (Member, error) {
-// m := MemberData{}
-// // if err := json.Unmarshal(bytes, data); err != nil {
-// // return nil, err
-// // }
-// //
-// // return newMember(m.Id, m.Factory)
-// }
+func readMember(ctx common.Context, r enc.Reader) (Member, error) {
+	var id string
+	var version int
+	var connection enc.Message
+	if err := r.Read("id", &id); err != nil {
+		return nil, errors.New(err)
+	}
+	if err := r.Read("version", &version); err != nil {
+		return nil, errors.New(err)
+	}
+	if err := r.Read("connection", &connection); err != nil {
+		return nil, errors.New(err)
+	}
 
-type MemberData struct {
-	Id      string
-	Version int
-	Factory []byte
+	factory, err := net.ReadConnectionFactory(connection)
+	if err != nil {
+		return nil, errors.New(err)
+	}
+
+	uid, err := uuid.FromString(id)
+	if err != nil {
+		return nil, errors.New(err)
+	}
+
+	return newMember(ctx, uid, factory, version), nil
 }
 
-// TODO: members must be gob encodable!  connection factory can't be encoded!
-type memberImpl struct {
-	ctx common.Context
-	id  uuid.UUID
-	fac net.ConnectionFactory
-	ver int
+type member struct {
+	ctx     common.Context
+	id      uuid.UUID
+	factory net.ConnectionFactory
+	version int
 }
 
-func newMember(ctx common.Context, id uuid.UUID, fac net.ConnectionFactory, ver int) Member {
-	return &memberImpl{ctx, id, fac, ver}
+func newMember(ctx common.Context, id uuid.UUID, factory net.ConnectionFactory, version int) Member {
+	return &member{ctx, id, factory, version}
 }
 
-func (m *memberImpl) Id() uuid.UUID {
+func (m *member) Id() uuid.UUID {
 	return m.id
 }
 
-func (m *memberImpl) Conn() (net.Connection, error) {
-	return m.fac.Conn()
+func (m *member) Conn() (net.Connection, error) {
+	return m.factory.Conn()
 }
 
-func (m *memberImpl) Version() int {
-	return m.ver
+func (m *member) Version() int {
+	return m.version
 }
 
-func (m *memberImpl) client() (client, error) {
+func (m *member) client() (client, error) {
 	conn, err := m.Conn()
 	if err != nil {
 		return nil, err
 	}
 
-	return newClient(net.NewClient(m.ctx, conn)), nil
+	client, err := net.NewClient(m.ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+
+	return newClient(client), nil
 }
 
-type clientImpl struct {
+func (m *member) Write(w enc.Writer) {
+	w.Write("id", m.id.String())
+	w.Write("connection", m.factory)
+	w.Write("version", m.version)
+}
+
+type cclient struct {
 	client net.Client
-	lock   sync.Mutex
 }
 
 func newClient(client net.Client) client {
-	return &clientImpl{client: client}
+	return &cclient{client: client}
 }
 
-func (c *clientImpl) Close() error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
+func (c *cclient) Close() error {
 	return c.client.Close()
 }
 
-func (c *clientImpl) Ping() (bool, error) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
+func (c *cclient) Ping() (bool, error) {
 	_, err := c.client.Send(newPingRequest())
 	if err != nil {
-		return false, err
+		return false, errors.New(err)
 	}
 
 	return true, nil
 }
 
-func (c *clientImpl) PingProxy(id uuid.UUID) (bool, error) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
+func (c *cclient) PingProxy(id uuid.UUID) (bool, error) {
 	resp, err := c.client.Send(newPingProxyRequest(id))
 	if err != nil {
-		return false, err
+		return false, errors.New(err)
 	}
 
-	return parsePingProxyResponse(resp)
+	return readPingProxyResponse(resp)
 }
 
-func (c *clientImpl) Update(updates []update) ([]bool, error) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
+func (c *cclient) Update(updates []update) ([]bool, error) {
 	resp, err := c.client.Send(newUpdateRequest(updates))
 	if err != nil {
-		return nil, err
+		return nil, errors.New(err)
 	}
 
-	return parseUpdateResponse(resp)
+	return readUpdateResponse(resp)
 }
