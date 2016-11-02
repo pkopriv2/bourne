@@ -63,7 +63,7 @@ func (m *IncompatibleTypeError) Error() string {
 }
 
 type UnsupportedTypeError struct {
-	actual   string
+	actual string
 }
 
 func NewUnsupportedTypeError(e interface{}) *UnsupportedTypeError {
@@ -74,6 +74,13 @@ func (u *UnsupportedTypeError) Error() string {
 	return fmt.Sprintf("Unsupported type: %v", u.actual)
 }
 
+// A primary consumer abstraction.  Consumers wishing to define a simple
+// encoding scheme for their objects should implement this interface. Any
+// writable object is automatically embeddable in other objects and
+// standard encoding streams (e.g. json/gob/xml).
+type Writable interface {
+	Write(Writer)
+}
 
 // The primary encoding interface. Consumers use the writer to populate
 // the fields of a message
@@ -88,21 +95,13 @@ type Reader interface {
 	ReadOptional(field string, ptr interface{}) (bool, error)
 }
 
-// A primary consumer abstraction.  Consumers wishing to define a simple
-// encoding scheme for their objects should implement this interface. Any
-// writable object is automatically embeddable in other objects and
-// standard encoding streams (e.g. json/gob/xml).
-type Writable interface {
-	Write(Writer)
-}
-
 // An immutable data object.  A message may be embedded in other messages
 // or serialized onto data streams as desired.  They may also be passed
 // to parsing functions for populating internal data fields.  This does
 // force consumers to make public parsers where an implementation is required
 type Message interface {
 	Reader
-	Streamable
+	Streamer
 	Writable
 }
 
@@ -118,6 +117,6 @@ type Decoder interface {
 	Decode(interface{}) error
 }
 
-type Streamable interface {
+type Streamer interface {
 	Stream(Encoder) error
 }

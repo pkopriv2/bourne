@@ -2,7 +2,6 @@ package convoy
 
 import (
 	"github.com/pkopriv2/bourne/enc"
-	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -14,63 +13,86 @@ import (
 //  * Basic Design: http://bitsavers.informatik.uni-stuttgart.de/pdf/xerox/parc/techReports/CSL-89-1_Epidemic_Algorithms_for_Replicated_Database_Maintenance.pdf
 //
 
+
+// Joins the cluster
+func JoinCluster(addr string) (Member, error) {
+	return nil nil
+}
+
+func StartCluster(port int) (Member, error) {
+	return nil, nil
+}
+
+func Connect(addr string) (Member, error) {
+	return nil, nil
+}
+
+
 // A member represents the fundamental unit of identity within a group.
 type Member interface {
 	enc.Writable
+
+	// Returns the id of the member
 	Id() uuid.UUID
-	Conn() (net.Connection, error)
+
+	// Returns the current version of the member (used during reconciliation)
 	Version() int
-	client() (client, error)
+
+	// Returns the standard services client.  Consumers must close the client.
+	Client() (Client, error)
 }
+
 
 // A service exposes the standard actions to be taken on members.
 // For the purposes of inventory management, these will provide
 // the standard ping and proxy ping actions.
-type client interface {
+type Client interface {
+	// Closes the client and frees up any resources.
 	Close() error
-	Ping() (bool, error)
-	PingProxy(uuid.UUID) (bool, error)
-	Update([]update) ([]bool, error)
-}
 
-// A peer is a service that hosts the distributed roster.  A group
-// of peers use a simple gossip protocol to distribute updates to
-// each other.  A word regarding implementation:  Updates to a
-// peer MUST originate from the member they are addressed to update
-// or at least must coordinate with the member to determine an
-// appropriate version for the data!  Otherwise, inconsisentcies
-// can and most likely WILL happen!!!!!
-type Peer interface {
-	Close() error
+	// A copy of the member's roster.
 	Roster() Roster
-	ping(uuid.UUID) (bool, error)
+
+	// Pings the member.  Returns true if the member is alive.
+	Ping() (bool, error)
+
+	// Requests that the member ping another another member.
+	// True indicates the member was able to successfully ping
+	// the target
+	pingProxy(uuid.UUID) (bool, error)
+
+	// Sends a batch of updates to the member.  Returns an array
+	// indicating which updates were accepted
 	update([]update) ([]bool, error)
 }
 
-// the primary reconciliation technique will involve a "globally unique"
-// counter for each member.  Luckily, we can distribute the counter to
-// the members themselves, allowing us no consistency issues.
-type clock interface {
-	Cur() int
-	Inc() int
+type Store interface {
+	Get(uuid.UUID) DataBase
+	Add(uuid.UUID) DataBase
 }
 
-// An update is the basic unit of change.  In practical terms, an update
-// is either a put or a delete.
-type update interface {
-	enc.Writable
-
-	Re() uuid.UUID
-	Version() int
-	Apply(Roster) bool
+type DataBase interface {
+	Get(key string) Entity
+	NewUpdate()
 }
 
-// The roster is the database of members.  The roster can be obtained
-// via a single peer.
+type DataBase interface {
+	Get(key string) Entity
+	NewUpdate()
+}
+
+type Store interface {
+	NewUpdate()
+}
+
+// The roster is the database of members.  The roster can be obtained via
+// a single peer.
 type Roster interface {
+
 	// Returns the number of active members of the group.
 	Size() int
 
+	// Returns the member of the given id.   Only active members are returned.
 	Get(uuid.UUID) Member
 
 	// Returns an iterator that provides a random permutation over the
@@ -80,13 +102,32 @@ type Roster interface {
 	// in the event of concurrent updates to the roster
 	Iterator() Iterator
 
+	// adds the member.  Returns true if the join was accepted.
 	join(Member) bool
+
+	// removes the member with the give id.  Returns true if the leave was accepted.
 	leave(uuid.UUID, int) bool
-	// NOTE: leaving failed status out for now...not sure if it's necessary!
-	// fail(Member) bool
+
+	// Returns a raw log of updates that can be sent to other members.
 	log() []update
 }
 
 type Iterator interface {
 	Next() Member
 }
+
+// An update is the basic unit of change.  In practical terms, an update
+// is either a put or a delete.
+type update interface {
+	enc.Writable
+
+	// which member the update is in regards to.
+	Re() uuid.UUID
+
+	// the version that this update should apply to.  (used for reconciliation)
+	Version() int
+
+	// applys the update to the roster
+	Apply(Roster) bool
+}
+

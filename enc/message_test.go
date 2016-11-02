@@ -90,10 +90,10 @@ func TestEncode_JSON_String(t *testing.T) {
 		w.Write("field", "hello, world")
 	})
 
-	err := StreamWrite(enc, msg)
+	err := Encode(enc, msg)
 	assert.Nil(t, err)
 
-	actual, err := StreamRead(dec)
+	actual, err := Decode(dec)
 	assert.Nil(t, err)
 
 	assert.Equal(t, msg, actual)
@@ -108,10 +108,10 @@ func TestEncode_JSON_Bool(t *testing.T) {
 		w.Write("field", true)
 	})
 
-	err := StreamWrite(enc, msg)
+	err := Encode(enc, msg)
 	assert.Nil(t, err)
 
-	actual, err := StreamRead(dec)
+	actual, err := Decode(dec)
 	assert.Nil(t, err)
 
 	assert.Equal(t, msg, actual)
@@ -131,10 +131,10 @@ func TestEncode_JSON_Composite(t *testing.T) {
 		w.Write("field", msg1)
 	})
 
-	err := StreamWrite(enc, msg2)
+	err := Encode(enc, msg2)
 	assert.Nil(t, err)
 
-	actual, err := StreamRead(dec)
+	actual, err := Decode(dec)
 	assert.Nil(t, err)
 
 	assert.Equal(t, msg2, actual)
@@ -185,10 +185,10 @@ func TestEncode_JSON_Strings(t *testing.T) {
 		w.Write("field", []string{"hello", "world"})
 	})
 
-	err := StreamWrite(enc, msg)
+	err := Encode(enc, msg)
 	assert.Nil(t, err)
 
-	actual, err := StreamRead(dec)
+	actual, err := Decode(dec)
 	assert.Nil(t, err)
 
 	assert.Equal(t, msg, actual)
@@ -203,10 +203,10 @@ func TestEncode_GOB_Strings(t *testing.T) {
 		w.Write("field", []string{"hello", "world"})
 	})
 
-	err := StreamWrite(enc, msg)
+	err := Encode(enc, msg)
 	assert.Nil(t, err)
 
-	actual, err := StreamRead(dec)
+	actual, err := Decode(dec)
 	assert.Nil(t, err)
 
 	assert.Equal(t, msg, actual)
@@ -239,10 +239,10 @@ func TestEncode_JSON_Complex(t *testing.T) {
 	dec := json.NewDecoder(buf)
 
 	val := &TestWritableComplex{1, &TestWritable{1, "2"}}
-	err := StreamWrite(enc, val)
+	err := Encode(enc, val)
 	assert.Nil(t, err)
 
-	msg, err := StreamRead(dec)
+	msg, err := Decode(dec)
 	assert.Nil(t, err)
 
 	actual, err := ParseTestWritableComplex(msg)
@@ -256,10 +256,10 @@ func TestEncode_JSON_Complex_Nil(t *testing.T) {
 	dec := json.NewDecoder(buf)
 
 	val := &TestWritableComplex{field1: 1}
-	err := StreamWrite(enc, val)
+	err := Encode(enc, val)
 	assert.Nil(t, err)
 
-	msg, err := StreamRead(dec)
+	msg, err := Decode(dec)
 	assert.Nil(t, err)
 
 	actual, err := ParseTestWritableComplex(msg)

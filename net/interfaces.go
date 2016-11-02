@@ -57,3 +57,7 @@ func ReadConnectionFactory(m enc.Reader) (ConnectionFactory, error) {
 		return ReadTcpConnectionFactory(m)
 	}
 }
+
+func NewAddr(host string, port int) string {
+	return fmt.Sprintf("%v:%v", host, port)
+}

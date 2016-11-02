@@ -3,87 +3,111 @@ package convoy
 import (
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
-	uuid "github.com/satori/go.uuid"
+	"github.com/pkopriv2/bourne/net"
 )
 
-func StartPeer(ctx common.Context, clusterHost string, clusterPort int) (Peer, error) {
-	return nil, nil
+var PeerClosedError = errors.New("ERROR:PEER:CLOSED")
+
+func StartCluster(ctx common.Context, port int) (Peer, error) {
+	peer := &peer{
+		ctx:    ctx,
+		roster: newRoster(),
+		closer: make(chan struct{}),
+		closed: make(chan struct{}),
+	}
+
+	if err := peer.startServer(); err != nil {
+		return nil, err
+	}
+
+	return peer, nil
 }
 
 type peer struct {
 	ctx    common.Context
 	roster Roster
-	diss   Disseminator
-	pool   concurrent.WorkPool
+	port   int
 
 	closer chan struct{}
 	closed chan struct{}
 	wait   sync.WaitGroup
-	fail   concurrent.Val
 }
 
 func (p *peer) Close() error {
-	panic("not implemented")
+	select {
+	case <-p.closed:
+		return PeerClosedError
+	case p.closer <- struct{}{}:
+	}
+
+	close(p.closed)
+	p.wait.Wait()
+	return nil
+}
+
+func (p *peer) client() (client, error) {
+	client, err := net.NewTcpClient(p.ctx, net.NewAddr("localhost", p.port))
+	if err != nil {
+		return nil, err
+	}
+
+	return newClient(client), nil
 }
 
 func (p *peer) Roster() Roster {
 	return p.roster
 }
 
-func (p *peer) ping(uuid.UUID) (bool, error) {
-	panic("not implemented")
+// func (p *peer) ping(target uuid.UUID) (bool, error) {
+// member :=  p.roster.Get(target)
+// if member == nil {
+// return false, nil
+// }
+//
+// client, err := member.client()
+// if err != nil {
+// return false, nil
+// }
+// defer client.Close()
+// return client.Ping()
+// }
+//
+// func (p *peer) update(updates []update) ([]bool, error) {
+// ret := make([]bool, 0, len(updates))
+// for _, u := range updates {
+// ret = append(ret, u.Apply(p.Roster()))
+// }
+// return ret, nil
+// }
+
+func (p *peer) startServer() error {
+	server, err := net.NewTcpServer(p.ctx, 0, newPeerHandler(p))
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		defer server.Close()
+		<-p.closed
+	}()
+	return nil
 }
 
-func (p *peer) update([]update) ([]bool, error) {
-	panic("not implemented")
-}
+func newPeerHandler(peer *peer) net.Handler {
+	return func(req net.Request) net.Response {
+		action, err := readMeta(req.Meta())
+		if err != nil {
+			return net.NewErrorResponse(errors.Wrap(err, "Error parsing action"))
+		}
 
-// func servePeer(peer *peer) {
-// defer peer.wait.Done()
-//
-// listener, err := net.ListenTCP(0)
-// if err != nil {
-// return
-// }
-//
-// pool := concurrent.NewWorkPool(
-// peer.ctx.Config().OptionalInt(
-// confServerPoolSize, defaultServerPoolSize))
-//
-// newServer(pool, listener, newPeerHandler(peer))
-// }
-//
-// func newPeerHandler(peer Peer) handler {
-// return func(req request) response {
-// switch req.Type {
-// default:
-// return newErrorResponse(newUnknownRequestError(req.Type))
-// case pingType:
-// return newPingResponse()
-// case pingProxyType:
-// return handlePingProxy(peer, req.Body.(uuid.UUID))
-// case updateType:
-// return handleUpdate(peer, req.Body.([]update))
-// }
-// }
-// }
-//
-// func handlePingProxy(peer Peer, target uuid.UUID) response {
-// success, err := peer.ping(target)
-// if err != nil {
-// return newErrorResponse(err)
-// }
-//
-// return newPingProxyResponse(success)
-// }
-//
-// func handleUpdate(peer Peer, updates []update) response {
-// success, err := peer.update(updates)
-// if err != nil {
-// return newErrorResponse(err)
-// }
-//
-// return newUpdateResponse(success)
-// }
+		switch action {
+		default:
+			return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
+		case pingAction:
+			return net.NewEmptyResponse()
+		}
+		return nil
+	}
+}

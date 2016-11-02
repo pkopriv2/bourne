@@ -88,6 +88,14 @@ type Response interface {
 
 // Request/response intiailization functions.
 func NewRequest(meta enc.Message, body enc.Message) Request {
+	if meta == nil {
+		meta = enc.EmptyMessage
+	}
+
+	if body == nil {
+		body = enc.EmptyMessage
+	}
+
 	return &request{meta, body}
 }
 
@@ -100,6 +108,10 @@ func NewStandardRequest(body enc.Message) Request {
 }
 
 func NewResponse(err error, body enc.Message) Response {
+	if body == nil {
+		body = enc.EmptyMessage
+	}
+
 	return &response{err, body}
 }
 
@@ -116,18 +128,18 @@ func NewErrorResponse(err error) Response {
 }
 
 func readRequest(dec enc.Decoder) (Request, error) {
-	msg, err := enc.StreamRead(dec)
+	msg, err := enc.Decode(dec)
 	if err != nil {
 		return nil, err
 	}
 
 	var meta enc.Message
-	if _, err := msg.ReadOptional("meta", &meta); err != nil {
+	if err := msg.Read("meta", &meta); err != nil {
 		return nil, err
 	}
 
 	var body enc.Message
-	if _, err := msg.ReadOptional("body", &body); err != nil {
+	if err := msg.Read("body", &body); err != nil {
 		return nil, err
 	}
 
@@ -135,7 +147,7 @@ func readRequest(dec enc.Decoder) (Request, error) {
 }
 
 func readResponse(dec enc.Decoder) (Response, error) {
-	msg, err := enc.StreamRead(dec)
+	msg, err := enc.Decode(dec)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +158,7 @@ func readResponse(dec enc.Decoder) (Response, error) {
 	}
 
 	var body enc.Message
-	if _, err := msg.ReadOptional("body", &body); err != nil {
+	if err := msg.Read("body", &body); err != nil {
 		return nil, err
 	}
 
@@ -316,7 +328,7 @@ func (s *client) Send(req Request) (Response, error) {
 func (s *client) send(req Request) error {
 	var err error
 	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
-		err = enc.StreamWrite(s.enc, req)
+		err = enc.Encode(s.enc, req)
 		return nil
 	})
 
@@ -519,7 +531,7 @@ func (s *server) recv(dec enc.Decoder) (Request, error) {
 func (s *server) send(encoder enc.Encoder, res Response) error {
 	var err error
 	done, timer := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
-		err = enc.StreamWrite(encoder, res)
+		err = enc.Encode(encoder, res)
 		return nil
 	})
 
@@ -553,6 +565,7 @@ func NewTcpServer(ctx common.Context, port int, handler Handler) (Server, error)
 }
 
 var empty string
+
 func parseError(msg string) error {
 	if msg == empty {
 		return nil

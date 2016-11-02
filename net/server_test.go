@@ -112,7 +112,7 @@ func TestClientServer_MultiRequest(t *testing.T) {
 	called := concurrent.NewAtomicCounter()
 	server := NewTestServer(func(r Request) Response {
 		called.Inc()
-		assert.Nil(t, r.Body())
+		assert.Equal(t, enc.EmptyMessage, r.Body())
 		return NewStandardResponse(nil)
 	}, nil)
 	defer server.Close()

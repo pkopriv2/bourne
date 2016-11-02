@@ -8,22 +8,25 @@ import (
 	"github.com/pkg/errors"
 )
 
+// Builds a message from the given builder func
+var EmptyMessage = newMessageWriter().Build()
+
 // Message builders are just functions which accept a writer.
 type WriteFn func(w Writer)
 
 // Encodes a writable onto the stream.
-func StreamWrite(enc Encoder, w Writable) error {
+func Encode(enc Encoder, w Writable) error {
 	return Write(w).Stream(enc)
 }
 
 // Decodes a message from the stream.
-func StreamRead(e Decoder) (Message, error) {
+func Decode(e Decoder) (Message, error) {
 	var raw map[string]interface{}
 	if err := e.Decode(&raw); err != nil {
 		return nil, errors.Wrapf(err, "Error reading message from stream")
 	}
 
-	obj, err := ParseDumpedObject(raw)
+	obj, err := parseObject(raw)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error parsing object from stream")
 	}
@@ -51,19 +54,19 @@ func Write(w Writable) Message {
 // Build a small type system over the standard go system.  The intent is to
 // severely limit the number of encodable values so that we can maintain
 // compatibility across various encoding schemes.
-type Value interface {
+type encValue interface {
+	// Assigns the value to the value pointed to by ptr.   Values are able
+	// to make decisions as to what ptr values it supports.
 	AssignTo(ptr interface{}) error
+
+	// Dumps the value to a raw go type
 	Dump() interface{}
 }
 
 // A boolean value
-type Bool bool
+type boolValue bool
 
-func (b Bool) Dump() interface{} {
-	return bool(b)
-}
-
-func (b Bool) AssignTo(raw interface{}) error {
+func (b boolValue) AssignTo(raw interface{}) error {
 	switch ptr := raw.(type) {
 	default:
 		return NewIncompatibleTypeError(b, ptr)
@@ -74,14 +77,14 @@ func (b Bool) AssignTo(raw interface{}) error {
 	return nil
 }
 
-// a string value
-type String string
-
-func (s String) Dump() interface{} {
-	return string(s)
+func (b boolValue) Dump() interface{} {
+	return bool(b)
 }
 
-func (s String) AssignTo(raw interface{}) error {
+// a string value
+type stringValue string
+
+func (s stringValue) AssignTo(raw interface{}) error {
 	switch ptr := raw.(type) {
 	default:
 		return NewIncompatibleTypeError(s, ptr)
@@ -92,29 +95,19 @@ func (s String) AssignTo(raw interface{}) error {
 	return nil
 }
 
-// an array value (composed of other values)
-type Array []Value
-
-func ParseDumpedArray(arr []interface{}) (Array, error) {
-	ret := make([]Value, 0, len(arr))
-	for _, cur := range arr {
-		val, err := ParseDumpedValue(cur)
-		if err != nil {
-			return nil, err
-		}
-
-		ret = append(ret, val)
-	}
-
-	return Array(ret), nil
+func (s stringValue) Dump() interface{} {
+	return string(s)
 }
 
-func (a Array) AssignTo(ptr interface{}) error {
+// an array value (composed of other values)
+type arrayValue []encValue
+
+func (a arrayValue) AssignTo(ptr interface{}) error {
 	switch ptr := ptr.(type) {
 	default:
 		return NewUnsupportedTypeError(ptr)
-	case *[]Object:
-		arr := make([]Object, len(a))
+	case *[]objectValue:
+		arr := make([]objectValue, len(a))
 		for i := 0; i < len(a); i++ {
 			a[i].AssignTo(&arr[i])
 		}
@@ -136,48 +129,45 @@ func (a Array) AssignTo(ptr interface{}) error {
 	return nil
 }
 
-func (a Array) Dump() interface{} {
+func (a arrayValue) Dump() interface{} {
 	arr := make([]interface{}, len(a))
-	gob.Register(arr) // grr....
+	gob.Register(arr) // grr.... what does this screw up later?
 	for i := 0; i < len(a); i++ {
 		arr[i] = a[i].Dump()
 	}
 	return arr
 }
 
-// a generic field indexed value
-type Object map[string]Value
-
-func NewEmptyObject() Object {
-	return Object(make(map[string]Value))
-}
-
-func ParseDumpedObject(data map[string]interface{}) (Object, error) {
-	obj := make(map[string]Value)
-	for k, v := range data {
-		val, err := ParseDumpedValue(v)
+func parseArray(arr []interface{}) (arrayValue, error) {
+	ret := make([]encValue, 0, len(arr))
+	for _, cur := range arr {
+		val, err := parseValue(cur)
 		if err != nil {
 			return nil, err
 		}
 
-		obj[k] = val
+		ret = append(ret, val)
 	}
 
-	return Object(obj), nil
+	return arrayValue(ret), nil
 }
 
-func (o Object) AssignTo(ptr interface{}) error {
+// a generic field indexed value
+type objectValue map[string]encValue
+
+
+func (o objectValue) AssignTo(ptr interface{}) error {
 	switch ptr := ptr.(type) {
 	default:
 		return NewUnsupportedTypeError(ptr)
-	case *Object:
+	case *objectValue:
 		*ptr = o
 	}
 
 	return nil
 }
 
-func (o Object) Read(field string, ptr interface{}) error {
+func (o objectValue) Read(field string, ptr interface{}) error {
 	value, ok := o[field]
 	if !ok {
 		return &MissingFieldError{field}
@@ -190,7 +180,7 @@ func (o Object) Read(field string, ptr interface{}) error {
 	return nil
 }
 
-func (o Object) ReadOptional(field string, ptr interface{}) (bool, error) {
+func (o objectValue) ReadOptional(field string, ptr interface{}) (bool, error) {
 	value, ok := o[field]
 	if !ok {
 		return false, nil
@@ -203,22 +193,22 @@ func (o Object) ReadOptional(field string, ptr interface{}) (bool, error) {
 	return true, nil
 }
 
-func (o Object) Write(w Writer) {
+func (o objectValue) Write(w Writer) {
 	for k, v := range o {
 		w.Write(k, v)
 	}
 }
 
-func (o Object) Copy() Object {
-	ret := make(map[string]Value)
+func (o objectValue) Copy() objectValue {
+	ret := make(map[string]encValue)
 	for k, v := range o {
 		ret[k] = v
 	}
 
-	return Object(ret)
+	return objectValue(ret)
 }
 
-func (o Object) Dump() interface{} {
+func (o objectValue) Dump() interface{} {
 	ret := make(map[string]interface{})
 	for k, v := range o {
 		ret[k] = v.Dump()
@@ -227,28 +217,46 @@ func (o Object) Dump() interface{} {
 	return ret
 }
 
+func newEmptyObject() objectValue {
+	return objectValue(make(map[string]encValue))
+}
+
+func parseObject(data map[string]interface{}) (objectValue, error) {
+	obj := make(map[string]encValue)
+	for k, v := range data {
+		val, err := parseValue(v)
+		if err != nil {
+			return nil, err
+		}
+
+		obj[k] = val
+	}
+
+	return objectValue(obj), nil
+}
+
 // parses the dumped format of value
-func ParseDumpedValue(data interface{}) (Value, error) {
+func parseValue(data interface{}) (encValue, error) {
 	switch val := data.(type) {
 	default:
 		return nil, NewUnsupportedTypeError(val)
 	case bool:
-		return Bool(val), nil
+		return boolValue(val), nil
 	case string:
-		return String(val), nil
+		return stringValue(val), nil
 	case []interface{}:
-		return ParseDumpedArray(val)
+		return parseArray(val)
 	case map[string]interface{}:
-		return ParseDumpedObject(val)
+		return parseObject(val)
 	}
 }
 
 type messageWriter struct {
-	val Object
+	val objectValue
 }
 
 func newMessageWriter() *messageWriter {
-	return &messageWriter{NewEmptyObject()}
+	return &messageWriter{newEmptyObject()}
 }
 
 func (m *messageWriter) Write(field string, raw interface{}) {
@@ -269,12 +277,12 @@ func (m *messageWriter) Write(field string, raw interface{}) {
 	// Primitive types
 	switch typed := raw.(type) {
 	case string:
-		m.val[field] = String(typed)
+		m.val[field] = stringValue(typed)
 		return
 	case bool:
-		m.val[field] = Bool(typed)
+		m.val[field] = boolValue(typed)
 		return
-	case Value:
+	case encValue:
 		m.val[field] = typed
 		return
 	case Writable:
@@ -286,24 +294,25 @@ func (m *messageWriter) Write(field string, raw interface{}) {
 		panic(errors.Wrapf(NewUnsupportedTypeError(raw), "Error writing field [%v]", field))
 	}
 
+	// Array types
 	arr := reflect.ValueOf(raw)
 	num := arr.Len()
-	val := make([]Value, num)
+	val := make([]encValue, num)
 	for i := 0; i < num; i++ {
 		item := arr.Index(i).Interface()
 		switch typed := item.(type) {
 		case string:
-			val[i] = String(typed)
+			val[i] = stringValue(typed)
 		case bool:
-			val[i] = Bool(typed)
-		case Value:
+			val[i] = boolValue(typed)
+		case encValue:
 			val[i] = typed
 		case Writable:
 			val[i] = Write(typed).(*message).val
 		}
 	}
 
-	m.val[field] = Array(val)
+	m.val[field] = arrayValue(val)
 }
 
 func (m *messageWriter) Build() Message {
@@ -311,7 +320,7 @@ func (m *messageWriter) Build() Message {
 }
 
 type message struct {
-	val Object
+	val objectValue
 }
 
 func (m *message) Read(field string, raw interface{}) error {
@@ -366,14 +375,14 @@ func (m *message) Read(field string, raw interface{}) error {
 			return errors.Wrapf(err, "Error while reading field [%v]", field)
 		}
 	case *Message:
-		var obj Object
+		var obj objectValue
 		if err := value.AssignTo(&obj); err != nil {
 			return errors.Wrapf(err, "Error while reading field [%v]", field)
 		}
 
 		*ptr = &message{obj}
 	case *[]Message:
-		var obj []Object
+		var obj []objectValue
 		if err := value.AssignTo(&obj); err != nil {
 			return errors.Wrapf(err, "Error while reading field [%v]", field)
 		}
@@ -434,19 +443,18 @@ func assignInts(vals []string, ptr *[]int) error {
 	return nil
 }
 
-func writeInt(val int) Value {
-	return String(strconv.Itoa(val))
+func writeInt(val int) encValue {
+	return stringValue(strconv.Itoa(val))
 }
 
-func writeInts(val []int) Value {
-	ret := make([]Value, len(val))
+func writeInts(val []int) encValue {
+	ret := make([]encValue, len(val))
 	for i := 0; i < len(val); i++ {
 		ret[i] = writeInt(val[i])
 	}
 
-	return Array(ret)
+	return arrayValue(ret)
 }
-
 
 func isArrayValue(value interface{}) bool {
 	switch reflect.ValueOf(value).Kind() {
