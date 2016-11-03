@@ -19,13 +19,16 @@ import (
 //
 // The intended use is primarily within infrastructure management, where the
 // desire is to understand not only what what hosts are currently alive and
-// healthy, but also meta information about that host.  In that vein, hosts are
+// healthy, but also meta information about them.  In that vein, hosts are
 // able to publish information about themselves.  This can range from standard
 // properties (e.g. hostname, fqdn, ip address, etc..) but can really be anything.
 //
-// Convoy replicates each store to all members of the cluster using
-// an epidemic style dissemination protocol.  The goal is a searchable
-// data store which identifies hosts - or their properties.
+// Architecturally, this means that each member of a cluster just manages its
+// own database - ie all updates to that database are routed to it - and
+// shares updates with other members.
+//
+// The end goal is a highly resilient, searchable dataset that allows members
+// to be looked up via their store properties.
 //
 type ChangeType int
 
@@ -35,19 +38,21 @@ const (
 )
 
 // Publishes the db to the given port.  This is the "first" member of the
-// cluster and will not discovery anyone else until it is contacted.
-//
-func Publish(ctx common.Context, db Database, port int) (Cluster, error) {
+// cluster and will not discover anyone else until it is contacted.
+func Publish(ctx common.Context, db Database) (Cluster, error) {
 	return nil, nil
 }
 
-// Publishes the store to the cluster via the given member addr.  The
+// Publishes the store to the cluster via the given member addr.
 func PublishTo(ctx common.Context, db Database, addr string) (Cluster, error) {
 	return nil, nil
 }
 
-// A database is really just an indexed log of changes.
+// A database is really just an indexed log of changes.  In fact, a store
+// is just the aggregated list of changes.
 type Database interface {
+
+	// every database must be globally identifiable.
 	Id() uuid.UUID
 
 	// Returns a channel containing an ordered list of changes
