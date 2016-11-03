@@ -1,7 +1,9 @@
 package convoy
 
 import (
-	"github.com/pkopriv2/bourne/enc"
+	"io"
+
+	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -12,122 +14,107 @@ import (
 //  * https://www.cs.cornell.edu/~asdas/research/dsn02-swim.pdf
 //  * Basic Design: http://bitsavers.informatik.uni-stuttgart.de/pdf/xerox/parc/techReports/CSL-89-1_Epidemic_Algorithms_for_Replicated_Database_Maintenance.pdf
 //
+// Convoy is a database dissemination library.  The intended use is primarily
+// within infrastructure management, where the desire is to understand
+// not only what what hosts are currently alive and healthy, but also
+// meta information about that host.  In that vein, hosts are able to
+// publish information about themselves. Moreover, clients of the cluster
+// can coordinate with a host to update the host's database.
+//
+// Convoy replicates each store to all members of the cluster using
+// an epidemic style dissemination protocol.  The goal is a searchable
+// data store which identifies hosts - or its properties.
+//
 
-
-// Joins the cluster
-func JoinCluster(addr string) (Member, error) {
-	return nil nil
-}
-
-func StartCluster(port int) (Member, error) {
+// Publishes the db to the given port.  This is the "first" member of the
+// cluster.
+func Publish(ctx common.Context, db Database, port int) (Cluster, error) {
 	return nil, nil
 }
 
-func Connect(addr string) (Member, error) {
+// Publishes the store to the cluster via the given member addr.  The
+func PublishTo(ctx common.Context, db Database, addr string) (Cluster, error) {
 	return nil, nil
 }
 
+// A cluster represents the aggregated view of all members' data stores.
+type Cluster interface {
+	io.Closer
 
-// A member represents the fundamental unit of identity within a group.
-type Member interface {
-	enc.Writable
+	// Returns a handle to the store of the given id.  Consumers
+	// must close the store or risk leaking resources.
+	GetStore(store uuid.UUID) (Store, error)
 
-	// Returns the id of the member
+	// Returns the value of the given key from the given store.
+	GetValue(store uuid.UUID, key string) (string, error)
+
+	// MUST DO:
+	// Add search functiionality.
+}
+
+// A database is really just an indexed log of changes.
+type Database interface {
+	Store
+
+	// Returns a channel containing an ordered list of changes
+	// whose versions are greater than or equal to the given
+	// version number.
+	Log(int) <-chan Change
+}
+
+// A change is the funamental dissemination unit
+type ChangeType int
+
+const (
+	Publish    ChangeType = 0
+	Leave                 = 1
+	Offline               = 2
+	ItemUpdate            = 3
+	ItemDelete            = 4
+)
+
+//
+type Transaction struct {
+
+	// Which store is being updated
+	Re uuid.UUID
+
+	// At what version was the store.
+	Version int
+
+	// The type of change being applied
+	Type ChangeType
+
+	// The data being updated (if applicable)
+	Key string
+	Val string
+}
+
+// A very simple key,value store abstraction. Updates to the store
+// are transactionally safe - regardless of whether the store is
+// local or remote.
+type Store interface {
+	io.Closer
+
+	// A value
 	Id() uuid.UUID
 
-	// Returns the current version of the member (used during reconciliation)
-	Version() int
+	// Returns the item value and version
+	Get(key string) (string, error)
 
-	// Returns the standard services client.  Consumers must close the client.
-	Client() (Client, error)
+	// Returns a handle to a batch of changes to apply to the store.
+	Update() (Update, error)
 }
 
+// An update represents an uncommitted batch of changes for a given store.
+type Update interface {
 
-// A service exposes the standard actions to be taken on members.
-// For the purposes of inventory management, these will provide
-// the standard ping and proxy ping actions.
-type Client interface {
-	// Closes the client and frees up any resources.
-	Close() error
+	// Puts the key value
+	Put(key string, val string)
 
-	// A copy of the member's roster.
-	Roster() Roster
+	// Deletes the key value at key.
+	Delete(key string)
 
-	// Pings the member.  Returns true if the member is alive.
-	Ping() (bool, error)
-
-	// Requests that the member ping another another member.
-	// True indicates the member was able to successfully ping
-	// the target
-	pingProxy(uuid.UUID) (bool, error)
-
-	// Sends a batch of updates to the member.  Returns an array
-	// indicating which updates were accepted
-	update([]update) ([]bool, error)
+	// Commits the changes and returns the new version.
+	Commit() (int, error)
 }
-
-type Store interface {
-	Get(uuid.UUID) DataBase
-	Add(uuid.UUID) DataBase
-}
-
-type DataBase interface {
-	Get(key string) Entity
-	NewUpdate()
-}
-
-type DataBase interface {
-	Get(key string) Entity
-	NewUpdate()
-}
-
-type Store interface {
-	NewUpdate()
-}
-
-// The roster is the database of members.  The roster can be obtained via
-// a single peer.
-type Roster interface {
-
-	// Returns the number of active members of the group.
-	Size() int
-
-	// Returns the member of the given id.   Only active members are returned.
-	Get(uuid.UUID) Member
-
-	// Returns an iterator that provides a random permutation over the
-	// current roster members.  Returns nil once all current members
-	// have been iterated.  Implementations should guarantee that
-	// at most 2 complete iterations are required to visit every member
-	// in the event of concurrent updates to the roster
-	Iterator() Iterator
-
-	// adds the member.  Returns true if the join was accepted.
-	join(Member) bool
-
-	// removes the member with the give id.  Returns true if the leave was accepted.
-	leave(uuid.UUID, int) bool
-
-	// Returns a raw log of updates that can be sent to other members.
-	log() []update
-}
-
-type Iterator interface {
-	Next() Member
-}
-
-// An update is the basic unit of change.  In practical terms, an update
-// is either a put or a delete.
-type update interface {
-	enc.Writable
-
-	// which member the update is in regards to.
-	Re() uuid.UUID
-
-	// the version that this update should apply to.  (used for reconciliation)
-	Version() int
-
-	// applys the update to the roster
-	Apply(Roster) bool
-}
-
