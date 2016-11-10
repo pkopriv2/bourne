@@ -89,7 +89,8 @@ func (k kiv) Less(other btree.Item) bool {
 
 // A transactional data view into the directory.   This is extremely
 // dangerous and only people who really know what they're doing should
-// use this.
+// use this directly.  Instead, use the convenience functions for
+// generating common mutations over a transaction
 //
 // ** INTERNAL ONLY **
 type tx struct {
@@ -98,14 +99,115 @@ type tx struct {
 	Kiv     *index
 }
 
+
+// Adds a member to the directory
+func dirPutMemberTx(id uuid.UUID, mem Member, ver int) func(*tx) error {
+	return func(tx *tx) error {
+		updated := datum{Member: mem, Version: ver, Time: tx.Time}
+
+		existing, ok := tx.Primary[id]
+		if !ok {
+			tx.Primary[id] = updated
+			return nil
+		}
+
+		if existing.Version < ver {
+			tx.Primary[id] = updated
+			return nil
+		}
+
+		return nil
+	}
+}
+
+// Removes a member from the directory.
+func dirDelMemberTx(id uuid.UUID, ver int) func(*tx) error {
+	return func(tx *tx) error {
+		updated := datum{Deleted: true, Version: ver, Time: tx.Time}
+
+		existing, ok := tx.Primary[id]
+		if !ok {
+			tx.Primary[id] = updated
+			return nil
+		}
+
+		if existing.Version <= ver { // notice equality
+			tx.Primary[id] = updated
+			return nil
+		}
+
+		return nil
+	}
+}
+
+// Puts the key value to the directory for the member at the given id.
+func dirPutKeyValueTx(id uuid.UUID, key string, val string, ver int) func(*tx) error {
+	return func(tx *tx) error {
+		updated := ref{Time: tx.Time, Version: ver}
+
+		var existingRef *ref
+		var existingKiv *kiv
+		tx.Kiv.ScanAt(kiv{Id: id, Key: key}, func(scan *indexScan, key indexKey) {
+			kiv := key.(kiv)
+			ref := tx.Kiv.Get(existingKiv).(ref)
+
+			existingKiv = &kiv
+			existingRef = &ref
+			scan.Stop()
+		})
+
+		if existingRef == nil {
+			tx.Kiv.Put(kiv{id, key, val}, updated)
+			return nil
+		}
+
+		if existingRef.Version < ver {
+			tx.Kiv.Remove(existingKiv)
+			tx.Kiv.Put(kiv{id, key, val}, updated)
+			return nil
+		}
+
+		return nil
+	}
+}
+
+// Removes a key value from the directory.
+func dirDelKeyValueTx(id uuid.UUID, key string, ver int) func(*tx) error {
+	return func(tx *tx) error {
+		updated := ref{Deleted: true, Time: tx.Time, Version: ver}
+
+		var existingRef *ref
+		var existingKiv *kiv
+		tx.Kiv.ScanAt(kiv{Id: id, Key: key}, func(scan *indexScan, key indexKey) {
+			kiv := key.(kiv)
+			ref := tx.Kiv.Get(existingKiv).(ref)
+
+			existingKiv = &kiv
+			existingRef = &ref
+			scan.Stop()
+		})
+
+		if existingRef == nil {
+			tx.Kiv.Put(kiv{Id: id, Key: key}, updated)
+			return nil
+		}
+
+		if existingRef.Version < ver {
+			tx.Kiv.Remove(existingKiv)
+			tx.Kiv.Put(kiv{Id: id, Key: key}, updated)
+			return nil
+		}
+
+		return nil
+	}
+}
+
 // the core storage type.
 type directory struct {
-	ctx common.Context
-
-	lock sync.RWMutex
-	id   map[uuid.UUID]datum
-	kiv  *index // index of kiv -> ref
-
+	ctx    common.Context
+	lock   sync.RWMutex
+	id     map[uuid.UUID]datum
+	kiv    *index // index of kiv -> ref
 	closed chan struct{}
 	closer chan struct{}
 	wait   sync.WaitGroup
@@ -133,104 +235,6 @@ func (d *directory) write(fn func(*tx) error) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	return fn(&tx{time.Now(), d.id, d.kiv})
-}
-
-func (d *directory) PutMember(id uuid.UUID, mem Member, ver int) error {
-	return d.write(func(tx *tx) error {
-		updated := datum{Member: mem, Version: ver, Time: tx.Time}
-
-		existing, ok := tx.Primary[id]
-		if !ok {
-			tx.Primary[id] = updated
-			return nil
-		}
-
-		if existing.Version < ver {
-			tx.Primary[id] = updated
-			return nil
-		}
-
-		return nil
-	})
-}
-
-func (d *directory) DelMember(id uuid.UUID, ver int) error {
-	return d.write(func(tx *tx) error {
-		updated := datum{Deleted: true, Version: ver, Time: tx.Time}
-
-		existing, ok := tx.Primary[id]
-		if !ok {
-			tx.Primary[id] = updated
-			return nil
-		}
-
-		if existing.Version <= ver { // notice equality
-			tx.Primary[id] = updated
-			return nil
-		}
-
-		return nil
-	})
-}
-
-func (d *directory) PutKeyValue(id uuid.UUID, key string, val string, ver int) error {
-	return d.write(func(tx *tx) error {
-        updated := ref{Time: tx.Time, Version: ver}
-
-        var existingRef *ref
-        var existingKiv *kiv
-        tx.Kiv.ScanAt(kiv{Id: id, Key: key}, func(scan *indexScan, key indexKey) {
-            kiv := key.(kiv)
-            ref := tx.Kiv.Get(existingKiv).(ref)
-
-            existingKiv = &kiv
-            existingRef = &ref
-            scan.Stop()
-        })
-
-        if existingRef == nil {
-            tx.Kiv.Put(kiv{id, key, val}, updated)
-            return nil
-        }
-
-        if existingRef.Version < ver {
-            tx.Kiv.Remove(existingKiv)
-            tx.Kiv.Put(kiv{id, key, val}, updated)
-            return nil
-        }
-
-		return nil
-	})
-}
-
-func (d *directory) DelKeyValue(id uuid.UUID, key string, ver int) error {
-	return d.write(func(tx *tx) error {
-        updated := ref{Deleted: true, Time: tx.Time, Version: ver}
-
-        var existingRef *ref
-        var existingKiv *kiv
-        tx.Kiv.ScanAt(kiv{Id: id, Key: key}, func(scan *indexScan, key indexKey) {
-            kiv := key.(kiv)
-            ref := tx.Kiv.Get(existingKiv).(ref)
-
-            existingKiv = &kiv
-            existingRef = &ref
-            scan.Stop()
-        })
-
-        if existingRef == nil {
-            tx.Kiv.Put(kiv{Id: id, Key: key}, updated)
-            return nil
-        }
-
-        if existingRef.Version < ver {
-            tx.Kiv.Remove(existingKiv)
-            tx.Kiv.Put(kiv{Id: id, Key: key}, updated)
-            return nil
-        }
-
-		return nil
-	})
 }
 
 func (d *directory) Close() error {
@@ -295,13 +299,13 @@ func (d *collector) run() {
 
 	ctx := d.dir.ctx
 	conf := ctx.Config()
+	logger := ctx.Logger()
+	defer logger.Debug("GC shutting down")
 
 	gcExp := conf.OptionalDuration("convoy.directory.gc.data.expiration", 24*60*time.Minute)
 	gcPer := conf.OptionalDuration("convoy.directory.gc.cycle.time", 30*time.Second)
 
-	logger := ctx.Logger()
 	logger.Debug("Running GC every [%v] with expiration [%v]", gcPer, gcExp)
-	defer logger.Debug("GC shutting down")
 
 	// TODO: Run benchmarks to determine if we should do a stop the world collection,
 	// or if we should do more of a concurrent-mark and sweep approach.

@@ -1,6 +1,8 @@
 package convoy
 
 import (
+	"math/rand"
+	"strconv"
 	"testing"
 	"time"
 
@@ -114,13 +116,16 @@ func TestDirectory_Gc_DeletedDatumWithRefs(t *testing.T) {
 	id := uuid.NewV4()
 	assert.Nil(t, dir.write(func(tx *tx) error {
 		tx.Primary[id] = datum{Deleted: true, Time: time.Now()}
-		tx.Kiv.Put(kiv{id, "key", "val"}, ref{Id: id}) // not deleted
+		for i := 0; i < 1024; i++ {
+			tx.Kiv.Put(kiv{id, strconv.Itoa(rand.Int()), "val"}, ref{}) // not deleted
+		}
 		return nil
 	}))
 
 	time.Sleep(200 * time.Millisecond)
 	assert.Nil(t, dir.read(func(tx *tx) error {
 		assert.Equal(t, 0, len(tx.Primary))
+		assert.Equal(t, 0, tx.Kiv.Size())
 		return nil
 	}))
 }
