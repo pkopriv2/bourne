@@ -179,10 +179,12 @@ func readDuration(m map[string]interface{}, key string) (time.Duration, error) {
 		return 0, newConfigMissingError(key)
 	}
 
-	ret, ok := val.(int)
-	if !ok {
-		return 0, newConfigParsingError(Duration, key, val)
+	switch ret := val.(type) {
+	case int64:
+		return time.Duration(ret) * time.Millisecond, nil
+	case time.Duration:
+		return ret, nil
 	}
 
-	return time.Duration(ret) * time.Millisecond, nil
+	return 0, newConfigParsingError(Duration, key, val)
 }

@@ -2,10 +2,27 @@ package convoy
 
 import (
 	"io"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
+)
+
+const (
+	confPingTimeout         = "convoy.ping.timeout"
+	confUpdateTimeout       = "convoy.update.timeout"
+	confUpdateBatchSize     = "convoy.update.batch.size"
+	confDisseminationPeriod = "convoy.dissemination.period"
+	confServerPoolSize      = "convoy.server.pool.size"
+)
+
+const (
+	defaultPingTimeout         = time.Second
+	defaultUpdateTimeout       = time.Second
+	defaultUpdateBatchSize     = 50
+	defaultDisseminationPeriod = 5 * time.Second
+	defaultServerPoolSize      = 10
 )
 
 // References:
@@ -30,12 +47,6 @@ import (
 // The end goal is a highly resilient, searchable dataset that allows members
 // to be looked up via their store properties.
 //
-type ChangeType int
-
-const (
-	Add = 1
-	Del = 2
-)
 
 // Publishes the db to the given port.  This is the "first" member of the
 // cluster and will not discover anyone else until it is contacted.
@@ -51,36 +62,45 @@ func PublishTo(ctx common.Context, db Database, addr string) (Cluster, error) {
 // A database is really just an indexed log of changes.  In fact, a store
 // is just the aggregated list of changes.
 type Database interface {
+	Store
 
 	// every database must be globally identifiable.
 	Id() uuid.UUID
 
 	// Returns a channel containing an ordered list of changes
 	// whose versions are greater than or equal to the given
-	// version number.
-	Log(int) <-chan Change
+	// version number.  The channel will remain open until
+	// the database is closed.
+	Log() <-chan Change
 }
 
 // The fundamental unit of change within the published database.
-type Change struct {
-
-	// At what version was the store.
-	Version int
-
-	// The type of change being applied
-	Type ChangeType
-
-	// The data being updated (if applicable)
-	Key string
-	Val string
+type Change interface {
+	Version() int
+	Deleted() bool
+	Key() string
+	Val() string
 }
 
-// A cluster represents the aggregated view of all members' data stores.
-type Cluster interface {
-	io.Closer
+// A cluster represents the aggregated view of all members' data
+// stores.
+type Cluster interface { io.Closer
 
 	// Returns a handle to the store of the given id.  Consumers
 	GetMember(id uuid.UUID) (Member, error)
+//
+	// // Returns the currently alive members.
+	// Alive() ([]Member, error)
+//
+	// // Returns the currently dead members.  This means the member is out of contact.
+	// // This can happen for a variety of environmental reasons.
+	// Dead() ([]Member, error)
+//
+	// // Returns the recently left members.
+	// Gone() ([]Member, error)
+//
+	// // Return
+	// ForceLeave(m Member)
 
 	// MUST DO:
 	// Add search functiionality.
@@ -90,11 +110,14 @@ type Cluster interface {
 type Member interface {
 	io.Closer
 
+	// The id of the member
+	Ping() bool
+
 	// Connects to the target of the client on the given port.
 	Connect(int) (net.Connection, error)
 
 	// Returns a store client.
-	Store() (Store, error)
+	Store(common.Context) (Store, error)
 }
 
 // A very simple key,value store abstraction. Updates to the store
@@ -107,18 +130,8 @@ type Store interface {
 	Get(key string) (string, error)
 
 	// Returns a handle to a batch of changes to apply to the store.
-	Update() (Update, error)
-}
+	Put(key string, val string) error
 
-// An update represents an uncommitted batch of changes for a given store.
-type Update interface {
-
-	// Puts the key value
-	Put(key string, val string)
-
-	// Deletes the key value at key.
-	Delete(key string)
-
-	// Commits the changes and returns the new version.
-	Commit() (int, error)
+	// Deletes the value associated with the key
+	Del(key string) error
 }
