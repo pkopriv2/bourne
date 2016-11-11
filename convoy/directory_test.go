@@ -60,16 +60,16 @@ func TestDirectory_Read_Write(t *testing.T) {
 	defer dir.Close()
 
 
-	assert.Nil(t, dir.write(func(tx *db) error {
-		tx.Primary[member.id] = datum{Member: member}
-		return nil
-	}))
-
-	assert.Nil(t, dir.read(func(tx *db) error {
-		assert.Equal(t, 1, len(tx.Primary))
-		assert.Equal(t, member, tx.Primary[member.id].Member)
-		return nil
-	}))
+	// assert.Nil(t, dir.write(func(tx *db) error {
+		// tx.Primary[member.id] = datum{Member: member}
+		// return nil
+	// }))
+//
+	// assert.Nil(t, dir.read(func(tx *db) error {
+		// assert.Equal(t, 1, len(tx.Primary))
+		// assert.Equal(t, member, tx.Primary[member.id].Member)
+		// return nil
+	// }))
 }
 //
 // func TestDirectory_Gc_DeletedDatum(t *testing.T) {

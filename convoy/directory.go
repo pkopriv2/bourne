@@ -292,6 +292,20 @@ func newDirectory(ctx common.Context) *directory {
 	return dir
 }
 
+func (d *directory) apply(e event) {
+    d.write(func(db *db) {
+        e.Apply(db)
+    })
+}
+
+func (d *directory) batch(events []event) {
+    d.write(func(db *db) {
+        for _, e := range events {
+            e.Apply(db)
+        }
+    })
+}
+
 func (d *directory) read(fn func(*db)) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
