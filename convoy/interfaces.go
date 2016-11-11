@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -84,21 +85,22 @@ type Change interface {
 
 // A cluster represents the aggregated view of all members' data
 // stores.
-type Cluster interface { io.Closer
+type Cluster interface {
+	io.Closer
 
 	// Returns a handle to the store of the given id.  Consumers
 	GetMember(id uuid.UUID) (Member, error)
-//
+	//
 	// // Returns the currently alive members.
 	// Alive() ([]Member, error)
-//
+	//
 	// // Returns the currently dead members.  This means the member is out of contact.
 	// // This can happen for a variety of environmental reasons.
 	// Dead() ([]Member, error)
-//
+	//
 	// // Returns the recently left members.
 	// Gone() ([]Member, error)
-//
+	//
 	// // Return
 	// ForceLeave(m Member)
 
@@ -108,7 +110,7 @@ type Cluster interface { io.Closer
 
 // A simple client abstraction.
 type Member interface {
-	io.Closer
+	enc.Writable
 
 	// The id of the member
 	Ping() bool

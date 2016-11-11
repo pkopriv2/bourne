@@ -11,26 +11,34 @@ import (
 	"github.com/pkopriv2/bourne/btree"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/enc"
 	uuid "github.com/satori/go.uuid"
 )
 
-// the primary index data type
-type datum struct {
-	Time    time.Time
-	Deleted bool
-	Version int
-	Member  Member
-}
+// The directory is the core storage engine of the convoy replicas.
+// It's primary purpose is to maintain 1.) the listing of members
+// and 2.) allow searchable access to the members' datastores.
 
 // the secondary index data type. (just a pointer to primary)
-type ref struct {
+type datum struct {
 	Deleted bool
 	Version int
 	Time    time.Time
 }
 
-func (r ref) String() string {
+func (r datum) String() string {
 	return fmt.Sprintf("(%v, %v, %v)", r.Deleted, r.Version, r.Time)
+}
+
+// Events encapsulate a specific mutation, allowing them to
+// be stored or replicated for future use.  Events are stored
+// in time sorted order - but are NOT made durable.  Therefore,
+// this log is NOT suitable for disaster recovery.  The current
+// approach is to recreate the log from a "live" member.
+type event interface {
+	enc.Writable
+
+	Apply(*db)
 }
 
 // Every member contributes a small key-value db to the directory.
@@ -52,7 +60,42 @@ func (k item) IncrementVal() item {
 	return item{k.Id, k.Key, incString(k.Val)}
 }
 
-// An item that is sorted according to the precedence rules: Key/Id/Val
+// the ikv key index (Id-Key-Val)
+type ikv item
+
+func (k ikv) String() string {
+	return fmt.Sprintf("/id:%v/key:%s/val:%v", k.Key, k.Id, k.Val)
+}
+
+func (k ikv) IncrementKey() ikv {
+	return ikv(item(k).IncrementKey())
+}
+
+func (k ikv) IncrementId() ikv {
+	return ikv(item(k).IncrementId())
+}
+
+func (k ikv) IncrementVal() ikv {
+	return ikv(item(k).IncrementVal())
+}
+
+func (k ikv) Compare(o ikv) int {
+	if ret := bytes.Compare(k.Id.Bytes(), o.Id.Bytes()); ret != 0 {
+		return ret
+	}
+
+	if ret := bytes.Compare([]byte(k.Key), []byte(o.Key)); ret != 0 {
+		return ret
+	}
+
+	return bytes.Compare([]byte(k.Val), []byte(o.Val))
+}
+
+func (k ikv) Less(other btree.Item) bool {
+	return k.Compare(other.(ikv)) < 0
+}
+
+// The kiv key index (Key-Id-Val)
 type kiv item
 
 func (k kiv) String() string {
@@ -87,127 +130,150 @@ func (k kiv) Less(other btree.Item) bool {
 	return k.Compare(other.(kiv)) < 0
 }
 
-// A transactional data view into the directory.   This is extremely
-// dangerous and only people who really know what they're doing should
-// use this directly.  Instead, use the convenience functions for
-// generating common mutations over a transaction
+// index of time to event
+type te uint64
+
+func (t te) Less(than btree.Item) bool {
+	return t < than.(te)
+}
+
+// A transactional data view into the directory.   Whiles this does guarantee
+// a consistent view, updates to the data are visible immediately.  There is
+// no rollback mechanism.  This is extremely dangerous and only people who really
+// know what they're doing should use this directly.  Instead, use the convenience
+// functions for generating common mutations over a transaction
 //
 // ** INTERNAL ONLY **
-type tx struct {
-	Time    time.Time
-	Primary map[uuid.UUID]datum
-	Kiv     *index
+type db struct {
+	Clock uint64
+	Time  time.Time
+	Te    *index // time -> event index
+	Ikv   *index
+	Kiv   *index
 }
 
+// Puts the key value to the directory for the member at the given id.
+func dirIndexKiv(db *db, key kiv, ver int, del bool) {
+	updated := datum{Time: db.Time, Version: ver, Deleted: del}
 
-// Adds a member to the directory
-func dirPutMemberTx(id uuid.UUID, mem Member, ver int) func(*tx) error {
-	return func(tx *tx) error {
-		updated := datum{Member: mem, Version: ver, Time: tx.Time}
+	var existingKiv *kiv
+	var existingDatum *datum
+	db.Kiv.ScanAt(kiv{Key: key.Key, Id: key.Id}, func(scan *indexScan, key indexKey) {
+		kiv := key.(kiv)
+		datum := db.Kiv.Get(kiv).(datum)
 
-		existing, ok := tx.Primary[id]
-		if !ok {
-			tx.Primary[id] = updated
-			return nil
-		}
+		existingKiv = &kiv
+		existingDatum = &datum
+		scan.Stop()
+	})
 
-		if existing.Version < ver {
-			tx.Primary[id] = updated
-			return nil
-		}
-
-		return nil
+	if existingDatum == nil {
+		db.Kiv.Put(key, updated)
+		return
 	}
-}
 
-// Removes a member from the directory.
-func dirDelMemberTx(id uuid.UUID, ver int) func(*tx) error {
-	return func(tx *tx) error {
-		updated := datum{Deleted: true, Version: ver, Time: tx.Time}
-
-		existing, ok := tx.Primary[id]
-		if !ok {
-			tx.Primary[id] = updated
-			return nil
-		}
-
-		if existing.Version <= ver { // notice equality
-			tx.Primary[id] = updated
-			return nil
-		}
-
-		return nil
+	if existingDatum.Version < ver {
+		db.Kiv.Remove(existingKiv)
+		db.Kiv.Put(key, updated)
+		return
 	}
 }
 
 // Puts the key value to the directory for the member at the given id.
-func dirPutKeyValueTx(id uuid.UUID, key string, val string, ver int) func(*tx) error {
-	return func(tx *tx) error {
-		updated := ref{Time: tx.Time, Version: ver}
+func dirIndexIkv(db *db, key ikv, ver int, del bool) {
+	updated := datum{Time: db.Time, Version: ver, Deleted: del}
 
-		var existingRef *ref
-		var existingKiv *kiv
-		tx.Kiv.ScanAt(kiv{Id: id, Key: key}, func(scan *indexScan, key indexKey) {
-			kiv := key.(kiv)
-			ref := tx.Kiv.Get(existingKiv).(ref)
+	var existingIkv *ikv
+	var existingDatum *datum
+	db.Ikv.ScanAt(ikv{Key: key.Key, Id: key.Id}, func(scan *indexScan, key indexKey) {
+		ikv := key.(ikv)
+		datum := db.Ikv.Get(ikv).(datum)
 
-			existingKiv = &kiv
-			existingRef = &ref
-			scan.Stop()
-		})
+		existingIkv = &ikv
+		existingDatum = &datum
+		scan.Stop()
+	})
 
-		if existingRef == nil {
-			tx.Kiv.Put(kiv{id, key, val}, updated)
-			return nil
-		}
+	if existingDatum == nil {
+		db.Ikv.Put(key, updated)
+		return
+	}
 
-		if existingRef.Version < ver {
-			tx.Kiv.Remove(existingKiv)
-			tx.Kiv.Put(kiv{id, key, val}, updated)
-			return nil
-		}
-
-		return nil
+	if existingDatum.Version < ver {
+		db.Ikv.Remove(existingIkv)
+		db.Ikv.Put(key, updated)
+		return
 	}
 }
 
-// Removes a key value from the directory.
-func dirDelKeyValueTx(id uuid.UUID, key string, ver int) func(*tx) error {
-	return func(tx *tx) error {
-		updated := ref{Deleted: true, Time: tx.Time, Version: ver}
+// Puts the key value to the directory for the member at the given id.
+func dirIndexEvent(db *db, key te, event event) {
+	db.Ikv.Put(key, event)
+}
 
-		var existingRef *ref
-		var existingKiv *kiv
-		tx.Kiv.ScanAt(kiv{Id: id, Key: key}, func(scan *indexScan, key indexKey) {
-			kiv := key.(kiv)
-			ref := tx.Kiv.Get(existingKiv).(ref)
+// The primary data event type.
+type dataEvent struct {
+	Id  uuid.UUID
+	Key string
+	Val string
+	Ver int
+	Del bool
+}
 
-			existingKiv = &kiv
-			existingRef = &ref
-			scan.Stop()
-		})
+func newAddDatum(id uuid.UUID, key string, val string, ver int) *dataEvent {
+	return &dataEvent{id, key, val, ver, false}
+}
 
-		if existingRef == nil {
-			tx.Kiv.Put(kiv{Id: id, Key: key}, updated)
-			return nil
-		}
+func newDelDatum(id uuid.UUID, key string, ver int) *dataEvent {
+	return &dataEvent{id, key, "", ver, true}
+}
 
-		if existingRef.Version < ver {
-			tx.Kiv.Remove(existingKiv)
-			tx.Kiv.Put(kiv{Id: id, Key: key}, updated)
-			return nil
-		}
-
-		return nil
+func readDataEvent(r enc.Reader) (*dataEvent, error) {
+	id, err := readUUID(r, "id")
+	if err != nil {
+		return nil, err
 	}
+
+	event := &dataEvent{Id: id}
+	if err := r.Read("key", &event.Key); err != nil {
+		return nil, err
+	}
+	if err := r.Read("val", &event.Val); err != nil {
+		return nil, err
+	}
+	if err := r.Read("ver", &event.Ver); err != nil {
+		return nil, err
+	}
+	if err := r.Read("del", &event.Del); err != nil {
+		return nil, err
+	}
+	return event, nil
+}
+
+func (e *dataEvent) Write(w enc.Writer) {
+	w.Write("id", e.Id.String())
+	w.Write("key", e.Key)
+	w.Write("val", e.Val)
+	w.Write("ver", e.Ver)
+	w.Write("del", e.Del)
+}
+
+func (e *dataEvent) Apply(db *db) {
+	item := item{e.Id, e.Key, e.Val}
+
+	dirIndexEvent(db, te(db.Clock), e)
+	dirIndexKiv(db, kiv(item), e.Ver, e.Del)
+	dirIndexIkv(db, ikv(item), e.Ver, e.Del)
 }
 
 // the core storage type.
 type directory struct {
 	ctx    common.Context
 	lock   sync.RWMutex
-	id     map[uuid.UUID]datum
-	kiv    *index // index of kiv -> ref
+	clock  uint64
+	kiv    *index // index of kiv -> datum
+	ikv    *index // index of ikv -> datum
+	te     *index // index of te  -> event
 	closed chan struct{}
 	closer chan struct{}
 	wait   sync.WaitGroup
@@ -217,7 +283,8 @@ func newDirectory(ctx common.Context) *directory {
 	dir := &directory{
 		ctx:    ctx,
 		kiv:    newIndex(),
-		id:     make(map[uuid.UUID]datum),
+		ikv:    newIndex(),
+		te:     newIndex(),
 		closed: make(chan struct{}),
 		closer: make(chan struct{}, 1)}
 
@@ -225,16 +292,17 @@ func newDirectory(ctx common.Context) *directory {
 	return dir
 }
 
-func (d *directory) read(fn func(*tx) error) error {
+func (d *directory) read(fn func(*db)) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
-	return fn(&tx{time.Now(), d.id, d.kiv})
+	fn(&db{d.clock, time.Now(), d.te, d.ikv, d.kiv})
 }
 
-func (d *directory) write(fn func(*tx) error) error {
+func (d *directory) write(fn func(*db)) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
-	return fn(&tx{time.Now(), d.id, d.kiv})
+	d.clock++
+	fn(&db{d.clock, time.Now(), d.te, d.ikv, d.kiv})
 }
 
 func (d *directory) Close() error {
@@ -263,18 +331,25 @@ func (d *directory) startGc() {
 	}()
 }
 
+// The directory collector.  Keeps it clean!
 type collector struct {
 	dir    *directory
+	gcExp  time.Duration
+	gcPer  time.Duration
 	closed chan struct{}
 	closer chan struct{}
 	wait   sync.WaitGroup
 }
 
 func newCollector(dir *directory) *collector {
+	conf := dir.ctx.Config()
+
 	c := &collector{
 		dir:    dir,
 		closed: make(chan struct{}),
 		closer: make(chan struct{}, 1),
+		gcExp:  conf.OptionalDuration("convoy.directory.gc.data.expiration", 24*60*time.Minute),
+		gcPer:  conf.OptionalDuration("convoy.directory.gc.cycle.time", 30*time.Second),
 	}
 
 	c.wait.Add(1)
@@ -295,121 +370,62 @@ func (c *collector) Close() error {
 }
 
 func (d *collector) run() {
+	logger := d.dir.ctx.Logger()
 	defer d.wait.Done()
-
-	ctx := d.dir.ctx
-	conf := ctx.Config()
-	logger := ctx.Logger()
 	defer logger.Debug("GC shutting down")
 
-	gcExp := conf.OptionalDuration("convoy.directory.gc.data.expiration", 24*60*time.Minute)
-	gcPer := conf.OptionalDuration("convoy.directory.gc.cycle.time", 30*time.Second)
+	logger.Debug("Running GC every [%v] with expiration [%v]", d.gcPer, d.gcExp)
 
-	logger.Debug("Running GC every [%v] with expiration [%v]", gcPer, gcExp)
-
-	// TODO: Run benchmarks to determine if we should do a stop the world collection,
-	// or if we should do more of a concurrent-mark and sweep approach.
-	ticker := time.Tick(gcPer)
+	ticker := time.Tick(d.gcPer)
 	for {
-		var gcBeg time.Time
 		select {
 		case <-d.closed:
 			return
-		case gcBeg = <-ticker:
+		case <-ticker:
 		}
 
 		// clean it up
-		d.runGcCycle(gcBeg, gcExp)
+		d.runGcCycle(d.gcExp)
 	}
 }
 
-func (d *collector) runGcCycle(gcBeg time.Time, gcExp time.Duration) {
-	logger := d.dir.ctx.Logger()
+func (d *collector) runGcCycle(gcExp time.Duration) {
+	d.dir.write(func(db *db) {
+		d.dir.ctx.Logger().Debug("Gc begin [%v]", db.Time)
 
-	d.dir.write(func(tx *tx) error {
-		logger.Debug("Directory GC Cycle Start [%v]", gcBeg)
-
-		// collect all dead data.
-		datums := concurrent.NewFuture(func() interface{} {
-			return collectDeadDatums(tx, gcBeg, gcExp)
+		ikvs := concurrent.NewFuture(func() interface{} {
+			deleteDeadDatums(db.Ikv, collectDeadKeys(db.Ikv, db.Time, gcExp))
+			return nil
 		})
 
-		// collect all dead kiv ref's
-		refs := concurrent.NewFuture(func() interface{} {
-			return collectDeadKivRefs(tx, gcBeg, gcExp)
+		kivs := concurrent.NewFuture(func() interface{} {
+			deleteDeadDatums(db.Kiv, collectDeadKeys(db.Kiv, db.Time, gcExp))
+			return nil
 		})
 
-		// delete data
-		deleteKivRefs(tx, (<-refs).([]kiv))
-		deleteDatums(tx, (<-datums).([]uuid.UUID))
-		return nil
+		<-ikvs
+		<-kivs
 	})
 }
 
-func collectDeadDatums(tx *tx, gcStart time.Time, gcDead time.Duration) []uuid.UUID {
-	dead := make([]uuid.UUID, 0, 128)
-	for id, datum := range tx.Primary {
+func deleteDeadDatums(idx *index, keys []indexKey) {
+	for _, key := range keys {
+		idx.Remove(key)
+	}
+}
+
+func collectDeadKeys(idx *index, gcStart time.Time, gcDead time.Duration) []indexKey {
+	dead := make([]indexKey, 0, 128)
+
+	idx.Scan(func(scan *indexScan, key indexKey) {
+		datum := idx.Get(key).(datum)
 		if datum.Deleted && gcStart.Sub(datum.Time) >= gcDead {
-			dead = append(dead, id)
-		}
-	}
-
-	return dead
-}
-
-func collectDeadKivRefs(tx *tx, gcStart time.Time, gcDead time.Duration) []kiv {
-	dead := make([]kiv, 0, 128)
-
-	tx.Kiv.Scan(func(scan *indexScan, key indexKey) {
-		kiv := key.(kiv)
-		ref := tx.Kiv.Get(key).(ref)
-		if ref.Deleted && gcStart.Sub(ref.Time) >= gcDead {
-			dead = append(dead, kiv)
-			return
-		}
-
-		if _, ok := tx.Primary[kiv.Id]; !ok {
-			dead = append(dead, kiv)
+			dead = append(dead, key)
 			return
 		}
 	})
 
 	return dead
-}
-
-// assumes a write lock is taken
-func deleteKivRefs(tx *tx, refs []kiv) {
-	for _, kiv := range refs {
-		tx.Kiv.Remove(kiv)
-	}
-}
-
-// assumes a write lock is taken
-func deleteDatums(tx *tx, ids []uuid.UUID) {
-	// make lookup table
-	lookup := make(map[uuid.UUID]bool)
-	for _, id := range ids {
-		lookup[id] = true
-	}
-
-	// lookup any refs that would be orphaned by delete.
-	deadRefs := make([]kiv, 0, 128)
-	tx.Kiv.Scan(func(scan *indexScan, key indexKey) {
-		kiv := key.(kiv)
-		if lookup[kiv.Id] {
-			deadRefs = append(deadRefs, kiv)
-		}
-	})
-
-	// delete the refs
-	for _, key := range deadRefs {
-		tx.Kiv.Remove(key)
-	}
-
-	// delete the datums
-	for _, id := range ids {
-		delete(tx.Primary, id)
-	}
 }
 
 // a few helper methods

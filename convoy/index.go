@@ -6,7 +6,7 @@ import "github.com/pkopriv2/bourne/btree"
 // fashion.  In reality, it is simply a btree of keys with
 // a lookup table from key to value.  This implements
 // hash-like put/get/delete operations which all perform
-// in log32(n).  It also supports primitive indexScan facilities
+// in log32(n).  It also supports primitive scan facilities
 // which can be used to search arbitrary subsections of
 // the index.
 

@@ -33,25 +33,32 @@ func idxBucket(id uuid.UUID) []byte {
 
 // This is just a test implementation.  Will need to add durability to make this resilient to host failures.
 type database struct {
+
 	id uuid.UUID
-	db bolt.DB
+	db *bolt.DB
 
 	lock sync.RWMutex
 }
 
-func NewDatabase(id uuid.UUID) Database {
-	return nil
-	// return &database{
-	// id:        id,
-	// db:
-	// log:       make([]Change, 1024),
-	// idx:       make(map[string]string),
-	// listeners: make([]chan Change, 0, 10),
-	// closed:    make(chan struct{})}
+func NewDatabase(id uuid.UUID) (Database, error) {
+	db, err := bolt.Open("db", 0600, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return &database{id: id, db: db}, nil
 }
 
 func (d *database) Close() error {
 	return d.db.Close()
+}
+
+func (l *database) Id() uuid.UUID {
+	return l.id
+}
+
+func (d *database) Log() <-chan Change {
+	panic("not implemented")
 }
 
 func (d *database) Get(key string) (string, error) {
@@ -116,24 +123,21 @@ func (d *database) Del(key string) error {
 			panic("Bolt db not initialized")
 		}
 
-		// version, _ := log.NextSequence()
+		version, _ := log.NextSequence()
 
-		// msg := enc.Write(newChange(int(version), false, true, val))
-		// buf := new(bytes.Buffer)
-		// msg.Stream(gob.NewEncoder(buf))
-//
-		// if err := log.Put(itob(version), buf.Bytes()); err != nil {
-			// return err
-		// }
-//
-		// if err := idx.Put([]byte(key), []byte(val)); err != nil {
-			// return err
-		// }
+		msg := enc.Write(newChange(int(version), true, key, ""))
+		buf := new(bytes.Buffer)
+		msg.Stream(gob.NewEncoder(buf))
+
+		if err := log.Put(itob(version), buf.Bytes()); err != nil {
+			return err
+		}
+
+		if err := idx.Delete([]byte(key)); err != nil {
+			return err
+		}
 
 		return nil
 	})
 }
 
-func (l *database) Id() uuid.UUID {
-	return l.id
-}

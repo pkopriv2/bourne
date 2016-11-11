@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -12,6 +13,10 @@ type member struct {
 	id   uuid.UUID
 	host string
 	port int
+}
+
+func (m *member) Write(enc.Writer) {
+	panic("not implemented")
 }
 
 func newMember(id uuid.UUID, host string, port int) *member {

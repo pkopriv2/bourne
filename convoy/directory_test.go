@@ -1,8 +1,6 @@
 package convoy
 
 import (
-	"math/rand"
-	"strconv"
 	"testing"
 	"time"
 
@@ -61,71 +59,70 @@ func TestDirectory_Read_Write(t *testing.T) {
 	dir := newDirectory(common.NewContext(common.NewEmptyConfig()))
 	defer dir.Close()
 
-	member := newMember(uuid.NewV4(), "host", 1)
 
-	assert.Nil(t, dir.write(func(tx *tx) error {
+	assert.Nil(t, dir.write(func(tx *db) error {
 		tx.Primary[member.id] = datum{Member: member}
 		return nil
 	}))
 
-	assert.Nil(t, dir.read(func(tx *tx) error {
+	assert.Nil(t, dir.read(func(tx *db) error {
 		assert.Equal(t, 1, len(tx.Primary))
 		assert.Equal(t, member, tx.Primary[member.id].Member)
 		return nil
 	}))
 }
-
-func TestDirectory_Gc_DeletedDatum(t *testing.T) {
-	dir := NewTestDirectory()
-	defer dir.Close()
-
-	id := uuid.NewV4()
-	assert.Nil(t, dir.write(func(tx *tx) error {
-		tx.Primary[id] = datum{Deleted: true, Time: time.Now()}
-		return nil
-	}))
-
-	time.Sleep(200 * time.Millisecond)
-	assert.Nil(t, dir.read(func(tx *tx) error {
-		assert.Equal(t, 0, len(tx.Primary))
-		return nil
-	}))
-}
-
-func TestDirectory_Gc_HangingRef(t *testing.T) {
-	dir := NewTestDirectory()
-	defer dir.Close()
-
-	id := uuid.NewV4()
-	assert.Nil(t, dir.write(func(tx *tx) error {
-		tx.Kiv.Put(kiv{id, "key", "val"}, ref{})
-		return nil
-	}))
-
-	time.Sleep(200 * time.Millisecond)
-	assert.Nil(t, dir.read(func(tx *tx) error {
-		assert.Equal(t, 0, tx.Kiv.Size())
-		return nil
-	}))
-}
-
-func TestDirectory_Gc_DeletedDatumWithRefs(t *testing.T) {
-	dir := NewTestDirectory()
-	defer dir.Close()
-
-	id := uuid.NewV4()
-	assert.Nil(t, dir.write(func(tx *tx) error {
-		tx.Primary[id] = datum{Deleted: true, Time: time.Now()}
-		for i := 0; i < 1024; i++ {
-			tx.Kiv.Put(kiv{id, strconv.Itoa(rand.Int()), "val"}, ref{}) // not deleted
-		}
-		return nil
-	}))
-
-	time.Sleep(200 * time.Millisecond)
-	assert.Nil(t, dir.read(func(tx *tx) error {
-		assert.Equal(t, 0, len(tx.Primary))
-		assert.Equal(t, 0, tx.Kiv.Size())
-		return nil
-	}))
-}
+//
+// func TestDirectory_Gc_DeletedDatum(t *testing.T) {
+// dir := NewTestDirectory()
+// defer dir.Close()
+//
+// id := uuid.NewV4()
+// assert.Nil(t, dir.write(func(tx *db) error {
+// tx.Primary[id] = datum{Deleted: true, Time: time.Now()}
+// return nil
+// }))
+//
+// time.Sleep(200 * time.Millisecond)
+// assert.Nil(t, dir.read(func(tx *db) error {
+// assert.Equal(t, 0, len(tx.Primary))
+// return nil
+// }))
+// }
+//
+// func TestDirectory_Gc_HangingRef(t *testing.T) {
+// dir := NewTestDirectory()
+// defer dir.Close()
+//
+// id := uuid.NewV4()
+// assert.Nil(t, dir.write(func(tx *db) error {
+// tx.Kiv.Put(kiv{id, "key", "val"}, ref{})
+// return nil
+// }))
+//
+// time.Sleep(200 * time.Millisecond)
+// assert.Nil(t, dir.read(func(tx *db) error {
+// assert.Equal(t, 0, tx.Kiv.Size())
+// return nil
+// }))
+// }
+//
+// func TestDirectory_Gc_DeletedDatumWithRefs(t *testing.T) {
+// dir := NewTestDirectory()
+// defer dir.Close()
+//
+// id := uuid.NewV4()
+// assert.Nil(t, dir.write(func(tx *db) error {
+// tx.Primary[id] = datum{Deleted: true, Time: time.Now()}
+// for i := 0; i < 1024; i++ {
+// tx.Kiv.Put(kiv{id, strconv.Itoa(rand.Int()), "val"}, ref{}) // not deleted
+// }
+// return nil
+// }))
+//
+// time.Sleep(200 * time.Millisecond)
+// assert.Nil(t, dir.read(func(tx *db) error {
+// assert.Equal(t, 0, len(tx.Primary))
+// assert.Equal(t, 0, tx.Kiv.Size())
+// return nil
+// }))
+// }
