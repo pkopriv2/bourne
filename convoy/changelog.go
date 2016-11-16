@@ -1,0 +1,175 @@
+package convoy
+
+import (
+	"bytes"
+	"encoding/binary"
+	"encoding/gob"
+	"sync"
+	"time"
+
+	"github.com/boltdb/bolt"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/enc"
+	uuid "github.com/satori/go.uuid"
+)
+
+const (
+	ChangeLogLocationKey     = "bourne.convoy.changelog.path"
+	ChangeLogLocationDefault = "/var/bourne/db"
+)
+
+var (
+	logBucket = []byte("CONVOY:CHANGELOG")
+	idBucket  = []byte("CONVOY:CHANGELOG:ID")
+	idKey     = []byte("ID")
+)
+
+type changelog struct {
+	db      *bolt.DB
+	fns     []func(*Change)
+	fnsLock sync.RWMutex
+}
+
+func openChangeLog(ctx common.Context) (*changelog, error) {
+	db, err := bolt.Open(
+		ctx.Config().Optional(
+			ChangeLogLocationKey,
+			ChangeLogLocationDefault), 0600, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+
+	return &changelog{db: db, fns: make([]func(*Change), 0, 4)}, nil
+}
+
+func (c *changelog) Close() error {
+	return c.db.Close()
+}
+
+func (c *changelog) Listen(fn func(*Change)) {
+	c.fnsLock.Lock()
+	defer c.fnsLock.Lock()
+	c.fns = append(c.fns, fn)
+}
+
+func (c *changelog) Listeners() []func(*Change){
+	c.fnsLock.RLock()
+	defer c.fnsLock.RUnlock()
+	ret := make([]func(*Change), 0, len(c.fns))
+	for _, fn := range c.fns {
+		ret = append(ret, fn)
+	}
+	return ret
+}
+
+func (c *changelog) broadcast(chg *Change) {
+	for _, fn := range c.Listeners() {
+		fn(chg)
+	}
+}
+
+func (c *changelog) Id() (id uuid.UUID, err error) {
+	err = c.db.Update(func(tx *bolt.Tx) error {
+		id, err = getOrCreateId(tx)
+		return err
+	})
+	return
+}
+
+func (c *changelog) Append(chg *Change) (err error) {
+	err = c.db.Update(func(tx *bolt.Tx) error {
+		err = appendChange(tx, chg)
+		return err
+	})
+
+	if err != nil {
+		return
+	}
+
+	c.broadcast(chg)
+	return
+}
+
+func (c *changelog) Raw() (chgs []*Change, err error) {
+	err = c.db.View(func(tx *bolt.Tx) error {
+		chgs, err = readChanges(tx)
+		return err
+	})
+	return
+}
+
+// Helper functions
+func changeKeyBytes(id uint64) []byte {
+	key := make([]byte, 8)
+	binary.BigEndian.PutUint64(key, id)
+	return key
+}
+
+func parseChangeKey(val []byte) uint64 {
+	return binary.BigEndian.Uint64(val)
+}
+
+func changeValBytes(c *Change) []byte {
+	buf := new(bytes.Buffer)
+	enc.Encode(gob.NewEncoder(buf), c)
+	return buf.Bytes()
+}
+
+func parseChangeVal(val []byte) (*Change, error) {
+	msg, err := enc.Decode(gob.NewDecoder(bytes.NewBuffer(val)))
+	if err != nil {
+		return nil, err
+	}
+
+	return ReadChange(msg)
+}
+
+func getOrCreateId(tx *bolt.Tx) (uuid.UUID, error) {
+	var id uuid.UUID
+
+	bucket, err := tx.CreateBucketIfNotExists(idBucket)
+	if err != nil {
+		return id, err
+	}
+
+	idBytes := bucket.Get(idKey)
+	if idBytes != nil {
+		id, err = uuid.FromBytes(idBytes)
+		return id, err
+	}
+
+	id = uuid.NewV4()
+	return id, bucket.Put(idKey, id.Bytes())
+}
+
+func appendChange(tx *bolt.Tx, chg *Change) error {
+	bucket, err := tx.CreateBucketIfNotExists(logBucket)
+	if err != nil {
+		return err
+	}
+
+	id, err := bucket.NextSequence()
+	if err != nil {
+		return err
+	}
+
+	return bucket.Put(changeKeyBytes(id), changeValBytes(chg))
+}
+
+func readChanges(tx *bolt.Tx) ([]*Change, error) {
+	bucket := tx.Bucket(logBucket)
+	if bucket == nil {
+		return nil, nil
+	}
+
+	chgs := make([]*Change, 0, 1024)
+	return chgs, bucket.ForEach(func(_ []byte, val []byte) error {
+		chg, err := parseChangeVal(val)
+		if err != nil {
+			return err
+		}
+
+		chgs = append(chgs, chg)
+		return nil
+	})
+}

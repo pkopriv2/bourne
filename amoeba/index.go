@@ -6,19 +6,6 @@ import (
 	"github.com/pkopriv2/bourne/btree"
 )
 
-// An index stores arbitrary data in a sorted, searchable
-// fashion.  In reality, it is simply a btree of keys with
-// a lookup table from key to value.  This implements
-// hash-like put/get/delete operations which all perform
-// in logb(n).  It also supports primitive scan facilities
-// which can be used to search arbitrary subsections of
-// the index.
-//
-// The original intention of this indexing solution is to
-// be used in an eventually convergent database.  Therefore,
-// every data event must be versioned.
-
-
 
 // the index value
 type item struct {
@@ -94,10 +81,6 @@ func (i *index) Get(key Key) Item {
 		return nil
 	}
 
-	if val.Val() == nil {
-		return nil
-	}
-
 	return val
 }
 
@@ -120,10 +103,6 @@ func (r *index) ScanFrom(start Key, fn func(*Scan, Key, Item)) {
 		r.tree.AscendGreaterOrEqual(next, func(i btree.Item) bool {
 			key := i.(indexKey)
 			item := r.table[key]
-			if item.Val == nil {
-				return true
-			}
-
 			fn(scan, key.Key, item)
 			return !scan.stop && scan.next == nil
 		})

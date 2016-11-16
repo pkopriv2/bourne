@@ -2,7 +2,7 @@
 
 Amoeba is a library of indexing primitives.  Its intended use is within 
 a distributed, eventually convergent database, but has been extracted for 
-general use.  It implements a simple in-memory indexing library for use in 
+general use.  It implements a simple in-memory indexer for use in 
 applications which require more advanced lookup methods than what a simple 
 map can provide.  It supports near-constant time (log32(n)) get/set operations
 and a very performant scanning abstraction.
@@ -68,8 +68,7 @@ are now in play.  Among those are:
 
 Externalizing time allows us to index data on non-ambiguous elements (e.g. keys)
 while reconciling any issues of delivery by only ever accepting the latest 
-observed value for an item.  Amoeba indexes are both idempotent and eventually
-consistent. 
+observed value for an item.  
 
 ### Deleting a value
 
@@ -117,6 +116,3 @@ Amoeba can configured with the following keys:
 
 * amoeba.index.gc.expiration - Minimum time before deleted data is considered garbage.
 * amoeba.index.gc.cycle - Minimum duration between gc cycles.
-
-## LICENSE
-

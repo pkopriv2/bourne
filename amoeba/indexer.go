@@ -63,7 +63,7 @@ type Update interface {
 	Del(key Key, ver int)
 }
 
-// Implements a simple sortable interface.
+// A simple sortable interface
 type Sortable interface {
 	Compare(Sortable) int
 }

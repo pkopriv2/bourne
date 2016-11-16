@@ -10,21 +10,22 @@ import (
 )
 
 type member struct {
-	id   uuid.UUID
-	host string
-	port int
+	Id   uuid.UUID
+	Host string
+	Port int
+	Version int
 }
 
 func (m *member) Write(enc.Writer) {
 	panic("not implemented")
 }
 
-func newMember(id uuid.UUID, host string, port int) *member {
-	return &member{id, host, port}
+func newMember(id uuid.UUID, host string, port int, ver int) *member {
+	return &member{id, host, port, ver}
 }
 
 func (m *member) String() string {
-	return fmt.Sprintf("(%v)[%v:%v]", m.id.String(), m.host, m.port)
+	return fmt.Sprintf("(%v)[%v:%v]", m.Id.String(), m.Host, m.Port)
 }
 
 func (m *member) Close() error {
@@ -40,7 +41,7 @@ func (m *member) Update(Status int) error {
 }
 
 func (m *member) Connect(port int) (net.Connection, error) {
-	return net.ConnectTcp(net.NewAddr(m.host, port))
+	return net.ConnectTcp(net.NewAddr(m.Host, m.Port))
 }
 
 func (m *member) Store(common.Context) (Store, error) {

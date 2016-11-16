@@ -1,4 +1,4 @@
-package enc
+package scribe
 
 import (
 	"encoding/gob"

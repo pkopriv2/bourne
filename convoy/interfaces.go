@@ -68,19 +68,57 @@ type Database interface {
 	// every database must be globally identifiable.
 	Id() uuid.UUID
 
-	// Returns a channel containing an ordered list of changes
-	// whose versions are greater than or equal to the given
-	// version number.  The channel will remain open until
-	// the database is closed.
-	Log() <-chan Change
+	// the only difference between a store and a db is that a database
+	// has a durable change log
+	Log() ChangeLog
 }
 
-// The fundamental unit of change within the published database.
-type Change interface {
-	Version() int
-	Deleted() bool
-	Key() string
-	Val() string
+type ChangeLog interface {
+	io.Closer
+
+	// Every change log must be globally unique
+	Id() (uuid.UUID, error)
+
+	// Appends a change to the log and notifies any listeners.
+	Append(Change) error
+
+	// Returns all the changes in the lifetime of the change log.
+	All() ([]Change, error)
+
+	// Registers a handler to be invoked on any change to the log.
+	Listen(func(Change))
+}
+
+// Fundamental unit of change within the published database
+type Change struct {
+	Key string
+	Val string
+	Ver int
+	Del bool
+}
+
+func ReadChange(r enc.Reader) (*Change, error) {
+	c := &Change{}
+	if err := r.Read("Key", &c.Key); err != nil {
+		return nil, err
+	}
+	if err := r.Read("Val", &c.Val); err != nil {
+		return nil, err
+	}
+	if err := r.Read("Ver", &c.Ver); err != nil {
+		return nil, err
+	}
+	if err := r.Read("Del", &c.Del); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *Change) Write(w enc.Writer) {
+	w.Write("Key", c.Key)
+	w.Write("Val", c.Val)
+	w.Write("Ver", c.Ver)
+	w.Write("Del", c.Del)
 }
 
 // A cluster represents the aggregated view of all members' data
