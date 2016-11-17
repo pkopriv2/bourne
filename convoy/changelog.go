@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/boltdb/bolt"
-	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
@@ -34,13 +33,8 @@ type changelog struct {
 }
 
 // Opens the change log.  This uses the shared store
-func openChangeLog(ctx common.Context) (ChangeLog, error) {
-	db, err := stash.Open(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return &changelog{db: db, fns: make([]func(Change), 0, 4)}, nil
+func openChangeLog(db stash.Stash) ChangeLog {
+	return &changelog{db: db, fns: make([]func(Change), 0, 4)}
 }
 
 func (c *changelog) Close() error {

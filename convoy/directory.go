@@ -21,23 +21,20 @@ type event interface {
 
 // the core storage type.
 type directory struct {
-	Ctx     common.Context
-	Lock    sync.RWMutex
-	Data    amoeba.Indexer
-	Members amoeba.Indexer
+	Ctx  common.Context
+	Lock sync.RWMutex
+	Data amoeba.Indexer
 }
 
 func newDirectory(ctx common.Context) *directory {
 	return &directory{
-		Ctx:     ctx,
-		Data:    amoeba.NewIndexer(ctx),
-		Members: amoeba.NewIndexer(ctx)}
+		Ctx:  ctx,
+		Data: amoeba.NewIndexer(ctx)}
 }
 
 func (d *directory) Close() error {
 	d.Lock.Lock()
 	defer d.Lock.Lock()
-	defer d.Members.Close()
 	defer d.Data.Close()
 	return nil
 }
@@ -45,20 +42,16 @@ func (d *directory) Close() error {
 func (d *directory) Update(fn func(*update)) {
 	d.Lock.Lock()
 	defer d.Lock.Lock()
-	d.Members.Update(func(members amoeba.Update) {
-		d.Data.Update(func(data amoeba.Update) {
-			fn(&update{Data: data, Members: members})
-		})
+	d.Data.Update(func(data amoeba.Update) {
+		fn(&update{Data: data})
 	})
 }
 
 func (d *directory) View(fn func(*view)) {
 	d.Lock.RLock()
 	defer d.Lock.RUnlock()
-	d.Members.Update(func(members amoeba.Update) {
-		d.Data.Update(func(data amoeba.Update) {
-			fn(&view{Data: data, Members: members})
-		})
+	d.Data.Update(func(data amoeba.Update) {
+		fn(&view{Data: data})
 	})
 }
 
@@ -157,9 +150,14 @@ type view struct {
 	Data    amoeba.View
 }
 
+const (
+	memberHostKey   = "/Convoy/Host"
+	memberPortKey   = "/Convoy/Port"
+	memberStatusKey = "/Convoy/Status"
+)
+
 type update struct {
-	Members amoeba.Update
-	Data    amoeba.Update
+	Data amoeba.Update
 }
 
 func (u *update) AddDatum(id uuid.UUID, key string, val string, ver int) {
@@ -171,12 +169,11 @@ func (u *update) DelDatum(id uuid.UUID, key string, ver int) {
 }
 
 func (u *update) AddMember(id uuid.UUID, m *member) {
-	u.Members.Put(mi{id}, m, m.Version)
+	u.Data.Put(ki{memberHostKey, id}, m.Host, m.Version)
+	u.Data.Put(ki{memberPortKey, id}, m.Port, m.Version)
 }
 
 func (u *update) DelMember(id uuid.UUID, ver int) {
-	u.Members.Del(mi{id}, ver)
-
 	type item struct {
 		key  amoeba.Key
 		item amoeba.Item
@@ -195,7 +192,6 @@ func (u *update) DelMember(id uuid.UUID, ver int) {
 		u.Data.Del(i.key, i.item.Ver())
 	}
 }
-
 
 // The primary data event type.
 type dataEvent struct {
@@ -290,4 +286,3 @@ func (e *memberEvent) Apply(tx *update) {
 		tx.AddMember(e.Id, newMember(e.Id, e.Host, e.Port, e.Ver))
 	}
 }
-

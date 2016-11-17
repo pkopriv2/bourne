@@ -20,12 +20,9 @@ func GetTestPath(dir string, file string) string {
 }
 
 func TestStash_Close(t *testing.T) {
-	ctx := common.NewContext(
-		common.NewConfig(
-			map[string]interface{}{
-				StashLocationKey: GetTestPath(TestSuffix, "db")}))
+	ctx := common.NewContext(common.NewEmptyConfig())
 
-	stash1, err1 := Open(ctx)
+	stash1, err1 := OpenRandom(ctx)
 	assert.Nil(t, err1)
 
 	ctx.Close()
@@ -34,14 +31,27 @@ func TestStash_Close(t *testing.T) {
 	}))
 }
 
-func TestStash_ConcurrentUpdates(t *testing.T) {
+func TestStash_MultipeOpens(t *testing.T) {
 	ctx := common.NewContext(
 		common.NewConfig(
 			map[string]interface{}{
 				StashLocationKey: GetTestPath(TestSuffix, "db")}))
 	defer ctx.Close()
 
-	stash, err := Open(ctx)
+	stash1, err1 := OpenConfigured(ctx)
+	assert.Nil(t, err1)
+
+	stash2, err2 := OpenConfigured(ctx)
+	assert.Nil(t, err2)
+
+	assert.Equal(t, stash1, stash2)
+}
+
+func TestStash_ConcurrentUpdates(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	stash, err := OpenRandom(ctx)
 	assert.Nil(t, err)
 
 	bucket := []byte("bucket")
@@ -109,22 +119,6 @@ func TestStash_ConcurrentUpdates(t *testing.T) {
 
 	wait.Wait()
 	assert.Equal(t, uint64(200), get(stash))
-}
-
-func TestStash_SameLocation(t *testing.T) {
-	ctx := common.NewContext(
-		common.NewConfig(
-			map[string]interface{}{
-				StashLocationKey: GetTestPath(TestSuffix, "db")}))
-	defer ctx.Close()
-
-	stash1, err1 := Open(ctx)
-	assert.Nil(t, err1)
-
-	stash2, err2 := Open(ctx)
-	assert.Nil(t, err2)
-
-	assert.Equal(t, stash1, stash2)
 }
 
 // Helper functions
