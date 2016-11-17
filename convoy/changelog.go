@@ -5,64 +5,65 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"sync"
-	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/enc"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
-const (
-	ChangeLogLocationKey     = "bourne.convoy.changelog.path"
-	ChangeLogLocationDefault = "/var/bourne/db"
-)
-
 var (
-	logBucket = []byte("CONVOY:CHANGELOG")
-	idBucket  = []byte("CONVOY:CHANGELOG:ID")
-	idKey     = []byte("ID")
+	logBucket = []byte("convoy/changelog")
+	idBucket  = []byte("convoy/changelog/id")
+	idKey     = []byte("id")
 )
 
+// The change log implementation.  The change log is
+// built on a bolt DB instance, so it is guaranteed
+// both durable and thread-safe.
 type changelog struct {
-	db      *bolt.DB
-	fns     []func(*Change)
+	// The underlying bolt db instance.
+	db stash.Stash
+
+	// Change handlers
+	fns []func(Change)
+
+	// Lock around handlers
 	fnsLock sync.RWMutex
 }
 
-func openChangeLog(ctx common.Context) (*changelog, error) {
-	db, err := bolt.Open(
-		ctx.Config().Optional(
-			ChangeLogLocationKey,
-			ChangeLogLocationDefault), 0600, &bolt.Options{Timeout: 1 * time.Second})
+// Opens the change log.  This uses the shared store
+func openChangeLog(ctx common.Context) (ChangeLog, error) {
+	db, err := stash.Open(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &changelog{db: db, fns: make([]func(*Change), 0, 4)}, nil
+	return &changelog{db: db, fns: make([]func(Change), 0, 4)}, nil
 }
 
 func (c *changelog) Close() error {
-	return c.db.Close()
+	return nil
 }
 
-func (c *changelog) Listen(fn func(*Change)) {
+func (c *changelog) Listen(fn func(Change)) {
 	c.fnsLock.Lock()
 	defer c.fnsLock.Lock()
 	c.fns = append(c.fns, fn)
 }
 
-func (c *changelog) Listeners() []func(*Change){
+func (c *changelog) Listeners() []func(Change) {
 	c.fnsLock.RLock()
 	defer c.fnsLock.RUnlock()
-	ret := make([]func(*Change), 0, len(c.fns))
+	ret := make([]func(Change), 0, len(c.fns))
 	for _, fn := range c.fns {
 		ret = append(ret, fn)
 	}
 	return ret
 }
 
-func (c *changelog) broadcast(chg *Change) {
+func (c *changelog) broadcast(chg Change) {
 	for _, fn := range c.Listeners() {
 		fn(chg)
 	}
@@ -76,7 +77,7 @@ func (c *changelog) Id() (id uuid.UUID, err error) {
 	return
 }
 
-func (c *changelog) Append(chg *Change) (err error) {
+func (c *changelog) Append(chg Change) (err error) {
 	err = c.db.Update(func(tx *bolt.Tx) error {
 		err = appendChange(tx, chg)
 		return err
@@ -90,7 +91,7 @@ func (c *changelog) Append(chg *Change) (err error) {
 	return
 }
 
-func (c *changelog) Raw() (chgs []*Change, err error) {
+func (c *changelog) All() (chgs []Change, err error) {
 	err = c.db.View(func(tx *bolt.Tx) error {
 		chgs, err = readChanges(tx)
 		return err
@@ -109,16 +110,17 @@ func parseChangeKey(val []byte) uint64 {
 	return binary.BigEndian.Uint64(val)
 }
 
-func changeValBytes(c *Change) []byte {
+func changeValBytes(c Change) []byte {
 	buf := new(bytes.Buffer)
 	enc.Encode(gob.NewEncoder(buf), c)
 	return buf.Bytes()
 }
 
-func parseChangeVal(val []byte) (*Change, error) {
+func parseChangeVal(val []byte) (Change, error) {
 	msg, err := enc.Decode(gob.NewDecoder(bytes.NewBuffer(val)))
 	if err != nil {
-		return nil, err
+		var chg Change
+		return chg, err
 	}
 
 	return ReadChange(msg)
@@ -142,7 +144,7 @@ func getOrCreateId(tx *bolt.Tx) (uuid.UUID, error) {
 	return id, bucket.Put(idKey, id.Bytes())
 }
 
-func appendChange(tx *bolt.Tx, chg *Change) error {
+func appendChange(tx *bolt.Tx, chg Change) error {
 	bucket, err := tx.CreateBucketIfNotExists(logBucket)
 	if err != nil {
 		return err
@@ -156,13 +158,13 @@ func appendChange(tx *bolt.Tx, chg *Change) error {
 	return bucket.Put(changeKeyBytes(id), changeValBytes(chg))
 }
 
-func readChanges(tx *bolt.Tx) ([]*Change, error) {
+func readChanges(tx *bolt.Tx) ([]Change, error) {
 	bucket := tx.Bucket(logBucket)
 	if bucket == nil {
 		return nil, nil
 	}
 
-	chgs := make([]*Change, 0, 1024)
+	chgs := make([]Change, 0, 1024)
 	return chgs, bucket.ForEach(func(_ []byte, val []byte) error {
 		chg, err := parseChangeVal(val)
 		if err != nil {

@@ -97,24 +97,24 @@ type Change struct {
 	Del bool
 }
 
-func ReadChange(r enc.Reader) (*Change, error) {
+func ReadChange(r enc.Reader) (Change, error) {
 	c := &Change{}
 	if err := r.Read("Key", &c.Key); err != nil {
-		return nil, err
+		return *c, err
 	}
 	if err := r.Read("Val", &c.Val); err != nil {
-		return nil, err
+		return *c, err
 	}
 	if err := r.Read("Ver", &c.Ver); err != nil {
-		return nil, err
+		return *c, err
 	}
 	if err := r.Read("Del", &c.Del); err != nil {
-		return nil, err
+		return *c, err
 	}
-	return c, nil
+	return *c, nil
 }
 
-func (c *Change) Write(w enc.Writer) {
+func (c Change) Write(w enc.Writer) {
 	w.Write("Key", c.Key)
 	w.Write("Val", c.Val)
 	w.Write("Ver", c.Ver)
@@ -148,7 +148,6 @@ type Cluster interface {
 
 // A simple client abstraction.
 type Member interface {
-	enc.Writable
 
 	// The id of the member
 	Ping() bool

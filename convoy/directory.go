@@ -14,14 +14,6 @@ import (
 // It's primary purpose is to maintain 1.) the listing of members
 // and 2.) allow searchable access to the members' datastores.
 
-// Events encapsulate a specific mutation, allowing them to
-// be stored or replicated for future use.  Events are stored
-// in time sorted order - but are NOT made durable.  Therefore,
-// this is NOT suitable for disaster recovery.  The current
-// approach is to recreate the directory from a "live" member.
-// The primary eventing abstraction.  The directory can be
-// expressed as a sequence of events and likewise can be
-// be built from them.
 type event interface {
 	enc.Writable
 	Apply(*update)

@@ -1,6 +1,11 @@
 package common
 
+import "io"
+
 type Context interface {
+	io.Closer
+
+	Env() Env
 	Config() Config
 	Logger() Logger
 }
@@ -8,10 +13,19 @@ type Context interface {
 type ctx struct {
 	config Config
 	logger Logger
+	env *env
 }
 
 func NewContext(config Config) Context {
-	return &ctx{config, NewStandardLogger(config)}
+	return &ctx{config: config, logger: NewStandardLogger(config), env: NewEnv()}
+}
+
+func (c *ctx) Close() error {
+	return c.env.Close()
+}
+
+func (c *ctx) Env() Env {
+	return c.env
 }
 
 func (c *ctx) Config() Config {

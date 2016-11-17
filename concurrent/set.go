@@ -4,9 +4,9 @@ import "sync"
 
 type Set interface {
 	All() []interface{}
-	Add(interface{})
+	Add(interface{}) bool
 	Contains(interface{}) bool
-	Remove(interface{})
+	Remove(interface{}) bool
 }
 
 type set struct {
@@ -24,20 +24,34 @@ func (s *set) All() []interface{} {
 	return CopyArr(Keys(s.inner))
 }
 
-func (s *set) Add(v interface{}) {
+func (s *set) Add(v interface{}) bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if _, ok := s.inner[v]; ok {
+		return false
+	}
+
 	s.inner[v] = struct{}{}
+	return true
 }
 
 func (s *set) Contains(v interface{}) bool {
+	s.lock.RLock()
+	defer s.lock.Unlock()
 	var ret bool
 	_, ret = s.inner[v]
 	return ret
 }
 
-func (s *set) Remove(v interface{}) {
+func (s *set) Remove(v interface{}) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if _, ok := s.inner[v]; ok {
+		return false
+	}
+
 	delete(s.inner, v)
+	return true
 }
 
 func Keys(m map[interface{}]struct{}) []interface{} {

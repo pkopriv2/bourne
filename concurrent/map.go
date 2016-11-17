@@ -1,53 +1,80 @@
 package concurrent
 
 import (
-	"fmt"
 	"sync"
 )
 
 type Map interface {
 	All() map[interface{}]interface{}
 	Get(interface{}) interface{}
-	Put(interface{}, interface{}) error
+	Put(interface{}, interface{})
 	Remove(interface{})
+	Update(func(Map))
 }
 
-type mmap struct {
+// concurrent map.
+type cmap struct {
 	lock  sync.RWMutex
 	inner map[interface{}]interface{}
 }
 
 func NewMap() Map {
-	return &mmap{inner: make(map[interface{}]interface{})}
+	return &cmap{inner: make(map[interface{}]interface{})}
 }
 
-func (s *mmap) All() map[interface{}]interface{} {
+func (s *cmap) Update(fn func(Map)) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	fn(&smap{s.inner})
+}
+
+func (s *cmap) All() map[interface{}]interface{} {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	return CopyMap(s.inner)
 }
 
-func (s *mmap) Get(key interface{}) interface{} {
+func (s *cmap) Get(key interface{}) interface{} {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 	return s.inner[key]
 }
 
-func (s *mmap) Put(key interface{}, val interface{}) error {
+func (s *cmap) Put(key interface{}, val interface{}) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	if _, ok := s.inner[key]; ok {
-		return fmt.Errorf("Key exists")
-	}
-
 	s.inner[key] = val
-	return nil
 }
 
-func (s *mmap) Remove(key interface{}) {
+func (s *cmap) Remove(key interface{}) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	delete(s.inner, key)
+}
+
+// single-threaded map
+type smap struct {
+	inner map[interface{}]interface{}
+}
+
+func (m *smap) All() map[interface{}]interface{} {
+	return m.inner
+}
+
+func (m *smap) Get(k interface{}) interface{} {
+	return m.inner[k]
+}
+
+func (m *smap) Put(k interface{}, v interface{}) {
+	m.inner[k] = v
+}
+
+func (m *smap) Remove(k interface{}) {
+	delete(m.inner, k)
+}
+
+func (m *smap) Update(func(Map)) {
+	panic("Recursive calls to update are not allowed!")
 }
 
 func CopyMap(m map[interface{}]interface{}) map[interface{}]interface{} {
