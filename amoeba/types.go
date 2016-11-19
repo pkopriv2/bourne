@@ -8,6 +8,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// Just a list of supported data types.
 
 // An integer key type
 type IntKey int

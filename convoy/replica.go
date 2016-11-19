@@ -11,9 +11,9 @@ import (
 var PeerClosedError = errors.New("ERROR:PEER:CLOSED")
 
 type replica struct {
-	ctx       common.Context
+	ctx common.Context
 	// directory *directory
-	server    net.Server
+	server net.Server
 
 	closer chan struct{}
 	closed chan struct{}
@@ -33,18 +33,18 @@ func (p *replica) Close() error {
 }
 
 // func newDirectoryHandler(directory *directory) net.Handler {
-	// return func(req net.Request) net.Response {
-		// action, err := readMeta(req.Meta())
-		// if err != nil {
-			// return net.NewErrorResponse(errors.Wrap(err, "Error parsing action"))
-		// }
+// return func(req net.Request) net.Response {
+// action, err := readMeta(req.Meta())
+// if err != nil {
+// return net.NewErrorResponse(errors.Wrap(err, "Error parsing action"))
+// }
 //
-		// switch action {
-		// default:
-			// return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
-		// case pingAction:
-			// return net.NewEmptyResponse()
-		// }
-		// return nil
-	// }
+// switch action {
+// default:
+// return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
+// case pingAction:
+// return net.NewEmptyResponse()
+// }
+// return nil
+// }
 // }

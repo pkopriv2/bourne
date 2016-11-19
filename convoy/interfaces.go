@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/net"
+	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -73,6 +73,7 @@ type Database interface {
 	Log() ChangeLog
 }
 
+// A change log is nothing but an ordered list of changes.
 type ChangeLog interface {
 	io.Closer
 
@@ -80,7 +81,7 @@ type ChangeLog interface {
 	Id() (uuid.UUID, error)
 
 	// Appends a change to the log and notifies any listeners.
-	Append(Change) error
+	Append(string, string, int, bool) (Change, error)
 
 	// Returns all the changes in the lifetime of the change log.
 	All() ([]Change, error)
@@ -91,34 +92,40 @@ type ChangeLog interface {
 
 // Fundamental unit of change within the published database
 type Change struct {
+	// TODO: Scribe needs to support large number types!
+	Seq int
 	Key string
 	Val string
 	Ver int
 	Del bool
 }
 
-func ReadChange(r enc.Reader) (Change, error) {
+func ReadChange(r scribe.Reader) (Change, error) {
 	c := &Change{}
-	if err := r.Read("Key", &c.Key); err != nil {
+	if err := r.Read("seq", &c.Seq); err != nil {
 		return *c, err
 	}
-	if err := r.Read("Val", &c.Val); err != nil {
+	if err := r.Read("key", &c.Key); err != nil {
 		return *c, err
 	}
-	if err := r.Read("Ver", &c.Ver); err != nil {
+	if err := r.Read("val", &c.Val); err != nil {
 		return *c, err
 	}
-	if err := r.Read("Del", &c.Del); err != nil {
+	if err := r.Read("ver", &c.Ver); err != nil {
+		return *c, err
+	}
+	if err := r.Read("del", &c.Del); err != nil {
 		return *c, err
 	}
 	return *c, nil
 }
 
-func (c Change) Write(w enc.Writer) {
-	w.Write("Key", c.Key)
-	w.Write("Val", c.Val)
-	w.Write("Ver", c.Ver)
-	w.Write("Del", c.Del)
+func (c Change) Write(w scribe.Writer) {
+	w.Write("seq", c.Seq)
+	w.Write("key", c.Key)
+	w.Write("val", c.Val)
+	w.Write("ver", c.Ver)
+	w.Write("del", c.Del)
 }
 
 // A cluster represents the aggregated view of all members' data

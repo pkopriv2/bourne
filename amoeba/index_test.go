@@ -44,23 +44,33 @@ func TestIndex_Del_Empty(t *testing.T) {
 
 	item := item{nil, 0, time.Now()}
 	index.Del(intKey(1), item.Ver(), item.Time)
-	assert.Nil(t, index.Get(intKey(1)))
+
+	actual := index.Get(intKey(1))
+	assert.Equal(t, item, actual)
 }
 
 func TestIndex_Del_DelGreaterVersion(t *testing.T) {
 	index := NewTestIndex()
-	item := item{"val", 0, time.Now()}
-	index.Put(intKey(1), item.Val(), item.Ver(), item.Time)
-	index.Del(intKey(1), item.Ver()+1, item.Time)
-	assert.Nil(t, index.Get(intKey(1)))
+	it := item{"val", 0, time.Now()}
+	index.Put(intKey(1), it.Val(), it.Ver(), it.Time)
+
+	expected := item{nil, it.Ver() + 1, it.Time}
+	index.Del(intKey(1), expected.Ver(), expected.Time)
+
+	actual := index.Get(intKey(1))
+	assert.Equal(t, expected, actual)
 }
 
 func TestIndex_Del_DelSameVersion(t *testing.T) {
 	index := NewTestIndex()
-	item := item{"val", 0, time.Now()}
-	index.Put(intKey(1), item.Val(), item.Ver(), item.Time)
-	index.Del(intKey(1), item.Ver(), item.Time)
-	assert.Nil(t, index.Get(intKey(1)))
+	it := item{"val", 0, time.Now()}
+	index.Put(intKey(1), it.Val(), it.Ver(), it.Time)
+
+	expected := item{nil, 0, time.Now()}
+	index.Del(intKey(1), expected.Ver(), expected.Time)
+
+	actual := index.Get(intKey(1))
+	assert.Equal(t, expected, actual)
 }
 
 func TestIndex_Del_DelLessVersion(t *testing.T) {

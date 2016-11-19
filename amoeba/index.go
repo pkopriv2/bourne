@@ -64,7 +64,17 @@ func (i *index) Put(key Key, val Val, ver int, time time.Time) {
 		return
 	}
 
-	if cur.Ver() <= ver {
+	if cur.Ver() < ver {
+		i.table[indexKey] = item
+		i.tree.ReplaceOrInsert(indexKey)
+		return
+	}
+
+	if cur.Ver() > ver {
+		return
+	}
+
+	if item.Time.After(cur.Time) {
 		i.table[indexKey] = item
 		i.tree.ReplaceOrInsert(indexKey)
 		return

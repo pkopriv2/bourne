@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/boltdb/bolt"
-	"github.com/pkopriv2/bourne/enc"
+	"github.com/pkopriv2/bourne/scribe"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
@@ -18,10 +18,19 @@ var (
 	idKey     = []byte("id")
 )
 
+// Adds a listener to the change log and returns a buffered channel of changes.
+func changeLogListen(cl ChangeLog) <-chan Change {
+	ret := make(chan Change, 1024)
+	cl.Listen(func(chg Change) {
+		ret <- chg
+	})
+	return ret
+}
+
 // The change log implementation.  The change log is
 // built on a bolt DB instance, so it is guaranteed
 // both durable and thread-safe.
-type changelog struct {
+type changeLog struct {
 	// The underlying bolt db instance.
 	db stash.Stash
 
@@ -34,20 +43,28 @@ type changelog struct {
 
 // Opens the change log.  This uses the shared store
 func openChangeLog(db stash.Stash) ChangeLog {
-	return &changelog{db: db, fns: make([]func(Change), 0, 4)}
+	return &changeLog{db: db, fns: make([]func(Change), 0, 4)}
 }
 
-func (c *changelog) Close() error {
-	return nil
+func (c *changeLog) Close() error {
+	return nil // the stash is managed by the context.
 }
 
-func (c *changelog) Listen(fn func(Change)) {
+func (c *changeLog) Listen(fn func(Change)) {
 	c.fnsLock.Lock()
-	defer c.fnsLock.Lock()
+	defer c.fnsLock.Unlock()
 	c.fns = append(c.fns, fn)
 }
 
-func (c *changelog) Listeners() []func(Change) {
+func (c *changeLog) Id() (id uuid.UUID, err error) {
+	err = c.db.Update(func(tx *bolt.Tx) error {
+		id, err = getOrCreateId(tx)
+		return err
+	})
+	return
+}
+
+func (c *changeLog) Listeners() []func(Change) {
 	c.fnsLock.RLock()
 	defer c.fnsLock.RUnlock()
 	ret := make([]func(Change), 0, len(c.fns))
@@ -57,23 +74,9 @@ func (c *changelog) Listeners() []func(Change) {
 	return ret
 }
 
-func (c *changelog) broadcast(chg Change) {
-	for _, fn := range c.Listeners() {
-		fn(chg)
-	}
-}
-
-func (c *changelog) Id() (id uuid.UUID, err error) {
+func (c *changeLog) Append(key string, val string, ver int, del bool) (chg Change, err error) {
 	err = c.db.Update(func(tx *bolt.Tx) error {
-		id, err = getOrCreateId(tx)
-		return err
-	})
-	return
-}
-
-func (c *changelog) Append(chg Change) (err error) {
-	err = c.db.Update(func(tx *bolt.Tx) error {
-		err = appendChange(tx, chg)
+		chg, err = appendChange(tx, key, val, ver, del)
 		return err
 	})
 
@@ -85,12 +88,19 @@ func (c *changelog) Append(chg Change) (err error) {
 	return
 }
 
-func (c *changelog) All() (chgs []Change, err error) {
+func (c *changeLog) All() (chgs []Change, err error) {
 	err = c.db.View(func(tx *bolt.Tx) error {
 		chgs, err = readChanges(tx)
 		return err
 	})
 	return
+}
+
+
+func (c *changeLog) broadcast(chg Change) {
+	for _, fn := range c.Listeners() {
+		fn(chg)
+	}
 }
 
 // Helper functions
@@ -106,12 +116,12 @@ func parseChangeKey(val []byte) uint64 {
 
 func changeValBytes(c Change) []byte {
 	buf := new(bytes.Buffer)
-	enc.Encode(gob.NewEncoder(buf), c)
+	scribe.Encode(gob.NewEncoder(buf), c)
 	return buf.Bytes()
 }
 
 func parseChangeVal(val []byte) (Change, error) {
-	msg, err := enc.Decode(gob.NewDecoder(bytes.NewBuffer(val)))
+	msg, err := scribe.Decode(gob.NewDecoder(bytes.NewBuffer(val)))
 	if err != nil {
 		var chg Change
 		return chg, err
@@ -138,18 +148,21 @@ func getOrCreateId(tx *bolt.Tx) (uuid.UUID, error) {
 	return id, bucket.Put(idKey, id.Bytes())
 }
 
-func appendChange(tx *bolt.Tx, chg Change) error {
+func appendChange(tx *bolt.Tx, key string, val string, ver int, del bool) (Change, error) {
+	var chg Change
+
 	bucket, err := tx.CreateBucketIfNotExists(logBucket)
 	if err != nil {
-		return err
+		return chg, err
 	}
 
 	id, err := bucket.NextSequence()
 	if err != nil {
-		return err
+		return chg, err
 	}
 
-	return bucket.Put(changeKeyBytes(id), changeValBytes(chg))
+	chg = Change{int(id), key, val, ver, del}
+	return chg, bucket.Put(changeKeyBytes(id), changeValBytes(chg))
 }
 
 func readChanges(tx *bolt.Tx) ([]Change, error) {

@@ -21,12 +21,13 @@ func GetTestPath(dir string, file string) string {
 
 func TestStash_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
 
-	stash1, err1 := OpenRandom(ctx)
+	stash, err1 := OpenTransient(ctx)
 	assert.Nil(t, err1)
+	stash.Close()
 
-	ctx.Close()
-	assert.NotNil(t, stash1.Update(func(*bolt.Tx) error {
+	assert.NotNil(t, stash.Update(func(*bolt.Tx) error {
 		return nil
 	}))
 }
@@ -38,10 +39,10 @@ func TestStash_MultipeOpens(t *testing.T) {
 				StashLocationKey: GetTestPath(TestSuffix, "db")}))
 	defer ctx.Close()
 
-	stash1, err1 := OpenConfigured(ctx)
+	stash1, err1 := OpenTransient(ctx)
 	assert.Nil(t, err1)
 
-	stash2, err2 := OpenConfigured(ctx)
+	stash2, err2 := Open(ctx, stash1.Path())
 	assert.Nil(t, err2)
 
 	assert.Equal(t, stash1, stash2)
@@ -51,7 +52,7 @@ func TestStash_ConcurrentUpdates(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	stash, err := OpenRandom(ctx)
+	stash, err := OpenTransient(ctx)
 	assert.Nil(t, err)
 
 	bucket := []byte("bucket")

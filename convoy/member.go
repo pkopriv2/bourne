@@ -12,7 +12,7 @@ import (
 type member struct {
 	Id   uuid.UUID
 	Host string
-	Port int
+	Port string // no need for int representation
 	Version int
 }
 
@@ -20,7 +20,7 @@ func (m *member) Write(enc.Writer) {
 	panic("not implemented")
 }
 
-func newMember(id uuid.UUID, host string, port int, ver int) *member {
+func newMember(id uuid.UUID, host string, port string, ver int) *member {
 	return &member{id, host, port, ver}
 }
 

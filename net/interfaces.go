@@ -58,6 +58,6 @@ func ReadConnectionFactory(m enc.Reader) (ConnectionFactory, error) {
 	}
 }
 
-func NewAddr(host string, port int) string {
+func NewAddr(host string, port string) string {
 	return fmt.Sprintf("%v:%v", host, port)
 }

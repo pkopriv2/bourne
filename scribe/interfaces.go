@@ -120,3 +120,4 @@ type Decoder interface {
 type Streamer interface {
 	Stream(Encoder) error
 }
+

@@ -180,6 +180,8 @@ func readDuration(m map[string]interface{}, key string) (time.Duration, error) {
 	}
 
 	switch ret := val.(type) {
+	case int:
+		return time.Duration(ret) * time.Millisecond, nil
 	case int64:
 		return time.Duration(ret) * time.Millisecond, nil
 	case time.Duration:

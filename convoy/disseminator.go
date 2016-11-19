@@ -5,7 +5,7 @@ import "errors"
 var DisseminatorClosedError = errors.New("DISSEMINATOR:CLOSED")
 
 // Sends an update to a randomly chosen recipient.
-
+//
 // The disseminator implements the most crucial aspects of epidemic algorithms.
 //
 // Based on analysis by [1], a randomly connected graph of N nodes becomes fully
@@ -15,220 +15,221 @@ var DisseminatorClosedError = errors.New("DISSEMINATOR:CLOSED")
 //
 // However, there are other considerations that must be taken into account, namely
 //
-//	* How do we avoid missing transiently failed nodes?
-//  * How do we avoid overloading underlying network resources?
+// * How do we avoid missing transiently failed nodes?
+// * How do we avoid overloading underlying network resources?
 //
 // [1] http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
-//
+
+
 // type Disseminator interface {
-// Push(update) error
-// Close() error
+	// Register(<-chan event) error
+	// Close() error
 // }
 //
+//
 // type disseminatorImpl struct {
-// roster  Roster
-// updates Updates
+	// roster  Roster
+	// updates Updates
 //
-// period  time.Duration
-// timeout time.Duration
-// batch   int
+	// period  time.Duration
+	// timeout time.Duration
 //
-// closed chan struct{}
-// closer chan struct{}
-// wait   sync.WaitGroup
+	// closed chan struct{}
+	// closer chan struct{}
+	// wait   sync.WaitGroup
 // }
 //
 // func newDisseminator(ctx common.Context, r Roster) Disseminator {
-// ret := &disseminatorImpl{
-// roster:  r,
-// updates: newPendingUpdates(),
-// timeout: ctx.Config().OptionalDuration(confUpdateTimeout, defaultUpdateTimeout),
-// batch:   ctx.Config().OptionalInt(confUpdateBatchSize, defaultUpdateBatchSize),
-// period:  ctx.Config().OptionalDuration(confDisseminationPeriod, defaultDisseminationPeriod),
-// closed:  make(chan struct{}),
-// closer:  make(chan struct{}, 1)}
+	// ret := &disseminatorImpl{
+		// roster:  r,
+		// updates: newPendingUpdates(),
+		// timeout: ctx.Config().OptionalDuration(confUpdateTimeout, defaultUpdateTimeout),
+		// batch:   ctx.Config().OptionalInt(confUpdateBatchSize, defaultUpdateBatchSize),
+		// period:  ctx.Config().OptionalDuration(confDisseminationPeriod, defaultDisseminationPeriod),
+		// closed:  make(chan struct{}),
+		// closer:  make(chan struct{}, 1)}
 //
-// go disseminate(ret)
-// return ret
-// }
+		// go disseminate(ret)
+		// return ret
+	// }
 //
-// func (d *disseminatorImpl) Push(u update) error {
-// remaining := int(math.Ceil(math.Log10(float64(d.roster.Size()))))
-// return d.push([]pending{pending{u, remaining}})
-// }
+	// func (d *disseminatorImpl) Push(u update) error {
+		// remaining := int(math.Ceil(math.Log10(float64(d.roster.Size()))))
+		// return d.push([]pending{pending{u, remaining}})
+	// }
 //
-// func (d *disseminatorImpl) push(p []pending) error {
-// for _, cur := range p {
-// select {
-// case <-d.closed:
-// return DisseminatorClosedError
-// case d.updates.Push() <- cur:
-// }
-// }
+	// func (d *disseminatorImpl) push(p []pending) error {
+		// for _, cur := range p {
+			// select {
+			// case <-d.closed:
+				// return DisseminatorClosedError
+			// case d.updates.Push() <- cur:
+			// }
+		// }
 //
-// return nil
-// }
+		// return nil
+	// }
 //
-// func (d *disseminatorImpl) pop() ([]pending, error) {
-// ret := make([]pending, 0, d.batch)
+	// func (d *disseminatorImpl) pop() ([]pending, error) {
+		// ret := make([]pending, 0, d.batch)
 //
-// for i := 0; i < d.batch; i++ {
-// select {
-// default:
-// break
-// case <-d.closed:
-// return nil, DisseminatorClosedError
-// case p := <-d.updates.Pop():
-// ret = append(ret, p)
-// }
-// }
+		// for i := 0; i < d.batch; i++ {
+			// select {
+			// default:
+				// break
+			// case <-d.closed:
+				// return nil, DisseminatorClosedError
+			// case p := <-d.updates.Pop():
+				// ret = append(ret, p)
+			// }
+		// }
 //
-// return ret, nil
-// }
-//
-//
-// func (d *disseminatorImpl) Close() error {
-// select {
-// case <-d.closed:
-// return nil
-// case d.closer <- struct{}{}:
-// }
-//
-// close(d.closed)
-// d.wait.Wait()
-// return nil
-// }
+		// return ret, nil
+	// }
 //
 //
-// // func (d *disseminatorImpl) fail(m Member) error {
-// // if !d.roster.(m.Id(), m.Version()) {
-// // return nil
-// // }
-// //
-// // return d.Push(newFail(m.Id(), m.Version()))
-// // }
+	// func (d *disseminatorImpl) Close() error {
+		// select {
+		// case <-d.closed:
+			// return nil
+		// case d.closer <- struct{}{}:
+		// }
 //
-// func disseminate(d *disseminatorImpl) {
-// defer d.wait.Done()
+		// close(d.closed)
+		// d.wait.Wait()
+		// return nil
+	// }
 //
-// gen := Generate(d.roster, d.closed)
 //
-// timer := time.NewTimer(d.period)
-// for range timer.C  {
+	// // func (d *disseminatorImpl) fail(m Member) error {
+	// // if !d.roster.(m.Id(), m.Version()) {
+	// // return nil
+	// // }
+	// //
+	// // return d.Push(newFail(m.Id(), m.Version()))
+	// // }
 //
-// // var m Member
-// select {
-// case <-d.closed:
-// case _ = <-gen:
-// }
+	// func disseminate(d *disseminatorImpl) {
+		// defer d.wait.Done()
 //
-// // client, err := m.client()
-// // if err != nil {
-// // continue
-// // }
-// //
-// // batch, err := d.pop()
-// // if err != nil {
-// // return
-// // }
-// //
-// // updates := make([]update, 0, len(batch))
-// // for _, u := range batch {
-// // updates = append(updates, u.update)
-// // }
-// }
+		// gen := Generate(d.roster, d.closed)
 //
-// }
+		// timer := time.NewTimer(d.period)
+		// for range timer.C  {
 //
-// // The list of pending updates tracks the updates to be
-// // disemminated amongst the group.  It attempts to favor
-// // updates which have not been fully disemminated, by
-// // tracking the number of remaining attempts for an update.
-// //
-// // TODO: Currently implemented as unbounded queue.  If we bound,
-// // then a potential deadlock exists in the dissemination logic
-// // where commiting a batch back onto the queue can be blocked,
-// // halting the disseminator indefinitely.
-// type Updates interface {
-// Close() error
-// Push() chan<- pending
-// Pop() <-chan pending
-// }
+			// // var m Member
+			// select {
+			// case <-d.closed:
+			// case _ = <-gen:
+			// }
 //
-// type pending struct {
-// update    update
-// remaining int
-// }
+			// // client, err := m.client()
+			// // if err != nil {
+			// // continue
+			// // }
+			// //
+			// // batch, err := d.pop()
+			// // if err != nil {
+			// // return
+			// // }
+			// //
+			// // updates := make([]update, 0, len(batch))
+			// // for _, u := range batch {
+			// // updates = append(updates, u.update)
+			// // }
+		// }
 //
-// type updatesQueue struct {
-// heap   *binaryheap.Heap
-// push   chan pending
-// pop    chan pending
-// closer chan struct{}
-// closed chan struct{}
-// wait   sync.WaitGroup
-// }
+	// }
 //
-// func newPendingUpdates() Updates {
-// u := &updatesQueue{heap: binaryheap.NewWith(maxRemainingComparator)}
-// u.wait.Add(2)
-// go popper(u)
-// go pusher(u)
-// return u
-// }
+	// // The list of pending updates tracks the updates to be
+	// // disemminated amongst the group.  It attempts to favor
+	// // updates which have not been fully disemminated, by
+	// // tracking the number of remaining attempts for an update.
+	// //
+	// // TODO: Currently implemented as unbounded queue.  If we bound,
+	// // then a potential deadlock exists in the dissemination logic
+	// // where commiting a batch back onto the queue can be blocked,
+	// // halting the disseminator indefinitely.
+	// type Updates interface {
+		// Close() error
+		// Push() chan<- pending
+		// Pop() <-chan pending
+	// }
 //
-// func (u *updatesQueue) Close() error {
-// select {
-// case <-u.closed:
-// return fmt.Errorf("Updates queue closed")
-// case u.closer <- struct{}{}:
-// }
+	// type pending struct {
+		// update    update
+		// remaining int
+	// }
 //
-// close(u.closed)
-// u.wait.Wait()
-// return nil
-// }
+	// type updatesQueue struct {
+		// heap   *binaryheap.Heap
+		// push   chan pending
+		// pop    chan pending
+		// closer chan struct{}
+		// closed chan struct{}
+		// wait   sync.WaitGroup
+	// }
 //
-// func (u *updatesQueue) Push() chan<- pending {
-// return u.push
-// }
+	// func newPendingUpdates() Updates {
+		// u := &updatesQueue{heap: binaryheap.NewWith(maxRemainingComparator)}
+		// u.wait.Add(2)
+		// go popper(u)
+		// go pusher(u)
+		// return u
+	// }
 //
-// func (u *updatesQueue) Pop() <-chan pending {
-// return u.pop
-// }
+	// func (u *updatesQueue) Close() error {
+		// select {
+		// case <-u.closed:
+			// return fmt.Errorf("Updates queue closed")
+		// case u.closer <- struct{}{}:
+		// }
 //
-// func pusher(p *updatesQueue) {
-// defer p.wait.Done()
+		// close(u.closed)
+		// u.wait.Wait()
+		// return nil
+	// }
 //
-// for {
-// var pending pending
-// select {
-// case <-p.closed:
-// return
-// case pending = <-p.push:
-// }
+	// func (u *updatesQueue) Push() chan<- pending {
+		// return u.push
+	// }
 //
-// p.heap.Push(pending)
-// }
-// }
+	// func (u *updatesQueue) Pop() <-chan pending {
+		// return u.pop
+	// }
 //
-// func popper(p *updatesQueue) {
-// defer p.wait.Done()
+	// func pusher(p *updatesQueue) {
+		// defer p.wait.Done()
 //
-// for {
+		// for {
+			// var pending pending
+			// select {
+			// case <-p.closed:
+				// return
+			// case pending = <-p.push:
+			// }
 //
-// val, _ := p.heap.Pop()
-// select {
-// case <-p.closed:
-// return
-// case p.pop <- val.(pending):
-// }
-// }
-// }
+			// p.heap.Push(pending)
+		// }
+	// }
 //
-// func maxRemainingComparator(a, b interface{}) int {
-// pendingA := a.(pending)
-// pendingB := b.(pending)
+	// func popper(p *updatesQueue) {
+		// defer p.wait.Done()
 //
-// return pendingB.remaining - pendingA.remaining
-// }
+		// for {
+//
+			// val, _ := p.heap.Pop()
+			// select {
+			// case <-p.closed:
+				// return
+			// case p.pop <- val.(pending):
+			// }
+		// }
+	// }
+//
+	// func maxRemainingComparator(a, b interface{}) int {
+		// pendingA := a.(pending)
+		// pendingB := b.(pending)
+//
+		// return pendingB.remaining - pendingA.remaining
+	// }

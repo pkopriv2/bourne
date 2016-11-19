@@ -1,11 +1,11 @@
 package stash
 
 import (
+	"io"
 	"path"
 	"time"
 
 	"github.com/boltdb/bolt"
-	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	uuid "github.com/satori/go.uuid"
@@ -20,6 +20,10 @@ const (
 // A stash is nothing but a shared instance of a bolt
 // database.
 type Stash interface {
+	io.Closer
+
+	// Returns the os filesystem path to the stash
+	Path() string
 
 	// Update the shared bolt instance.
 	Update(func(*bolt.Tx) error) error
@@ -38,6 +42,17 @@ func OpenConfigured(ctx common.Context) (stash Stash, err error) {
 	return Open(ctx, ctx.Config().Optional(StashLocationKey, StashLocationDefault))
 }
 
+// Opens a transient stash instance that will be deleted on ctx#close().
+func OpenTransient(ctx common.Context) (Stash, error) {
+	stash, err := OpenRandom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	deleteOnClose(ctx, stash)
+	return stash, nil
+}
+
 // Opens the stash instance at the given location and binds it to the context.
 func Open(ctx common.Context, path string) (stash Stash, err error) {
 	env := ctx.Env()
@@ -52,25 +67,42 @@ func Open(ctx common.Context, path string) (stash Stash, err error) {
 		}
 
 		// Go ahead and open stash instance.
-		db, dbErr := getStore(path)
-		if dbErr != nil {
-			err = errors.Wrap(dbErr, "Error opening store")
+		stash, err = getStore(path)
+		if err != nil {
 			return
 		}
 
 		// Store it on the context
-		data.Put(path, db)
+		data.Put(path, stash)
 
-		// Finally, add a close handler
-		env.OnClose(func() {
-			defer db.Close()
-			defer env.Data().Remove(path)
-			ctx.Logger().Debug("Closing stash instance [%v]", path)
-		})
-
-		stash = db
+		// bind the stash's cleanup to the context
+		removeOnClose(ctx, stash)
+		closeOnClose(ctx, stash)
 	})
 	return
+}
+
+func closeOnClose(ctx common.Context, stash Stash) {
+	ctx.Env().OnClose(func() {
+		ctx.Logger().Debug("Closing stash [%v]", stash.Path())
+		stash.Close()
+	})
+}
+
+func removeOnClose(ctx common.Context, stash Stash) {
+	path := stash.Path()
+	ctx.Env().OnClose(func() {
+		ctx.Logger().Debug("Removing context entry [%v]", path)
+		ctx.Env().Data().Remove(path)
+	})
+}
+
+func deleteOnClose(ctx common.Context, stash Stash) {
+	path := stash.Path()
+	ctx.Env().OnClose(func() {
+		ctx.Logger().Debug("Deleting stash instance [%v]", path)
+		afero.NewOsFs().RemoveAll(path)
+	})
 }
 
 func getStore(loc string) (*bolt.DB, error) {
