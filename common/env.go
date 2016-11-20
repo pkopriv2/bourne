@@ -6,8 +6,8 @@ import (
 )
 
 type Env interface {
+	Closed() <-chan struct{}
 	OnClose(func())
-
 	Data() concurrent.Map
 }
 
@@ -42,10 +42,14 @@ func (c *env) Close() error {
 	return nil
 }
 
-func (e *env) Data() concurrent.Map {
-	return e.data
+func (e *env) Closed() <-chan struct{} {
+	return e.Closed()
 }
 
 func (c *env) OnClose(fn func()) {
 	c.closes.Append(fn)
+}
+
+func (e *env) Data() concurrent.Map {
+	return e.data
 }

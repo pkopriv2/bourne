@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/pkopriv2/bourne/enc"
+	"github.com/pkopriv2/bourne/scribe"
 )
 
 func ListenTcp(port int) (Listener, error) {
@@ -25,7 +25,7 @@ func ConnectTcp(addr string) (Connection, error) {
 	return &TcpConnection{conn}, nil
 }
 
-func ReadTcpConnectionFactory(r enc.Reader) (ConnectionFactory, error) {
+func ReadTcpConnectionFactory(r scribe.Reader) (ConnectionFactory, error) {
 	var addr string
 	if err := r.Read("addr", &addr); err != nil {
 		return nil, err
@@ -42,7 +42,7 @@ type TcpConnectionFactory struct {
 	addr string
 }
 
-func (t *TcpConnectionFactory) Write(w enc.Writer) {
+func (t *TcpConnectionFactory) Write(w scribe.Writer) {
 	w.Write("type", "tcp")
 	w.Write("addr", t.addr)
 }

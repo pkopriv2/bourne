@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pkopriv2/bourne/enc"
+	"github.com/pkopriv2/bourne/scribe"
 )
 
 var ConnectionClosedError = errors.New("CONN:CLOSED")
@@ -38,13 +38,13 @@ type Listener interface {
 //
 // Consumers should not retain any references to the created connection.
 type ConnectionFactory interface {
-	enc.Writable
+	scribe.Writable
 	Conn() (Connection, error)
 }
 
 // Returns a connection factory from the raw message data, the input
 // of which is expected to be in the format produced via ConnectionFactory#Write()
-func ReadConnectionFactory(m enc.Reader) (ConnectionFactory, error) {
+func ReadConnectionFactory(m scribe.Reader) (ConnectionFactory, error) {
 	var typ string
 	if err := m.Read("type", &typ); err != nil {
 		return nil, err

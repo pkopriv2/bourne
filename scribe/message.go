@@ -8,6 +8,9 @@ import (
 )
 
 // Builds a message from the given builder func
+var EmptyMessage = newMessageWriter().Build()
+
+// Builds a message from the given builder func
 func Build(fn func(w Writer)) Message {
 	// initialize a new builder
 	msg := newMessageWriter()

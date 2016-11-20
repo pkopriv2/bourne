@@ -32,19 +32,3 @@ func (p *replica) Close() error {
 	return nil
 }
 
-// func newDirectoryHandler(directory *directory) net.Handler {
-// return func(req net.Request) net.Response {
-// action, err := readMeta(req.Meta())
-// if err != nil {
-// return net.NewErrorResponse(errors.Wrap(err, "Error parsing action"))
-// }
-//
-// switch action {
-// default:
-// return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
-// case pingAction:
-// return net.NewEmptyResponse()
-// }
-// return nil
-// }
-// }

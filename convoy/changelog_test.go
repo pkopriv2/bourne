@@ -111,6 +111,6 @@ func OpenTestStash(ctx common.Context) stash.Stash {
 	return db
 }
 
-func OpenTestChangeLog(ctx common.Context) ChangeLog {
+func OpenTestChangeLog(ctx common.Context) *changeLog {
 	return openChangeLog(OpenTestStash(ctx))
 }

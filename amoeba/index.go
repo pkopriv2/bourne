@@ -53,7 +53,7 @@ func (i *index) Size() int {
 	return len(i.table)
 }
 
-func (i *index) Put(key Key, val Val, ver int, time time.Time) {
+func (i *index) Put(key Key, val Val, ver int, time time.Time) bool {
 	indexKey := indexKey{key}
 	item := item{val, ver, time}
 
@@ -61,28 +61,30 @@ func (i *index) Put(key Key, val Val, ver int, time time.Time) {
 	if !ok {
 		i.table[indexKey] = item
 		i.tree.ReplaceOrInsert(indexKey)
-		return
+		return true
 	}
 
 	if cur.Ver() < ver {
 		i.table[indexKey] = item
 		i.tree.ReplaceOrInsert(indexKey)
-		return
+		return true
 	}
 
 	if cur.Ver() > ver {
-		return
+		return false
 	}
 
 	if item.Time.After(cur.Time) {
 		i.table[indexKey] = item
 		i.tree.ReplaceOrInsert(indexKey)
-		return
+		return true
 	}
+
+	return false
 }
 
-func (i *index) Del(key Key, ver int, time time.Time) {
-	i.Put(key, nil, ver, time)
+func (i *index) Del(key Key, ver int, time time.Time) bool {
+	return i.Put(key, nil, ver, time)
 }
 
 func (i *index) Get(key Key) Item {

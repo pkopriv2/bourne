@@ -7,7 +7,7 @@ import (
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
-	"github.com/pkopriv2/bourne/enc"
+	"github.com/pkopriv2/bourne/scribe"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,7 +33,6 @@ func NewTestServer(fn Handler, config common.Config) Server {
 
 	return server
 }
-
 
 func TestServer_Close(t *testing.T) {
 	server := NewTestServer(successHandler, nil)
@@ -72,7 +71,7 @@ func TestClient_ServerCloseAfter(t *testing.T) {
 }
 
 func TestClientServer_SingleRequest(t *testing.T) {
-	msg := enc.Build(func(w enc.Writer) {
+	msg := scribe.Build(func(w scribe.Writer) {
 		w.Write("field1", 1)
 		w.Write("field2", true)
 	})
@@ -112,7 +111,7 @@ func TestClientServer_MultiRequest(t *testing.T) {
 	called := concurrent.NewAtomicCounter()
 	server := NewTestServer(func(r Request) Response {
 		called.Inc()
-		assert.Equal(t, enc.EmptyMessage, r.Body())
+		assert.Equal(t, scribe.EmptyMessage, r.Body())
 		return NewStandardResponse(nil)
 	}, nil)
 	defer server.Close()

@@ -87,7 +87,8 @@ type ChangeLog interface {
 	All() ([]Change, error)
 
 	// Registers a handler to be invoked on any change to the log.
-	Listen(func(Change))
+	// The zero value and false are sent when the log is closed.
+	Listen(func(Change, bool))
 }
 
 // Fundamental unit of change within the published database

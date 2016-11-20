@@ -6,12 +6,12 @@ import (
 
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/enc"
+	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
 
 // System reserved keys.  Consumers should consider the: /Convoy/
-// namespace offlimits!
+// namespace off limits!
 const (
 	memberHostAttr   = "/Convoy/Host"
 	memberPortAttr   = "/Convoy/Port"
@@ -31,8 +31,8 @@ var (
 // It's primary purpose is to maintain 1.) the listing of members
 // and 2.) allow searchable access to the members' datastores.
 type event interface {
-	enc.Writable
-	Apply(*update)
+	scribe.Writable
+	Apply(*update) bool
 }
 
 // the core storage type.
@@ -71,18 +71,22 @@ func (d *directory) View(fn func(*view)) {
 	})
 }
 
-func (d *directory) Apply(e event) {
+func (d *directory) Apply(e event) bool {
+	var ret bool
 	d.Update(func(u *update) {
-		e.Apply(u)
+		ret = e.Apply(u)
 	})
+	return ret
 }
 
-func (d *directory) ApplyAll(events []event) {
+func (d *directory) ApplyAll(events []event) []bool {
+	ret := make([]bool, 0, len(events))
 	d.Update(func(u *update) {
 		for _, e := range events {
-			e.Apply(u)
+			ret = append(ret, e.Apply(u))
 		}
 	})
+	return ret
 }
 
 func (d *directory) Events() []event {
@@ -163,12 +167,12 @@ func dirGetMemberAttr(data amoeba.View, id uuid.UUID, attr string) (val string, 
 	return dirUnpackAmoebaItem(data.Get(ai{attr, id}))
 }
 
-func dirAddMemberAttr(data amoeba.Update, id uuid.UUID, attr string, val string, ver int) {
-	data.Put(ai{attr, id}, val, ver)
+func dirAddMemberAttr(data amoeba.Update, id uuid.UUID, attr string, val string, ver int) bool {
+	return data.Put(ai{attr, id}, val, ver)
 }
 
-func dirDelMemberAttr(data amoeba.Update, id uuid.UUID, attr string, ver int) {
-	data.Del(ai{attr, id}, ver)
+func dirDelMemberAttr(data amoeba.Update, id uuid.UUID, attr string, ver int) bool {
+	return data.Del(ai{attr, id}, ver)
 }
 
 func dirScan(data amoeba.View, fn func(*amoeba.Scan, uuid.UUID, string, string, int)) {
@@ -201,16 +205,23 @@ func dirGetMember(data amoeba.View, id uuid.UUID) *member {
 		Version: ver}
 }
 
+func dirAddMember(data amoeba.Update, m *member) bool {
+	if ! dirAddMemberAttr(data, m.Id, memberHostAttr, m.Host, m.Version) {
+		return false
+	}
 
-func dirAddMember(data amoeba.Update, m *member) {
-	dirAddMemberAttr(data, m.Id, memberHostAttr, m.Host, m.Version)
-	dirAddMemberAttr(data, m.Id, memberPortAttr, m.Port, m.Version)
+	return dirAddMemberAttr(data, m.Id, memberPortAttr, m.Port, m.Version)
 }
 
-func dirDelMember(u *update, id uuid.UUID, ver int) {
+func dirDelMember(u *update, id uuid.UUID, ver int) bool {
 	type item struct {
 		key  amoeba.Key
 		item amoeba.Item
+	}
+
+	// see if someone else has already done this work.
+	if ! u.Data.Del(ai{memberHostAttr, id}, ver) {
+		return false
 	}
 
 	deadItems := make([]item, 0, 128)
@@ -225,6 +236,8 @@ func dirDelMember(u *update, id uuid.UUID, ver int) {
 	for _, i := range deadItems {
 		u.Data.Del(i.key, i.item.Ver())
 	}
+
+	return true
 }
 
 // A couple very simple low level view/update abstractions
@@ -265,6 +278,34 @@ func (u *update) DelMember(id uuid.UUID, ver int) {
 	dirDelMember(u, id, ver)
 }
 
+
+func readEvent(r scribe.Reader) (event, error) {
+	var typ string
+	if err := r.Read("type", &typ); err != nil {
+		return nil, err
+	}
+
+	switch typ {
+	default:
+		return nil, fmt.Errorf("Cannot parse event.  Unknown type [%v]", typ)
+	case "data":
+		return readDataEvent(r)
+	case "member":
+		return readMemberEvent(r)
+	}
+}
+
+func writeEvent(w scribe.Writer, e event) {
+	e.Write(w)
+
+	switch e.(type) {
+	case *dataEvent:
+		w.Write("type", "data")
+	case *memberEvent:
+		w.Write("type", "member")
+	}
+}
+
 // The primary data event type.
 type dataEvent struct {
 	Id   uuid.UUID
@@ -274,8 +315,8 @@ type dataEvent struct {
 	Del  bool
 }
 
-func readDataEvent(r enc.Reader) (*dataEvent, error) {
-	id, err := readUUID(r, "id")
+func readDataEvent(r scribe.Reader) (*dataEvent, error) {
+	id, err := scribe.ReadUUID(r, "id")
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +337,7 @@ func readDataEvent(r enc.Reader) (*dataEvent, error) {
 	return event, nil
 }
 
-func (e *dataEvent) Write(w enc.Writer) {
+func (e *dataEvent) Write(w scribe.Writer) {
 	w.Write("id", e.Id.String())
 	w.Write("attr", e.Attr)
 	w.Write("val", e.Val)
@@ -304,11 +345,13 @@ func (e *dataEvent) Write(w enc.Writer) {
 	w.Write("del", e.Del)
 }
 
-func (e *dataEvent) Apply(tx *update) {
+func (e *dataEvent) Apply(tx *update) bool {
 	if e.Del {
 		tx.DelMemberAttr(e.Id, e.Attr, e.Ver)
+		return true
 	} else {
 		tx.AddMemberAttr(e.Id, e.Attr, e.Val, e.Ver)
+		return true
 	}
 }
 
@@ -321,8 +364,8 @@ type memberEvent struct {
 	Del  bool
 }
 
-func readMemberEvent(r enc.Reader) (*memberEvent, error) {
-	id, err := readUUID(r, "id")
+func readMemberEvent(r scribe.Reader) (*memberEvent, error) {
+	id, err := scribe.ReadUUID(r, "id")
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +387,7 @@ func readMemberEvent(r enc.Reader) (*memberEvent, error) {
 	return event, nil
 }
 
-func (e *memberEvent) Write(w enc.Writer) {
+func (e *memberEvent) Write(w scribe.Writer) {
 	w.Write("id", e.Id.String())
 	w.Write("host", e.Host)
 	w.Write("port", e.Port)
@@ -352,10 +395,12 @@ func (e *memberEvent) Write(w enc.Writer) {
 	w.Write("del", e.Del)
 }
 
-func (e *memberEvent) Apply(tx *update) {
+func (e *memberEvent) Apply(tx *update) bool {
 	if e.Del {
 		tx.DelMember(e.Id, e.Ver)
+		return true
 	} else {
 		tx.AddMember(newMember(e.Id, e.Host, e.Port, e.Ver))
+		return true
 	}
 }

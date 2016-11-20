@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkopriv2/bourne/scribe"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
-	"github.com/pkopriv2/bourne/enc"
 )
 
 // These set of classes implement a very simple "embeddable", protocol
@@ -71,45 +71,45 @@ type Client interface {
 
 // A request is a writable message asking the server to invoke a handler.
 type Request interface {
-	enc.Writable
+	scribe.Writable
 
-	Meta() enc.Reader
-	Body() enc.Reader
+	Meta() scribe.Reader
+	Body() scribe.Reader
 }
 
 // A response is a writable message telling the consumer the result of
 // invoking the handler.
 type Response interface {
-	enc.Writable
+	scribe.Writable
 
 	Error() error
-	Body() enc.Reader
+	Body() scribe.Reader
 }
 
 // Request/response intiailization functions.
-func NewRequest(meta enc.Message, body enc.Message) Request {
+func NewRequest(meta scribe.Message, body scribe.Message) Request {
 	if meta == nil {
-		meta = enc.EmptyMessage
+		meta = scribe.EmptyMessage
 	}
 
 	if body == nil {
-		body = enc.EmptyMessage
+		body = scribe.EmptyMessage
 	}
 
 	return &request{meta, body}
 }
 
-func NewEmptyRequest(meta enc.Message) Request {
+func NewEmptyRequest(meta scribe.Message) Request {
 	return NewRequest(meta, nil)
 }
 
-func NewStandardRequest(body enc.Message) Request {
+func NewStandardRequest(body scribe.Message) Request {
 	return NewRequest(nil, body)
 }
 
-func NewResponse(err error, body enc.Message) Response {
+func NewResponse(err error, body scribe.Message) Response {
 	if body == nil {
-		body = enc.EmptyMessage
+		body = scribe.EmptyMessage
 	}
 
 	return &response{err, body}
@@ -119,7 +119,7 @@ func NewEmptyResponse() Response {
 	return NewResponse(nil, nil)
 }
 
-func NewStandardResponse(body enc.Message) Response {
+func NewStandardResponse(body scribe.Message) Response {
 	return NewResponse(nil, body)
 }
 
@@ -127,18 +127,18 @@ func NewErrorResponse(err error) Response {
 	return NewResponse(err, nil)
 }
 
-func readRequest(dec enc.Decoder) (Request, error) {
-	msg, err := enc.Decode(dec)
+func readRequest(dec scribe.Decoder) (Request, error) {
+	msg, err := scribe.Decode(dec)
 	if err != nil {
 		return nil, err
 	}
 
-	var meta enc.Message
+	var meta scribe.Message
 	if err := msg.Read("meta", &meta); err != nil {
 		return nil, err
 	}
 
-	var body enc.Message
+	var body scribe.Message
 	if err := msg.Read("body", &body); err != nil {
 		return nil, err
 	}
@@ -146,8 +146,8 @@ func readRequest(dec enc.Decoder) (Request, error) {
 	return NewRequest(meta, body), nil
 }
 
-func readResponse(dec enc.Decoder) (Response, error) {
-	msg, err := enc.Decode(dec)
+func readResponse(dec scribe.Decoder) (Response, error) {
+	msg, err := scribe.Decode(dec)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func readResponse(dec enc.Decoder) (Response, error) {
 		return nil, err
 	}
 
-	var body enc.Message
+	var body scribe.Message
 	if err := msg.Read("body", &body); err != nil {
 		return nil, err
 	}
@@ -167,37 +167,37 @@ func readResponse(dec enc.Decoder) (Response, error) {
 
 // request/response structs
 type request struct {
-	meta enc.Message
-	body enc.Message
+	meta scribe.Message
+	body scribe.Message
 }
 
-func (r *request) Meta() enc.Reader {
+func (r *request) Meta() scribe.Reader {
 	return r.meta
 }
 
-func (r *request) Body() enc.Reader {
+func (r *request) Body() scribe.Reader {
 	return r.body
 }
 
-func (r *request) Write(w enc.Writer) {
+func (r *request) Write(w scribe.Writer) {
 	w.Write("meta", r.meta)
 	w.Write("body", r.body)
 }
 
 type response struct {
 	err  error
-	body enc.Message
+	body scribe.Message
 }
 
 func (r *response) Error() error {
 	return r.err
 }
 
-func (r *response) Body() enc.Reader {
+func (r *response) Body() scribe.Reader {
 	return r.body
 }
 
-func (r *response) Write(w enc.Writer) {
+func (r *response) Write(w scribe.Writer) {
 	w.Write("body", r.body)
 	if r.err != nil {
 		w.Write("error", r.err.Error())
@@ -265,8 +265,8 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 		return nil, err
 	}
 
-	var encoder enc.Encoder
-	var readr enc.Decoder
+	var encoder scribe.Encoder
+	var readr scribe.Decoder
 	switch encoding {
 	default:
 		return nil, &UnsupportedEncodingError{EncodingToString(encoding)}
@@ -294,8 +294,8 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 type client struct {
 	conn Connection
 
-	enc enc.Encoder
-	dec enc.Decoder
+	enc scribe.Encoder
+	dec scribe.Decoder
 
 	logger common.Logger
 
@@ -328,7 +328,7 @@ func (s *client) Send(req Request) (Response, error) {
 func (s *client) send(req Request) error {
 	var err error
 	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
-		err = enc.Encode(s.enc, req)
+		err = scribe.Encode(s.enc, req)
 		return nil
 	})
 
@@ -455,8 +455,8 @@ func (s *server) newWorker(conn Connection) func() {
 		defer conn.Close()
 		s.logger.Debug("Processing connection: %v", conn)
 
-		var encoder enc.Encoder
-		var readr enc.Decoder
+		var encoder scribe.Encoder
+		var readr scribe.Decoder
 
 		encoding, err := readEncoding(conn)
 		if err != nil {
@@ -510,7 +510,7 @@ func (s *server) handle(req Request) (Response, error) {
 	}
 }
 
-func (s *server) recv(dec enc.Decoder) (Request, error) {
+func (s *server) recv(dec scribe.Decoder) (Request, error) {
 	var req Request
 	var err error
 	done, timer := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
@@ -528,10 +528,10 @@ func (s *server) recv(dec enc.Decoder) (Request, error) {
 	}
 }
 
-func (s *server) send(encoder enc.Encoder, res Response) error {
+func (s *server) send(encoder scribe.Encoder, res Response) error {
 	var err error
 	done, timer := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
-		err = enc.Encode(encoder, res)
+		err = scribe.Encode(encoder, res)
 		return nil
 	})
 

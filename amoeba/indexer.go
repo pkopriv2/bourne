@@ -57,10 +57,10 @@ type Update interface {
 	View
 
 	// Puts the value at the key.
-	Put(key Key, val Val, ver int)
+	Put(key Key, val Val, ver int) bool
 
 	// Deletes the key. Future reads will return nil for the key.
-	Del(key Key, ver int)
+	Del(key Key, ver int) bool
 }
 
 // A simple sortable interface
@@ -112,16 +112,20 @@ func Get(idx Indexer, key Key) Item {
 	return item
 }
 
-func Put(idx Indexer, key Key, val Val, ver int) {
+func Put(idx Indexer, key Key, val Val, ver int) bool {
+	var ret bool
 	idx.Update(func(u Update) {
-		u.Put(key, val, ver)
+		ret = u.Put(key, val, ver)
 	})
+	return ret
 }
 
-func Del(idx Indexer, key Key, ver int) {
+func Del(idx Indexer, key Key, ver int) bool  {
+	var ret bool
 	idx.Update(func(u Update) {
-		u.Del(key, ver)
+		ret = u.Del(key, ver)
 	})
+	return ret
 }
 
 // IMPLEMENTATIONS:
@@ -173,12 +177,12 @@ func (u *update) ScanFrom(start Key, fn func(*Scan, Key, Item)) {
 	u.view.ScanFrom(start, fn)
 }
 
-func (u *update) Put(key Key, val Val, ver int) {
-	u.view.index.Put(key, val, ver, u.Time())
+func (u *update) Put(key Key, val Val, ver int) bool {
+	return u.view.index.Put(key, val, ver, u.Time())
 }
 
-func (u *update) Del(key Key, ver int) {
-	u.view.index.Del(key, ver, u.Time())
+func (u *update) Del(key Key, ver int) bool {
+	return u.view.index.Del(key, ver, u.Time())
 }
 
 type indexer struct {

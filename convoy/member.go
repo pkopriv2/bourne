@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/enc"
 	"github.com/pkopriv2/bourne/net"
+	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -16,7 +16,7 @@ type member struct {
 	Version int
 }
 
-func (m *member) Write(enc.Writer) {
+func (m *member) Write(scribe.Writer) {
 	panic("not implemented")
 }
 
@@ -37,6 +37,10 @@ func (m *member) Ping() bool {
 }
 
 func (m *member) Update(Status int) error {
+	panic("not implemented")
+}
+
+func (m *member) ApplyEvents(events []event) error {
 	panic("not implemented")
 }
 
