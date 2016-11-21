@@ -65,9 +65,6 @@ func PublishTo(ctx common.Context, db Database, addr string) (Cluster, error) {
 type Database interface {
 	Store
 
-	// every database must be globally identifiable.
-	Id() uuid.UUID
-
 	// the only difference between a store and a db is that a database
 	// has a durable change log
 	Log() ChangeLog
@@ -81,7 +78,7 @@ type ChangeLog interface {
 	Id() (uuid.UUID, error)
 
 	// Appends a change to the log and notifies any listeners.
-	Append(string, string, int, bool) (Change, error)
+	Append(key string, val string, del bool) (Change, error)
 
 	// Returns all the changes in the lifetime of the change log.
 	All() ([]Change, error)
@@ -174,7 +171,7 @@ type Store interface {
 	io.Closer
 
 	// Returns the item value and version
-	Get(key string) (string, error)
+	Get(key string) (string, bool, error)
 
 	// Returns a handle to a batch of changes to apply to the store.
 	Put(key string, val string) error

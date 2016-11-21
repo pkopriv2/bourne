@@ -64,10 +64,10 @@ func TestChangeLog_Append(t *testing.T) {
 	cl := OpenTestChangeLog(ctx)
 	assert.Nil(t, cl.Close())
 
-	chg, err := cl.Append("key", "val", 0, false)
+	chg, err := cl.Append("key", "val", false)
 	assert.Nil(t, err)
 
-	exp := Change{1, "key", "val", 0, false}
+	exp := Change{1, "key", "val", 1, false}
 	assert.Equal(t, exp, chg)
 }
 
@@ -78,9 +78,9 @@ func TestChangeLog_Listen(t *testing.T) {
 	cl := OpenTestChangeLog(ctx)
 	ch := changeLogListen(cl)
 
-	chg1, _ := cl.Append("key", "val", 0, false)
-	chg2, _ := cl.Append("key", "val1", 1, false)
-	chg3, _ := cl.Append("key", "", 2, true)
+	chg1, _ := cl.Append("key", "val", false)
+	chg2, _ := cl.Append("key", "val1", false)
+	chg3, _ := cl.Append("key", "", true)
 
 	assert.Equal(t, chg1, <-ch)
 	assert.Equal(t, chg2, <-ch)
@@ -93,9 +93,9 @@ func TestChangeLog_All(t *testing.T) {
 
 	cl := OpenTestChangeLog(ctx)
 
-	chg1, _ := cl.Append("key", "val", 0, false)
-	chg2, _ := cl.Append("key", "val1", 1, false)
-	chg3, _ := cl.Append("key", "", 2, true)
+	chg1, _ := cl.Append("key", "val", false)
+	chg2, _ := cl.Append("key", "val1", false)
+	chg3, _ := cl.Append("key", "", true)
 
 	all, err := cl.All()
 	assert.Nil(t, err)

@@ -26,7 +26,7 @@ import "github.com/pkopriv2/bourne/stash"
 Stash contains basically a single method:
 
 ```go
-stash := stash.Open(ctx)
+stash := stash.Open(ctx, "path/to/stash.db")
 ```
 
 This method is guaranteed thread-safe and will only produce a single
@@ -35,7 +35,7 @@ bolt.DB instance per stash location.
 ### Closing a Stash Instance
 
 ```go
-stash := stash.Open(ctx)
+stash := stash.Open(ctx, "path/to/stash.db")
 defer ctx.Close()
 ```
 

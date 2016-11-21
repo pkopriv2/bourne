@@ -42,6 +42,14 @@ func newDirListRequest() net.Request {
 	return net.NewRequest(metaDirList, scribe.EmptyMessage)
 }
 
+func newDirListResponse(events []event) net.Response {
+	return net.NewStandardResponse(
+		scribe.Build(
+			func(w scribe.Writer) {
+				w.Write("events", events)
+			}))
+}
+
 func newDirApplyRequest(events []event) net.Request {
 	return net.NewRequest(metaDirApply, scribe.Build(func(w scribe.Writer) {
 		w.Write("events", events)
@@ -67,12 +75,11 @@ func readDirApplyRequest(req net.Request) ([]event, error) {
 	return events, nil
 }
 
-func newDirApplyResponseBody(success []bool) scribe.Message {
-	return scribe.Build(func(w scribe.Writer) {
-		w.Write("success", success)
-	})
+func newDirApplyResponse(success []bool) net.Response {
+	return net.NewStandardResponse(
+		scribe.Build(
+			func(w scribe.Writer) {
+				w.Write("success", success)
+			}))
 }
 
-func readUpdateResponseBody(body scribe.Reader) (success []bool, err error) {
-	return success, body.Read("success", &success)
-}

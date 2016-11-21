@@ -33,7 +33,7 @@ func changeLogListen(cl ChangeLog) <-chan Change {
 }
 
 // Converts a stream of changes to events.
-func changesToEvents(id uuid.UUID, ch <-chan Change) <-chan event {
+func changeStreamToEventStream(id uuid.UUID, ch <-chan Change) <-chan event {
 	ret := make(chan event, 1024)
 	go func() {
 		for chg := range ch {
@@ -43,6 +43,14 @@ func changesToEvents(id uuid.UUID, ch <-chan Change) <-chan event {
 		close(ret)
 	}()
 	return nil
+}
+
+func changesToEvents(id uuid.UUID, chgs []Change) []event  {
+	ret := make([]event, 0, len(chgs))
+	for _, c := range chgs {
+		ret = append(ret, changeToEvent(id, c))
+	}
+	return ret
 }
 
 // The change log implementation.  The change log is
@@ -95,9 +103,9 @@ func (c *changeLog) Listeners() []func(Change, bool) {
 	return ret
 }
 
-func (c *changeLog) Append(key string, val string, ver int, del bool) (chg Change, err error) {
+func (c *changeLog) Append(key string, val string, del bool) (chg Change, err error) {
 	err = c.db.Update(func(tx *bolt.Tx) error {
-		chg, err = changeLogAppend(tx, key, val, ver, del)
+		chg, err = changeLogAppend(tx, key, val, del)
 		return err
 	})
 
@@ -168,7 +176,7 @@ func changeLogGetId(tx *bolt.Tx) (uuid.UUID, error) {
 	return id, bucket.Put(idKey, id.Bytes())
 }
 
-func changeLogAppend(tx *bolt.Tx, key string, val string, ver int, del bool) (Change, error) {
+func changeLogAppend(tx *bolt.Tx, key string, val string, del bool) (Change, error) {
 	var chg Change
 
 	bucket, err := tx.CreateBucketIfNotExists(logBucket)
@@ -181,7 +189,7 @@ func changeLogAppend(tx *bolt.Tx, key string, val string, ver int, del bool) (Ch
 		return chg, err
 	}
 
-	chg = Change{int(id), key, val, ver, del}
+	chg = Change{int(id), key, val, int(id), del}
 	return chg, bucket.Put(changeLogKeyBytes(id), changeLogValBytes(chg))
 }
 

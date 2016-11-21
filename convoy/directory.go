@@ -295,17 +295,6 @@ func readEvent(r scribe.Reader) (event, error) {
 	}
 }
 
-func writeEvent(w scribe.Writer, e event) {
-	e.Write(w)
-
-	switch e.(type) {
-	case *dataEvent:
-		w.Write("type", "data")
-	case *memberEvent:
-		w.Write("type", "member")
-	}
-}
-
 // The primary data event type.
 type dataEvent struct {
 	Id   uuid.UUID
@@ -338,6 +327,7 @@ func readDataEvent(r scribe.Reader) (*dataEvent, error) {
 }
 
 func (e *dataEvent) Write(w scribe.Writer) {
+	w.Write("type", "data")
 	w.Write("id", e.Id.String())
 	w.Write("attr", e.Attr)
 	w.Write("val", e.Val)
@@ -388,6 +378,7 @@ func readMemberEvent(r scribe.Reader) (*memberEvent, error) {
 }
 
 func (e *memberEvent) Write(w scribe.Writer) {
+	w.Write("type", "member")
 	w.Write("id", e.Id.String())
 	w.Write("host", e.Host)
 	w.Write("port", e.Port)
