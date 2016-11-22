@@ -7,7 +7,7 @@ import (
 	"github.com/pkopriv2/bourne/scribe"
 )
 
-func ListenTcp(port int) (Listener, error) {
+func ListenTcp(port string) (*TcpListener, error) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%v", port))
 	if err != nil {
 		return nil, err
@@ -16,7 +16,7 @@ func ListenTcp(port int) (Listener, error) {
 	return &TcpListener{listener: listener}, nil
 }
 
-func ConnectTcp(addr string) (Connection, error) {
+func ConnectTcp(addr string) (*TcpConnection, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err

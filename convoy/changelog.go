@@ -45,7 +45,7 @@ func changeStreamToEventStream(id uuid.UUID, ch <-chan Change) <-chan event {
 	return nil
 }
 
-func changesToEvents(id uuid.UUID, chgs []Change) []event  {
+func changesToEvents(id uuid.UUID, chgs []Change) []event {
 	ret := make([]event, 0, len(chgs))
 	for _, c := range chgs {
 		ret = append(ret, changeToEvent(id, c))
@@ -59,18 +59,18 @@ func changesToEvents(id uuid.UUID, chgs []Change) []event  {
 type changeLog struct {
 
 	// The underlying bolt db instance.
-	db stash.Stash
+	Stash stash.Stash
 
 	// Change handlers
-	fns []func(Change, bool)
+	Handlers []func(Change, bool)
 
 	// Lock around handlers
-	fnsLock sync.RWMutex
+	Lock sync.RWMutex
 }
 
 // Opens the change log.  This uses the shared store
 func openChangeLog(db stash.Stash) *changeLog {
-	return &changeLog{db: db, fns: make([]func(Change, bool), 0, 4)}
+	return &changeLog{Stash: db, Handlers: make([]func(Change, bool), 0, 4)}
 }
 
 func (c *changeLog) Close() error {
@@ -80,13 +80,21 @@ func (c *changeLog) Close() error {
 }
 
 func (c *changeLog) Listen(fn func(Change, bool)) {
-	c.fnsLock.Lock()
-	defer c.fnsLock.Unlock()
-	c.fns = append(c.fns, fn)
+	c.Lock.Lock()
+	defer c.Lock.Unlock()
+	c.Handlers = append(c.Handlers, fn)
+}
+
+func (c *changeLog) Seq() (seq int, err error) {
+	err = c.Stash.View(func(tx *bolt.Tx) error {
+		seq = changeLogGetSeq(tx)
+		return err
+	})
+	return
 }
 
 func (c *changeLog) Id() (id uuid.UUID, err error) {
-	err = c.db.Update(func(tx *bolt.Tx) error {
+	err = c.Stash.Update(func(tx *bolt.Tx) error {
 		id, err = changeLogGetId(tx)
 		return err
 	})
@@ -94,17 +102,17 @@ func (c *changeLog) Id() (id uuid.UUID, err error) {
 }
 
 func (c *changeLog) Listeners() []func(Change, bool) {
-	c.fnsLock.RLock()
-	defer c.fnsLock.RUnlock()
-	ret := make([]func(Change, bool), 0, len(c.fns))
-	for _, fn := range c.fns {
+	c.Lock.RLock()
+	defer c.Lock.RUnlock()
+	ret := make([]func(Change, bool), 0, len(c.Handlers))
+	for _, fn := range c.Handlers {
 		ret = append(ret, fn)
 	}
 	return ret
 }
 
 func (c *changeLog) Append(key string, val string, del bool) (chg Change, err error) {
-	err = c.db.Update(func(tx *bolt.Tx) error {
+	err = c.Stash.Update(func(tx *bolt.Tx) error {
 		chg, err = changeLogAppend(tx, key, val, del)
 		return err
 	})
@@ -118,7 +126,7 @@ func (c *changeLog) Append(key string, val string, del bool) (chg Change, err er
 }
 
 func (c *changeLog) All() (chgs []Change, err error) {
-	err = c.db.View(func(tx *bolt.Tx) error {
+	err = c.Stash.View(func(tx *bolt.Tx) error {
 		chgs, err = changeLogReadAll(tx)
 		return err
 	})
@@ -156,6 +164,15 @@ func changeLogParseVal(val []byte) (Change, error) {
 	}
 
 	return ReadChange(msg)
+}
+
+func changeLogGetSeq(tx *bolt.Tx) int {
+	bucket := tx.Bucket(logBucket)
+	if bucket == nil {
+		return 0
+	}
+
+	return int(bucket.Sequence())
 }
 
 func changeLogGetId(tx *bolt.Tx) (uuid.UUID, error) {

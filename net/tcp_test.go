@@ -9,12 +9,12 @@ import (
 
 // TODO: randomize port assignment.
 func TestTcpListener_Close(t *testing.T) {
-	listener, _ := ListenTcp(0)
+	listener, _ := ListenTcp("0")
 	assert.Nil(t, listener.Close())
 }
 
 func TestTcpListener_Accept(t *testing.T) {
-	listener, _ := ListenTcp(0)
+	listener, _ := ListenTcp("0")
 	defer listener.Close()
 
 	go func() {
@@ -31,7 +31,7 @@ func TestTcpListener_Accept(t *testing.T) {
 }
 
 func TestTcpListener_Read_Write(t *testing.T) {
-	listener, _ := ListenTcp(9000)
+	listener, _ := ListenTcp("9000")
 	defer listener.Close()
 
 	go func() {

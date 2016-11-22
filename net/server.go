@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkopriv2/bourne/scribe"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/scribe"
 )
 
 // These set of classes implement a very simple "embeddable", protocol
@@ -73,7 +73,10 @@ type Client interface {
 type Request interface {
 	scribe.Writable
 
+	// Request header information
 	Meta() scribe.Reader
+
+	// The body of the message.  Never nil
 	Body() scribe.Reader
 }
 
@@ -82,7 +85,10 @@ type Request interface {
 type Response interface {
 	scribe.Writable
 
+	// Whether or not an error occurred.
 	Error() error
+
+	// The body of the message.  Never nil
 	Body() scribe.Reader
 }
 
@@ -292,13 +298,10 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 }
 
 type client struct {
-	conn Connection
-
-	enc scribe.Encoder
-	dec scribe.Decoder
-
-	logger common.Logger
-
+	conn        Connection
+	enc         scribe.Encoder
+	dec         scribe.Decoder
+	logger      common.Logger
 	sendTimeout time.Duration
 	recvTimeout time.Duration
 }
@@ -555,7 +558,7 @@ func NewTcpClient(ctx common.Context, addr string) (Client, error) {
 	return NewClient(ctx, conn)
 }
 
-func NewTcpServer(ctx common.Context, port int, handler Handler) (Server, error) {
+func NewTcpServer(ctx common.Context, port string, handler Handler) (Server, error) {
 	listener, err := ListenTcp(port)
 	if err != nil {
 		return nil, err

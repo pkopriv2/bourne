@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
@@ -77,6 +76,9 @@ type ChangeLog interface {
 	// Every change log must be globally unique
 	Id() (uuid.UUID, error)
 
+	// Returns the current sequence of the log
+	Seq() (int, error)
+
 	// Appends a change to the log and notifies any listeners.
 	Append(key string, val string, del bool) (Change, error)
 
@@ -90,7 +92,6 @@ type ChangeLog interface {
 
 // Fundamental unit of change within the published database
 type Change struct {
-	// TODO: Scribe needs to support large number types!
 	Seq int
 	Key string
 	Val string
@@ -154,14 +155,14 @@ type Cluster interface {
 // A simple client abstraction.
 type Member interface {
 
-	// The id of the member
-	Ping() bool
-
-	// Connects to the target of the client on the given port.
-	Connect(int) (net.Connection, error)
-
-	// Returns a store client.
-	Store(common.Context) (Store, error)
+	// // The id of the member
+	// Ping() bool
+	//
+	// // Connects to the target of the client on the given port.
+	// Connect(int) (net.Connection, error)
+	//
+	// // Returns a store client.
+	// Store(common.Context) (Store, error)
 }
 
 // A very simple key,value store abstraction. Updates to the store

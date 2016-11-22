@@ -38,6 +38,7 @@ var (
 
 // Request/Response helpers
 
+// /dir/list
 func newDirListRequest() net.Request {
 	return net.NewRequest(metaDirList, scribe.EmptyMessage)
 }
@@ -50,6 +51,26 @@ func newDirListResponse(events []event) net.Response {
 			}))
 }
 
+func readDirListResponse(res net.Response) ([]event, error) {
+	var msgs []scribe.Message
+	if err := res.Body().Read("events", &msgs); err != nil {
+		return nil, errors.Wrap(err, "Error parsing events")
+	}
+
+	events := make([]event, 0, len(msgs))
+	for _, msg := range msgs {
+		e, err := readEvent(msg)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Parsing event [%v]", msg)
+		}
+
+		events = append(events, e)
+	}
+
+	return events, nil
+}
+
+// /dir/apply
 func newDirApplyRequest(events []event) net.Request {
 	return net.NewRequest(metaDirApply, scribe.Build(func(w scribe.Writer) {
 		w.Write("events", events)
@@ -75,6 +96,7 @@ func readDirApplyRequest(req net.Request) ([]event, error) {
 	return events, nil
 }
 
+
 func newDirApplyResponse(success []bool) net.Response {
 	return net.NewStandardResponse(
 		scribe.Build(
@@ -83,3 +105,11 @@ func newDirApplyResponse(success []bool) net.Response {
 			}))
 }
 
+func readDirApplyResponse(res net.Response) (msgs []bool, err error) {
+    if err = res.Error(); err != nil {
+        return nil, err
+    }
+
+    err = res.Body().Read("events",&msgs)
+    return
+}

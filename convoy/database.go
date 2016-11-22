@@ -3,6 +3,7 @@ package convoy
 import (
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/stash"
 )
 
 type database struct {
@@ -11,7 +12,16 @@ type database struct {
 	ChgLog ChangeLog
 }
 
-func OpenDatabase(ctx common.Context, log ChangeLog) (Database, error) {
+func OpenDatabase(ctx common.Context, path string) (Database, error) {
+	stash, err := stash.Open(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	return indexChangeLog(ctx, openChangeLog(stash))
+}
+
+func indexChangeLog(ctx common.Context, log ChangeLog) (Database, error) {
 	db := &database{
 		Ctx:    ctx,
 		Data:   amoeba.NewIndexer(ctx),

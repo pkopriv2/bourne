@@ -57,6 +57,48 @@ func TestChangeLog_Id_Durability(t *testing.T) {
 	assert.Equal(t, id1, id2)
 }
 
+func TestChangeLog_Seq_Empty(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	cl := OpenTestChangeLog(ctx)
+	assert.Nil(t, cl.Close())
+
+	seq, err := cl.Seq()
+	assert.Nil(t, err)
+	assert.Equal(t, 0, seq)
+}
+
+func TestChangeLog_Seq_Single(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	cl := OpenTestChangeLog(ctx)
+	assert.Nil(t, cl.Close())
+
+	cl.Append("key", "val", false)
+
+	seq, err := cl.Seq()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, seq)
+}
+
+func TestChangeLog_Seq_Multi(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	cl := OpenTestChangeLog(ctx)
+	assert.Nil(t, cl.Close())
+
+	cl.Append("key", "val", false)
+	cl.Append("key", "val", false)
+	cl.Append("key", "val", false)
+
+	seq, err := cl.Seq()
+	assert.Nil(t, err)
+	assert.Equal(t, 3, seq)
+}
+
 func TestChangeLog_Append(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
