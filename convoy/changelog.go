@@ -34,7 +34,7 @@ func changeLogListen(cl ChangeLog) <-chan Change {
 
 // Converts a stream of changes to events.
 func changeStreamToEventStream(id uuid.UUID, ch <-chan Change) <-chan event {
-	ret := make(chan event, 1024)
+	ret := make(chan event)
 	go func() {
 		for chg := range ch {
 			ret <- changeToEvent(id, chg)
@@ -42,7 +42,7 @@ func changeStreamToEventStream(id uuid.UUID, ch <-chan Change) <-chan event {
 
 		close(ret)
 	}()
-	return nil
+	return ret
 }
 
 func changesToEvents(id uuid.UUID, chgs []Change) []event {
@@ -57,15 +57,9 @@ func changesToEvents(id uuid.UUID, chgs []Change) []event {
 // built on a bolt DB instance, so it is guaranteed
 // both durable and thread-safe.
 type changeLog struct {
-
-	// The underlying bolt db instance.
-	Stash stash.Stash
-
-	// Change handlers
+	Stash    stash.Stash
 	Handlers []func(Change, bool)
-
-	// Lock around handlers
-	Lock sync.RWMutex
+	Lock     sync.RWMutex
 }
 
 // Opens the change log.  This uses the shared store

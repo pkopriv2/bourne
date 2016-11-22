@@ -272,15 +272,15 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 	}
 
 	var encoder scribe.Encoder
-	var readr scribe.Decoder
+	var decoder scribe.Decoder
 	switch encoding {
 	default:
 		return nil, &UnsupportedEncodingError{EncodingToString(encoding)}
 	case Json:
-		readr = json.NewDecoder(conn)
+		decoder = json.NewDecoder(conn)
 		encoder = json.NewEncoder(conn)
 	case Gob:
-		readr = gob.NewDecoder(conn)
+		decoder = gob.NewDecoder(conn)
 		encoder = gob.NewEncoder(conn)
 	}
 
@@ -292,7 +292,7 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 		logger:      ctx.Logger(),
 		conn:        conn,
 		enc:         encoder,
-		dec:         readr,
+		dec:         decoder,
 		sendTimeout: config.OptionalDuration(ConfClientSendTimeout, DefaultClientSendTimeout),
 		recvTimeout: config.OptionalDuration(ConfClientRecvTimeout, DefaultClientRecvTimeout)}, nil
 }
@@ -459,7 +459,7 @@ func (s *server) newWorker(conn Connection) func() {
 		s.logger.Debug("Processing connection: %v", conn)
 
 		var encoder scribe.Encoder
-		var readr scribe.Decoder
+		var decoder scribe.Decoder
 
 		encoding, err := readEncoding(conn)
 		if err != nil {
@@ -470,15 +470,15 @@ func (s *server) newWorker(conn Connection) func() {
 		default:
 			return // TODO: respond with error!
 		case Json:
-			readr = json.NewDecoder(conn)
+			decoder = json.NewDecoder(conn)
 			encoder = json.NewEncoder(conn)
 		case Gob:
-			readr = gob.NewDecoder(conn)
+			decoder = gob.NewDecoder(conn)
 			encoder = gob.NewEncoder(conn)
 		}
 
 		for {
-			req, err := s.recv(readr)
+			req, err := s.recv(decoder)
 			if err != nil {
 				s.logger.Error("Error receiving request [%v]", err)
 				return

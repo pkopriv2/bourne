@@ -12,16 +12,18 @@ type database struct {
 	ChgLog ChangeLog
 }
 
+// Opens the database using the path to the given db file.
 func OpenDatabase(ctx common.Context, path string) (Database, error) {
 	stash, err := stash.Open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 
-	return indexChangeLog(ctx, openChangeLog(stash))
+	return initDatabase(ctx, openChangeLog(stash))
 }
 
-func indexChangeLog(ctx common.Context, log ChangeLog) (Database, error) {
+// Opens the database using the given changelog
+func initDatabase(ctx common.Context, log ChangeLog) (Database, error) {
 	db := &database{
 		Ctx:    ctx,
 		Data:   amoeba.NewIndexer(ctx),

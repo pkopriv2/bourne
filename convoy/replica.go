@@ -30,13 +30,7 @@ type replica struct {
 	Wait   sync.WaitGroup
 }
 
-func StartCluster(ctx common.Context, db Database, port int) (*replica, error) {
-
-	// Create the member instance.
-	self, err := replicaSelf(ctx, db, strconv.Itoa(port))
-	if err != nil {
-		return nil, err
-	}
+func StartReplica(ctx common.Context, db Database, port int) (*replica, error) {
 
 	// Create the directory instance.
 	dir, err := replicaInitDir(ctx, db.Log())
@@ -50,15 +44,20 @@ func StartCluster(ctx common.Context, db Database, port int) (*replica, error) {
 		return nil, err
 	}
 
-	// Add the member entry to the directory
+	// Create the 'self' instance.
+	self, err := replicaInitSelf(ctx, db, strconv.Itoa(port))
+	if err != nil {
+		return nil, err
+	}
+
+	// Initialize/populate the directory
 	dir.Update(func(u *update) {
 		u.AddMember(self)
 	})
 
-	// Index the log
 	dir.ApplyAll(changesToEvents(self.Id, chgs))
 
-	// Host the replica
+	// Start the server.
 	server, err := net.NewTcpServer(ctx, strconv.Itoa(port), newReplicaHandler(dir))
 	if err != nil {
 		return nil, err
@@ -80,6 +79,8 @@ func (r *replica) Close() error {
 		return errors.New("Replica Closed")
 	case r.Closer <- struct{}{}:
 	}
+
+	r.Ctx.Logger().Info("Replica shutting down.")
 
 	r.Server.Close()
 	r.Dir.Close()
@@ -164,7 +165,7 @@ func replicaHandleDirApply(replicaHandleDirApply *directory, req net.Request) ne
 }
 
 // Returns the "self" member.
-func replicaSelf(ctx common.Context, db Database, port string) (mem *member, err error) {
+func replicaInitSelf(ctx common.Context, db Database, port string) (mem *member, err error) {
 	var id uuid.UUID
 	var seq int
 
