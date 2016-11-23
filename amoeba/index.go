@@ -83,6 +83,10 @@ func (i *index) Put(key Key, val Val, ver int, time time.Time) bool {
 	return false
 }
 
+func (i *index) DelNow(key Key) {
+	i.tree.Delete(indexKey{key})
+}
+
 func (i *index) Del(key Key, ver int, time time.Time) bool {
 	return i.Put(key, nil, ver, time)
 }
@@ -107,6 +111,10 @@ func (r *index) Scan(fn func(*Scan, Key, Item)) {
 func (r *index) ScanFrom(start Key, fn func(*Scan, Key, Item)) {
 	next := indexKey{start}
 	for {
+		if r.tree.Len() == 0 {
+			return
+		}
+
 		if r.tree.Max().Less(next) {
 			return
 		}

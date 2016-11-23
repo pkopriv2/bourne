@@ -81,6 +81,7 @@ func IncrementBytes(val []byte) []byte {
 	return cur.Bytes()
 }
 
+// TODO: THERE'S A BUG!!
 func IncrementUUID(id uuid.UUID) uuid.UUID {
 	inc := IncrementBytes(id.Bytes())
 	buf := make([]byte, 16)

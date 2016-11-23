@@ -30,6 +30,36 @@ type replica struct {
 	Wait   sync.WaitGroup
 }
 
+func addMemberEvent(m *member) event {
+	return &memberEvent{m.Id, m.Host, m.Port, m.Version, false}
+}
+
+func JoinReplica(self *replica, peer *client) error {
+
+	// 1. Register self with the peer.  (Should result in realtime updates being delivered to self.)
+	_, err := peer.DirApply([]event{addMemberEvent(self.Self)})
+	if err != nil {
+		return errors.Wrap(err, "Error registering self with peer")
+	}
+
+	// 2. Download the peer's directory.
+	events, err := peer.DirList()
+	if err != nil {
+		return errors.Wrap(err, "Error retrieving directory list from peer")
+	}
+
+	// 3. Index the peer's events.
+	self.Dir.ApplyAll(events)
+
+	// 4. Send self's directory to the peer.
+	_, err = peer.DirApply(self.Dir.Events())
+	if err != nil {
+		return errors.Wrap(err, "Error publishing events to peer")
+	}
+
+	return nil
+}
+
 func StartReplica(ctx common.Context, db Database, port int) (*replica, error) {
 
 	// Create the directory instance.
@@ -51,7 +81,7 @@ func StartReplica(ctx common.Context, db Database, port int) (*replica, error) {
 	}
 
 	// Initialize/populate the directory
-	dir.Update(func(u *update) {
+	dir.Update(func(u *dirUpdate) {
 		u.AddMember(self)
 	})
 
@@ -93,16 +123,29 @@ func (r *replica) Id() uuid.UUID {
 }
 
 func (r *replica) Client() (*client, error) {
-	return r.Self.Client(r.Ctx)
+	raw, err := r.Server.Client()
+	if err != nil {
+		return nil, err
+	}
+
+	return &client{raw}, nil
 }
 
-func (r *replica) Search(filter func(id uuid.UUID, key string, val string) bool) []Member {
+func (r *replica) Scan(fn func(*amoeba.Scan, uuid.UUID, string, string)) {
+	r.Dir.View(func(v *dirView) {
+		v.Scan(func(s *amoeba.Scan, id uuid.UUID, key string, val string, _ int) {
+			fn(s, id, key, val)
+		})
+	})
+}
+
+func (r *replica) Collect(filter func(id uuid.UUID, key string, val string) bool) []Member {
 	var members []Member
 
-	r.Dir.View(func(v *view) {
+	r.Dir.View(func(v *dirView) {
 		ids := make(map[uuid.UUID]struct{})
 
-		v.Scan(func(s *amoeba.Scan, id uuid.UUID, key string, val string, _ int) {
+		v.Scan(func(s *amoeba.Scan, id uuid.UUID, key string, val string, ver int) {
 			if filter(id, key, val) {
 				ids[id] = struct{}{}
 			}
@@ -122,7 +165,7 @@ func (r *replica) Search(filter func(id uuid.UUID, key string, val string) bool)
 }
 
 func (r *replica) GetMember(id uuid.UUID) (mem Member, err error) {
-	r.Dir.View(func(v *view) {
+	r.Dir.View(func(v *dirView) {
 		mem = v.GetMember(id)
 	})
 	return
@@ -132,19 +175,22 @@ func (r *replica) GetMember(id uuid.UUID) (mem Member, err error) {
 
 // Primary service handler for a replica.
 func newReplicaHandler(dir *directory) net.Handler {
+	logger := dir.Ctx.Logger()
+
 	return func(req net.Request) net.Response {
 		action, err := readMeta(req.Meta())
 		if err != nil {
 			return net.NewErrorResponse(errors.Wrap(err, "Error parsing action"))
 		}
 
+		logger.Debug("Processing request: %v", req)
 		switch action {
 		default:
 			return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
 		case epDirApply:
-			return replicaHandleDirList(dir, req)
-		case epDirList:
 			return replicaHandleDirApply(dir, req)
+		case epDirList:
+			return replicaHandleDirList(dir, req)
 		}
 	}
 }

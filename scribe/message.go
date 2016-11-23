@@ -122,7 +122,7 @@ type message struct {
 func (m *message) Read(field string, raw interface{}) error {
 	value, ok := m.val[field]
 	if !ok {
-		return &MissingFieldError{field}
+		return errors.Wrap(&MissingFieldError{field}, "Error reading field")
 	}
 
 	// Derivative types
@@ -200,7 +200,8 @@ func (m *message) ReadOptional(field string, ptr interface{}) (bool, error) {
 		return true, nil
 	}
 
-	if _, ok := err.(*MissingFieldError); ok {
+
+	if _, ok := errors.Cause(err).(*MissingFieldError); ok {
 		return false, nil
 	}
 

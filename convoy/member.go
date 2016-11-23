@@ -9,6 +9,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+
+
 type member struct {
 	Id      uuid.UUID
 	Host    string
@@ -37,7 +39,17 @@ func (m *member) Store(common.Context) (Store, error) {
 }
 
 func (m *member) Client(ctx common.Context) (*client, error) {
-	conn, err := m.connect(m.Port)
+	return connectMember(ctx, net.NewAddr(m.Host, m.Port))
+}
+
+// A thin member client.
+type client struct {
+	Raw net.Client
+}
+
+// Connects to the given member at addr and returns the standard member client.
+func connectMember(ctx common.Context, addr string) (*client, error) {
+	conn, err := net.ConnectTcp(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -50,16 +62,11 @@ func (m *member) Client(ctx common.Context) (*client, error) {
 	return &client{raw}, nil
 }
 
-// A thin member client.
-type client struct {
-	Raw net.Client
-}
-
 func (c *client) Close() error {
 	return c.Raw.Close()
 }
 
-func (m *client) DirList(ctx common.Context, events []event) ([]event, error) {
+func (m *client) DirList() ([]event, error) {
 	resp, err := m.Raw.Send(newDirListRequest())
 	if err != nil {
 		return nil, err
@@ -68,7 +75,7 @@ func (m *client) DirList(ctx common.Context, events []event) ([]event, error) {
 	return readDirListResponse(resp)
 }
 
-func (m *client) DirApply(ctx common.Context, events []event) ([]bool, error) {
+func (m *client) DirApply(events []event) ([]bool, error) {
 	resp, err := m.Raw.Send(newDirApplyRequest(events))
 	if err != nil {
 		return nil, err

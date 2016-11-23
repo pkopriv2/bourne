@@ -96,7 +96,6 @@ func readDirApplyRequest(req net.Request) ([]event, error) {
 	return events, nil
 }
 
-
 func newDirApplyResponse(success []bool) net.Response {
 	return net.NewStandardResponse(
 		scribe.Build(
@@ -106,10 +105,10 @@ func newDirApplyResponse(success []bool) net.Response {
 }
 
 func readDirApplyResponse(res net.Response) (msgs []bool, err error) {
-    if err = res.Error(); err != nil {
-        return nil, err
-    }
+	if err = res.Error(); err != nil {
+		return nil, err
+	}
 
-    err = res.Body().Read("events",&msgs)
-    return
+	err = res.Body().Read("success", &msgs)
+	return
 }

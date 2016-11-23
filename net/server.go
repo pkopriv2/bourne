@@ -190,6 +190,10 @@ func (r *request) Write(w scribe.Writer) {
 	w.Write("body", r.body)
 }
 
+func (r *request) String() string {
+	return fmt.Sprintf("Meta: %v :: Body: %v", r.meta, r.body)
+}
+
 type response struct {
 	err  error
 	body scribe.Message
@@ -209,6 +213,11 @@ func (r *response) Write(w scribe.Writer) {
 		w.Write("error", r.err.Error())
 	}
 }
+
+func (r *response) String() string {
+	return fmt.Sprintf("Err: %v :: Body: %v", r.err, r.body)
+}
+
 
 // Support for multiple encodings (intended to help troubleshoot live systems)
 type Encoding byte
@@ -353,7 +362,6 @@ func (s *client) recv() (Response, error) {
 
 	select {
 	case <-done:
-		s.logger.Debug("Received response: %v", resp)
 		return resp, err
 	case <-timeout:
 		return resp, concurrent.NewTimeoutError(s.sendTimeout, "client:recv")
@@ -456,7 +464,6 @@ func (s *server) killConnection(conn Connection, err error) error {
 func (s *server) newWorker(conn Connection) func() {
 	return func() {
 		defer conn.Close()
-		s.logger.Debug("Processing connection: %v", conn)
 
 		var encoder scribe.Encoder
 		var decoder scribe.Decoder

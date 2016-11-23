@@ -61,6 +61,9 @@ type Update interface {
 
 	// Deletes the key. Future reads will return nil for the key.
 	Del(key Key, ver int) bool
+
+	// Deletes the key, but doesn't
+	DelNow(key Key)
 }
 
 // A simple sortable interface
@@ -185,6 +188,10 @@ func (u *update) Del(key Key, ver int) bool {
 	return u.view.index.Del(key, ver, u.Time())
 }
 
+func (u *update) DelNow(key Key) {
+	u.view.index.DelNow(key)
+}
+
 type indexer struct {
 	ctx    common.Context
 	index  *index
@@ -221,7 +228,7 @@ func (e *indexer) Close() error {
 
 func (e *indexer) Read(fn func(View)) {
 	e.lock.RLock()
-	defer e.lock.RLock()
+	defer e.lock.RUnlock()
 	fn(&view{time: time.Now(), index: e.index})
 }
 
