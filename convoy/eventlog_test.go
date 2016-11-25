@@ -127,7 +127,6 @@ func (e *testEvent) Write(w scribe.Writer) {
 }
 
 func (e *testEvent) Apply(tx *dirUpdate) bool {
-	// do nothing
 	return true
 }
 
@@ -135,11 +134,3 @@ func (e *testEvent) String() string {
 	return "Test event"
 }
 
-//
-// func OpenTestStash(ctx common.Context) stash.Stash {
-// db, err := stash.OpenTransient(ctx)
-// if err != nil {
-// panic(err)
-// }
-// return db
-// }
