@@ -70,7 +70,7 @@ func (d *disseminator) Disseminate(ch <-chan event) error {
 	go func() {
 		defer d.wait.Done()
 		for e := range ch {
-			d.log.Push(e)
+			d.log.Push(e, 2)
 		}
 	}()
 
@@ -109,7 +109,7 @@ func (d *disseminator) start() error {
 			case <-tick.C:
 			}
 
-			d.log.ProcessBatch(64, func(evts []event) bool {
+			d.log.Process(func(evts []event) bool {
 				client, err := m.Client(d.dir.Ctx)
 				if client != nil {
 					return false

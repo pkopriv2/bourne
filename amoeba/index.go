@@ -84,7 +84,9 @@ func (i *index) Put(key Key, val Val, ver int, time time.Time) bool {
 }
 
 func (i *index) DelNow(key Key) {
-	i.tree.Delete(indexKey{key})
+	item := indexKey{key}
+	i.tree.Delete(item)
+	delete(i.table, item)
 }
 
 func (i *index) Del(key Key, ver int, time time.Time) bool {

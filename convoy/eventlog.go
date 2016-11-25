@@ -2,17 +2,18 @@ package convoy
 
 import (
 	"github.com/pkopriv2/bourne/amoeba"
+	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
 // the index value
-type evtKey struct {
+type eventLogKey struct {
 	id  uuid.UUID
 	cnt int
 }
 
-func (e evtKey) Compare(other amoeba.Sortable) int {
-	o := other.(evtKey)
+func (e eventLogKey) Compare(other amoeba.Sortable) int {
+	o := other.(eventLogKey)
 	if e.cnt != o.cnt {
 		return o.cnt - e.cnt // Reverse cnt order.
 	}
@@ -21,13 +22,13 @@ func (e evtKey) Compare(other amoeba.Sortable) int {
 }
 
 type eventLogEntry struct {
-	Key evtKey
+	Key   eventLogKey
 	Event event
 }
 
 // this method is only here for parity.
-func eventLogUnpackAmoebaKey(k amoeba.Key) evtKey {
-	return k.(evtKey)
+func eventLogUnpackAmoebaKey(k amoeba.Key) eventLogKey {
+	return k.(eventLogKey)
 }
 
 func eventLogUnpackAmoebaItem(item amoeba.Item) event {
@@ -43,19 +44,25 @@ func eventLogUnpackAmoebaItem(item amoeba.Item) event {
 	return raw.(event)
 }
 
-func eventLogGetEvent(data amoeba.View, key evtKey) event {
+func eventLogGetEvent(data amoeba.View, key eventLogKey) event {
 	return eventLogUnpackAmoebaItem(data.Get(key))
 }
 
-func eventLogPutEvent(data amoeba.Update, key evtKey, e event) bool {
+func eventLogPutEvent(data amoeba.Update, key eventLogKey, e event) bool {
 	return data.Put(key, e, 0) // shouldn't ever collide.
 }
 
-func eventLogDelEvent(data amoeba.Update, key evtKey) {
+func eventLogPutBatch(data amoeba.Update, batch []eventLogEntry) {
+	for _, e := range batch {
+		eventLogPutEvent(data, e.Key, e.Event)
+	}
+}
+
+func eventLogDelEvent(data amoeba.Update, key eventLogKey) {
 	data.DelNow(key)
 }
 
-func eventLogScan(data amoeba.View, fn func(*amoeba.Scan, evtKey, event)) {
+func eventLogScan(data amoeba.View, fn func(*amoeba.Scan, eventLogKey, event)) {
 	data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 		evt := eventLogUnpackAmoebaItem(i)
 		if evt == nil {
@@ -66,52 +73,66 @@ func eventLogScan(data amoeba.View, fn func(*amoeba.Scan, evtKey, event)) {
 	})
 }
 
-func eventLogIncrement(data amoeba.Update, e eventLogEntry) {
-	eventLogPutEvent(data, evtKey{e.Key.id, e.Key.cnt+1}, e.Event)
+func eventLogDec(data amoeba.Update, e eventLogEntry) {
+
+	// do nothing
+	if e.Key.cnt == 1 {
+		return
+	}
+
+	eventLogPutEvent(data, eventLogKey{e.Key.id, e.Key.cnt - 1}, e.Event)
 }
 
-func eventLogIncrementBatch(data amoeba.Update, evts []eventLogEntry) {
+func eventLogDecBatch(data amoeba.Update, evts []eventLogEntry) {
 	for _, e := range evts {
-		eventLogIncrement(data, e)
+		eventLogDec(data, e)
 	}
 }
-
 
 // A couple very simple low level view/update abstractions
 type evtLogUpdate struct {
 	Data amoeba.Update
 }
 
-func (u *evtLogUpdate) Del(k evtKey) {
-	eventLogDelEvent(u.Data, k)
+func (u *evtLogUpdate) Add(key eventLogKey, e event) {
+	eventLogPutEvent(u.Data, key, e)
 }
 
-func (u *evtLogUpdate) Add(k evtKey, e event) {
-	eventLogPutEvent(u.Data, k, e)
+func (u *evtLogUpdate) Succeed(batch []eventLogEntry) {
+	eventLogDecBatch(u.Data, batch)
 }
 
-func (u *evtLogUpdate) NextBatch(size int) []eventLogEntry {
-	ret := make([]eventLogEntry, 0, size)
-	eventLogScan(u.Data, func(s *amoeba.Scan, k evtKey, e event) {
-		defer func() {size--}()
+func (u *evtLogUpdate) Fail(batch []eventLogEntry) {
+	eventLogPutBatch(u.Data, batch)
+}
+
+func (u *evtLogUpdate) NextBatch(size int) (batch []eventLogEntry) {
+	batch = make([]eventLogEntry, 0, size)
+	eventLogScan(u.Data, func(s *amoeba.Scan, k eventLogKey, e event) {
+		defer func() { size-- }()
 		if size == 0 {
 			s.Stop()
+			return
 		}
-		ret = append(ret, eventLogEntry{k, e})
+
+		batch = append(batch, eventLogEntry{k, e})
 	})
 
-	for _, entry := range ret {
+	// I find it best to actually remove the items from the queue.  This
+	// way, we're not limiting the number of actors who can process.
+	for _, entry := range batch {
 		eventLogDelEvent(u.Data, entry.Key)
 	}
-
-	return ret
+	return
 }
 
-// The event log implementation.  The event log is
-// built on a bolt DB instance, so it is guaranteed
-// both durable and thread-safe.
+// The event log implementation.  The event log
 type eventLog struct {
 	Data amoeba.Indexer
+}
+
+func newEventLog(ctx common.Context) *eventLog {
+	return &eventLog{amoeba.NewIndexer(ctx)}
 }
 
 func (c *eventLog) Close() error {
@@ -124,40 +145,43 @@ func (d *eventLog) Update(fn func(*evtLogUpdate)) {
 	})
 }
 
-func (d *eventLog) Push(e event) {
-	d.Update(func(u *evtLogUpdate) {
-		u.Add(evtKey{uuid.NewV1(), 0}, e) // NOTE: using V1 uuid so we don't exhaust entropy.
-	})
-}
-
-func (d *eventLog) ProcessBatch(size int, fn func([]event) bool) {
-	var batch []eventLogEntry
-
-	d.Update(func(u *evtLogUpdate) {
-		batch = u.NextBatch(size)
-	})
-
-	if len(batch) == 0 {
+func (d *eventLog) Push(e event, successes int) {
+	if successes < 1 {
 		return
 	}
 
-	events := make([]event, 0, len(batch))
-	for _, entry := range batch {
-		events = append(events, entry.Event)
-	}
-
-	success := fn(events)
-
 	d.Update(func(u *evtLogUpdate) {
-		for _, e := range batch {
-			if ! success {
-				u.Add(e.Key, e.Event)
-				continue
-			}
-
-			if e.Key.cnt > 0 {
-				u.Add(evtKey{e.Key.id, e.Key.cnt-1}, e.Event)
-			}
-		}
+		u.Add(eventLogKey{uuid.NewV1(), successes}, e) // NOTE: using V1 uuid so we don't exhaust entropy.
 	})
+}
+
+func (d *eventLog) batch(size int) (batch []eventLogEntry) {
+	batch = []eventLogEntry{}
+	d.Update(func(u *evtLogUpdate) {
+		batch = u.NextBatch(size)
+	})
+	return
+}
+
+func (d *eventLog) Process(fn func([]event) bool) {
+	batch := d.batch(255)
+	if fn(eventLogExtractEvents(batch)) {
+		d.Update(func(u *evtLogUpdate) {
+			u.Succeed(batch)
+		})
+	} else {
+		d.Update(func(u *evtLogUpdate) {
+			u.Fail(batch)
+		})
+	}
+}
+
+func eventLogExtractEvents(batch []eventLogEntry) (events []event) {
+	events = make([]event, 0, len(batch))
+	for _, entry := range batch {
+		{
+			events = append(events, entry.Event)
+		}
+	}
+	return
 }
