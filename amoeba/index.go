@@ -70,16 +70,6 @@ func (i *index) Put(key Key, val Val, ver int, time time.Time) bool {
 		return true
 	}
 
-	if cur.Ver() > ver {
-		return false
-	}
-
-	if item.Time.After(cur.Time) {
-		i.table[indexKey] = item
-		i.tree.ReplaceOrInsert(indexKey)
-		return true
-	}
-
 	return false
 }
 
@@ -90,7 +80,23 @@ func (i *index) DelNow(key Key) {
 }
 
 func (i *index) Del(key Key, ver int, time time.Time) bool {
-	return i.Put(key, nil, ver, time)
+	indexKey := indexKey{key}
+	item := item{nil, ver, time}
+
+	cur, ok := i.table[indexKey]
+	if !ok {
+		i.table[indexKey] = item
+		i.tree.ReplaceOrInsert(indexKey)
+		return true
+	}
+
+	if cur.Ver() <= ver {
+		i.table[indexKey] = item
+		i.tree.ReplaceOrInsert(indexKey)
+		return true
+	}
+
+	return false
 }
 
 func (i *index) Get(key Key) Item {

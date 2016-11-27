@@ -161,6 +161,23 @@ func indexById(members []*member) map[uuid.UUID]*member {
 	return ret
 }
 
+func TestDirectory_ApplyDataEvent(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	dir := newDirectory(ctx)
+
+	type item struct {
+		Id   uuid.UUID
+		Attr string
+		Val  string
+		Ver  int
+		Del  bool
+	}
+
+	evt := &dataEvent{uuid.NewV1(), "key", "val", 0, false}
+	assert.True(t, dir.Apply(evt))
+	assert.False(t, dir.Apply(evt))
+}
+
 func TestDirectory_ApplyEvents(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	dir := newDirectory(ctx)
@@ -199,3 +216,4 @@ func TestDirectory_ApplyEvents(t *testing.T) {
 
 	assert.Equal(t, expected, actual)
 }
+

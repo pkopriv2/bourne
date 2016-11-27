@@ -23,7 +23,7 @@ func newMember(id uuid.UUID, host string, port string, ver int) *member {
 }
 
 func (m *member) String() string {
-	return fmt.Sprintf("(%v)[%v:%v]", m.Id.String(), m.Host, m.Port)
+	return fmt.Sprintf("Member(%v)[%v:%v]", m.Id.String()[:7], m.Host, m.Port)
 }
 
 func (m *member) connect(port string) (net.Connection, error) {
@@ -55,7 +55,7 @@ func connectMember(ctx common.Context, addr string) (*client, error) {
 	}
 
 	raw, err := net.NewClient(ctx, conn)
-	if err != nil {
+	if err != nil || raw == nil {
 		return nil, err
 	}
 

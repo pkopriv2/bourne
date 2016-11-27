@@ -52,12 +52,6 @@ func eventLogPutEvent(data amoeba.Update, key eventLogKey, e event) bool {
 	return data.Put(key, e, 0) // shouldn't ever collide.
 }
 
-func eventLogPutBatch(data amoeba.Update, batch []eventLogEntry) {
-	for _, e := range batch {
-		eventLogPutEvent(data, e.Key, e.Event)
-	}
-}
-
 func eventLogDelEvent(data amoeba.Update, key eventLogKey) {
 	data.DelNow(key)
 }
@@ -73,22 +67,6 @@ func eventLogScan(data amoeba.View, fn func(*amoeba.Scan, eventLogKey, event)) {
 	})
 }
 
-func eventLogDec(data amoeba.Update, e eventLogEntry) {
-
-	// do nothing
-	if e.Key.cnt == 1 {
-		return
-	}
-
-	eventLogPutEvent(data, eventLogKey{e.Key.id, e.Key.cnt - 1}, e.Event)
-}
-
-func eventLogDecBatch(data amoeba.Update, evts []eventLogEntry) {
-	for _, e := range evts {
-		eventLogDec(data, e)
-	}
-}
-
 // A couple very simple low level view/update abstractions
 type evtLogUpdate struct {
 	Data amoeba.Update
@@ -98,12 +76,18 @@ func (u *evtLogUpdate) Add(key eventLogKey, e event) {
 	eventLogPutEvent(u.Data, key, e)
 }
 
-func (u *evtLogUpdate) Succeed(batch []eventLogEntry) {
-	eventLogDecBatch(u.Data, batch)
+func (u *evtLogUpdate) SucceedBatch(batch []eventLogEntry) {
+	for _, e := range batch {
+		if e.Key.cnt > 1 {
+			eventLogPutEvent(u.Data, eventLogKey{e.Key.id, e.Key.cnt - 1}, e.Event)
+		}
+	}
 }
 
-func (u *evtLogUpdate) Fail(batch []eventLogEntry) {
-	eventLogPutBatch(u.Data, batch)
+func (u *evtLogUpdate) FailBatch(batch []eventLogEntry) {
+	for _, e := range batch {
+		eventLogPutEvent(u.Data, e.Key, e.Event)
+	}
 }
 
 func (u *evtLogUpdate) NextBatch(size int) (batch []eventLogEntry) {
@@ -145,17 +129,23 @@ func (d *eventLog) Update(fn func(*evtLogUpdate)) {
 	})
 }
 
-func (d *eventLog) Push(e event, successes int) {
-	if successes < 1 {
+func (d *eventLog) PushBatch(batch []event, n int) {
+	if len(batch) == 0 || n < 1 {
 		return
 	}
 
 	d.Update(func(u *evtLogUpdate) {
-		u.Add(eventLogKey{uuid.NewV1(), successes}, e) // NOTE: using V1 uuid so we don't exhaust entropy.
+		for _, e := range batch {
+			u.Add(eventLogKey{uuid.NewV1(), n}, e) // NOTE: using V1 uuid so we don't exhaust entropy.
+		}
 	})
 }
 
-func (d *eventLog) batch(size int) (batch []eventLogEntry) {
+func (d *eventLog) Push(e event, successes int) {
+	d.PushBatch([]event{e}, successes)
+}
+
+func (d *eventLog) nextBatch(size int) (batch []eventLogEntry) {
 	batch = []eventLogEntry{}
 	d.Update(func(u *evtLogUpdate) {
 		batch = u.NextBatch(size)
@@ -163,17 +153,21 @@ func (d *eventLog) batch(size int) (batch []eventLogEntry) {
 	return
 }
 
-func (d *eventLog) Process(fn func([]event) bool) {
-	batch := d.batch(255)
-	if fn(eventLogExtractEvents(batch)) {
-		d.Update(func(u *evtLogUpdate) {
-			u.Succeed(batch)
-		})
-	} else {
-		d.Update(func(u *evtLogUpdate) {
-			u.Fail(batch)
-		})
-	}
+func (d *eventLog) Process(fn func([]event) error) (err error) {
+	batch := d.nextBatch(256)
+
+	// IMPORTANT: Make sure function invocation never involves lock!
+	err = fn(eventLogExtractEvents(batch))
+
+	d.Update(func(u *evtLogUpdate) {
+		if err != nil {
+			u.FailBatch(batch)
+		} else {
+			u.SucceedBatch(batch)
+		}
+	})
+
+	return
 }
 
 func eventLogExtractEvents(batch []eventLogEntry) (events []event) {

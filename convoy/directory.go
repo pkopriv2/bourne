@@ -36,13 +36,11 @@ type event interface {
 
 // the core storage type.
 type directory struct {
-	Ctx  common.Context
 	Data amoeba.Indexer
 }
 
 func newDirectory(ctx common.Context) *directory {
 	return &directory{
-		Ctx:  ctx,
 		Data: amoeba.NewIndexer(ctx)}
 }
 
@@ -281,20 +279,20 @@ type dirUpdate struct {
 	Data amoeba.Update
 }
 
-func (u *dirUpdate) AddMemberAttr(id uuid.UUID, attr string, val string, ver int) {
-	dirAddMemberAttr(u.Data, id, attr, val, ver)
+func (u *dirUpdate) AddMemberAttr(id uuid.UUID, attr string, val string, ver int) bool {
+	return dirAddMemberAttr(u.Data, id, attr, val, ver)
 }
 
-func (u *dirUpdate) DelMemberAttr(id uuid.UUID, attr string, ver int) {
-	dirDelMemberAttr(u.Data, id, attr, ver)
+func (u *dirUpdate) DelMemberAttr(id uuid.UUID, attr string, ver int) bool {
+	return dirDelMemberAttr(u.Data, id, attr, ver)
 }
 
-func (u *dirUpdate) AddMember(m *member) {
-	dirAddMember(u.Data, m)
+func (u *dirUpdate) AddMember(m *member) bool {
+	return dirAddMember(u.Data, m)
 }
 
-func (u *dirUpdate) DelMember(id uuid.UUID, ver int) {
-	dirDelMember(u, id, ver)
+func (u *dirUpdate) DelMember(id uuid.UUID, ver int) bool {
+	return dirDelMember(u, id, ver)
 }
 
 func readEvent(r scribe.Reader) (event, error) {
@@ -355,11 +353,9 @@ func (e *dataEvent) Write(w scribe.Writer) {
 
 func (e *dataEvent) Apply(tx *dirUpdate) bool {
 	if e.Del {
-		tx.DelMemberAttr(e.Id, e.Attr, e.Ver)
-		return true
+		return tx.DelMemberAttr(e.Id, e.Attr, e.Ver)
 	} else {
-		tx.AddMemberAttr(e.Id, e.Attr, e.Val, e.Ver)
-		return true
+		return tx.AddMemberAttr(e.Id, e.Attr, e.Val, e.Ver)
 	}
 }
 
@@ -370,6 +366,10 @@ type memberEvent struct {
 	Port string
 	Ver  int
 	Del  bool
+}
+
+func addMemberEvent(m *member) event {
+	return &memberEvent{m.Id, m.Host, m.Port, m.Version, false}
 }
 
 func readMemberEvent(r scribe.Reader) (*memberEvent, error) {
@@ -406,10 +406,8 @@ func (e *memberEvent) Write(w scribe.Writer) {
 
 func (e *memberEvent) Apply(tx *dirUpdate) bool {
 	if e.Del {
-		tx.DelMember(e.Id, e.Ver)
-		return true
+		return tx.DelMember(e.Id, e.Ver)
 	} else {
-		tx.AddMember(newMember(e.Id, e.Host, e.Port, e.Ver))
-		return true
+		return tx.AddMember(newMember(e.Id, e.Host, e.Port, e.Ver))
 	}
 }

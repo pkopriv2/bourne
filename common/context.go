@@ -35,3 +35,7 @@ func (c *ctx) Config() Config {
 func (c *ctx) Logger() Logger {
 	return c.logger
 }
+
+func (c *ctx) FormatLogger(fmt string, args...interface{}) Logger {
+	return formatLogger(c.logger, fmt, args...)
+}

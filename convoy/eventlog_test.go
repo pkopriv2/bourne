@@ -26,15 +26,15 @@ func TestEventLog_Push_Process_SingleSuccess(t *testing.T) {
 	evt := &testEvent{}
 	el.Push(evt, 1)
 
-	el.Process(func(b []event) bool {
+	el.Process(func(b []event) error {
 		assert.Equal(t, 1, len(b))
 		assert.Equal(t, evt, b[0])
-		return true
+		return nil
 	})
 
-	el.Process(func(b []event) bool {
+	el.Process(func(b []event) error {
 		assert.Equal(t, []event{}, b)
-		return true
+		return nil
 	})
 }
 
@@ -48,21 +48,21 @@ func TestEventLog_Push_Process_MultipleSuccess(t *testing.T) {
 	evt := &testEvent{}
 	el.Push(evt, 2)
 
-	el.Process(func(b []event) bool {
+	el.Process(func(b []event) error {
 		assert.Equal(t, 1, len(b))
 		assert.Equal(t, evt, b[0])
-		return true
+		return nil
 	})
 
-	el.Process(func(b []event) bool {
+	el.Process(func(b []event) error {
 		assert.Equal(t, 1, len(b))
 		assert.Equal(t, evt, b[0])
-		return true
+		return nil
 	})
 
-	el.Process(func(b []event) bool {
+	el.Process(func(b []event) error {
 		assert.Equal(t, []event{}, b)
-		return true
+		return nil
 	})
 }
 
@@ -77,16 +77,16 @@ func TestEventLog_Push_Process_MultipleItems(t *testing.T) {
 	el.Push(evt, 1)
 	el.Push(evt, 1)
 
-	el.Process(func(b []event) bool {
+	el.Process(func(b []event) error {
 		assert.Equal(t, 2, len(b))
 		assert.Equal(t, evt, b[0])
 		assert.Equal(t, evt, b[1])
-		return true
+		return nil
 	})
 
-	el.Process(func(b []event) bool {
+	el.Process(func(b []event) error {
 		assert.Equal(t, []event{}, b)
-		return true
+		return nil
 	})
 }
 
@@ -109,16 +109,15 @@ func TestEventLog_Push_Process_ConcurrentProcesses(t *testing.T) {
 
 	count := 0
 	for cont := true; cont; {
-		el.Process(func(b []event) bool {
+		el.Process(func(b []event) error {
 			count = count + len(b)
 			cont = count < 1024*8
-			return true
+			return nil
 		})
 	}
 
 	// not really necessary.  this test won't finish if we don't process them all.
 	assert.Equal(t, 1024*8, count)
-
 }
 
 type testEvent struct{}
