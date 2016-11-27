@@ -105,6 +105,7 @@ func (r *replica) Close() error {
 
 	r.Ctx.Logger().Info("Replica shutting down.")
 
+	r.Dissem.Close()
 	r.Server.Close()
 	r.Dir.Close()
 	close(r.Closed)
@@ -222,7 +223,10 @@ func replicaHandleDirApply(env *replicaEnv, req net.Request) net.Response {
 	}
 
 	env.Logger.Debug("Successfully applied [%v] events", len(dissem))
-	env.Dissem.Push(dissem)
+	if err := env.Dissem.Push(dissem); err != nil {
+		return net.NewErrorResponse(err)
+	}
+
 	return newDirApplyResponse(successes)
 }
 

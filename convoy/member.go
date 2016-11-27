@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
-
-
 
 type member struct {
 	Id      uuid.UUID
@@ -54,10 +53,15 @@ func connectMember(ctx common.Context, addr string) (*client, error) {
 		return nil, err
 	}
 
+	if conn == nil {
+		return nil, errors.Errorf("Error opening connection [%v]", addr)
+	}
+
 	raw, err := net.NewClient(ctx, conn)
-	if err != nil || raw == nil {
+	if err != nil {
 		return nil, err
 	}
+
 
 	return &client{raw}, nil
 }

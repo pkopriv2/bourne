@@ -76,7 +76,8 @@ func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir
 	size.Store(len(dir.All()))
 
 	ret := &disseminator{
-		logger: logger.Fmt("Dissem"),
+		ctx:    ctx,
+		logger: logger.Fmt("Disseminator"),
 		log:    newEventLog(ctx),
 		dir:    dir,
 		period: period,
@@ -141,7 +142,7 @@ func (d *disseminator) start(self *member) error {
 					continue
 				}
 
-				if m == self {
+				if m.Id == self.Id {
 					continue
 				}
 
@@ -154,7 +155,9 @@ func (d *disseminator) start(self *member) error {
 			case <-tick.C:
 			}
 
-			d.log.Process(d.newProcessor(m))
+			if err := d.log.Process(d.newProcessor(m)); err != nil {
+				d.logger.Debug("Error disseminating: %v", err)
+			}
 		}
 	}()
 
@@ -163,14 +166,14 @@ func (d *disseminator) start(self *member) error {
 
 func (d *disseminator) newProcessor(m *member) func([]event) error {
 	return func(batch []event) error {
-		d.logger.Info("Disseminating [%v] events", len(batch))
+		d.logger.Info("Disseminating [%v] events to member [%v]", len(batch), m)
 
 		client, err := m.Client(d.ctx)
-		if err != nil  {
+		if err != nil {
 			return errors.Wrapf(err, "Error retrieving member client [%v]", m)
 		}
 
-		if client == nil  {
+		if client == nil {
 			return errors.Errorf("Unable to retrieve member client [%v]", m)
 		}
 

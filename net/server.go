@@ -275,6 +275,7 @@ func writeEncoding(conn Connection, enc Encoding) error {
 
 func NewClient(ctx common.Context, conn Connection) (Client, error) {
 	config := ctx.Config()
+
 	encoding, err := EncodingFromString(config.Optional(ConfClientEncoding, DefaultClientEncoding))
 	if err != nil {
 		return nil, err
