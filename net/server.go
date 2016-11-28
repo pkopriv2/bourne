@@ -218,7 +218,6 @@ func (r *response) String() string {
 	return fmt.Sprintf("Err: %v :: Body: %v", r.err, r.body)
 }
 
-
 // Support for multiple encodings (intended to help troubleshoot live systems)
 type Encoding byte
 
@@ -273,7 +272,16 @@ func writeEncoding(conn Connection, enc Encoding) error {
 
 // Client implementation
 
-func NewClient(ctx common.Context, conn Connection) (Client, error) {
+type client struct {
+	conn        Connection
+	enc         scribe.Encoder
+	dec         scribe.Decoder
+	logger      common.Logger
+	sendTimeout time.Duration
+	recvTimeout time.Duration
+}
+
+func NewClient(ctx common.Context, log common.Logger, conn Connection) (Client, error) {
 	config := ctx.Config()
 
 	encoding, err := EncodingFromString(config.Optional(ConfClientEncoding, DefaultClientEncoding))
@@ -307,14 +315,6 @@ func NewClient(ctx common.Context, conn Connection) (Client, error) {
 		recvTimeout: config.OptionalDuration(ConfClientRecvTimeout, DefaultClientRecvTimeout)}, nil
 }
 
-type client struct {
-	conn        Connection
-	enc         scribe.Encoder
-	dec         scribe.Decoder
-	logger      common.Logger
-	sendTimeout time.Duration
-	recvTimeout time.Duration
-}
 
 func (s *client) Close() error {
 	return s.conn.Close()
@@ -370,9 +370,8 @@ func (s *client) recv() (Response, error) {
 }
 
 // Server implementation
-func NewServer(ctx common.Context, listener Listener, handler Handler) (Server, error) {
+func NewServer(ctx common.Context, logger common.Logger, listener Listener, handler Handler) (Server, error) {
 	config := ctx.Config()
-	logger := ctx.Logger()
 
 	sendTimeout := config.OptionalDuration(ConfServerSendTimeout, DefaultServerSendTimeout)
 	recvTimeout := config.OptionalDuration(ConfServerRecvTimeout, sendTimeout)
@@ -392,16 +391,14 @@ func NewServer(ctx common.Context, listener Listener, handler Handler) (Server, 
 }
 
 type server struct {
-	handler  Handler
-	listener Listener
-	context  common.Context
-	logger   common.Logger
-
-	pool   concurrent.WorkPool
-	closer chan struct{}
-	closed chan struct{}
-	wait   sync.WaitGroup
-
+	handler     Handler
+	listener    Listener
+	context     common.Context
+	logger      common.Logger
+	pool        concurrent.WorkPool
+	closer      chan struct{}
+	closed      chan struct{}
+	wait        sync.WaitGroup
 	sendTimeout time.Duration
 	recvTimeout time.Duration
 }
@@ -418,7 +415,7 @@ func (s *server) Client() (Client, error) {
 		return nil, err
 	}
 
-	return NewClient(s.context, conn)
+	return NewClient(s.context, s.logger, conn)
 }
 
 func (s *server) Close() error {
@@ -557,22 +554,22 @@ func (s *server) send(encoder scribe.Encoder, res Response) error {
 }
 
 // Tcp support
-func NewTcpClient(ctx common.Context, addr string) (Client, error) {
+func NewTcpClient(ctx common.Context, log common.Logger, addr string) (Client, error) {
 	conn, err := ConnectTcp(addr)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewClient(ctx, conn)
+	return NewClient(ctx, log, conn)
 }
 
-func NewTcpServer(ctx common.Context, port string, handler Handler) (Server, error) {
+func NewTcpServer(ctx common.Context, log common.Logger, port string, handler Handler) (Server, error) {
 	listener, err := ListenTcp(port)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewServer(ctx, listener, handler)
+	return NewServer(ctx, log, listener, handler)
 }
 
 var empty string

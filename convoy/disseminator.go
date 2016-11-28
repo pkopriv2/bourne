@@ -4,11 +4,11 @@ import (
 	"math"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 )
 
 // Sends an update to a randomly chosen recipient.
@@ -27,6 +27,28 @@ import (
 //
 // [1] http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
 
+
+// Accepts a channel of events and disseminates them
+func dissemEvents(ch <-chan event, dissem *disseminator) {
+	go func() {
+		for e := range ch {
+			done, timeout := concurrent.NewBreaker(365*24*time.Hour, func() interface{} {
+				dissem.Push([]event{e})
+				return nil
+			})
+
+			select {
+			case <-done:
+				continue
+			case <-timeout:
+				return
+			}
+		}
+	}()
+}
+
+
+// A simple iterator
 type dissemIter struct {
 	rest []*member
 }
@@ -44,46 +66,27 @@ func (i *dissemIter) Next() (m *member) {
 	i.rest = i.rest[1:]
 	return
 }
-
-// Helper functions.
-func dissemShuffleMembers(arr []*member) []*member {
-	ret := make([]*member, len(arr))
-	for i, j := range rand.Perm(len(arr)) {
-		ret[i] = arr[j]
-	}
-	return ret
-}
-
-func dissemNumTransmissions(numMembers int) int {
-	return int(math.Ceil(math.Log2(float64(numMembers))))
-}
-
 // disseminator implementation.
 type disseminator struct {
-	ctx    common.Context
-	logger common.Logger
-	log    *eventLog
-	dir    *directory
-	period time.Duration
-	closed chan struct{}
-	closer chan struct{}
-	wait   sync.WaitGroup
-	size   *atomic.Value
+	Ctx    common.Context
+	Logger common.Logger
+	Evts   *eventLog
+	Dir    *directory
+	Period time.Duration
+	Closed chan struct{}
+	Closer chan struct{}
+	Wait   sync.WaitGroup
 }
 
 func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir *directory, period time.Duration) (*disseminator, error) {
-	size := new(atomic.Value)
-	size.Store(len(dir.All()))
-
 	ret := &disseminator{
-		ctx:    ctx,
-		logger: logger.Fmt("Disseminator"),
-		log:    newEventLog(ctx),
-		dir:    dir,
-		period: period,
-		size:   size,
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1)}
+		Ctx:    ctx,
+		Logger: logger.Fmt("Disseminator"),
+		Evts:   newEventLog(ctx),
+		Dir:    dir,
+		Period: period,
+		Closed: make(chan struct{}),
+		Closer: make(chan struct{}, 1)}
 
 	if err := ret.start(self); err != nil {
 		return nil, err
@@ -94,42 +97,43 @@ func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir
 
 func (d *disseminator) Close() error {
 	select {
-	case <-d.closed:
+	case <-d.Closed:
 		return nil
-	case d.closer <- struct{}{}:
+	case d.Closer <- struct{}{}:
 	}
 
-	close(d.closed)
-	d.wait.Wait()
+	close(d.Closed)
+	d.Wait.Wait()
 	return nil
 }
 
 func (d *disseminator) Push(e []event) error {
 	select {
 	default:
-	case <-d.closed:
+	case <-d.Closed:
 		return errors.Errorf("Disseminator closed")
 	}
 
-	size := len(d.dir.All())
-	n := dissemNumTransmissions(size)
-	d.logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", len(e), n, size)
-	d.log.PushBatch(e, n)
+	num := len(e)
+	if num == 0 {
+		return nil
+	}
+
+	n := len(d.Dir.All())
+	if fanout := dissemFanout(n); fanout > 0 {
+		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
+		d.Evts.PushBatch(e, fanout)
+	}
+
 	return nil
 }
 
 func (d *disseminator) start(self *member) error {
-	select {
-	default:
-	case <-d.closed:
-		return errors.Errorf("Disseminator closed")
-	}
-
-	d.wait.Add(1)
+	d.Wait.Add(1)
 	go func() {
-		defer d.wait.Done()
+		defer d.Wait.Done()
 
-		tick := time.NewTicker(d.period)
+		tick := time.NewTicker(d.Period)
 		iter := d.newIterator()
 
 		for {
@@ -150,13 +154,13 @@ func (d *disseminator) start(self *member) error {
 			}
 
 			select {
-			case <-d.closed:
+			case <-d.Closed:
 				return
 			case <-tick.C:
 			}
 
-			if err := d.log.Process(d.newProcessor(m)); err != nil {
-				d.logger.Debug("Error disseminating: %v", err)
+			if err := d.Evts.Process(d.newProcessor(m)); err != nil {
+				d.Logger.Debug("Error disseminating: %v", err)
 			}
 		}
 	}()
@@ -166,9 +170,13 @@ func (d *disseminator) start(self *member) error {
 
 func (d *disseminator) newProcessor(m *member) func([]event) error {
 	return func(batch []event) error {
-		d.logger.Info("Disseminating [%v] events to member [%v]", len(batch), m)
+		if len(batch) == 0 {
+			return nil
+		}
 
-		client, err := m.Client(d.ctx)
+		d.Logger.Info("Disseminating [%v] events to member [%v]", len(batch), m)
+
+		client, err := m.Client(d.Ctx)
 		if err != nil {
 			return errors.Wrapf(err, "Error retrieving member client [%v]", m)
 		}
@@ -177,11 +185,26 @@ func (d *disseminator) newProcessor(m *member) func([]event) error {
 			return errors.Errorf("Unable to retrieve member client [%v]", m)
 		}
 
+		defer client.Close()
 		_, err = client.DirApply(batch)
 		return err
 	}
 }
 
 func (d *disseminator) newIterator() *dissemIter {
-	return dissemNewIter(dissemShuffleMembers(d.dir.All()))
+	return dissemNewIter(dissemShuffleMembers(d.Dir.All()))
+}
+
+
+// Helper functions.
+func dissemShuffleMembers(arr []*member) []*member {
+	ret := make([]*member, len(arr))
+	for i, j := range rand.Perm(len(arr)) {
+		ret[i] = arr[j]
+	}
+	return ret
+}
+
+func dissemFanout(numMembers int) int {
+	return 2 * int(math.Ceil(math.Log(float64(numMembers))))
 }

@@ -25,8 +25,9 @@ func NewTestServer(fn Handler, config common.Config) Server {
 	if config == nil {
 		config = common.NewEmptyConfig()
 	}
+	ctx := common.NewContext(config)
 
-	server, err := NewTcpServer(common.NewContext(config), "0", fn)
+	server, err := NewTcpServer(ctx, ctx.Logger(), "0", fn)
 	if err != nil {
 		panic(err)
 	}

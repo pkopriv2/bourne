@@ -35,7 +35,7 @@ func TestDirectory_GetMember_Exist(t *testing.T) {
 	defer dir.Close()
 
 	member := newMember(uuid.NewV1(), "host", "0", 1)
-	dir.Update(func(u *dirUpdate) {
+	dir.update(func(u *dirUpdate) {
 		u.AddMember(member)
 	})
 
@@ -50,7 +50,7 @@ func TestDirectory_GetAttr_NoExist(t *testing.T) {
 	defer dir.Close()
 
 	member := newMember(uuid.NewV1(), "host", "0", 1)
-	dir.Update(func(u *dirUpdate) {
+	dir.update(func(u *dirUpdate) {
 		u.AddMember(member)
 	})
 
@@ -66,7 +66,7 @@ func TestDirectory_GetAttr_Exist(t *testing.T) {
 	defer dir.Close()
 
 	member := newMember(uuid.NewV1(), "host", "0", 1)
-	dir.Update(func(u *dirUpdate) {
+	dir.update(func(u *dirUpdate) {
 		u.AddMember(member)
 	})
 
@@ -84,7 +84,7 @@ func TestDirectory_DelAttr_NoExist(t *testing.T) {
 	defer dir.Close()
 
 	member := newMember(uuid.NewV1(), "host", "0", 1)
-	dir.Update(func(u *dirUpdate) {
+	dir.update(func(u *dirUpdate) {
 		u.AddMember(member)
 		u.DelMemberAttr(member.Id, "attr", 1)
 	})
@@ -100,7 +100,7 @@ func TestDirectory_Scan(t *testing.T) {
 	dir := newDirectory(ctx)
 	defer dir.Close()
 
-	dir.Update(func(u *dirUpdate) {
+	dir.update(func(u *dirUpdate) {
 		for i := 0; i < 1024; i++ {
 			member := newMember(uuid.NewV1(), "host", "0", 1)
 			u.AddMember(member)
@@ -123,7 +123,7 @@ func TestDirectory_ListMembers(t *testing.T) {
 
 	members := make(map[uuid.UUID]*member)
 
-	dir.Update(func(u *dirUpdate) {
+	dir.update(func(u *dirUpdate) {
 		for i := 0; i < 1024; i++ {
 			member := newMember(uuid.NewV1(), "host", "0", 1)
 			members[member.Id] = member
@@ -136,18 +136,14 @@ func TestDirectory_ListMembers(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		for i := 0; i < 10240; i++ {
-			dir.Update(func(u *dirUpdate) {
+			dir.update(func(u *dirUpdate) {
 				u.AddMemberAttr(uuid.NewV1(), "key", strconv.Itoa(i), 0)
 			})
 		}
 	}()
 
-	var actual []*member
 	for i := 0; i < 64; i++ {
-		dir.View(func(v *dirView) {
-			actual = v.ListMembers()
-			assert.Equal(t, members, indexById(actual))
-		})
+		assert.Equal(t, members, indexById(dir.All()))
 	}
 
 	wait.Wait()
@@ -190,7 +186,7 @@ func TestDirectory_ApplyEvents(t *testing.T) {
 		Del  bool
 	}
 
-	dir.Update(func(u *dirUpdate) {
+	dir.update(func(u *dirUpdate) {
 		for i := 0; i < 1; i++ {
 			member := newMember(uuid.NewV1(), "host", "0", 1)
 			u.AddMember(member)
@@ -216,4 +212,3 @@ func TestDirectory_ApplyEvents(t *testing.T) {
 
 	assert.Equal(t, expected, actual)
 }
-

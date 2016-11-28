@@ -2,9 +2,11 @@ package convoy
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
@@ -26,8 +28,27 @@ var (
 		memberStatusAttr: struct{}{}}
 )
 
+// Reads from the channel of events and applies them to the directory.
+func dirIndexEvents(ch <-chan event, dir *directory) {
+	go func() {
+		for e := range ch {
+			done, timeout := concurrent.NewBreaker(365*24*time.Hour, func() interface{} {
+				dir.Apply(e)
+				return nil
+			})
+
+			select {
+			case <-done:
+				continue
+			case <-timeout:
+				return
+			}
+		}
+	}()
+}
+
 // The directory is the core storage engine of the convoy replicas.
-// It's primary purpose is to maintain 1.) the listing of members
+// Its primary purpose is to maintain 1.) the listing of members
 // and 2.) allow searchable access to the members' datastores.
 type event interface {
 	scribe.Writable
@@ -48,7 +69,7 @@ func (d *directory) Close() error {
 	return d.Data.Close()
 }
 
-func (d *directory) Update(fn func(*dirUpdate)) {
+func (d *directory) update(fn func(*dirUpdate)) {
 	d.Data.Update(func(data amoeba.Update) {
 		fn(&dirUpdate{Data: data})
 	})
@@ -60,54 +81,49 @@ func (d *directory) View(fn func(*dirView)) {
 	})
 }
 
-// Returns an array of all members (regardless of )
-func (d *directory) All() (ret []*member) {
+func (d *directory) Collect(filter func(uuid.UUID, string, string, int) bool) (ret []*member) {
 	ret = make([]*member, 0)
 	d.View(func(v *dirView) {
-		ret = dirListMembers(v.Data)
+		ret = v.Collect(filter)
 	})
 	return
 }
 
+func (d *directory) First(filter func(uuid.UUID, string, string, int) bool) (ret *member) {
+	d.View(func(v *dirView) {
+		ret = v.First(filter)
+	})
+	return
+}
+
+func (d *directory) All() (ret []*member) {
+	return d.Collect(func(uuid.UUID, string, string, int) bool {
+		return true
+	})
+}
+
 func (d *directory) Apply(e event) (ret bool) {
-	d.Update(func(u *dirUpdate) {
+	d.update(func(u *dirUpdate) {
 		ret = e.Apply(u)
 	})
 	return
 }
 
-func (d *directory) ApplyAll(events []event) []bool {
-	ret := make([]bool, 0, len(events))
-	d.Update(func(u *dirUpdate) {
+func (d *directory) ApplyAll(events []event) (ret []bool) {
+	ret = make([]bool, 0, len(events))
+	d.update(func(u *dirUpdate) {
 		for _, e := range events {
 			ret = append(ret, e.Apply(u))
 		}
 	})
-	return ret
+	return
 }
 
-func (d *directory) Events() []event {
-	events := make([]event, 0, 1024)
+func (d *directory) Events() (events []event) {
 	d.View(func(v *dirView) {
-		// Scan the data index
-		v.Data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
-			// unpack the key
-			attr, id := dirUnpackAmoebaKey(k)
-
-			// unpack the item
-			val, ver, ok := dirUnpackAmoebaItem(i)
-
-			// finally, add the event
-			events = append(events,
-				&dataEvent{
-					Id:   id,
-					Attr: attr,
-					Ver:  ver,
-					Val:  val,
-					Del:  !ok})
-		})
+		events = dirEvents(v.Data)
 	})
-	return events
+	return
 }
 
 // data index key type
@@ -184,6 +200,27 @@ func dirScan(data amoeba.View, fn func(*amoeba.Scan, uuid.UUID, string, string, 
 	})
 }
 
+func dirEvents(data amoeba.View) (events []event) {
+	events = make([]event, 0, 1024)
+	data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
+		// unpack the key
+		attr, id := dirUnpackAmoebaKey(k)
+
+		// unpack the item
+		val, ver, ok := dirUnpackAmoebaItem(i)
+
+		// finally, add the event
+		events = append(events,
+			&dataEvent{
+				Id:   id,
+				Attr: attr,
+				Ver:  ver,
+				Val:  val,
+				Del:  !ok})
+	})
+	return
+}
+
 func dirGetMember(data amoeba.View, id uuid.UUID) *member {
 	host, ver, found := dirGetMemberAttr(data, id, memberHostAttr)
 	if !found {
@@ -202,22 +239,6 @@ func dirGetMember(data amoeba.View, id uuid.UUID) *member {
 		Version: ver}
 }
 
-func dirListMembers(data amoeba.View) []*member {
-	ids := make(map[uuid.UUID]struct{})
-	dirScan(data, func(s *amoeba.Scan, id uuid.UUID, key string, val string, ver int) {
-		ids[id] = struct{}{}
-	})
-
-	ret := make([]*member, 0, len(ids))
-	for id, _ := range ids {
-		if member := dirGetMember(data, id); member != nil {
-			ret = append(ret, member)
-		}
-	}
-
-	return ret
-}
-
 func dirAddMember(data amoeba.Update, m *member) bool {
 	if !dirAddMemberAttr(data, m.Id, memberHostAttr, m.Host, m.Version) {
 		return false
@@ -226,19 +247,19 @@ func dirAddMember(data amoeba.Update, m *member) bool {
 	return dirAddMemberAttr(data, m.Id, memberPortAttr, m.Port, m.Version)
 }
 
-func dirDelMember(u *dirUpdate, id uuid.UUID, ver int) bool {
+func dirDelMember(data amoeba.Update, id uuid.UUID, ver int) bool {
 	type item struct {
 		key  amoeba.Key
 		item amoeba.Item
 	}
 
 	// see if someone else has already done this work.
-	if !u.Data.Del(ai{memberHostAttr, id}, ver) {
+	if !dirDelMemberAttr(data, id, memberHostAttr, ver) {
 		return false
 	}
 
 	deadItems := make([]item, 0, 128)
-	u.Data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
+	data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 		ki := k.(ai)
 		if ki.Id == id {
 			deadItems = append(deadItems, item{k, i})
@@ -247,19 +268,46 @@ func dirDelMember(u *dirUpdate, id uuid.UUID, ver int) bool {
 	})
 
 	for _, i := range deadItems {
-		u.Data.Del(i.key, i.item.Ver())
+		data.Del(i.key, i.item.Ver())
 	}
 
 	return true
 }
 
+func dirFirst(v amoeba.View, filter func(uuid.UUID, string, string, int) bool) (member *member) {
+	dirScan(v, func(s *amoeba.Scan, id uuid.UUID, key string, val string, ver int) {
+		if filter(id, key, val, ver) {
+			defer s.Stop()
+			member = dirGetMember(v, id)
+		}
+	})
+	return
+}
+
+func dirCollect(v amoeba.View, filter func(uuid.UUID, string, string, int) bool) (members []*member) {
+	ids := make(map[uuid.UUID]struct{})
+
+	dirScan(v, func(s *amoeba.Scan, id uuid.UUID, key string, val string, ver int) {
+		if filter(id, key, val, ver) {
+			ids[id] = struct{}{}
+		}
+	})
+
+	members = make([]*member, 0, len(ids))
+
+	for id, _ := range ids {
+		m := dirGetMember(v, id)
+		if m != nil {
+			members = append(members, m)
+		}
+	}
+
+	return
+}
+
 // A couple very simple low level view/update abstractions
 type dirView struct {
 	Data amoeba.View
-}
-
-func (u *dirView) ListMembers() []*member {
-	return dirListMembers(u.Data)
 }
 
 func (u *dirView) GetMember(id uuid.UUID) *member {
@@ -272,6 +320,14 @@ func (u *dirView) GetMemberAttr(id uuid.UUID, attr string) (string, int, bool) {
 
 func (u *dirView) Scan(fn func(scan *amoeba.Scan, id uuid.UUID, attr string, val string, ver int)) {
 	dirScan(u.Data, fn)
+}
+
+func (u *dirView) Collect(filter func(id uuid.UUID, attr string, val string, ver int) bool) []*member {
+	return dirCollect(u.Data, filter)
+}
+
+func (u *dirView) First(filter func(id uuid.UUID, attr string, val string, ver int) bool) *member {
+	return dirFirst(u.Data, filter)
 }
 
 type dirUpdate struct {
@@ -292,7 +348,7 @@ func (u *dirUpdate) AddMember(m *member) bool {
 }
 
 func (u *dirUpdate) DelMember(id uuid.UUID, ver int) bool {
-	return dirDelMember(u, id, ver)
+	return dirDelMember(u.Data, id, ver)
 }
 
 func readEvent(r scribe.Reader) (event, error) {

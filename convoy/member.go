@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
@@ -38,7 +37,7 @@ func (m *member) Store(common.Context) (Store, error) {
 }
 
 func (m *member) Client(ctx common.Context) (*client, error) {
-	return connectMember(ctx, net.NewAddr(m.Host, m.Port))
+	return connectMember(ctx, ctx.Logger().Fmt(m.String()), net.NewAddr(m.Host, m.Port))
 }
 
 // A thin member client.
@@ -47,21 +46,16 @@ type client struct {
 }
 
 // Connects to the given member at addr and returns the standard member client.
-func connectMember(ctx common.Context, addr string) (*client, error) {
+func connectMember(ctx common.Context, log common.Logger, addr string) (*client, error) {
 	conn, err := net.ConnectTcp(addr)
 	if err != nil {
 		return nil, err
 	}
 
-	if conn == nil {
-		return nil, errors.Errorf("Error opening connection [%v]", addr)
-	}
-
-	raw, err := net.NewClient(ctx, conn)
+	raw, err := net.NewClient(ctx, log.Fmt("-> [%v]", addr), conn)
 	if err != nil {
 		return nil, err
 	}
-
 
 	return &client{raw}, nil
 }

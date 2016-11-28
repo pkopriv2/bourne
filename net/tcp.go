@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/scribe"
 )
 
@@ -20,6 +21,10 @@ func ConnectTcp(addr string) (*TcpConnection, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
+	}
+
+	if conn == nil {
+		return nil, errors.Errorf("Error opening connection [%v]", addr)
 	}
 
 	return &TcpConnection{conn}, nil
