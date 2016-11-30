@@ -27,7 +27,6 @@ import (
 //
 // [1] http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
 
-
 // Accepts a channel of events and disseminates them
 func dissemEvents(ch <-chan event, dissem *disseminator) {
 	go func() {
@@ -47,14 +46,17 @@ func dissemEvents(ch <-chan event, dissem *disseminator) {
 	}()
 }
 
-
-// A simple iterator
+// A simple member iterator
 type dissemIter struct {
 	rest []*member
 }
 
 func dissemNewIter(all []*member) *dissemIter {
 	return &dissemIter{all}
+}
+
+func (i *dissemIter) Size() int {
+	return len(i.rest)
 }
 
 func (i *dissemIter) Next() (m *member) {
@@ -66,6 +68,7 @@ func (i *dissemIter) Next() (m *member) {
 	i.rest = i.rest[1:]
 	return
 }
+
 // disseminator implementation.
 type disseminator struct {
 	Ctx    common.Context
@@ -78,7 +81,7 @@ type disseminator struct {
 	Wait   sync.WaitGroup
 }
 
-func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir *directory, period time.Duration) (*disseminator, error) {
+func newDisseminator(ctx common.Context, logger common.Logger, dir *directory, period time.Duration) (*disseminator, error) {
 	ret := &disseminator{
 		Ctx:    ctx,
 		Logger: logger.Fmt("Disseminator"),
@@ -88,7 +91,7 @@ func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir
 		Closed: make(chan struct{}),
 		Closer: make(chan struct{}, 1)}
 
-	if err := ret.start(self); err != nil {
+	if err := ret.start(); err != nil {
 		return nil, err
 	}
 
@@ -122,13 +125,13 @@ func (d *disseminator) Push(e []event) error {
 	n := len(d.Dir.All())
 	if fanout := dissemFanout(n); fanout > 0 {
 		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
-		d.Evts.PushBatch(e, fanout)
+		d.Evts.Add(e, fanout)
 	}
 
 	return nil
 }
 
-func (d *disseminator) start(self *member) error {
+func (d *disseminator) start() error {
 	d.Wait.Add(1)
 	go func() {
 		defer d.Wait.Done()
@@ -137,20 +140,14 @@ func (d *disseminator) start(self *member) error {
 		iter := d.newIterator()
 
 		for {
-			// get member
 			var m *member
 			for {
 				m = iter.Next()
-				if m == nil {
-					iter = d.newIterator()
-					continue
+				if m != nil {
+					break
 				}
 
-				if m.Id == self.Id {
-					continue
-				}
-
-				break
+				iter = d.newIterator()
 			}
 
 			select {
@@ -159,42 +156,55 @@ func (d *disseminator) start(self *member) error {
 			case <-tick.C:
 			}
 
-			if err := d.Evts.Process(d.newProcessor(m)); err != nil {
-				d.Logger.Debug("Error disseminating: %v", err)
+			batch := d.Evts.Pop(256)
+
+			if err := d.disseminateTo(m, batch); err != nil {
+				d.Evts.Return(batch)
+				continue
 			}
+
+			d.Evts.Return(dissemDecWeight(batch))
 		}
 	}()
 
 	return nil
 }
 
-func (d *disseminator) newProcessor(m *member) func([]event) error {
-	return func(batch []event) error {
-		if len(batch) == 0 {
-			return nil
+func dissemDecWeight(batch []eventLogEntry) []eventLogEntry {
+	ret := make([]eventLogEntry, 0, len(batch))
+	for _, entry := range batch {
+		key := entry.Key.Update(entry.Key.Weight - 1)
+		if key.Weight > 0 {
+			ret = append(ret, eventLogEntry{key, entry.Event})
 		}
-
-		d.Logger.Info("Disseminating [%v] events to member [%v]", len(batch), m)
-
-		client, err := m.Client(d.Ctx)
-		if err != nil {
-			return errors.Wrapf(err, "Error retrieving member client [%v]", m)
-		}
-
-		if client == nil {
-			return errors.Errorf("Unable to retrieve member client [%v]", m)
-		}
-
-		defer client.Close()
-		_, err = client.DirApply(batch)
-		return err
 	}
+	return ret
+}
+
+func (d *disseminator) disseminateTo(m *member, batch []eventLogEntry) error {
+	client, err := m.Client(d.Ctx)
+	if err != nil {
+		return errors.Wrapf(err, "Error retrieving member client [%v]", m)
+	}
+
+	if client == nil {
+		return errors.Errorf("Unable to retrieve member client [%v]", m)
+	}
+
+	defer client.Close()
+
+	_, events, err := client.EvtPushPull(eventLogExtractEvents(batch))
+	if err != nil {
+		return errors.Wrapf(err, "Error pushing events", m)
+	}
+
+	d.Dir.ApplyAll(events)
+	return nil
 }
 
 func (d *disseminator) newIterator() *dissemIter {
 	return dissemNewIter(dissemShuffleMembers(d.Dir.All()))
 }
-
 
 // Helper functions.
 func dissemShuffleMembers(arr []*member) []*member {

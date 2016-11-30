@@ -1,6 +1,8 @@
 package convoy
 
 import (
+	"hash/fnv"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -14,9 +16,9 @@ import (
 // System reserved keys.  Consumers should consider the: /Convoy/
 // namespace off limits!
 const (
-	memberHostAttr   = "/Convoy/Host"
-	memberPortAttr   = "/Convoy/Port"
-	memberStatusAttr = "/Convoy/Status"
+	memberHostAttr   = "/Convoy/Member/Host"
+	memberPortAttr   = "/Convoy/Member/Port"
+	memberStatusAttr = "/Convoy/Member/Status"
 )
 
 // Creating a quick lookup table to filter out system values when
@@ -57,7 +59,8 @@ type event interface {
 
 // the core storage type.
 type directory struct {
-	Data amoeba.Indexer
+	Data   amoeba.Indexer
+	Digest []byte
 }
 
 func newDirectory(ctx common.Context) *directory {
@@ -100,6 +103,26 @@ func (d *directory) All() (ret []*member) {
 	return d.Collect(func(uuid.UUID, string, string, int) bool {
 		return true
 	})
+	return
+}
+
+func (d *directory) Size() int {
+	return d.Data.Size()
+}
+
+func (d *directory) Hash() []byte {
+	hash := fnv.New64()
+
+	d.View(func(v *dirView) {
+		v.Scan(func(s *amoeba.Scan, id uuid.UUID, key string, val string, ver int) {
+			hash.Write(id.Bytes())
+			binary.Write(hash, binary.BigEndian, key)
+			binary.Write(hash, binary.BigEndian, val)
+			binary.Write(hash, binary.BigEndian, ver)
+		})
+	})
+
+	return hash.Sum(nil)
 }
 
 func (d *directory) Apply(e event) (ret bool) {
@@ -251,11 +274,6 @@ func dirDelMember(data amoeba.Update, id uuid.UUID, ver int) bool {
 	type item struct {
 		key  amoeba.Key
 		item amoeba.Item
-	}
-
-	// see if someone else has already done this work.
-	if !dirDelMemberAttr(data, id, memberHostAttr, ver) {
-		return false
 	}
 
 	deadItems := make([]item, 0, 128)

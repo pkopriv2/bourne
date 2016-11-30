@@ -60,22 +60,27 @@ func TestDirectory_GetAttr_NoExist(t *testing.T) {
 	})
 }
 
-func TestDirectory_GetAttr_Exist(t *testing.T) {
+func TestDirectory_Hash(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	dir := newDirectory(ctx)
 	defer dir.Close()
 
-	member := newMember(uuid.NewV1(), "host", "0", 1)
+	for i := 0; i < 10240; i++ {
+		dir.update(func(u *dirUpdate) {
+			u.AddMemberAttr(uuid.NewV1(), "key", strconv.Itoa(i), 0)
+		})
+	}
+
+	hash1 := dir.Hash()
+	hash2 := dir.Hash()
+
 	dir.update(func(u *dirUpdate) {
-		u.AddMember(member)
+		u.AddMemberAttr(uuid.NewV1(), "key", "val", 0)
 	})
 
-	dir.View(func(v *dirView) {
-		val, ver, found := v.GetMemberAttr(member.Id, memberHostAttr)
-		assert.True(t, found)
-		assert.Equal(t, "host", val)
-		assert.Equal(t, 1, ver)
-	})
+	hash3 := dir.Hash()
+	assert.Equal(t, hash1, hash2)
+	assert.NotEqual(t, hash1, hash3)
 }
 
 func TestDirectory_DelAttr_NoExist(t *testing.T) {

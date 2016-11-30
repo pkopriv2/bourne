@@ -6,15 +6,13 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
 
 const (
-	ReplicaPortKey     string = "bourne.convoy.replica.port"
-	ReplicaPortDefault string = "8080"
+	ReplicaTagManager = "/Convoy/Replica/Manager"
 )
 
 // The replica instance.  This is what ultimately implements the
@@ -23,43 +21,18 @@ type replica struct {
 	Ctx    common.Context
 	Logger common.Logger
 	Db     Database
-	Dir    *directory
 	Self   *member
+	Dir    *directory
 	Dissem *disseminator
 	Server net.Server
-
 	Closer chan struct{}
 	Closed chan struct{}
 	Wait   sync.WaitGroup
 }
 
-func replicaJoin(self *replica, peer *client) error {
+// Initializes and returns a generic replica instance.
+func newReplica(ctx common.Context, db Database, port int) (*replica, error) {
 
-	// Register self with the peer.  (Should result in realtime updates being delivered to self.)
-	_, err := peer.DirApply([]event{addMemberEvent(self.Self)})
-	if err != nil {
-		return errors.Wrap(err, "Error registering self with peer")
-	}
-
-	// Send self's directory to the peer.
-	_, err = peer.DirApply(self.Dir.Events())
-	if err != nil {
-		return errors.Wrap(err, "Error publishing events to peer")
-	}
-
-	// Download the peer's directory.
-	events, err := peer.DirList()
-	if err != nil {
-		return errors.Wrap(err, "Error retrieving directory list from peer")
-	}
-
-	// Index the peer's events.
-	self.Dir.ApplyAll(events)
-
-	return nil
-}
-
-func replicaStart(ctx common.Context, db Database, port int) (*replica, error) {
 	// Create the 'self' instance.
 	self, err := replicaInitSelf(ctx, db, port)
 	if err != nil {
@@ -115,51 +88,62 @@ func (r *replica) Close() error {
 	return nil
 }
 
-func (r *replica) Seed() (*client, error) {
-	return nil, nil
-}
-
 func (r *replica) Id() uuid.UUID {
 	return r.Self.Id
 }
 
+func (r *replica) Join(manager *client) error {
+	return replicaJoin(r, manager)
+}
+
 func (r *replica) Client() (*client, error) {
-	raw, err := r.Server.Client()
-	if err != nil {
-		return nil, err
+	return replicaClient(r.Server)
+}
+
+func (r *replica) Tag(key string) error {
+	return replicaTag(r.Db, key)
+}
+
+func (r *replica) UnTag(key string) error {
+	return replicaUnTag(r.Db, key)
+}
+
+func (r *replica) Collect(fn func(string, string) bool) (ret []*member) {
+	ret = []*member{}
+	r.Dir.View(func(v *dirView) {
+		ret = replicaCollect(v, fn)
+	})
+	return
+}
+
+func (r *replica) CollectTagged(key string) (ret []*member) {
+	ret = []*member{}
+	r.Dir.View(func(v *dirView) {
+		ret = replicaDiscoverTaggedMembers(v, key)
+	})
+	return
+}
+
+func (r *replica) First(fn func(string, string) bool) (ret *member) {
+	r.Dir.View(func(v *dirView) {
+		ret = replicaFirst(v, fn)
+	})
+	return
+}
+
+func (r *replica) Managers() []*member {
+	return r.CollectTagged(ReplicaTagManager)
+}
+
+func (r *replica) Manager(assign bool) error {
+	if assign {
+		return r.Tag(ReplicaTagManager)
+	} else {
+		return r.UnTag(ReplicaTagManager)
 	}
-
-	return &client{raw}, nil
-}
-
-func (r *replica) Scan(fn func(*amoeba.Scan, uuid.UUID, string, string)) {
-	r.Dir.View(func(v *dirView) {
-		replicaScanDir(v, fn)
-	})
-}
-
-func (r *replica) Collect(filter func(id uuid.UUID, key string, val string) bool) (members []Member) {
-	r.Dir.View(func(v *dirView) {
-		members = replicaFilterDir(v, filter)
-	})
-	return
-}
-
-func (r *replica) GetMember(id uuid.UUID) (mem Member, err error) {
-	r.Dir.View(func(v *dirView) {
-		mem = v.GetMember(id)
-	})
-	return
 }
 
 // Helper functions
-type replicaEnv struct {
-	Ctx    common.Context
-	Logger common.Logger
-	Self   *member
-	Dir    *directory
-	Dissem *disseminator
-}
 
 // Returns the member representing "self"
 func replicaInitSelf(ctx common.Context, db Database, port int) (mem *member, err error) {
@@ -189,17 +173,11 @@ func replicaInitLogger(ctx common.Context, self *member) common.Logger {
 func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, error) {
 	dir := newDirectory(ctx)
 
-	// Grab the id
-	id, err := db.Log().Id()
-	if err != nil {
-		return nil, err
-	}
-
 	// start indexing realtime changes.
 	// !!! MUST HAPPEN PRIOR TO READING LOG CHANGES !!!
 	dirIndexEvents(
 		changeStreamToEventStream(
-			id, changeLogListen(db.Log())), dir)
+			self.Id, changeLogListen(db.Log())), dir)
 
 	// Grab all the changes from the database
 	chgs, err := db.Log().All()
@@ -219,9 +197,9 @@ func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, 
 	return dir, nil
 }
 
+// Returns a newly initialized disseminator.
 func replicaInitDissem(ctx common.Context, logger common.Logger, db Database, self *member, dir *directory) (*disseminator, error) {
-	// Create the disseminator
-	dissem, err := newDisseminator(ctx, logger, self, dir, time.Second)
+	dissem, err := newDisseminator(ctx, logger, dir, time.Second)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error constructing disseminator")
 	}
@@ -235,93 +213,99 @@ func replicaInitDissem(ctx common.Context, logger common.Logger, db Database, se
 }
 
 // Returns a newly initialized server.
-func replicaInitServer(ctx common.Context, log common.Logger, self *member, dir *directory, diss *disseminator, port int) (net.Server, error) {
-	return net.NewTcpServer(ctx, log, strconv.Itoa(port), replicaInitHandler(ctx, log, self, dir, diss))
+func replicaInitServer(ctx common.Context, log common.Logger, self *member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
+	return newServer(ctx, log, self, dir, dissem, port)
 }
 
-// Returns a new service handler for the replica
-func replicaInitHandler(ctx common.Context, logger common.Logger, self *member, dir *directory, diss *disseminator) net.Handler {
-	env := &replicaEnv{
-		Ctx:    ctx,
-		Logger: logger.Fmt("ReplicaServer"),
-		Self:   self,
-		Dir:    dir,
-		Dissem: diss}
+// Reconciles a directory
+func replicaReconcile(dir *directory, peer *client) error {
 
-	return func(req net.Request) net.Response {
-		action, err := readMeta(req.Meta())
-		if err != nil {
-			return net.NewErrorResponse(errors.Wrap(err, "Error parsing action"))
-		}
-
-		switch action {
-		default:
-			return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
-		case epDirApply:
-			return replicaDirApply(env, req)
-		case epDirList:
-			return replicaDirList(env, req)
-		}
-	}
-}
-
-// Handles a dir list request
-func replicaDirList(env *replicaEnv, req net.Request) net.Response {
-	return newDirListResponse(env.Dir.Events())
-}
-
-// Handles a dir apply request
-func replicaDirApply(env *replicaEnv, req net.Request) net.Response {
-	events, err := readDirApplyRequest(req)
+	// Send self's directory to the peer.
+	_, err := peer.DirApply(dir.Events())
 	if err != nil {
-		return net.NewErrorResponse(err)
+		return errors.Wrap(err, "Error publishing events to peer")
 	}
 
-	if len(events) == 0 {
-		return net.NewErrorResponse(errors.New("No events to apply!"))
+	// Download the peer's directory.
+	events, err := peer.DirList()
+	if err != nil {
+		return errors.Wrap(err, "Error retrieving directory list from peer")
 	}
 
-	env.Logger.Debug("Applying [%v] events", len(events))
-	successes := env.Dir.ApplyAll(events)
-
-	forward := make([]event, 0, len(successes))
-	for i, b := range successes {
-		if b {
-			forward = append(forward, events[i])
-		}
-	}
-
-	env.Logger.Debug("Successfully applied [%v] events", len(forward))
-	if err := env.Dissem.Push(forward); err != nil {
-		return net.NewErrorResponse(err)
-	}
-
-	return newDirApplyResponse(successes)
+	// Index the peer's events.
+	dir.ApplyAll(events)
+	return nil
 }
 
-func replicaScanDir(v *dirView, fn func(*amoeba.Scan, uuid.UUID, string, string)) {
-	v.Scan(func(s *amoeba.Scan, id uuid.UUID, key string, val string, _ int) {
-		fn(s, id, key, val)
+func replicaTag(db Database, tag string) error {
+	_, ok, err := db.Get(tag)
+	if err != nil {
+		return errors.Wrap(err, "Error retrieving exiting manager key")
+	}
+
+	if ok {
+		return nil
+	}
+
+	if err := db.Put(tag, ""); err != nil {
+		return errors.Wrap(err, "Unable to tag replica")
+	}
+
+	return nil
+}
+
+func replicaUnTag(db Database, tag string) error {
+	_, ok, err := db.Get(tag)
+	if err != nil {
+		return errors.Wrap(err, "Error retrieving exiting manager key")
+	}
+
+	if !ok {
+		return nil
+	}
+
+	if err := db.Del(tag); err != nil {
+		return errors.Wrap(err, "Unable to untag replica")
+	}
+
+	return nil
+}
+
+// Joins the replica to the given peer.
+func replicaJoin(self *replica, peer *client) error {
+
+	// Register self with the peer.  (Should result in realtime updates being delivered to self.)
+	_, err := peer.DirApply([]event{addMemberEvent(self.Self)})
+	if err != nil {
+		return errors.Wrap(err, "Error registering self with peer")
+	}
+
+	return replicaReconcile(self.Dir, peer)
+}
+
+func replicaDiscoverTaggedMembers(v *dirView, tag string) (ret []*member) {
+	return replicaCollect(v, func(key string, val string) bool {
+		return key == tag
 	})
 }
 
-func replicaFilterDir(v *dirView, filter func(uuid.UUID, string, string) bool) (members []Member) {
-	ids := make(map[uuid.UUID]struct{})
-
-	v.Scan(func(s *amoeba.Scan, id uuid.UUID, key string, val string, ver int) {
-		if filter(id, key, val) {
-			ids[id] = struct{}{}
-		}
+func replicaCollect(v *dirView, filter func(string, string) bool) []*member {
+	return v.Collect(func(id uuid.UUID, key string, val string, _ int) bool {
+		return filter(key, val)
 	})
+}
 
-	members = make([]Member, 0, len(ids))
+func replicaFirst(v *dirView, filter func(string, string) bool) *member {
+	return v.First(func(id uuid.UUID, key string, val string, _ int) bool {
+		return filter(key, val)
+	})
+}
 
-	for id, _ := range ids {
-		m := v.GetMember(id)
-		if m != nil {
-			members = append(members, m)
-		}
+func replicaClient(server net.Server) (*client, error) {
+	raw, err := server.Client()
+	if err != nil {
+		return nil, err
 	}
 
-	return
+	return &client{raw}, nil
 }

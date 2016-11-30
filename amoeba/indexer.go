@@ -27,6 +27,9 @@ import (
 type Indexer interface {
 	io.Closer
 
+	// Returns the size of the index
+	Size() int
+
 	// Performs a read on the indexer. The indexer supports miltiple reader,
 	// single writer semantics.
 	Read(func(View))
@@ -224,6 +227,13 @@ func (e *indexer) Close() error {
 	close(e.closed)
 	e.wait.Wait()
 	return nil
+}
+
+func (e *indexer) Size() (ret int) {
+	e.Read(func(v View) {
+		ret = e.index.Size()
+	})
+	return
 }
 
 func (e *indexer) Read(fn func(View)) {

@@ -315,7 +315,6 @@ func NewClient(ctx common.Context, log common.Logger, conn Connection) (Client, 
 		recvTimeout: config.OptionalDuration(ConfClientRecvTimeout, DefaultClientRecvTimeout)}, nil
 }
 
-
 func (s *client) Close() error {
 	return s.conn.Close()
 }
@@ -485,7 +484,9 @@ func (s *server) newWorker(conn Connection) func() {
 		for {
 			req, err := s.recv(decoder)
 			if err != nil {
-				s.logger.Error("Error receiving request [%v]", err)
+				if err != io.EOF {
+					s.logger.Error("Error receiving request [%v]", err)
+				}
 				return
 			}
 

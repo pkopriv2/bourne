@@ -36,7 +36,7 @@ func Encode(enc Encoder, w Writable) error {
 func Decode(e Decoder) (Message, error) {
 	var raw map[string]interface{}
 	if err := e.Decode(&raw); err != nil {
-		return nil, errors.Wrapf(err, "Error reading message from stream")
+		return nil, err
 	}
 
 	obj, err := parseObject(raw)

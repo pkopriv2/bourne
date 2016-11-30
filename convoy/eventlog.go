@@ -6,21 +6,29 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// the index value
+// The event log maintains a set of events sorted (descending) by the
+// number of remainaing attempts to be shared.
+
+// the index key
 type eventLogKey struct {
-	id  uuid.UUID
-	cnt int
+	Id     uuid.UUID
+	Weight int
+}
+
+func (e eventLogKey) Update(weight int) eventLogKey {
+	return eventLogKey{e.Id, weight}
 }
 
 func (e eventLogKey) Compare(other amoeba.Sortable) int {
 	o := other.(eventLogKey)
-	if e.cnt != o.cnt {
-		return o.cnt - e.cnt // Reverse cnt order.
+	if e.Weight != o.Weight {
+		return o.Weight - e.Weight // Reverse cnt order.
 	}
 
-	return amoeba.CompareUUIDs(e.id, o.id)
+	return amoeba.CompareUUIDs(e.Id, o.Id)
 }
 
+// the index key,value pair
 type eventLogEntry struct {
 	Key   eventLogKey
 	Event event
@@ -76,21 +84,15 @@ func (u *evtLogUpdate) Add(key eventLogKey, e event) {
 	eventLogPutEvent(u.Data, key, e)
 }
 
-func (u *evtLogUpdate) SucceedBatch(batch []eventLogEntry) {
+func (u *evtLogUpdate) Push(batch []eventLogEntry) {
 	for _, e := range batch {
-		if e.Key.cnt > 1 {
-			eventLogPutEvent(u.Data, eventLogKey{e.Key.id, e.Key.cnt - 1}, e.Event)
+		if e.Key.Weight >= 1 {
+			eventLogPutEvent(u.Data, e.Key, e.Event)
 		}
 	}
 }
 
-func (u *evtLogUpdate) FailBatch(batch []eventLogEntry) {
-	for _, e := range batch {
-		eventLogPutEvent(u.Data, e.Key, e.Event)
-	}
-}
-
-func (u *evtLogUpdate) NextBatch(size int) (batch []eventLogEntry) {
+func (u *evtLogUpdate) Peek(size int) (batch []eventLogEntry) {
 	batch = make([]eventLogEntry, 0, size)
 	eventLogScan(u.Data, func(s *amoeba.Scan, k eventLogKey, e event) {
 		defer func() { size-- }()
@@ -102,8 +104,11 @@ func (u *evtLogUpdate) NextBatch(size int) (batch []eventLogEntry) {
 		batch = append(batch, eventLogEntry{k, e})
 	})
 
-	// I find it best to actually remove the items from the queue.  This
-	// way, we're not limiting the number of actors who can process.
+	return
+}
+
+func (u *evtLogUpdate) Pop(size int) (batch []eventLogEntry) {
+	batch = u.Peek(size)
 	for _, entry := range batch {
 		eventLogDelEvent(u.Data, entry.Key)
 	}
@@ -129,7 +134,40 @@ func (d *eventLog) Update(fn func(*evtLogUpdate)) {
 	})
 }
 
-func (d *eventLog) PushBatch(batch []event, n int) {
+// returns, but does not remove a batch of entries from the log.  nil if none.
+func (d *eventLog) Peek(size int) (batch []eventLogEntry) {
+	batch = []eventLogEntry{}
+	d.Update(func(u *evtLogUpdate) {
+		batch = u.Peek(size)
+	})
+	return
+}
+
+// returns, but does not remove a batch of entries from the log.  nil if none.
+func (d *eventLog) PeekRaw(size int) (batch []event) {
+	d.Update(func(u *evtLogUpdate) {
+		batch = eventLogExtractEvents(u.Peek(size))
+	})
+	return
+}
+
+// returns and removes a batch of entries from the log.  nil if none.
+func (d *eventLog) Pop(size int) (batch []eventLogEntry) {
+	batch = []eventLogEntry{}
+	d.Update(func(u *evtLogUpdate) {
+		batch = u.Pop(size)
+	})
+	return
+}
+
+func (d *eventLog) Return(batch []eventLogEntry) {
+	d.Update(func(u *evtLogUpdate) {
+		u.Push(batch)
+	})
+	return
+}
+
+func (d *eventLog) Add(batch []event, n int) {
 	if len(batch) == 0 || n < 1 {
 		return
 	}
@@ -141,41 +179,22 @@ func (d *eventLog) PushBatch(batch []event, n int) {
 	})
 }
 
-func (d *eventLog) Push(e event, successes int) {
-	d.PushBatch([]event{e}, successes)
-}
-
-func (d *eventLog) nextBatch(size int) (batch []eventLogEntry) {
-	batch = []eventLogEntry{}
-	d.Update(func(u *evtLogUpdate) {
-		batch = u.NextBatch(size)
-	})
+func eventLogDecBatch(batch []eventLogEntry) (events []eventLogEntry) {
+	events = make([]eventLogEntry, 0, len(batch))
+	for _, entry := range batch {
+		events = append(events, eventLogDec(entry))
+	}
 	return
 }
 
-func (d *eventLog) Process(fn func([]event) error) (err error) {
-	batch := d.nextBatch(256)
-
-	// IMPORTANT: Make sure function invocation never involves lock!
-	err = fn(eventLogExtractEvents(batch))
-
-	d.Update(func(u *evtLogUpdate) {
-		if err != nil {
-			u.FailBatch(batch)
-		} else {
-			u.SucceedBatch(batch)
-		}
-	})
-
-	return
+func eventLogDec(e eventLogEntry) eventLogEntry {
+	return eventLogEntry{eventLogKey{e.Key.Id, e.Key.Weight - 1}, e.Event}
 }
 
 func eventLogExtractEvents(batch []eventLogEntry) (events []event) {
 	events = make([]event, 0, len(batch))
 	for _, entry := range batch {
-		{
-			events = append(events, entry.Event)
-		}
+		events = append(events, entry.Event)
 	}
 	return
 }

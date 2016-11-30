@@ -1,12 +1,12 @@
 package convoy
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
-	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,11 +28,11 @@ func TestReplica_Init_EmptyDb(t *testing.T) {
 	defer replica.Close()
 
 	// make sure self exists
-	members := replica.Collect(func(id uuid.UUID, key string, val string) bool {
+	members := replica.Collect(func(key string, val string) bool {
 		return true
 	})
 
-	assert.Equal(t, []Member{replica.Self}, members)
+	assert.Equal(t, []*member{replica.Self}, members)
 }
 
 func TestReplica_Init_NonEmptyDb(t *testing.T) {
@@ -46,11 +46,11 @@ func TestReplica_Init_NonEmptyDb(t *testing.T) {
 	defer replica.Close()
 
 	// make sure self exists
-	members := replica.Collect(func(id uuid.UUID, key string, val string) bool {
+	members := replica.Collect(func(key string, val string) bool {
 		return key == "key"
 	})
 
-	assert.Equal(t, []Member{replica.Self}, members)
+	assert.Equal(t, []*member{replica.Self}, members)
 }
 
 func TestReplica_Dir_Indexing(t *testing.T) {
@@ -64,11 +64,11 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 	time.Sleep(time.Millisecond)
 
 	// make sure that are
-	members := replica.Collect(func(id uuid.UUID, key string, val string) bool {
+	members := replica.Collect(func(key string, val string) bool {
 		return key == "key2"
 	})
 
-	assert.Equal(t, []Member{replica.Self}, members)
+	assert.Equal(t, []*member{replica.Self}, members)
 }
 
 //
@@ -99,8 +99,8 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 // return true
 // })
 //
-// assert.Equal(t, []Member{replica1.Self, replica2.Self}, members1)
-// assert.Equal(t, []Member{replica1.Self, replica2.Self}, members2)
+// assert.Equal(t, []*member{replica1.Self, replica2.Self}, members1)
+// assert.Equal(t, []*member{replica1.Self, replica2.Self}, members2)
 // }
 
 // func TestReplica_Join_ThreePeers(t *testing.T) {
@@ -149,14 +149,39 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 // fmt.Println("MEMBER2: ", members2)
 // fmt.Println("MEMBER3: ", members3)
 //
-// // assert.Equal(t, []Member{replica1.Self, replica2.Self}, members)
+// // assert.Equal(t, []*member{replica1.Self, replica2.Self}, members)
 /* } */
+
+func TestReplica_Manager(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	replica := StartTestReplica(ctx, 8190)
+	replica.Manager(true)
+
+	<-time.After(10 * time.Millisecond)
+	assert.Equal(t, []*member{replica.Self}, replica.Managers())
+}
+
+// func TestReplica_Managers(t *testing.T) {
+// ctx := common.NewContext(common.NewEmptyConfig())
+// defer ctx.Close()
+//
+// replica1 := StartTestReplica(ctx, 8190)
+// replica1.Manager(true)
+//
+// replica2 := StartTestReplica(ctx, 8191)
+// replica2.Join(ReplicaClient(replica1))
+//
+// <-time.After(5 * time.Second)
+// assert.Equal(t, []*member{replica1.Self}, replica2.Managers())
+// }
 
 func TestReplica_Join(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	clusterSize := 20
+	clusterSize := 100
 	cluster := make([]*replica, 0, clusterSize)
 
 	master := StartTestReplica(ctx, 8190)
@@ -164,8 +189,8 @@ func TestReplica_Join(t *testing.T) {
 
 	cluster = append(cluster, master)
 
-	completed := make(map[uuid.UUID]struct{})
-	completed[master.Self.Id] = struct{}{}
+	completed := make(map[*member]struct{})
+	completed[master.Self] = struct{}{}
 
 	for i := 0; i < clusterSize-1; i++ {
 		ri := StartTestReplica(ctx, 8191+i)
@@ -182,19 +207,23 @@ func TestReplica_Join(t *testing.T) {
 		for len(completed) < len(cluster) {
 			<-time.After(time.Second)
 
+			fmt.Println("COMPLETED: ", len(completed))
+			fmt.Println("COMPLETED: ", completed)
+
 			for _, r := range cluster {
-				members := r.Collect(func(id uuid.UUID, key string, val string) bool {
+				members := r.Collect(func(key string, val string) bool {
 					return true
 				})
 
 				if len(members) >= len(cluster) {
-					completed[r.Self.Id] = struct{}{}
+					completed[r.Self] = struct{}{}
 				}
 			}
 		}
 	}()
 
 	wait.Wait()
+	fmt.Println("COMPLETED: ", completed)
 }
 
 func ReplicaClient(r *replica) *client {
@@ -218,7 +247,7 @@ func StartTestReplica(ctx common.Context, port int) *replica {
 }
 
 func StartTestReplicaFromDb(ctx common.Context, db Database, port int) *replica {
-	replica, err := replicaStart(ctx, db, port)
+	replica, err := newReplica(ctx, db, port)
 	if err != nil {
 		panic(err)
 	}
