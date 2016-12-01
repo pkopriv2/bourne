@@ -223,7 +223,7 @@ type Encoding byte
 
 const (
 	Json Encoding = 0
-	Gob           = 2
+	Gob           = 1
 )
 
 type UnsupportedEncodingError struct {

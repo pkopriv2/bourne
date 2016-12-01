@@ -165,6 +165,7 @@ func (o Object) Copy() Object {
 
 func (o Object) Dump() interface{} {
 	ret := make(map[string]interface{})
+	gob.Register(ret) // grr.... what does this screw up later?
 	for k, v := range o {
 		ret[k] = v.Dump()
 	}
