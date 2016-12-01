@@ -40,8 +40,8 @@ func newReplica(ctx common.Context, db Database, port int) (*replica, error) {
 	}
 
 	// Initialize the root logger
-	root := replicaInitLogger(ctx, self)
-	root.Info("Starting replica.")
+	logger := replicaInitLogger(ctx, self)
+	logger.Info("Starting replica.")
 
 	// Create the directory instance.
 	dir, err := replicaInitDir(ctx, db, self)
@@ -50,13 +50,13 @@ func newReplica(ctx common.Context, db Database, port int) (*replica, error) {
 	}
 
 	// Create the disseminator
-	diss, err := replicaInitDissem(ctx, root, db, self, dir)
+	diss, err := replicaInitDissem(ctx, logger, db, self, dir)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error initializing disseminator")
 	}
 
 	// Create the network server.
-	server, err := replicaInitServer(ctx, root, self, dir, diss, port)
+	server, err := replicaInitServer(ctx, logger, self, dir, diss, port)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error initializing server")
 	}
@@ -67,7 +67,7 @@ func newReplica(ctx common.Context, db Database, port int) (*replica, error) {
 		Ctx:    ctx,
 		Dir:    dir,
 		Db:     db,
-		Logger: root,
+		Logger: logger,
 		Dissem: diss,
 		Server: server,
 		Closer: make(chan struct{}, 1),
@@ -93,20 +93,8 @@ func (r *replica) Id() uuid.UUID {
 	return r.Self.Id
 }
 
-func (r *replica) Join(manager *client) error {
-	return replicaJoin(r, manager)
-}
-
 func (r *replica) Client() (*client, error) {
 	return replicaClient(r.Server)
-}
-
-func (r *replica) Tag(key string) error {
-	return replicaTag(r.Db, key)
-}
-
-func (r *replica) UnTag(key string) error {
-	return replicaUnTag(r.Db, key)
 }
 
 func (r *replica) Collect(fn func(string, string) bool) (ret []*member) {
@@ -117,31 +105,11 @@ func (r *replica) Collect(fn func(string, string) bool) (ret []*member) {
 	return
 }
 
-func (r *replica) CollectTagged(key string) (ret []*member) {
-	ret = []*member{}
-	r.Dir.View(func(v *dirView) {
-		ret = replicaDiscoverTaggedMembers(v, key)
-	})
-	return
-}
-
 func (r *replica) First(fn func(string, string) bool) (ret *member) {
 	r.Dir.View(func(v *dirView) {
 		ret = replicaFirst(v, fn)
 	})
 	return
-}
-
-func (r *replica) Managers() []*member {
-	return r.CollectTagged(ReplicaTagManager)
-}
-
-func (r *replica) Manager(assign bool) error {
-	if assign {
-		return r.Tag(ReplicaTagManager)
-	} else {
-		return r.UnTag(ReplicaTagManager)
-	}
 }
 
 // Helper functions
@@ -200,7 +168,7 @@ func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, 
 
 // Returns a newly initialized disseminator.
 func replicaInitDissem(ctx common.Context, logger common.Logger, db Database, self *member, dir *directory) (*disseminator, error) {
-	dissem, err := newDisseminator(ctx, logger, dir, 500 * time.Millisecond)
+	dissem, err := newDisseminator(ctx, logger, dir, 500*time.Millisecond)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error constructing disseminator")
 	}
@@ -238,40 +206,6 @@ func replicaReconcile(dir *directory, peer *client) error {
 	return nil
 }
 
-func replicaTag(db Database, tag string) error {
-	_, ok, err := db.Get(tag)
-	if err != nil {
-		return errors.Wrap(err, "Error retrieving exiting manager key")
-	}
-
-	if ok {
-		return nil
-	}
-
-	if err := db.Put(tag, ""); err != nil {
-		return errors.Wrap(err, "Unable to tag replica")
-	}
-
-	return nil
-}
-
-func replicaUnTag(db Database, tag string) error {
-	_, ok, err := db.Get(tag)
-	if err != nil {
-		return errors.Wrap(err, "Error retrieving exiting manager key")
-	}
-
-	if !ok {
-		return nil
-	}
-
-	if err := db.Del(tag); err != nil {
-		return errors.Wrap(err, "Unable to untag replica")
-	}
-
-	return nil
-}
-
 // Joins the replica to the given peer.
 func replicaJoin(self *replica, peer *client) error {
 
@@ -282,12 +216,6 @@ func replicaJoin(self *replica, peer *client) error {
 	}
 
 	return replicaReconcile(self.Dir, peer)
-}
-
-func replicaDiscoverTaggedMembers(v *dirView, tag string) (ret []*member) {
-	return replicaCollect(v, func(key string, val string) bool {
-		return key == tag
-	})
 }
 
 func replicaCollect(v *dirView, filter func(string, string) bool) []*member {

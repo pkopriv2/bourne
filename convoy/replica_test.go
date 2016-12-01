@@ -2,7 +2,6 @@ package convoy
 
 import (
 	"fmt"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -153,17 +152,6 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 // // assert.Equal(t, []*member{replica1.Self, replica2.Self}, members)
 /* } */
 
-func TestReplica_Manager(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
-	defer ctx.Close()
-
-	replica := StartTestReplica(ctx, 8190)
-	replica.Manager(true)
-
-	<-time.After(10 * time.Millisecond)
-	assert.Equal(t, []*member{replica.Self}, replica.Managers())
-}
-
 // func TestReplica_Managers(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
 // defer ctx.Close()
@@ -184,9 +172,9 @@ func TestReplica_Join(t *testing.T) {
 	})
 
 	ctx := common.NewContext(conf)
-	defer ctx.Close()
+	// defer ctx.Close()
 
-	clusterSize := 128
+	clusterSize := 512
 	cluster := make([]*replica, 0, clusterSize)
 
 	master := StartTestReplica(ctx, 8190)
@@ -228,45 +216,58 @@ func TestReplica_Join(t *testing.T) {
 
 	fmt.Println("COMPLETED: ", joined)
 
-	numMessages := 1000
-	received := make(map[*member]struct{})
-	received[master.Self] = struct{}{}
+	// received := make(map[*member]struct{})
+	// received[master.Self] = struct{}{}
+	//
+	// numMessages := 10
+	//
+	// wait.Wait()
+	// wait.Add(1)
+	// go func() {
+	// defer wait.Done()
+	//
+	// for len(received) < len(cluster) {
+	// <-time.After(time.Second)
+	//
+	// fmt.Println("RECEIVED: ", len(received))
+	// for _, r := range cluster {
+	// if _, ok := received[r.Self]; ! ok {
+	// continue
+	// }
+	//
+	// <-time.After(time.Second)
+	//
+	// max := 0
+	// for i := 0; i < numMessages; i++ {
+	// expected := strconv.Itoa(i)
+	//
+	// member := r.First(func(key string, val string) bool {
+	// return key == expected
+	// })
+	//
+	// if member != nil {
+	// max = i
+	// } else {
+	// break
+	// }
+	// }
+	//
+	// fmt.Println("RECEIVED Max: ", max)
+	//
+	// if max == numMessages-1 {
+	// received[r.Self] = struct{}{}
+	// }
+	// }
+	// }
+	// }()
 
+	// for i := 0; i < numMessages; i++ {
+	// master.Db.Put(strconv.Itoa(i), "Sweeeet")
+	// }
+	//
+	//
 	wait.Wait()
-	wait.Add(1)
-	go func() {
-		defer wait.Done()
-
-		for len(received) < len(cluster) {
-			<-time.After(time.Second)
-
-			for _, r := range cluster {
-				max := 0
-				for i := 0; i < numMessages; i++ {
-					expected := strconv.Itoa(i)
-
-					member := r.First(func(key string, val string) bool {
-						return key == expected
-					})
-
-					if member != nil {
-						max = i
-					}
-				}
-
-				if max == numMessages-1 {
-					received[r.Self] = struct{}{}
-				}
-			}
-		}
-	}()
-
-	for i := 0; i < numMessages; i++ {
-		master.Db.Put(strconv.Itoa(i), "Sweeeet")
-	}
-
-	wait.Wait()
-	fmt.Println("COMPLETED: ", received)
+	// fmt.Println("COMPLETED: ", received)
 }
 
 func ReplicaClient(r *replica) *client {

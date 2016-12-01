@@ -2,7 +2,6 @@ package convoy
 
 import (
 	"strconv"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
@@ -39,7 +38,7 @@ type server struct {
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, logger common.Logger, self *member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
-	log, err := newTimeLog(ctx, logger, 10*60*time.Second)
+	log, err := newTimeLog(ctx, logger, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -85,12 +84,12 @@ func (s *server) DirList(req net.Request) net.Response {
 	return newDirListResponse(s.Dir.Events())
 }
 
-// Handles a /dir/list request
+// Handles a /dir/size request.  TODO: Dead
 func (s *server) DirSize(req net.Request) net.Response {
 	return newDirSizeResponse(s.Dir.Size())
 }
 
-// Handles a /dir/list request
+// Handles a /dir/hash request   TODO: Dead
 func (s *server) DirHash(req net.Request) net.Response {
 	return newDirHashResponse(s.Dir.Hash())
 }
@@ -126,7 +125,7 @@ func (s *server) EvtPushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	return newEvtPushPullResponse(ret, s.Log.Peek())
+	return newEvtPushPullResponse(ret, s.Log.Pop())
 }
 
 func (s *server) applyAndDisseminate(events []event) (ret []bool, err error) {
@@ -134,16 +133,16 @@ func (s *server) applyAndDisseminate(events []event) (ret []bool, err error) {
 		return []bool{}, nil
 	}
 
-
 	ret = s.Dir.ApplyAll(events)
 	s.Logger.Debug("Applied [%v] events", len(ret))
 
-	if err = s.Log.Push(serverCollectSuccess(events, ret)); err != nil {
-		s.Dissem.Push(serverCollectSuccess(events, ret))
+	unique := serverCollectSuccess(events, ret)
+	if err = s.Log.Push(unique); err != nil {
+		s.Dissem.Push(unique)
 		return
 	}
 
-	err = s.Dissem.Push(serverCollectSuccess(events, ret))
+	err = s.Dissem.Push(unique)
 	return
 }
 

@@ -170,17 +170,6 @@ func (d *disseminator) start() error {
 	return nil
 }
 
-func dissemDecWeight(batch []eventLogEntry) []eventLogEntry {
-	ret := make([]eventLogEntry, 0, len(batch))
-	for _, entry := range batch {
-		key := entry.Key.Update(entry.Key.Weight - 1)
-		if key.Weight > 0 {
-			ret = append(ret, eventLogEntry{key, entry.Event})
-		}
-	}
-	return ret
-}
-
 func (d *disseminator) disseminateTo(m *member, batch []eventLogEntry) error {
 	client, err := m.Client(d.Ctx)
 	if err != nil {
@@ -207,6 +196,17 @@ func (d *disseminator) newIterator() *dissemIter {
 }
 
 // Helper functions.
+func dissemDecWeight(batch []eventLogEntry) []eventLogEntry {
+	ret := make([]eventLogEntry, 0, len(batch))
+	for _, entry := range batch {
+		key := entry.Key.Update(entry.Key.Weight - 1)
+		if key.Weight > 0 {
+			ret = append(ret, eventLogEntry{key, entry.Event})
+		}
+	}
+	return ret
+}
+
 func dissemShuffleMembers(arr []*member) []*member {
 	ret := make([]*member, len(arr))
 	for i, j := range rand.Perm(len(arr)) {
@@ -216,5 +216,5 @@ func dissemShuffleMembers(arr []*member) []*member {
 }
 
 func dissemFanout(numMembers int) int {
-	return 4 * int(math.Ceil(math.Log(float64(numMembers))))
+	return 8 * int(math.Ceil(math.Log(float64(numMembers))))
 }
