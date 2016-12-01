@@ -41,6 +41,7 @@ func newReplica(ctx common.Context, db Database, port int) (*replica, error) {
 
 	// Initialize the root logger
 	root := replicaInitLogger(ctx, self)
+	root.Info("Starting replica.")
 
 	// Create the directory instance.
 	dir, err := replicaInitDir(ctx, db, self)
@@ -199,7 +200,7 @@ func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, 
 
 // Returns a newly initialized disseminator.
 func replicaInitDissem(ctx common.Context, logger common.Logger, db Database, self *member, dir *directory) (*disseminator, error) {
-	dissem, err := newDisseminator(ctx, logger, dir, time.Second)
+	dissem, err := newDisseminator(ctx, logger, dir, 500 * time.Millisecond)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error constructing disseminator")
 	}

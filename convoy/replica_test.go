@@ -2,6 +2,7 @@ package convoy
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -178,10 +179,14 @@ func TestReplica_Manager(t *testing.T) {
 // }
 
 func TestReplica_Join(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	clusterSize := 100
+	clusterSize := 128
 	cluster := make([]*replica, 0, clusterSize)
 
 	master := StartTestReplica(ctx, 8190)
@@ -189,8 +194,8 @@ func TestReplica_Join(t *testing.T) {
 
 	cluster = append(cluster, master)
 
-	completed := make(map[*member]struct{})
-	completed[master.Self] = struct{}{}
+	joined := make(map[*member]struct{})
+	joined[master.Self] = struct{}{}
 
 	for i := 0; i < clusterSize-1; i++ {
 		ri := StartTestReplica(ctx, 8191+i)
@@ -204,11 +209,10 @@ func TestReplica_Join(t *testing.T) {
 	go func() {
 		defer wait.Done()
 
-		for len(completed) < len(cluster) {
+		for len(joined) < len(cluster) {
 			<-time.After(time.Second)
 
-			fmt.Println("COMPLETED: ", len(completed))
-			fmt.Println("COMPLETED: ", completed)
+			fmt.Println("COMPLETED: ", len(joined))
 
 			for _, r := range cluster {
 				members := r.Collect(func(key string, val string) bool {
@@ -216,14 +220,53 @@ func TestReplica_Join(t *testing.T) {
 				})
 
 				if len(members) >= len(cluster) {
-					completed[r.Self] = struct{}{}
+					joined[r.Self] = struct{}{}
 				}
 			}
 		}
 	}()
 
+	fmt.Println("COMPLETED: ", joined)
+
+	numMessages := 1000
+	received := make(map[*member]struct{})
+	received[master.Self] = struct{}{}
+
 	wait.Wait()
-	fmt.Println("COMPLETED: ", completed)
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+
+		for len(received) < len(cluster) {
+			<-time.After(time.Second)
+
+			for _, r := range cluster {
+				max := 0
+				for i := 0; i < numMessages; i++ {
+					expected := strconv.Itoa(i)
+
+					member := r.First(func(key string, val string) bool {
+						return key == expected
+					})
+
+					if member != nil {
+						max = i
+					}
+				}
+
+				if max == numMessages-1 {
+					received[r.Self] = struct{}{}
+				}
+			}
+		}
+	}()
+
+	for i := 0; i < numMessages; i++ {
+		master.Db.Put(strconv.Itoa(i), "Sweeeet")
+	}
+
+	wait.Wait()
+	fmt.Println("COMPLETED: ", received)
 }
 
 func ReplicaClient(r *replica) *client {

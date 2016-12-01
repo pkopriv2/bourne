@@ -66,7 +66,7 @@ func (d *timeLog) Close() error {
 }
 
 func (d *timeLog) Peek() []event {
-	return eventLogExtractEvents(d.Evts.Peek(1024))
+	return eventLogExtractEvents(d.Evts.Peek(255))
 }
 
 func (d *timeLog) Push(e []event) error {

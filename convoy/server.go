@@ -134,12 +134,15 @@ func (s *server) applyAndDisseminate(events []event) (ret []bool, err error) {
 		return []bool{}, nil
 	}
 
-	s.Logger.Debug("Applying [%v] events", len(events))
-	if err = s.Log.Push(events); err != nil {
+
+	ret = s.Dir.ApplyAll(events)
+	s.Logger.Debug("Applied [%v] events", len(ret))
+
+	if err = s.Log.Push(serverCollectSuccess(events, ret)); err != nil {
+		s.Dissem.Push(serverCollectSuccess(events, ret))
 		return
 	}
 
-	ret = s.Dir.ApplyAll(events)
 	err = s.Dissem.Push(serverCollectSuccess(events, ret))
 	return
 }

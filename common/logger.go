@@ -12,7 +12,7 @@ const (
 )
 
 const (
-	defaultLoggerLevel = Error
+	defaultLoggerLevel = Info
 )
 
 func formatLogger(logger Logger, format string, args ...interface{}) Logger {

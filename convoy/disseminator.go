@@ -216,5 +216,5 @@ func dissemShuffleMembers(arr []*member) []*member {
 }
 
 func dissemFanout(numMembers int) int {
-	return 2 * int(math.Ceil(math.Log(float64(numMembers))))
+	return 4 * int(math.Ceil(math.Log(float64(numMembers))))
 }
