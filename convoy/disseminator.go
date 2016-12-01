@@ -11,6 +11,10 @@ import (
 	"github.com/pkopriv2/bourne/concurrent"
 )
 
+var (
+	dissemLastSeenThreshold = 8 * int(math.Log(1024)) // puts a soft limit of cluster size
+)
+
 // Sends an update to a randomly chosen recipient.
 //
 // The disseminator implements the most crucial aspects of epidemic algorithms.
@@ -71,25 +75,31 @@ func (i *dissemIter) Next() (m *member) {
 
 // disseminator implementation.
 type disseminator struct {
-	Ctx    common.Context
-	Logger common.Logger
-	Evts   *eventLog
-	Dir    *directory
-	Period time.Duration
-	Closed chan struct{}
-	Closer chan struct{}
-	Wait   sync.WaitGroup
+	Ctx      common.Context
+	Logger   common.Logger
+	Evts     *eventLog
+	Dir      *directory
+	Self     *member
+	Iter     *dissemIter
+	Lock     sync.Mutex
+	LastSeen map[*member]int
+	Clock    int
+	Period   time.Duration
+	Closed   chan struct{}
+	Closer   chan struct{}
+	Wait     sync.WaitGroup
 }
 
-func newDisseminator(ctx common.Context, logger common.Logger, dir *directory, period time.Duration) (*disseminator, error) {
+func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir *directory, period time.Duration) (*disseminator, error) {
 	ret := &disseminator{
-		Ctx:    ctx,
-		Logger: logger.Fmt("Disseminator"),
-		Evts:   newEventLog(ctx),
-		Dir:    dir,
-		Period: period,
-		Closed: make(chan struct{}),
-		Closer: make(chan struct{}, 1)}
+		Ctx:      ctx,
+		Logger:   logger.Fmt("Disseminator"),
+		Evts:     newEventLog(ctx),
+		Dir:      dir,
+		LastSeen: make(map[*member]int),
+		Period:   period,
+		Closed:   make(chan struct{}),
+		Closer:   make(chan struct{}, 1)}
 
 	if err := ret.start(); err != nil {
 		return nil, err
@@ -123,12 +133,53 @@ func (d *disseminator) Push(e []event) error {
 	}
 
 	n := len(d.Dir.All())
+
 	if fanout := dissemFanout(n); fanout > 0 {
 		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
 		d.Evts.Add(e, fanout)
 	}
 
 	return nil
+}
+
+func (d *disseminator) nextMember() *member {
+	d.Lock.Lock()
+	defer d.Lock.Unlock()
+
+	var iter *dissemIter
+	var m *member
+
+	defer func() { d.Clock++ }()
+	defer func() { d.Iter = iter }()
+	defer func() { if m != nil { d.LastSeen[m] = d.Clock } }()
+
+	iter = d.Iter
+	if iter == nil {
+		iter = d.newIterator()
+	}
+
+	for {
+		m = iter.Next()
+		if m == nil {
+			iter = d.newIterator()
+			continue
+		}
+
+		if m.Id == d.Self.Id {
+			continue
+		}
+
+		then,ok := d.LastSeen[m]
+		if ! ok {
+			break
+		}
+
+		if d.Clock - then < dissemLastSeenThreshold {
+			break
+		}
+	}
+
+	return m
 }
 
 func (d *disseminator) start() error {

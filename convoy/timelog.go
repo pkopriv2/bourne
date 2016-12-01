@@ -47,7 +47,7 @@ func (d *timeLog) Close() error {
 }
 
 func (d *timeLog) Pop() []event {
-	ret := d.Evts.Pop(1024)
+	ret := d.Evts.Pop(2048)
 	if ret == nil || len(ret) == 0 {
 		return []event{}
 	}
