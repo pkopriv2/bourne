@@ -6,7 +6,6 @@ import (
 	"github.com/pkopriv2/bourne/btree"
 )
 
-
 // the index value
 type item struct {
 	val  Val
@@ -37,8 +36,10 @@ func (i indexKey) Less(than btree.Item) bool {
 
 // the index implementation.
 type index struct {
-	tree  *btree.BTree
-	table map[btree.Item]item
+	tree   *btree.BTree
+	table  map[btree.Item]item
+	closed chan struct{}
+	closer chan struct{}
 }
 
 func newIndex(degree int) *index {

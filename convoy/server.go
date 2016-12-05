@@ -28,28 +28,29 @@ var (
 )
 
 type server struct {
-	Ctx    common.Context
+	Ctx common.Context
+
+	// the root server logger.
 	Logger common.Logger
-	Self   *member
-	Dir    *directory
+
+	// the member that is represented by this server.
+	Self *member
+
+	// the central storage abstraction. the directory is distributed amongst all members
+	Dir *directory
+
+	// the disseminator
 	Dissem *disseminator
-	Log    *timeLog
 }
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, logger common.Logger, self *member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
-	log, err := newTimeLog(ctx, logger, dir)
-	if err != nil {
-		return nil, err
-	}
-
 	server := &server{
 		Ctx:    ctx,
 		Logger: logger.Fmt("Server"),
 		Self:   self,
 		Dir:    dir,
 		Dissem: dissem,
-		Log:    log,
 	}
 
 	return net.NewTcpServer(ctx, server.Logger, strconv.Itoa(port), serverInitHandler(server))
@@ -105,12 +106,7 @@ func (s *server) DirApply(req net.Request) net.Response {
 		return net.NewErrorResponse(errors.New("Empty events."))
 	}
 
-	ret, err := s.applyAndDisseminate(events)
-	if err != nil {
-		return net.NewErrorResponse(err)
-	}
-
-	return newDirApplyResponse(ret)
+	return newDirApplyResponse(s.Dir.ApplyAll(events, true))
 }
 
 // Handles a /evt/push request
@@ -120,30 +116,8 @@ func (s *server) EvtPushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	ret, err := s.applyAndDisseminate(events)
-	if err != nil {
-		return net.NewErrorResponse(err)
-	}
-
-	return newEvtPushPullResponse(ret, s.Log.Pop())
-}
-
-func (s *server) applyAndDisseminate(events []event) (ret []bool, err error) {
-	if len(events) == 0 {
-		return []bool{}, nil
-	}
-
-	ret = s.Dir.ApplyAll(events)
-	s.Logger.Debug("Applied [%v] events", len(ret))
-
-	unique := serverCollectSuccess(events, ret)
-	if err = s.Log.Push(unique); err != nil {
-		s.Dissem.Push(unique)
-		return
-	}
-
-	err = s.Dissem.Push(unique)
-	return
+	ret := s.Dir.ApplyAll(events, true)
+	return newEvtPushPullResponse(ret, s.Dissem.Evts.Pop(1024))
 }
 
 // Helper functions
@@ -176,17 +150,6 @@ func serverReadEvents(msg scribe.Reader, field string) ([]event, error) {
 	}
 
 	return events, nil
-}
-
-func serverCollectSuccess(all []event, success []bool) []event {
-	forward := make([]event, 0, len(success))
-	for i, b := range success {
-		if b {
-			forward = append(forward, all[i])
-		}
-	}
-
-	return forward
 }
 
 // /events/pull

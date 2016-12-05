@@ -33,11 +33,11 @@ func changeLogListen(cl ChangeLog) <-chan Change {
 }
 
 // Converts a stream of changes to events.
-func changeStreamToEventStream(id uuid.UUID, ch <-chan Change) <-chan event {
+func changeStreamToEventStream(m *member, ch <-chan Change) <-chan event {
 	ret := make(chan event)
 	go func() {
 		for chg := range ch {
-			ret <- changeToEvent(id, chg)
+			ret <- changeToEvent(m, chg)
 		}
 
 		close(ret)
@@ -45,10 +45,10 @@ func changeStreamToEventStream(id uuid.UUID, ch <-chan Change) <-chan event {
 	return ret
 }
 
-func changesToEvents(id uuid.UUID, chgs []Change) []event {
+func changesToEvents(m *member, chgs []Change) []event {
 	ret := make([]event, 0, len(chgs))
 	for _, c := range chgs {
-		ret = append(ret, changeToEvent(id, c))
+		ret = append(ret, changeToEvent(m, c))
 	}
 	return ret
 }
@@ -223,6 +223,12 @@ func changeLogReadAll(tx *bolt.Tx) ([]Change, error) {
 }
 
 // Converts a change to a standard data event.
-func changeToEvent(id uuid.UUID, c Change) *dataEvent {
-	return &dataEvent{id, c.Key, c.Val, c.Ver, c.Del}
+//
+// NOTE: In order to support members joining and leaving multiple
+// we need to make sure taht we version the data such that any piece
+// of 'ACTIVE' data has a version greater to or equal to the member
+// version, where the member version essentially represents the moment
+// in time the change log was accessed.
+func changeToEvent(m *member, c Change) *dataEvent {
+	return &dataEvent{m.Id, c.Key, c.Val, m.Version + c.Ver, c.Del}
 }

@@ -8,27 +8,27 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestEventLog_Close(t *testing.T) {
+func TestViewLog_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	el := newEventLog(ctx)
+	el := newViewLog(ctx)
 	assert.Nil(t, el.Close())
 }
 
-func TestEventLog_Push_Single(t *testing.T) {
+func TestViewLog_Push_Single(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	el := newEventLog(ctx)
+	el := newViewLog(ctx)
 	defer el.Close()
 
 	evt := &testEvent{}
-	el.Add([]event{evt}, 1)
+	el.Push([]event{evt}, 1)
 
 	batch := el.Peek(10)
 	assert.Equal(t, 1, len(batch))
-	assert.Equal(t, evt, batch[0].Event)
+	assert.Equal(t, evt, batch[0])
 }
 
 type testEvent struct{}

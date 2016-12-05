@@ -2,7 +2,6 @@ package convoy
 
 import (
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -11,57 +10,65 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-const (
-	ReplicaTagManager = "/Convoy/Replica/Manager"
-)
-
 // The replica instance.  This is what ultimately implements the
 // "Cluster" abstraction for actual members of the cluster group.
 type replica struct {
 	Ctx    common.Context
 	Logger common.Logger
-	Db     Database
-	Self   *member
-	Dir    *directory
+
+	// the db hosted by this instance.
+	Db Database
+
+	// the member hosted by this instance.
+	Self *member
+
+	// the central directory - contains the local view of all replica's dbs
+	Dir *directory
+
+	// the disseminator.  Responsible for pushing and pulling data
 	Dissem *disseminator
+
+	// the view log.  maintains a listing of how many times an event has been viewed.
+	ViewLog *viewLog
+
+	// the time log. maintains a time based buffer of events - used for reconciliation
+	TimeLog *timeLog
+
+	// the core network server.
 	Server net.Server
+
 	Closer chan struct{}
 	Closed chan struct{}
-	Wait   sync.WaitGroup
 }
 
 // Initializes and returns a generic replica instance.
 func newReplica(ctx common.Context, db Database, port int) (*replica, error) {
 
-	// Create the 'self' instance.
+	// The replica will be inextricably bound to itself.
 	self, err := replicaInitSelf(ctx, db, port)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error initializing self")
 	}
 
-	// Initialize the root logger
+	// Decorate the root logger with the 'self' instance
 	logger := replicaInitLogger(ctx, self)
 	logger.Info("Starting replica.")
 
-	// Create the directory instance.
 	dir, err := replicaInitDir(ctx, db, self)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error initializing directory")
 	}
 
-	// Create the disseminator
-	diss, err := replicaInitDissem(ctx, logger, db, self, dir)
+	diss, err := replicaInitDissem(ctx, logger, self, dir)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error initializing disseminator")
 	}
 
-	// Create the network server.
 	server, err := replicaInitServer(ctx, logger, self, dir, diss, port)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error initializing server")
 	}
 
-	// Finally, return the replica
 	return &replica{
 		Self:   self,
 		Ctx:    ctx,
@@ -128,7 +135,7 @@ func replicaInitSelf(ctx common.Context, db Database, port int) (mem *member, er
 		return
 	}
 
-	mem = newMember(id, "localhost", strconv.Itoa(port), seq)
+	mem = newMember(id, "localhost", strconv.Itoa(port), seq, Alive)
 	return
 }
 
@@ -146,7 +153,7 @@ func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, 
 	// !!! MUST HAPPEN PRIOR TO READING LOG CHANGES !!!
 	dirIndexEvents(
 		changeStreamToEventStream(
-			self.Id, changeLogListen(db.Log())), dir)
+			self, changeLogListen(db.Log())), dir)
 
 	// Grab all the changes from the database
 	chgs, err := db.Log().All()
@@ -155,29 +162,26 @@ func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, 
 	}
 
 	// Add the self instance to the directory
-	dir.update(func(u *dirUpdate) {
+	dir.Update(func(u *dirUpdate) {
 		u.AddMember(self)
 	})
 
 	// Apply all the changes
-	dir.ApplyAll(changesToEvents(self.Id, chgs))
+	dir.ApplyAll(changesToEvents(self, chgs), true)
 
 	// Done.
 	return dir, nil
 }
 
 // Returns a newly initialized disseminator.
-func replicaInitDissem(ctx common.Context, logger common.Logger, db Database, self *member, dir *directory) (*disseminator, error) {
-	dissem, err := newDisseminator(ctx, logger, self, dir, 500*time.Millisecond)
+func replicaInitDissem(ctx common.Context, logger common.Logger, self *member, dir *directory) (*disseminator, error) {
+	dissem, err := newDisseminator(ctx, logger, self, dir, 2000*time.Millisecond)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error constructing disseminator")
 	}
 
 	// Start disseminating realtime changes.
-	dissemEvents(
-		changeStreamToEventStream(
-			self.Id, changeLogListen(db.Log())), dissem)
-
+	dissemEvents(timeLogListen(dir.Log), dissem)
 	return dissem, nil
 }
 
@@ -201,8 +205,7 @@ func replicaReconcile(dir *directory, peer *client) error {
 		return errors.Wrap(err, "Error retrieving directory list from peer")
 	}
 
-	// Index the peer's events.
-	dir.ApplyAll(events)
+	dir.ApplyAll(events, false)
 	return nil
 }
 
@@ -210,7 +213,7 @@ func replicaReconcile(dir *directory, peer *client) error {
 func replicaJoin(self *replica, peer *client) error {
 
 	// Register self with the peer.  (Should result in realtime updates being delivered to self.)
-	_, err := peer.DirApply([]event{addMemberEvent(self.Self)})
+	_, err := peer.DirApply([]event{newMemberAddEvent(self.Self)})
 	if err != nil {
 		return errors.Wrap(err, "Error registering self with peer")
 	}

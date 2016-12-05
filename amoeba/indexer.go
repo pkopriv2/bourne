@@ -23,7 +23,8 @@ import (
 // is expressive enough to support such a change without major changes
 // to the interfaces.
 
-// The core storage abstraction.
+// The core storage object.  Basically just manages read/write transactions
+// over the underlying index.
 type Indexer interface {
 	io.Closer
 
@@ -56,6 +57,7 @@ type View interface {
 	ScanFrom(start Key, fn func(*Scan, Key, Item))
 }
 
+// Update methods for an index.
 type Update interface {
 	View
 
@@ -204,7 +206,7 @@ type indexer struct {
 	closer chan struct{}
 }
 
-func NewIndexer(ctx common.Context) Indexer {
+func NewGcIndexer(ctx common.Context) Indexer {
 	e := &indexer{
 		ctx:    ctx,
 		index:  newIndex(32),
@@ -213,6 +215,16 @@ func NewIndexer(ctx common.Context) Indexer {
 
 	coll := newCollector(e)
 	coll.start()
+
+	return e
+}
+
+func NewIndexer(ctx common.Context) Indexer {
+	e := &indexer{
+		ctx:    ctx,
+		index:  newIndex(32),
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}
 
 	return e
 }

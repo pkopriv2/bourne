@@ -31,7 +31,6 @@ func WriteInt(w Writer, field string, val int) {
 	w.Write(field, strconv.Itoa(val))
 }
 
-
 func ReadInt(r Reader, field string) (int, error) {
 	var value string
 	if err := r.Read(field, &value); err != nil {

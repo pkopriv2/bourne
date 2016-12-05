@@ -2,7 +2,6 @@ package convoy
 
 import (
 	"fmt"
-	"math"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -74,7 +73,6 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 	assert.Equal(t, []*member{replica.Self}, members)
 }
 
-//
 // func TestReplica_Join_TwoPeers(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
 // defer ctx.Close()
@@ -171,13 +169,13 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 
 func TestReplica_Join(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Error),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
 	// defer ctx.Close()
 
-	clusterSize := 128
+	clusterSize := 256
 	cluster := make([]*replica, 0, clusterSize)
 
 	master := StartTestReplica(ctx, 8190)
@@ -190,9 +188,8 @@ func TestReplica_Join(t *testing.T) {
 
 	for i := 0; i < clusterSize-1; i++ {
 		ri := StartTestReplica(ctx, 8191+i)
-
-		JoinTestReplica(ri, masterClient)
 		cluster = append(cluster, ri)
+		JoinTestReplica(ri, masterClient)
 	}
 
 	var wait sync.WaitGroup
@@ -203,7 +200,8 @@ func TestReplica_Join(t *testing.T) {
 		for len(joined) < len(cluster) {
 			<-time.After(1 * time.Second)
 
-			fmt.Println("COMPLETED: ", len(joined))
+			fmt.Println("Number of joined: ", len(joined))
+			master.Logger.Info("Stats: %+v", master.Dir.Stats)
 
 			for _, r := range cluster {
 				members := r.Collect(func(key string, val string) bool {
@@ -217,21 +215,21 @@ func TestReplica_Join(t *testing.T) {
 		}
 	}()
 
-	fmt.Println("COMPLETED: ", joined)
+	fmt.Println("Joined: ", joined)
 
 	received := make(map[*member]struct{})
 	received[master.Self] = struct{}{}
 
-	numMessages := 1000
+	numMessages := 100
 
 	wait.Wait()
 	wait.Add(1)
 	go func() {
 		defer wait.Done()
 
-		randomSize := int(math.Log(float64(numMessages)))
+		randomSize := numMessages / 2
 		random := make([]int, randomSize)
-		for i := 0; i<randomSize; i++ {
+		for i := 0; i < randomSize; i++ {
 			random[i] = rand.Intn(numMessages)
 		}
 
@@ -256,17 +254,15 @@ func TestReplica_Join(t *testing.T) {
 					r.Logger.Error("RECEIVED!")
 					received[r.Self] = struct{}{}
 				}
-
 			}
 		}
 	}()
 
-
 	for j := 0; j < numMessages; j++ {
+		master.Logger.Error("Sending message: %v", j)
 		master.Db.Put(strconv.Itoa(j), "sweeet")
+		<-time.After(50*time.Millisecond)
 	}
-
-
 
 	wait.Wait()
 	// fmt.Println("COMPLETED: ", received)

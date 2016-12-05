@@ -4,8 +4,16 @@ import (
 	"bytes"
 	"math/big"
 	"strings"
+	"time"
 
 	uuid "github.com/satori/go.uuid"
+)
+
+var (
+	ZeroInt    int
+	ZeroUUID   uuid.UUID
+	ZeroString string
+	ZeroTime   time.Time
 )
 
 // Just a list of supported data types.
@@ -14,7 +22,7 @@ import (
 type IntKey int
 
 func (i IntKey) Inc() IntKey {
-    return IntKey(i + 1)
+	return IntKey(i + 1)
 }
 
 func (i IntKey) Compare(s Sortable) int {
@@ -25,7 +33,7 @@ func (i IntKey) Compare(s Sortable) int {
 type StringKey string
 
 func (i StringKey) Inc() StringKey {
-    return StringKey(IncrementString(string(i)))
+	return StringKey(IncrementString(string(i)))
 }
 
 func (i StringKey) Compare(s Sortable) int {
@@ -38,7 +46,7 @@ type BytesKey []byte
 // Increments the byte array by one value.  This assumes big.Endian
 // encoding.
 func (i BytesKey) Inc() BytesKey {
-    return BytesKey(IncrementBytes(i))
+	return BytesKey(IncrementBytes(i))
 }
 
 func (i BytesKey) Compare(s Sortable) int {
@@ -51,7 +59,7 @@ type UUIDKey uuid.UUID
 // Increments the byte array by one value.  This assumes big.Endian
 // encoding.
 func (k UUIDKey) Inc() UUIDKey {
-    return UUIDKey(IncrementUUID(uuid.UUID(k)))
+	return UUIDKey(IncrementUUID(uuid.UUID(k)))
 }
 
 func (k UUIDKey) Compare(s Sortable) int {
@@ -59,15 +67,15 @@ func (k UUIDKey) Compare(s Sortable) int {
 }
 
 // a few helper methods
-func CompareBytes(a,b []byte) int {
-	return bytes.Compare(a,b)
+func CompareBytes(a, b []byte) int {
+	return bytes.Compare(a, b)
 }
 
-func CompareUUIDs(a,b uuid.UUID) int {
+func CompareUUIDs(a, b uuid.UUID) int {
 	return CompareBytes(a.Bytes(), b.Bytes())
 }
 
-func CompareStrings(a,b string) int {
+func CompareStrings(a, b string) int {
 	return CompareBytes([]byte(a), []byte(b))
 }
 

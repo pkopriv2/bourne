@@ -134,7 +134,7 @@ type Cluster interface {
 
 	// Returns a handle to the store of the given id.  Consumers
 	GetMember(id uuid.UUID) (Member, error)
-	//
+
 	// // Returns the currently alive members.
 	// Alive() ([]Member, error)
 	//

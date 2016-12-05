@@ -8,7 +8,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
 )
 
 var (
@@ -32,20 +31,10 @@ var (
 // [1] http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
 
 // Accepts a channel of events and disseminates them
-func dissemEvents(ch <-chan event, dissem *disseminator) {
+func dissemEvents(ch <-chan []event, dissem *disseminator) {
 	go func() {
-		for e := range ch {
-			done, timeout := concurrent.NewBreaker(365*24*time.Hour, func() interface{} {
-				dissem.Push([]event{e})
-				return nil
-			})
-
-			select {
-			case <-done:
-				continue
-			case <-timeout:
-				return
-			}
+		for batch := range ch {
+			dissem.Push(batch)
 		}
 	}()
 }
@@ -75,31 +64,29 @@ func (i *dissemIter) Next() (m *member) {
 
 // disseminator implementation.
 type disseminator struct {
-	Ctx      common.Context
-	Logger   common.Logger
-	Evts     *eventLog
-	Dir      *directory
-	Self     *member
-	Iter     *dissemIter
-	Lock     sync.Mutex
-	LastSeen map[*member]int
-	Clock    int
-	Period   time.Duration
-	Closed   chan struct{}
-	Closer   chan struct{}
-	Wait     sync.WaitGroup
+	Ctx    common.Context
+	Logger common.Logger
+	Evts   *viewLog
+	Dir    *directory
+	Self   *member
+	Iter   *dissemIter
+	Lock   sync.Mutex
+	Period time.Duration
+	Closed chan struct{}
+	Closer chan struct{}
+	Wait   sync.WaitGroup
 }
 
 func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir *directory, period time.Duration) (*disseminator, error) {
 	ret := &disseminator{
-		Ctx:      ctx,
-		Logger:   logger.Fmt("Disseminator"),
-		Evts:     newEventLog(ctx),
-		Dir:      dir,
-		LastSeen: make(map[*member]int),
-		Period:   period,
-		Closed:   make(chan struct{}),
-		Closer:   make(chan struct{}, 1)}
+		Ctx:    ctx,
+		Logger: logger.Fmt("Disseminator"),
+		Evts:   newViewLog(ctx),
+		Dir:    dir,
+		Self:   self,
+		Period: period,
+		Closed: make(chan struct{}),
+		Closer: make(chan struct{}, 1)}
 
 	if err := ret.start(); err != nil {
 		return nil, err
@@ -132,11 +119,11 @@ func (d *disseminator) Push(e []event) error {
 		return nil
 	}
 
-	n := len(d.Dir.All())
 
+	n := d.Dir.NumMembers()
 	if fanout := dissemFanout(n); fanout > 0 {
 		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
-		d.Evts.Add(e, fanout)
+		d.Evts.Push(e, fanout)
 	}
 
 	return nil
@@ -148,10 +135,6 @@ func (d *disseminator) nextMember() *member {
 
 	var iter *dissemIter
 	var m *member
-
-	defer func() { d.Clock++ }()
-	defer func() { d.Iter = iter }()
-	defer func() { if m != nil { d.LastSeen[m] = d.Clock } }()
 
 	iter = d.Iter
 	if iter == nil {
@@ -169,14 +152,7 @@ func (d *disseminator) nextMember() *member {
 			continue
 		}
 
-		then,ok := d.LastSeen[m]
-		if ! ok {
-			break
-		}
-
-		if d.Clock - then < dissemLastSeenThreshold {
-			break
-		}
+		break
 	}
 
 	return m
@@ -188,18 +164,8 @@ func (d *disseminator) start() error {
 		defer d.Wait.Done()
 
 		tick := time.NewTicker(d.Period)
-		iter := d.newIterator()
 
 		for {
-			var m *member
-			for {
-				m = iter.Next()
-				if m != nil {
-					break
-				}
-
-				iter = d.newIterator()
-			}
 
 			select {
 			case <-d.Closed:
@@ -207,21 +173,18 @@ func (d *disseminator) start() error {
 			case <-tick.C:
 			}
 
-			batch := d.Evts.Pop(256)
-
-			if err := d.disseminateTo(m, batch); err != nil {
-				d.Evts.Return(batch)
+			if err := d.disseminateTo(d.nextMember(), d.Evts.Pop(128)); err == nil {
 				continue
 			}
 
-			d.Evts.Return(dissemDecWeight(batch))
+			// TODO: Handle error!
 		}
 	}()
 
 	return nil
 }
 
-func (d *disseminator) disseminateTo(m *member, batch []eventLogEntry) error {
+func (d *disseminator) disseminateTo(m *member, batch []event) error {
 	client, err := m.Client(d.Ctx)
 	if err != nil {
 		return errors.Wrapf(err, "Error retrieving member client [%v]", m)
@@ -233,12 +196,12 @@ func (d *disseminator) disseminateTo(m *member, batch []eventLogEntry) error {
 
 	defer client.Close()
 
-	_, events, err := client.EvtPushPull(eventLogExtractEvents(batch))
+	_, events, err := client.EvtPushPull(batch)
 	if err != nil {
 		return errors.Wrapf(err, "Error pushing events", m)
 	}
 
-	d.Dir.ApplyAll(events)
+	d.Dir.ApplyAll(events, true)
 	return nil
 }
 
@@ -247,17 +210,6 @@ func (d *disseminator) newIterator() *dissemIter {
 }
 
 // Helper functions.
-func dissemDecWeight(batch []eventLogEntry) []eventLogEntry {
-	ret := make([]eventLogEntry, 0, len(batch))
-	for _, entry := range batch {
-		key := entry.Key.Update(entry.Key.Weight - 1)
-		if key.Weight > 0 {
-			ret = append(ret, eventLogEntry{key, entry.Event})
-		}
-	}
-	return ret
-}
-
 func dissemShuffleMembers(arr []*member) []*member {
 	ret := make([]*member, len(arr))
 	for i, j := range rand.Perm(len(arr)) {
@@ -267,5 +219,5 @@ func dissemShuffleMembers(arr []*member) []*member {
 }
 
 func dissemFanout(numMembers int) int {
-	return 8 * int(math.Ceil(math.Log(float64(numMembers))))
+	return 2 * int(math.Ceil(math.Log(float64(numMembers))))
 }

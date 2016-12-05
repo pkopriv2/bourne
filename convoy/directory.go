@@ -1,15 +1,18 @@
 package convoy
 
 import (
-	"hash/fnv"
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
+	"math"
+	"strconv"
 	"time"
 
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
+	metrics "github.com/rcrowley/go-metrics"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -35,7 +38,7 @@ func dirIndexEvents(ch <-chan event, dir *directory) {
 	go func() {
 		for e := range ch {
 			done, timeout := concurrent.NewBreaker(365*24*time.Hour, func() interface{} {
-				dir.Apply(e)
+				dir.Apply(e, true)
 				return nil
 			})
 
@@ -49,38 +52,64 @@ func dirIndexEvents(ch <-chan event, dir *directory) {
 	}()
 }
 
-// The directory is the core storage engine of the convoy replicas.
-// Its primary purpose is to maintain 1.) the listing of members
-// and 2.) allow searchable access to the members' datastores.
-type event interface {
-	scribe.Writable
-	Apply(*dirUpdate) bool
+type dirStats struct {
+	memberAdds metrics.Counter
+	memberDels metrics.Counter
+	memberRate metrics.Meter
+}
+
+func newDirStats() *dirStats {
+	r := metrics.NewRegistry()
+
+	return &dirStats{
+		memberAdds: metrics.NewRegisteredCounter("convoy.directory.memberAdds", r),
+		memberDels: metrics.NewRegisteredCounter("convoy.directory.memberDels", r),
+		memberRate: metrics.NewRegisteredMeter("convoy.directory.memberRate", r),
+	}
+}
+
+func (s *dirStats) String() string {
+	return fmt.Sprintf("Members: Adds: %v, Dels: %v, Rate: %v", s.memberAdds.Count(), s.memberDels.Count(), s.memberRate.Rate5())
+}
+
+func (d *dirStats) Write(w scribe.Writer) {
+	scribe.WriteInt(w, "MemberAdds", int(d.memberAdds.Count()))
+	scribe.WriteInt(w, "MemberDels", int(d.memberDels.Count()))
+	scribe.WriteInt(w, "MemberRate1m", int(d.memberRate.Rate1()))
+	scribe.WriteInt(w, "MemberRate5m", int(d.memberRate.Rate5()))
 }
 
 // the core storage type.
+// Invariants:
+//   * Members must always have: host, port, status attributes.
+//   * Members version is obtained by taking latest of host, port, status.
+//   * Status events at same version have LWW semantics
 type directory struct {
-	Data   amoeba.Indexer
-	Digest []byte
+	Data  amoeba.Indexer
+	Log   *timeLog
+	Stats *dirStats
 }
 
 func newDirectory(ctx common.Context) *directory {
 	return &directory{
-		Data: amoeba.NewIndexer(ctx)}
+		Data:  amoeba.NewIndexer(ctx),
+		Log:   newTimeLog(ctx),
+		Stats: newDirStats()}
 }
 
 func (d *directory) Close() error {
 	return d.Data.Close()
 }
 
-func (d *directory) update(fn func(*dirUpdate)) {
+func (d *directory) Update(fn func(*dirUpdate)) {
 	d.Data.Update(func(data amoeba.Update) {
-		fn(&dirUpdate{Data: data})
+		fn(&dirUpdate{Data: data, Stats: d.Stats})
 	})
 }
 
 func (d *directory) View(fn func(*dirView)) {
 	d.Data.Read(func(data amoeba.View) {
-		fn(&dirView{Data: data})
+		fn(&dirView{Data: data, Stats: d.Stats})
 	})
 }
 
@@ -110,6 +139,10 @@ func (d *directory) Size() int {
 	return d.Data.Size()
 }
 
+func (d *directory) NumMembers() int {
+	return int(d.Stats.memberAdds.Count() - d.Stats.memberDels.Count())
+}
+
 func (d *directory) Hash() []byte {
 	hash := fnv.New64()
 
@@ -125,20 +158,23 @@ func (d *directory) Hash() []byte {
 	return hash.Sum(nil)
 }
 
-func (d *directory) Apply(e event) (ret bool) {
-	d.update(func(u *dirUpdate) {
-		ret = e.Apply(u)
-	})
-	return
+func (d *directory) Apply(e event, log bool) bool {
+	ret := d.ApplyAll([]event{e}, log)
+	return ret[0]
 }
 
-func (d *directory) ApplyAll(events []event) (ret []bool) {
+func (d *directory) ApplyAll(events []event, log bool) (ret []bool) {
 	ret = make([]bool, 0, len(events))
-	d.update(func(u *dirUpdate) {
+	d.Update(func(u *dirUpdate) {
 		for _, e := range events {
 			ret = append(ret, e.Apply(u))
 		}
+
+		if log {
+			d.Log.Push(dirCollectSuccesses(events, ret))
+		}
 	})
+
 	return
 }
 
@@ -211,6 +247,10 @@ func dirDelMemberAttr(data amoeba.Update, id uuid.UUID, attr string, ver int) bo
 	return data.Del(ai{attr, id}, ver)
 }
 
+func dirForceDelMemberAttr(data amoeba.Update, id uuid.UUID, attr string, ver int) {
+	data.DelNow(ai{attr, id})
+}
+
 func dirScan(data amoeba.View, fn func(*amoeba.Scan, uuid.UUID, string, string, int)) {
 	data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 		attr, id := dirUnpackAmoebaKey(k)
@@ -245,29 +285,56 @@ func dirEvents(data amoeba.View) (events []event) {
 }
 
 func dirGetMember(data amoeba.View, id uuid.UUID) *member {
-	host, ver, found := dirGetMemberAttr(data, id, memberHostAttr)
+	host, ver1, found := dirGetMemberAttr(data, id, memberHostAttr)
 	if !found {
 		return nil
 	}
 
-	port, _, found := dirGetMemberAttr(data, id, memberPortAttr)
+	port, ver2, found := dirGetMemberAttr(data, id, memberPortAttr)
 	if !found {
 		return nil
 	}
 
+	stat, ver3, found := dirGetMemberAttr(data, id, memberStatusAttr)
+	if !found {
+		return nil
+	}
+
+	status, err := strconv.Atoi(stat)
+	if err != nil {
+		panic(err)
+	}
+
+	ver := int(math.Max(float64(ver1), math.Max(float64(ver2), float64(ver3))))
 	return &member{
 		Id:      id,
 		Host:    host,
 		Port:    port,
+		Status:  MemberStatus(status),
 		Version: ver}
 }
 
 func dirAddMember(data amoeba.Update, m *member) bool {
+	if !dirAddMemberAttr(data, m.Id, memberStatusAttr, strconv.Itoa(int(m.Status)), m.Version) {
+		return false
+	}
+
 	if !dirAddMemberAttr(data, m.Id, memberHostAttr, m.Host, m.Version) {
 		return false
 	}
 
 	return dirAddMemberAttr(data, m.Id, memberPortAttr, m.Port, m.Version)
+}
+
+func dirUpdateMemberStatus(data amoeba.Update, id uuid.UUID, status MemberStatus, ver int) bool {
+	_, curVer, _ := dirGetMemberAttr(data, id, memberStatusAttr)
+	if ver < curVer {
+		return false
+	}
+
+	dirForceDelMemberAttr(data, id, memberStatusAttr, curVer)
+	dirAddMemberAttr(data, id, memberStatusAttr, strconv.Itoa(int(status)), ver)
+	return true
 }
 
 func dirDelMember(data amoeba.Update, id uuid.UUID, ver int) bool {
@@ -312,20 +379,30 @@ func dirCollect(v amoeba.View, filter func(uuid.UUID, string, string, int) bool)
 	})
 
 	members = make([]*member, 0, len(ids))
-
 	for id, _ := range ids {
 		m := dirGetMember(v, id)
 		if m != nil {
 			members = append(members, m)
 		}
 	}
-
 	return
+}
+
+func dirCollectSuccesses(all []event, success []bool) []event {
+	forward := make([]event, 0, len(success))
+	for i, b := range success {
+		if b {
+			forward = append(forward, all[i])
+		}
+	}
+
+	return forward
 }
 
 // A couple very simple low level view/update abstractions
 type dirView struct {
-	Data amoeba.View
+	Data  amoeba.View
+	Stats *dirStats
 }
 
 func (u *dirView) GetMember(id uuid.UUID) *member {
@@ -350,7 +427,8 @@ func (u *dirView) First(filter func(id uuid.UUID, attr string, val string, ver i
 
 type dirUpdate struct {
 	dirView
-	Data amoeba.Update
+	Data  amoeba.Update
+	Stats *dirStats
 }
 
 func (u *dirUpdate) AddMemberAttr(id uuid.UUID, attr string, val string, ver int) bool {
@@ -361,127 +439,28 @@ func (u *dirUpdate) DelMemberAttr(id uuid.UUID, attr string, ver int) bool {
 	return dirDelMemberAttr(u.Data, id, attr, ver)
 }
 
-func (u *dirUpdate) AddMember(m *member) bool {
-	return dirAddMember(u.Data, m)
+func (u *dirUpdate) AddMember(m *member) (ret bool) {
+	defer func() {
+		if ret {
+			u.Stats.memberRate.Mark(1)
+			u.Stats.memberAdds.Inc(1)
+		}
+	}()
+	ret = dirAddMember(u.Data, m)
+	return
 }
 
-func (u *dirUpdate) DelMember(id uuid.UUID, ver int) bool {
-	return dirDelMember(u.Data, id, ver)
+func (u *dirUpdate) DelMember(id uuid.UUID, ver int) (ret bool) {
+	defer func() {
+		if ret {
+			u.Stats.memberRate.Mark(1)
+			u.Stats.memberDels.Inc(1)
+		}
+	}()
+	ret = dirDelMember(u.Data, id, ver)
+	return
 }
 
-func readEvent(r scribe.Reader) (event, error) {
-	var typ string
-	if err := r.Read("type", &typ); err != nil {
-		return nil, err
-	}
-
-	switch typ {
-	default:
-		return nil, fmt.Errorf("Cannot parse event.  Unknown type [%v]", typ)
-	case "data":
-		return readDataEvent(r)
-	case "member":
-		return readMemberEvent(r)
-	}
-}
-
-// The primary data event type.
-type dataEvent struct {
-	Id   uuid.UUID
-	Attr string
-	Val  string
-	Ver  int
-	Del  bool
-}
-
-func readDataEvent(r scribe.Reader) (*dataEvent, error) {
-	id, err := scribe.ReadUUID(r, "id")
-	if err != nil {
-		return nil, err
-	}
-
-	event := &dataEvent{Id: id}
-	if err := r.Read("attr", &event.Attr); err != nil {
-		return nil, err
-	}
-	if err := r.Read("val", &event.Val); err != nil {
-		return nil, err
-	}
-	if err := r.Read("ver", &event.Ver); err != nil {
-		return nil, err
-	}
-	if err := r.Read("del", &event.Del); err != nil {
-		return nil, err
-	}
-	return event, nil
-}
-
-func (e *dataEvent) Write(w scribe.Writer) {
-	w.Write("type", "data")
-	w.Write("id", e.Id.String())
-	w.Write("attr", e.Attr)
-	w.Write("val", e.Val)
-	w.Write("ver", e.Ver)
-	w.Write("del", e.Del)
-}
-
-func (e *dataEvent) Apply(tx *dirUpdate) bool {
-	if e.Del {
-		return tx.DelMemberAttr(e.Id, e.Attr, e.Ver)
-	} else {
-		return tx.AddMemberAttr(e.Id, e.Attr, e.Val, e.Ver)
-	}
-}
-
-// a member add/leave
-type memberEvent struct {
-	Id   uuid.UUID
-	Host string
-	Port string
-	Ver  int
-	Del  bool
-}
-
-func addMemberEvent(m *member) event {
-	return &memberEvent{m.Id, m.Host, m.Port, m.Version, false}
-}
-
-func readMemberEvent(r scribe.Reader) (*memberEvent, error) {
-	id, err := scribe.ReadUUID(r, "id")
-	if err != nil {
-		return nil, err
-	}
-
-	event := &memberEvent{Id: id}
-	if err := r.Read("host", &event.Host); err != nil {
-		return nil, err
-	}
-	if err := r.Read("port", &event.Port); err != nil {
-		return nil, err
-	}
-	if err := r.Read("ver", &event.Ver); err != nil {
-		return nil, err
-	}
-	if err := r.Read("del", &event.Del); err != nil {
-		return nil, err
-	}
-
-	return event, nil
-}
-
-func (e *memberEvent) Write(w scribe.Writer) {
-	w.Write("type", "member")
-	w.Write("id", e.Id.String())
-	w.Write("host", e.Host)
-	w.Write("port", e.Port)
-	w.Write("ver", e.Ver)
-	w.Write("del", e.Del)
-}
-
-func (e *memberEvent) Apply(tx *dirUpdate) bool {
-	if e.Del {
-		return tx.DelMember(e.Id, e.Ver)
-	} else {
-		return tx.AddMember(newMember(e.Id, e.Host, e.Port, e.Ver))
-	}
+func (u *dirUpdate) UpdateMember(id uuid.UUID, status MemberStatus, ver int) bool {
+	return dirUpdateMemberStatus(u.Data, id, status, ver)
 }

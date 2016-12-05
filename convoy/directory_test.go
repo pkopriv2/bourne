@@ -34,8 +34,8 @@ func TestDirectory_GetMember_Exist(t *testing.T) {
 	dir := newDirectory(ctx)
 	defer dir.Close()
 
-	member := newMember(uuid.NewV1(), "host", "0", 1)
-	dir.update(func(u *dirUpdate) {
+	member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
+	dir.Update(func(u *dirUpdate) {
 		u.AddMember(member)
 	})
 
@@ -44,13 +44,32 @@ func TestDirectory_GetMember_Exist(t *testing.T) {
 	})
 }
 
+func TestDirectory_UpdateMember(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	dir := newDirectory(ctx)
+	defer dir.Close()
+
+	member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
+	dir.Update(func(u *dirUpdate) {
+		u.AddMember(member)
+		u.UpdateMember(member.Id, Failed, 2)
+	})
+
+	val := *member
+	val.Status = Failed
+	val.Version = 2
+	dir.View(func(v *dirView) {
+		assert.Equal(t, &val, v.GetMember(member.Id))
+	})
+}
+
 func TestDirectory_GetAttr_NoExist(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	dir := newDirectory(ctx)
 	defer dir.Close()
 
-	member := newMember(uuid.NewV1(), "host", "0", 1)
-	dir.update(func(u *dirUpdate) {
+	member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
+	dir.Update(func(u *dirUpdate) {
 		u.AddMember(member)
 	})
 
@@ -66,7 +85,7 @@ func TestDirectory_Hash(t *testing.T) {
 	defer dir.Close()
 
 	for i := 0; i < 10240; i++ {
-		dir.update(func(u *dirUpdate) {
+		dir.Update(func(u *dirUpdate) {
 			u.AddMemberAttr(uuid.NewV1(), "key", strconv.Itoa(i), 0)
 		})
 	}
@@ -74,7 +93,7 @@ func TestDirectory_Hash(t *testing.T) {
 	hash1 := dir.Hash()
 	hash2 := dir.Hash()
 
-	dir.update(func(u *dirUpdate) {
+	dir.Update(func(u *dirUpdate) {
 		u.AddMemberAttr(uuid.NewV1(), "key", "val", 0)
 	})
 
@@ -88,8 +107,8 @@ func TestDirectory_DelAttr_NoExist(t *testing.T) {
 	dir := newDirectory(ctx)
 	defer dir.Close()
 
-	member := newMember(uuid.NewV1(), "host", "0", 1)
-	dir.update(func(u *dirUpdate) {
+	member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
+	dir.Update(func(u *dirUpdate) {
 		u.AddMember(member)
 		u.DelMemberAttr(member.Id, "attr", 1)
 	})
@@ -105,9 +124,9 @@ func TestDirectory_Scan(t *testing.T) {
 	dir := newDirectory(ctx)
 	defer dir.Close()
 
-	dir.update(func(u *dirUpdate) {
+	dir.Update(func(u *dirUpdate) {
 		for i := 0; i < 1024; i++ {
-			member := newMember(uuid.NewV1(), "host", "0", 1)
+			member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
 			u.AddMember(member)
 		}
 	})
@@ -117,7 +136,7 @@ func TestDirectory_Scan(t *testing.T) {
 		v.Scan(func(s *amoeba.Scan, id uuid.UUID, attr string, val string, ver int) {
 			count++
 		})
-		assert.Equal(t, 1024*2, count)
+		assert.Equal(t, 1024*3, count)
 	})
 }
 
@@ -128,9 +147,9 @@ func TestDirectory_ListMembers(t *testing.T) {
 
 	members := make(map[uuid.UUID]*member)
 
-	dir.update(func(u *dirUpdate) {
+	dir.Update(func(u *dirUpdate) {
 		for i := 0; i < 1024; i++ {
-			member := newMember(uuid.NewV1(), "host", "0", 1)
+			member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
 			members[member.Id] = member
 			u.AddMember(member)
 		}
@@ -141,7 +160,7 @@ func TestDirectory_ListMembers(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		for i := 0; i < 10240; i++ {
-			dir.update(func(u *dirUpdate) {
+			dir.Update(func(u *dirUpdate) {
 				u.AddMemberAttr(uuid.NewV1(), "key", strconv.Itoa(i), 0)
 			})
 		}
@@ -175,8 +194,8 @@ func TestDirectory_ApplyDataEvent(t *testing.T) {
 	}
 
 	evt := &dataEvent{uuid.NewV1(), "key", "val", 0, false}
-	assert.True(t, dir.Apply(evt))
-	assert.False(t, dir.Apply(evt))
+	assert.True(t, dir.Apply(evt, false))
+	assert.False(t, dir.Apply(evt, false))
 }
 
 func TestDirectory_ApplyEvents(t *testing.T) {
@@ -191,15 +210,15 @@ func TestDirectory_ApplyEvents(t *testing.T) {
 		Del  bool
 	}
 
-	dir.update(func(u *dirUpdate) {
+	dir.Update(func(u *dirUpdate) {
 		for i := 0; i < 1; i++ {
-			member := newMember(uuid.NewV1(), "host", "0", 1)
+			member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
 			u.AddMember(member)
 		}
 	})
 
 	copy := newDirectory(ctx)
-	copy.ApplyAll(dir.Events())
+	copy.ApplyAll(dir.Events(), false)
 
 	expected := make([]item, 0, 128)
 	dir.View(func(v *dirView) {
