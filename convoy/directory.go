@@ -17,7 +17,7 @@ func dirIndexEvents(ch <-chan event, dir *directory) {
 	go func() {
 		for e := range ch {
 			done, timeout := concurrent.NewBreaker(365*24*time.Hour, func() interface{} {
-				dir.ApplyAll([]event{e})
+				dir.Apply([]event{e})
 				return nil
 			})
 
@@ -95,12 +95,16 @@ func (d *directory) Close() (ret error) {
 }
 
 func (d *directory) broadcast(batch []event) {
+	if len(batch) == 0 {
+		return
+	}
+
 	for _, fn := range d.Listeners() {
 		fn(batch)
 	}
 }
 
-func (d *directory) ApplyAll(events []event) (ret []bool) {
+func (d *directory) Apply(events []event) (ret []bool) {
 	ret = make([]bool, 0, len(events))
 	d.Core.Update(func(u *update) {
 		for _, e := range events {
@@ -126,6 +130,50 @@ func (d *directory) Get(id uuid.UUID) (ret *member) {
 	d.Core.View(func(u *view) {
 		ret = dirGetMember(u, id)
 	})
+	return
+}
+
+func (d *directory) Join(m *member) (err error) {
+	items := d.Core.Update(func(u *update) {
+		if !u.Enable(m.Id, m.Version) {
+			err = errors.Errorf("Member alread joined [%v]", m)
+			return
+		}
+
+		if !m.Healthy {
+			err = errors.Errorf("Cannot join unhealthy member [%v]", m)
+			return
+		}
+
+		u.Put(m.Id, m.Version, memberHealthAttr, "", m.Version)
+		u.Put(m.Id, m.Version, memberHostAttr, m.Host, m.Version)
+		u.Put(m.Id, m.Version, memberPortAttr, m.Port, m.Version)
+	})
+
+	d.broadcast(dirItemsToEvents(items))
+	return
+}
+
+func (d *directory) Leave(m *member) (err error) {
+	items := d.Core.Update(func(u *update) {
+		if !u.Disable(m.Id, m.Version) {
+			err = errors.Errorf("Member already joined [%v]", m.Id)
+			return
+		}
+	})
+
+	d.broadcast(dirItemsToEvents(items))
+	return
+}
+
+func (d *directory) Fail(m *member) (err error) {
+	items := d.Core.Update(func(u *update) {
+		if !u.Del(m.Id, m.Version, memberHealthAttr, m.Version) {
+			err = errors.Errorf("Unable to fail member [%v]", m)
+		}
+	})
+
+	d.broadcast(dirItemsToEvents(items))
 	return
 }
 
@@ -169,43 +217,6 @@ func (d *directory) All() (ret []*member) {
 	return
 }
 
-func (d *directory) Join(m *member) (err error) {
-	d.Core.Update(func(u *update) {
-		if !u.Enable(m.Id, m.Version) {
-			err = errors.Errorf("Member alread joined [%v]", m)
-			return
-		}
-
-		if !m.Healthy {
-			err = errors.Errorf("Cannot join unhealthy member [%v]", m)
-			return
-		}
-
-		u.Put(m.Id, m.Version, memberHealthAttr, "", m.Version)
-		u.Put(m.Id, m.Version, memberHostAttr, m.Host, m.Version)
-		u.Put(m.Id, m.Version, memberPortAttr, m.Port, m.Version)
-	})
-	return
-}
-
-func (d *directory) Leave(m *member) (err error) {
-	d.Core.Update(func(u *update) {
-		if !u.Disable(m.Id, m.Version) {
-			err = errors.Errorf("Member already joined [%v]", m.Id)
-			return
-		}
-	})
-	return
-}
-
-func (d *directory) Fail(m *member) (err error) {
-	d.Core.Update(func(u *update) {
-		if !u.Del(m.Id, m.Version, memberHealthAttr, m.Version) {
-			err = errors.Errorf("Unable to fail member [%v]", m)
-		}
-	})
-	return
-}
 
 // Retrieves a member from the directory
 func dirGetMember(v *view, id uuid.UUID) *member {
@@ -240,5 +251,13 @@ func dirCollectSuccesses(events []event, success []bool) []event {
 		}
 	}
 
+	return ret
+}
+
+func dirItemsToEvents(items []item) []event {
+	ret := make([]event, 0, len(items))
+	for _, i := range items {
+		ret = append(ret, i)
+	}
 	return ret
 }

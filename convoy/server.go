@@ -93,7 +93,7 @@ func (s *server) DirApply(req net.Request) net.Response {
 		return net.NewErrorResponse(errors.New("Empty events."))
 	}
 
-	return newDirApplyResponse(s.Dir.ApplyAll(events))
+	return newDirApplyResponse(s.Dir.Apply(events))
 }
 
 // Handles a /evt/push request
@@ -103,7 +103,7 @@ func (s *server) EvtPushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	return newEvtPushPullResponse(s.Dir.ApplyAll(events), s.Dissem.Evts.Pop(256))
+	return newEvtPushPullResponse(s.Dir.Apply(events), s.Dissem.Evts.Pop(256))
 }
 
 // Helper functions

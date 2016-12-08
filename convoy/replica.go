@@ -92,9 +92,19 @@ func (r *replica) Close() error {
 	}
 
 	r.Logger.Info("Replica shutting down.")
+
+	// stop accepting requests...
 	r.Server.Close()
 
-	// r.Dir.Apply(&memberDelEvent{r.Self.Id, r.Self.Version}, true)
+	// initialize the leave
+	r.Dir.Leave(r.Self)
+
+	// wait for the dissem queue to empty
+	for r.Dissem.Evts.Data.Size() > 0 {
+		time.Sleep(1 * time.Second)
+	}
+
+	// finally, shut everything down
 	r.Dissem.Close()
 	r.Dir.Close()
 	close(r.Closed)
@@ -152,7 +162,7 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self 
 	}
 
 	dir.Join(self)
-	dir.ApplyAll(changesToEvents(self, chgs))
+	dir.Apply(changesToEvents(self, chgs))
 	return dir, nil
 }
 
@@ -173,13 +183,12 @@ func replicaInitServer(ctx common.Context, log common.Logger, self *member, dir 
 	return newServer(ctx, log, self, dir, dissem, port)
 }
 
-// Reconciles a directory
-func replicaReconcile(dir *directory, peer *client) error {
-
-	// Send self's directory to the peer.
-	_, err := peer.DirApply(dir.Events())
+// Joins the replica to the given peer.
+func replicaJoin(self *replica, peer *client) error {
+	// Register self with the peer.  (Should result in realtime updates being delivered to self.)
+	_, err := peer.DirApply(self.Dir.Events())
 	if err != nil {
-		return errors.Wrap(err, "Error publishing events to peer")
+		return errors.Wrap(err, "Error registering self with peer")
 	}
 
 	// Download the peer's directory.
@@ -188,19 +197,8 @@ func replicaReconcile(dir *directory, peer *client) error {
 		return errors.Wrap(err, "Error retrieving directory list from peer")
 	}
 
-	dir.ApplyAll(events)
+	self.Dir.Apply(events)
 	return nil
-}
-
-// Joins the replica to the given peer.
-func replicaJoin(self *replica, peer *client) error {
-	// Register self with the peer.  (Should result in realtime updates being delivered to self.)
-	_, err := peer.DirApply(self.Dir.Events())
-	if err != nil {
-	return errors.Wrap(err, "Error registering self with peer")
-	}
-
-	return replicaReconcile(self.Dir, peer)
 }
 
 func replicaClient(server net.Server) (*client, error) {

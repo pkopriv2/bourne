@@ -1,7 +1,6 @@
 package convoy
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -163,131 +162,188 @@ import (
 // // <-time.After(5 * time.Second)
 // // assert.Equal(t, []*member{replica1.Self}, replica2.Managers())
 // // }
+//* / */
+// func TestReplica_Join(t *testing.T) {
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Info),
+// })
 //
-func TestReplica_Join(t *testing.T) {
+// ctx := common.NewContext(conf)
+// // defer ctx.Close()
+//
+// clusterSize := 64
+// cluster := make([]*replica, 0, clusterSize)
+//
+// master := StartTestReplica(ctx, 8190)
+// masterClient := ReplicaClient(master)
+//
+// cluster = append(cluster, master)
+//
+// var clusterLock sync.RWMutex
+// var clusterSnapshot = func() []*replica {
+// clusterLock.RLock()
+// defer clusterLock.RUnlock()
+// ret := make([]*replica, 0, clusterSize)
+// for _, r := range cluster {
+// ret = append(ret, r)
+// }
+// return ret
+// }
+//
+// go func() {
+// for {
+// for _, r := range clusterSnapshot() {
+// // r.Logger.Info("Timelog depth: %v", r.Dir.Log.Data.Size())
+// r.Logger.Info("Queue depth: %v", r.Dissem.Evts.Data.Size())
+// time.Sleep(10 * time.Millisecond)
+// }
+// }
+// }()
+//
+// var wait sync.WaitGroup
+// wait.Add(1)
+// go func() {
+// defer wait.Done()
+//
+// joined := make(map[*member]struct{})
+// joined[master.Self] = struct{}{}
+//
+// for len(joined) < clusterSize {
+// <-time.After(1 * time.Second)
+//
+// master.Logger.Info("Number of joined: %v", len(joined))
+//
+// for _, r := range clusterSnapshot() {
+// members := r.Dir.All()
+// if len(members) >= clusterSize {
+// joined[r.Self] = struct{}{}
+// }
+// }
+// }
+//
+// master.Logger.Info("Done joining")
+// }()
+//
+// for i := 0; i < clusterSize-1; i++ {
+// ri := StartTestReplica(ctx, 8191+i)
+// JoinTestReplica(ri, masterClient)
+//
+// clusterLock.Lock()
+// cluster = append(cluster, ri)
+// clusterLock.Unlock()
+//
+// }
+//
+// received := make(map[*member]struct{})
+// received[master.Self] = struct{}{}
+//
+// // numMessages := 500
+// //
+// // wait.Wait()
+// // wait.Add(1)
+// // go func() {
+// // defer wait.Done()
+// //
+// // randomSize := numMessages / 2
+// // random := make([]int, randomSize)
+// // for i := 0; i < randomSize; i++ {
+// // random[i] = rand.Intn(numMessages)
+// // }
+// //
+// // for len(received) < len(cluster) {
+// // <-time.After(1 * time.Second)
+// //
+// // for _, r := range cluster {
+// // if _, ok := received[r.Self]; ok {
+// // continue
+// // }
+// //
+// // found := make([]int, 0, len(random))
+// // r.Dir.View(func(d *dirView) {
+// // for i := range random {
+// // if _, _, ok := d.GetMemberAttr(master.Id(), strconv.Itoa(i)); ok {
+// // found = append(found, i)
+// // }
+// // }
+// // })
+// //
+// // if len(found) == len(random) {
+// // r.Logger.Error("Received messages")
+// // received[r.Self] = struct{}{}
+// // }
+// // }
+// // }
+// // }()
+// //
+// //
+// // master.Logger.Error("Sending message: %v", numMessages)
+// // for j := 0; j < numMessages; j++ {
+// // // master.Logger.Error("Sending message: %v", j)
+// // master.Db.Put(strconv.Itoa(j), "sweeet")
+// // <-time.After(50*time.Millisecond)
+// // }
+//
+// wait.Wait()
+// master.Logger.Error("Done")
+// // time.Sleep(30 * time.Second)
+// // fmt.Println("COMPLETED: ", received)
+/* } */
+
+func TestReplica_Leave(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
 	// defer ctx.Close()
 
-	clusterSize := 128
-	cluster := make([]*replica, 0, clusterSize)
-
 	master := StartTestReplica(ctx, 8190)
 	masterClient := ReplicaClient(master)
 
-	cluster = append(cluster, master)
+	r1 := StartTestReplica(ctx, 8191)
+	r2 := StartTestReplica(ctx, 8192)
 
-	var clusterLock sync.RWMutex
-	var clusterSnapshot = func() []*replica {
-		clusterLock.RLock()
-		defer clusterLock.RUnlock()
-		ret := make([]*replica, 0, clusterSize)
+	replicaJoin(r1, masterClient)
+	replicaJoin(r2, masterClient)
+	WaitForJoin(master, r1, r2)
+
+	go r1.Close()
+	WaitForLeave(r1, master, r2)
+}
+
+func WaitForJoin(cluster ...*replica) {
+	joined := make(map[*member]struct{})
+	for len(joined) < len(cluster) {
+		cluster[0].Logger.Info("Number of joined: %v", len(joined))
 		for _, r := range cluster {
-			ret = append(ret, r)
-		}
-		return ret
-	}
+			members := r.Dir.All()
+			if len(members) == len(cluster) {
+				joined[r.Self] = struct{}{}
+			}
 
-	go func() {
-		for {
-			for _, r := range clusterSnapshot() {
-				// r.Logger.Info("Timelog depth: %v", r.Dir.Log.Data.Size())
-				r.Logger.Info("Queue depth: %v", r.Dissem.Evts.Data.Size())
-				time.Sleep(10 * time.Millisecond)
+			if len(members) > len(cluster) {
+				panic("More members than cluster size!!!")
 			}
 		}
-	}()
-
-	var wait sync.WaitGroup
-	wait.Add(1)
-	go func() {
-		defer wait.Done()
-
-		joined := make(map[*member]struct{})
-		joined[master.Self] = struct{}{}
-
-		for len(joined) < clusterSize {
-			<-time.After(1 * time.Second)
-
-			master.Logger.Info("Number of joined: %v", len(joined))
-
-			for _, r := range clusterSnapshot() {
-				members := r.Dir.All()
-				if len(members) >= clusterSize {
-					joined[r.Self] = struct{}{}
-				}
-			}
-		}
-
-		master.Logger.Info("Done joining")
-	}()
-
-	for i := 0; i < clusterSize-1; i++ {
-		ri := StartTestReplica(ctx, 8191+i)
-		JoinTestReplica(ri, masterClient)
-
-		clusterLock.Lock()
-		cluster = append(cluster, ri)
-		clusterLock.Unlock()
-
+		<-time.After(250 * time.Millisecond)
 	}
 
-	received := make(map[*member]struct{})
-	received[master.Self] = struct{}{}
+	cluster[0].Logger.Info("Number of joined: %v", len(joined))
+}
 
-	// numMessages := 500
-	//
-	// wait.Wait()
-	// wait.Add(1)
-	// go func() {
-	// defer wait.Done()
-	//
-	// randomSize := numMessages / 2
-	// random := make([]int, randomSize)
-	// for i := 0; i < randomSize; i++ {
-	// random[i] = rand.Intn(numMessages)
-	// }
-	//
-	// for len(received) < len(cluster) {
-	// <-time.After(1 * time.Second)
-	//
-	// for _, r := range cluster {
-	// if _, ok := received[r.Self]; ok {
-	// continue
-	// }
-	//
-	// found := make([]int, 0, len(random))
-	// r.Dir.View(func(d *dirView) {
-	// for i := range random {
-	// if _, _, ok := d.GetMemberAttr(master.Id(), strconv.Itoa(i)); ok {
-	// found = append(found, i)
-	// }
-	// }
-	// })
-	//
-	// if len(found) == len(random) {
-	// r.Logger.Error("Received messages")
-	// received[r.Self] = struct{}{}
-	// }
-	// }
-	// }
-	// }()
-	//
-	//
-	// master.Logger.Error("Sending message: %v", numMessages)
-	// for j := 0; j < numMessages; j++ {
-	// // master.Logger.Error("Sending message: %v", j)
-	// master.Db.Put(strconv.Itoa(j), "sweeet")
-	// <-time.After(50*time.Millisecond)
-	// }
-
-	wait.Wait()
-	master.Logger.Error("Done")
-	time.Sleep(30 * time.Second)
-	// fmt.Println("COMPLETED: ", received)
+func WaitForLeave(m *replica, rest ...*replica) {
+	done := make(map[*member]struct{})
+	for len(done) < len(rest) {
+		m.Logger.Info("Number of sync'ed: %v", len(done))
+		for _, r := range rest {
+			members := r.Dir.All()
+			if len(members) == len(rest) {
+				done[r.Self] = struct{}{}
+			}
+		}
+		<-time.After(250 * time.Millisecond)
+	}
+	m.Logger.Info("Number of sync'ed: %v", len(done))
 }
 
 func ReplicaClient(r *replica) *client {

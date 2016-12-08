@@ -79,6 +79,9 @@ type ChangeLog interface {
 	// Returns the current sequence of the log
 	Seq() (int, error)
 
+	// Increments and returns the seq
+	Inc() (int, error)
+
 	// Appends a change to the log and notifies any listeners.
 	Append(key string, val string, del bool) (Change, error)
 

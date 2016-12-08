@@ -88,6 +88,14 @@ func (c *changeLog) Seq() (seq int, err error) {
 	return
 }
 
+func (c *changeLog) Inc() (seq int, err error) {
+	err = c.Stash.Update(func(tx *bolt.Tx) error {
+		seq, err = changeLogIncSeq(tx)
+		return err
+	})
+	return
+}
+
 func (c *changeLog) Id() (id uuid.UUID, err error) {
 	err = c.Stash.Update(func(tx *bolt.Tx) error {
 		id, err = changeLogGetId(tx)
@@ -168,6 +176,20 @@ func changeLogGetSeq(tx *bolt.Tx) int {
 	}
 
 	return int(bucket.Sequence())
+}
+
+func changeLogIncSeq(tx *bolt.Tx) (int, error) {
+	bucket, err := tx.CreateBucketIfNotExists(idBucket)
+	if err != nil {
+		return 0, err
+	}
+
+	seq, err := bucket.NextSequence()
+	if err != nil {
+		return 0, err
+	}
+
+	return int(seq), err
 }
 
 func changeLogGetId(tx *bolt.Tx) (uuid.UUID, error) {
