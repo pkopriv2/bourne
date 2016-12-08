@@ -36,8 +36,7 @@ type testEvent struct{}
 func (e *testEvent) Write(w scribe.Writer) {
 }
 
-func (e *testEvent) Apply(tx *dirUpdate) bool {
-	return true
+func (e *testEvent) Apply(tx *update) {
 }
 
 func (e *testEvent) String() string {

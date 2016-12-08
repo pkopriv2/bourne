@@ -8,7 +8,7 @@ import (
 
 type database struct {
 	Ctx    common.Context
-	Data   amoeba.Indexer
+	Data   amoeba.Index
 	ChgLog ChangeLog
 }
 

@@ -52,8 +52,8 @@ func viewLogUnpackAmoebaItem(item amoeba.Item) event {
 	return raw.(event)
 }
 
-func viewLogScan(data amoeba.View, fn func(*amoeba.Scan, viewLogKey, event)) {
-	data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
+func viewLogScan(data amoeba.View, fn func(amoeba.Scan, viewLogKey, event)) {
+	data.Scan(func(s amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 		evt := viewLogUnpackAmoebaItem(i)
 		if evt == nil {
 			return // shouldn't be possible...but guarding anyway.
@@ -65,7 +65,7 @@ func viewLogScan(data amoeba.View, fn func(*amoeba.Scan, viewLogKey, event)) {
 
 func viewLogPeek(data amoeba.View, num int) (batch []event) {
 	batch = make([]event, 0, 128)
-	viewLogScan(data, func(s *amoeba.Scan, k viewLogKey, e event) {
+	viewLogScan(data, func(s amoeba.Scan, k viewLogKey, e event) {
 		defer func() { num-- }()
 		if num == 0 {
 			s.Stop()
@@ -81,7 +81,7 @@ func viewLogPop(data amoeba.Update, num int) (batch []event) {
 	batch = make([]event, 0, 128)
 	viewed := make([]viewLogKey, 0, 128)
 
-	viewLogScan(data, func(s *amoeba.Scan, k viewLogKey, e event) {
+	viewLogScan(data, func(s amoeba.Scan, k viewLogKey, e event) {
 		defer func() { num-- }()
 		if num == 0 {
 			s.Stop()
@@ -93,7 +93,8 @@ func viewLogPop(data amoeba.Update, num int) (batch []event) {
 	})
 
 	for i, v := range viewed {
-		if v.Remaining < 1 {
+		data.DelNow(v)
+		if v.Remaining <= 1 {
 			continue
 		}
 
@@ -105,7 +106,7 @@ func viewLogPop(data amoeba.Update, num int) (batch []event) {
 
 // The event log implementation.  The event log
 type viewLog struct {
-	Data amoeba.Indexer
+	Data amoeba.Index
 }
 
 func newViewLog(ctx common.Context) *viewLog {

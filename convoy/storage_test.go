@@ -4,30 +4,32 @@ import (
 	"testing"
 
 	"github.com/pkopriv2/bourne/common"
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDirectory_Close(t *testing.T) {
+func TestStorage_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	dir := newDirectory(ctx, ctx.Logger())
+	dir := newStorage(ctx, ctx.Logger())
 	assert.Nil(t, dir.Close())
 }
 
-// func TestDirectory_GetMember_NoExist(t *testing.T) {
+func TestStorage_Get_NoExist(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	dir := newStorage(ctx, ctx.Logger())
+	defer dir.Close()
+
+	var id uuid.UUID
+
+	dir.View(func(v *dirView) {
+		assert.Nil(t, v.GetMember(id))
+	})
+}
+
+//
+// func TestStorage_GetMember_Exist(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
-// defer dir.Close()
-//
-// var id uuid.UUID
-//
-// dir.View(func(v *dirView) {
-// assert.Nil(t, v.GetMember(id))
-// })
-// }
-//
-// func TestDirectory_GetMember_Exist(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 // defer dir.Close()
 //
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
@@ -40,9 +42,9 @@ func TestDirectory_Close(t *testing.T) {
 // })
 // }
 //
-// func TestDirectory_UpdateMember(t *testing.T) {
+// func TestStorage_UpdateMember(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 // defer dir.Close()
 //
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
@@ -59,9 +61,9 @@ func TestDirectory_Close(t *testing.T) {
 // })
 // }
 //
-// func TestDirectory_GetAttr_NoExist(t *testing.T) {
+// func TestStorage_GetAttr_NoExist(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 // defer dir.Close()
 //
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
@@ -75,9 +77,9 @@ func TestDirectory_Close(t *testing.T) {
 // })
 // }
 //
-// func TestDirectory_DelAttr_NoExist(t *testing.T) {
+// func TestStorage_DelAttr_NoExist(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 // defer dir.Close()
 //
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
@@ -92,9 +94,9 @@ func TestDirectory_Close(t *testing.T) {
 // })
 // }
 //
-// func TestDirectory_Scan(t *testing.T) {
+// func TestStorage_Scan(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 // defer dir.Close()
 //
 // dir.update(func(u *dirUpdate) {
@@ -113,9 +115,9 @@ func TestDirectory_Close(t *testing.T) {
 // })
 // }
 //
-// func TestDirectory_ListMembers(t *testing.T) {
+// func TestStorage_ListMembers(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 // defer dir.Close()
 //
 // members := make(map[uuid.UUID]*member)
@@ -154,9 +156,9 @@ func TestDirectory_Close(t *testing.T) {
 // return ret
 // }
 //
-// func TestDirectory_ApplyDataEvent(t *testing.T) {
+// func TestStorage_ApplyDataEvent(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 //
 // type item struct {
 // Id   uuid.UUID
@@ -171,9 +173,9 @@ func TestDirectory_Close(t *testing.T) {
 // assert.False(t, dir.Apply(evt))
 // }
 //
-// func TestDirectory_ApplyEvents(t *testing.T) {
+// func TestStorage_ApplyEvents(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newDirectory(ctx, ctx.Logger())
+// dir := newStorage(ctx, ctx.Logger())
 //
 // type item struct {
 // Id   uuid.UUID
@@ -190,7 +192,7 @@ func TestDirectory_Close(t *testing.T) {
 // }
 // })
 //
-// copy := newDirectory(ctx, ctx.Logger())
+// copy := newStorage(ctx, ctx.Logger())
 // copy.ApplyAll(dir.Events())
 //
 // expected := make([]item, 0, 128)

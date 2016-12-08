@@ -72,6 +72,7 @@ type disseminator struct {
 	Iter   *dissemIter
 	Lock   sync.Mutex
 	Period time.Duration
+	Factor int
 	Closed chan struct{}
 	Closer chan struct{}
 	Wait   sync.WaitGroup
@@ -85,6 +86,7 @@ func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir
 		Dir:    dir,
 		Self:   self,
 		Period: period,
+		Factor: ctx.Config().OptionalInt("convoy.dissem.fanout.factor", 4),
 		Closed: make(chan struct{}),
 		Closer: make(chan struct{}, 1)}
 
@@ -102,6 +104,7 @@ func (d *disseminator) Close() error {
 	case d.Closer <- struct{}{}:
 	}
 
+	d.Evts.Close()
 	close(d.Closed)
 	d.Wait.Wait()
 	return nil
@@ -119,9 +122,8 @@ func (d *disseminator) Push(e []event) error {
 		return nil
 	}
 
-
-	n := d.Dir.NumMembers()
-	if fanout := dissemFanout(n); fanout > 0 {
+	n := len(d.Dir.All())
+	if fanout := dissemFanout(d.Factor, n); fanout > 0 {
 		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
 		d.Evts.Push(e, fanout)
 	}
@@ -152,6 +154,10 @@ func (d *disseminator) nextMember() *member {
 			continue
 		}
 
+		// if m.Status != Alive  {
+			// continue
+		// }
+
 		break
 	}
 
@@ -173,7 +179,7 @@ func (d *disseminator) start() error {
 			case <-tick.C:
 			}
 
-			if err := d.disseminateTo(d.nextMember(), d.Evts.Pop(128)); err == nil {
+			if _, err := d.disseminate(d.nextMember()); err == nil {
 				continue
 			}
 
@@ -182,6 +188,15 @@ func (d *disseminator) start() error {
 	}()
 
 	return nil
+}
+
+func (d *disseminator) disseminate(m *member) ([]event, error) {
+	batch := d.Evts.Pop(256)
+	if len(batch) == 0 {
+		return batch, nil
+	}
+
+	return batch, d.disseminateTo(m, batch)
 }
 
 func (d *disseminator) disseminateTo(m *member, batch []event) error {
@@ -201,7 +216,7 @@ func (d *disseminator) disseminateTo(m *member, batch []event) error {
 		return errors.Wrapf(err, "Error pushing events", m)
 	}
 
-	d.Dir.ApplyAll(events, true)
+	d.Dir.ApplyAll(events)
 	return nil
 }
 
@@ -218,6 +233,6 @@ func dissemShuffleMembers(arr []*member) []*member {
 	return ret
 }
 
-func dissemFanout(numMembers int) int {
-	return 2 * int(math.Ceil(math.Log(float64(numMembers))))
+func dissemFanout(factor int, numMembers int) int {
+	return factor * int(math.Ceil(math.Log(float64(numMembers)))) + 1
 }

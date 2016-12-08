@@ -2,7 +2,6 @@ package convoy
 
 import (
 	"strconv"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
@@ -13,7 +12,10 @@ import (
 // The replica instance.  This is what ultimately implements the
 // "Cluster" abstraction for actual members of the cluster group.
 type replica struct {
-	Ctx    common.Context
+	// the central context.
+	Ctx common.Context
+
+	// the root logger.  decorated with self's information.
 	Logger common.Logger
 
 	// the db hosted by this instance.
@@ -54,7 +56,7 @@ func newReplica(ctx common.Context, db Database, port int) (*replica, error) {
 	logger := replicaInitLogger(ctx, self)
 	logger.Info("Starting replica.")
 
-	dir, err := replicaInitDir(ctx, db, self)
+	dir, err := replicaInitDir(ctx, logger, db, self)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error initializing directory")
 	}
@@ -89,8 +91,10 @@ func (r *replica) Close() error {
 	}
 
 	r.Logger.Info("Replica shutting down.")
-	r.Dissem.Close()
 	r.Server.Close()
+
+	// r.Dir.Apply(&memberDelEvent{r.Self.Id, r.Self.Version}, true)
+	r.Dissem.Close()
 	r.Dir.Close()
 	close(r.Closed)
 	return nil
@@ -102,21 +106,6 @@ func (r *replica) Id() uuid.UUID {
 
 func (r *replica) Client() (*client, error) {
 	return replicaClient(r.Server)
-}
-
-func (r *replica) Collect(fn func(string, string) bool) (ret []*member) {
-	ret = []*member{}
-	r.Dir.View(func(v *dirView) {
-		ret = replicaCollect(v, fn)
-	})
-	return
-}
-
-func (r *replica) First(fn func(string, string) bool) (ret *member) {
-	r.Dir.View(func(v *dirView) {
-		ret = replicaFirst(v, fn)
-	})
-	return
 }
 
 // Helper functions
@@ -146,8 +135,8 @@ func replicaInitLogger(ctx common.Context, self *member) common.Logger {
 
 // Returns a newly initialized directory that is populated with the given db and member
 // and is indexing realtime changes to the db.
-func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, error) {
-	dir := newDirectory(ctx)
+func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self *member) (*directory, error) {
+	dir := newDirectory(ctx, logger)
 
 	// start indexing realtime changes.
 	// !!! MUST HAPPEN PRIOR TO READING LOG CHANGES !!!
@@ -161,13 +150,13 @@ func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, 
 		return nil, err
 	}
 
-	// Add the self instance to the directory
-	dir.Update(func(u *dirUpdate) {
-		u.AddMember(self)
-	})
+	// // Add the self instance to the directory
+	// dir.update(func(u *dirUpdate) {
+	// u.AddMember(self)
+	// })
 
 	// Apply all the changes
-	dir.ApplyAll(changesToEvents(self, chgs), true)
+	dir.ApplyAll(changesToEvents(self, chgs))
 
 	// Done.
 	return dir, nil
@@ -175,14 +164,15 @@ func replicaInitDir(ctx common.Context, db Database, self *member) (*directory, 
 
 // Returns a newly initialized disseminator.
 func replicaInitDissem(ctx common.Context, logger common.Logger, self *member, dir *directory) (*disseminator, error) {
-	dissem, err := newDisseminator(ctx, logger, self, dir, 2000*time.Millisecond)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error constructing disseminator")
-	}
-
-	// Start disseminating realtime changes.
-	dissemEvents(timeLogListen(dir.Log), dissem)
-	return dissem, nil
+	// dissem, err := newDisseminator(ctx, logger, self, dir, time.Second)
+	// if err != nil {
+	// return nil, errors.Wrap(err, "Error constructing disseminator")
+	// }
+	//
+	// // Start disseminating realtime changes.
+	// dissemEvents(timeLogListen(dir.Log), dissem)
+	// return dissem, nil
+	return nil, nil
 }
 
 // Returns a newly initialized server.
@@ -205,32 +195,21 @@ func replicaReconcile(dir *directory, peer *client) error {
 		return errors.Wrap(err, "Error retrieving directory list from peer")
 	}
 
-	dir.ApplyAll(events, false)
+	dir.ApplyAll(events)
 	return nil
 }
 
 // Joins the replica to the given peer.
 func replicaJoin(self *replica, peer *client) error {
+	return nil
 
 	// Register self with the peer.  (Should result in realtime updates being delivered to self.)
-	_, err := peer.DirApply([]event{newMemberAddEvent(self.Self)})
-	if err != nil {
-		return errors.Wrap(err, "Error registering self with peer")
-	}
-
-	return replicaReconcile(self.Dir, peer)
-}
-
-func replicaCollect(v *dirView, filter func(string, string) bool) []*member {
-	return v.Collect(func(id uuid.UUID, key string, val string, _ int) bool {
-		return filter(key, val)
-	})
-}
-
-func replicaFirst(v *dirView, filter func(string, string) bool) *member {
-	return v.First(func(id uuid.UUID, key string, val string, _ int) bool {
-		return filter(key, val)
-	})
+	// _, err := peer.DirApply([]event{newMemberAddEvent(self.Self)})
+	// if err != nil {
+	// return errors.Wrap(err, "Error registering self with peer")
+	// }
+	//
+	// return replicaReconcile(self.Dir, peer)
 }
 
 func replicaClient(server net.Server) (*client, error) {

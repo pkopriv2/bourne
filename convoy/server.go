@@ -14,16 +14,12 @@ const (
 	actEvtPushPull = "/events/pushPull"
 	actDirApply    = "/dir/apply"
 	actDirList     = "/dir/list"
-	actDirSize     = "/dir/size"
-	actDirHash     = "/dir/hash"
 )
 
 // Meta messages
 var (
 	metaDirApply    = serverNewMeta(actDirApply)
 	metaDirList     = serverNewMeta(actDirList)
-	metaDirSize     = serverNewMeta(actDirSize)
-	metaDirHash     = serverNewMeta(actDirHash)
 	metaEvtPushPull = serverNewMeta(actEvtPushPull)
 )
 
@@ -70,10 +66,6 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 			return s.DirApply(req)
 		case actDirList:
 			return s.DirList(req)
-		case actDirSize:
-			return s.DirSize(req)
-		case actDirHash:
-			return s.DirHash(req)
 		case actEvtPushPull:
 			return s.EvtPushPull(req)
 		}
@@ -85,14 +77,9 @@ func (s *server) DirList(req net.Request) net.Response {
 	return newDirListResponse(s.Dir.Events())
 }
 
-// Handles a /dir/size request.  TODO: Dead
-func (s *server) DirSize(req net.Request) net.Response {
-	return newDirSizeResponse(s.Dir.Size())
-}
-
-// Handles a /dir/hash request   TODO: Dead
-func (s *server) DirHash(req net.Request) net.Response {
-	return newDirHashResponse(s.Dir.Hash())
+// Handles a /dir/size request.  TODO: Finish
+func (s *server) DirStats(req net.Request) net.Response {
+	return nil
 }
 
 // Handles a /dir/apply request
@@ -106,7 +93,7 @@ func (s *server) DirApply(req net.Request) net.Response {
 		return net.NewErrorResponse(errors.New("Empty events."))
 	}
 
-	return newDirApplyResponse(s.Dir.ApplyAll(events, true))
+	return newDirApplyResponse(s.Dir.ApplyAll(events))
 }
 
 // Handles a /evt/push request
@@ -116,8 +103,7 @@ func (s *server) EvtPushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	ret := s.Dir.ApplyAll(events, true)
-	return newEvtPushPullResponse(ret, s.Dissem.Evts.Pop(1024))
+	return newEvtPushPullResponse(s.Dir.ApplyAll(events), s.Dissem.Evts.Pop(256))
 }
 
 // Helper functions
@@ -141,7 +127,7 @@ func serverReadEvents(msg scribe.Reader, field string) ([]event, error) {
 
 	events := make([]event, 0, len(msgs))
 	for _, msg := range msgs {
-		e, err := readEvent(msg)
+		e, err := readDataEvent(msg)
 		if err != nil {
 			return nil, errors.Wrap(err, "Parsing event requests")
 		}
@@ -200,45 +186,6 @@ func readDirListResponse(res net.Response) ([]event, error) {
 	}
 
 	return serverReadEvents(res.Body(), "events")
-}
-
-// /dir/size
-func newDirSizeRequest() net.Request {
-	return net.NewRequest(metaDirSize, scribe.EmptyMessage)
-}
-
-func newDirSizeResponse(size int) net.Response {
-	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		w.Write("size", size)
-	}))
-}
-
-func readDirSizeResponse(res net.Response) (ret int, err error) {
-	if err = res.Error(); err != nil {
-		return
-	}
-
-	err = res.Body().Read("size", &ret)
-	return
-}
-
-// /dir/hash
-func newDirHashRequest() net.Request {
-	return net.NewRequest(metaDirHash, scribe.EmptyMessage)
-}
-
-func newDirHashResponse(hash []byte) net.Response {
-	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		scribe.WriteBytes(w, "hash", hash)
-	}))
-}
-
-func readDirHashResponse(res net.Response) ([]byte, error) {
-	if err := res.Error(); err != nil {
-		return nil, err
-	}
-
-	return scribe.ReadBytes(res.Body(), "hash")
 }
 
 // /dir/apply

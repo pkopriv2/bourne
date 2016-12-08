@@ -9,6 +9,14 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+const (
+	ConfTimeLogHorizon = "convoy.timelog.horizon"
+)
+
+const (
+	DefaultTimeLogHorizon = 30 * time.Minute
+)
+
 // Adds a listener to the change log and returns a buffered channel of changes.
 // the channel is closed when the log is closed.
 func timeLogListen(tl *timeLog) <-chan []event {
@@ -23,15 +31,6 @@ func timeLogListen(tl *timeLog) <-chan []event {
 	})
 	return ret
 }
-
-
-const (
-	ConfTimeLogHorizon = "convoy.timelog.horizon"
-)
-
-const (
-	DefaultTimeLogHorizon = 30 * time.Minute
-)
 
 // Maintains a time sorted list of events up to some specified maximum ttl.
 type timeLogKey struct {
@@ -70,8 +69,8 @@ func timeLogUnpackAmoebaItem(item amoeba.Item) event {
 	return raw.(event)
 }
 
-func timeLogScanFrom(start timeLogKey, data amoeba.View, fn func(*amoeba.Scan, timeLogKey, event)) {
-	data.ScanFrom(start, func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
+func timeLogScanFrom(start timeLogKey, data amoeba.View, fn func(amoeba.Scan, timeLogKey, event)) {
+	data.ScanFrom(start, func(s amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 		evt := timeLogUnpackAmoebaItem(i)
 		if evt == nil {
 			return // shouldn't be possible...but guarding anyway.
@@ -81,8 +80,8 @@ func timeLogScanFrom(start timeLogKey, data amoeba.View, fn func(*amoeba.Scan, t
 	})
 }
 
-func timeLogScan(data amoeba.View, fn func(*amoeba.Scan, timeLogKey, event)) {
-	data.Scan(func(s *amoeba.Scan, k amoeba.Key, i amoeba.Item) {
+func timeLogScan(data amoeba.View, fn func(amoeba.Scan, timeLogKey, event)) {
+	data.Scan(func(s amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 		evt := timeLogUnpackAmoebaItem(i)
 		if evt == nil {
 			return
@@ -95,7 +94,7 @@ func timeLogScan(data amoeba.View, fn func(*amoeba.Scan, timeLogKey, event)) {
 // timeLog implementation.
 type timeLog struct {
 	Ctx      common.Context
-	Data     amoeba.Indexer
+	Data     amoeba.Index
 	Dead     time.Duration
 	Handlers []func([]event)
 	Lock     sync.RWMutex
@@ -142,7 +141,7 @@ func (t *timeLog) Peek(after time.Time) (ret []event) {
 		horizon := data.Time().Add(-t.Dead)
 
 		ret = make([]event, 0, 256)
-		timeLogScan(data, func(s *amoeba.Scan, key timeLogKey, e event) {
+		timeLogScan(data, func(s amoeba.Scan, key timeLogKey, e event) {
 			if key.Created.Before(after) || key.Created.Equal(after) || key.Created.Before(horizon) {
 				defer s.Stop()
 				return
@@ -170,7 +169,7 @@ func (t *timeLog) gc(data amoeba.Update) {
 	horizon := data.Time().Add(-t.Dead)
 
 	dead := make([]timeLogKey, 0, 128)
-	timeLogScanFrom(timeLogKey{amoeba.ZeroUUID, horizon}, data, func(s *amoeba.Scan, key timeLogKey, e event) {
+	timeLogScanFrom(timeLogKey{amoeba.ZeroUUID, horizon}, data, func(s amoeba.Scan, key timeLogKey, e event) {
 		dead = append(dead, key)
 	})
 
