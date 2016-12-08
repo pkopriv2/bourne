@@ -26,7 +26,7 @@ func OpenDatabase(ctx common.Context, path string) (Database, error) {
 func initDatabase(ctx common.Context, log ChangeLog) (Database, error) {
 	db := &database{
 		Ctx:    ctx,
-		Data:   amoeba.NewIndexer(ctx),
+		Data:   amoeba.NewBTreeIndex(8),
 		ChgLog: log,
 	}
 
@@ -34,7 +34,7 @@ func initDatabase(ctx common.Context, log ChangeLog) (Database, error) {
 }
 
 func (d *database) Close() error {
-	return d.Data.Close()
+	return nil
 }
 
 func (d *database) init() error {
@@ -46,9 +46,9 @@ func (d *database) init() error {
 	d.Data.Update(func(u amoeba.Update) {
 		for _, chg := range chgs {
 			if chg.Del {
-				u.Del(amoeba.StringKey(chg.Key), chg.Ver)
+				u.Del(amoeba.StringKey(chg.Key))
 			} else {
-				u.Put(amoeba.StringKey(chg.Key), chg.Val, chg.Ver)
+				u.Put(amoeba.StringKey(chg.Key), chg.Val)
 			}
 		}
 	})
@@ -81,40 +81,29 @@ func (d *database) Log() ChangeLog {
 }
 
 // Helper functions.
-func dbUnpackAmoebaItem(item amoeba.Item) (val string, ver int, ok bool) {
-	if item == nil {
-		return
-	}
-
-	raw := item.Val()
-	if raw == nil {
-		return
-	}
-
-	return raw.(string), item.Ver(), true
-}
-
 func dbGetVal(data amoeba.View, key string) (str string, ok bool) {
-	val, _, ok := dbUnpackAmoebaItem(data.Get(amoeba.StringKey(key)))
-	return val, ok
+	if raw := data.Get(amoeba.StringKey(key)); raw != nil {
+		return raw.(string), true
+	}
+	return
 }
 
 func dbDelVal(log ChangeLog, data amoeba.Update, key string) error {
-	chg, err := log.Append(key, "", true)
+	_, err := log.Append(key, "", true)
 	if err != nil {
 		return err
 	}
 
-	data.Del(amoeba.StringKey(key), chg.Ver)
+	data.Del(amoeba.StringKey(key))
 	return nil
 }
 
 func dbPutVal(log ChangeLog, data amoeba.Update, key string, val string) error {
-	chg, err := log.Append(key, val, false)
+	_, err := log.Append(key, val, false)
 	if err != nil {
 		return err
 	}
 
-	data.Put(amoeba.StringKey(key), val, chg.Ver)
+	data.Put(amoeba.StringKey(key), val)
 	return nil
 }

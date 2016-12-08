@@ -11,12 +11,12 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// System reserved keys.  Consumers should consider the: /Convoy/
+// System reserved keys.  Consumers should consider the: /Convoy/ namespace off limits!
 const (
-	memberEnabledAttr = "/Convoy/Member/Enabled"
-	memberHostAttr    = "/Convoy/Member/Host"
-	memberPortAttr    = "/Convoy/Member/Port"
-	memberStatusAttr  = "/Convoy/Member/Status"
+	memberEnabledAttr = "Convoy.Member.Enabled"
+	memberHostAttr    = "Convoy.Member.Host"
+	memberPortAttr    = "Convoy.Member.Port"
+	memberStatusAttr  = "Convoy.Member.Status"
 )
 
 // Core storage abstractions.
@@ -25,10 +25,10 @@ type item struct {
 	MemId  uuid.UUID
 	MemVer int
 
-	Attr    string
-	Val string
-	Ver int
-	Del bool
+	Attr string
+	Val  string
+	Ver  int
+	Del  bool
 
 	Time time.Time
 }
@@ -44,7 +44,7 @@ type status struct {
 type storage struct {
 	Context common.Context
 	Logger  common.Logger
-	Data    amoeba.RawIndex
+	Data    amoeba.Index
 	Roster  map[uuid.UUID]status // sync'ed with data lock
 	Wait    sync.WaitGroup
 	Closed  chan struct{}
@@ -54,11 +54,11 @@ type storage struct {
 func newStorage(ctx common.Context, logger common.Logger) *storage {
 	s := &storage{
 		Context: ctx,
-		Logger: logger.Fmt("Storage"),
-		Data:   amoeba.NewBTreeIndex(32),
-		Roster: make(map[uuid.UUID]status),
-		Closed: make(chan struct{}),
-		Closer: make(chan struct{}, 1)}
+		Logger:  logger.Fmt("Storage"),
+		Data:    amoeba.NewBTreeIndex(32),
+		Roster:  make(map[uuid.UUID]status),
+		Closed:  make(chan struct{}),
+		Closer:  make(chan struct{}, 1)}
 
 	coll := newStorageGc(s)
 	coll.start()
@@ -80,7 +80,7 @@ func (s *storage) Close() (err error) {
 
 func (d *storage) Status() (ret map[uuid.UUID]status) {
 	ret = make(map[uuid.UUID]status)
-	d.Data.Read(func(data amoeba.RawView) {
+	d.Data.Read(func(data amoeba.View) {
 		for k, v := range d.Roster {
 			ret[k] = v
 		}
@@ -89,13 +89,13 @@ func (d *storage) Status() (ret map[uuid.UUID]status) {
 }
 
 func (d *storage) View(fn func(*view)) {
-	d.Data.Read(func(data amoeba.RawView) {
+	d.Data.Read(func(data amoeba.View) {
 		fn(&view{data, d.Roster, time.Now()})
 	})
 }
 
 func (d *storage) Update(fn func(*update)) (ret []item) {
-	d.Data.Update(func(data amoeba.RawUpdate) {
+	d.Data.Update(func(data amoeba.Update) {
 		update := &update{&view{data, d.Roster, time.Now()}, data, d.Roster, make([]item, 0, 8)}
 		defer func() {
 			ret = update.Items
@@ -118,7 +118,7 @@ func (d *storage) All() (ret []item) {
 
 // Transactional view
 type view struct {
-	Raw    amoeba.RawView
+	Raw    amoeba.View
 	Roster map[uuid.UUID]status
 	Now    time.Time
 }
@@ -127,18 +127,14 @@ func (u *view) Time() time.Time {
 	return u.Now
 }
 
-func (u *view) Status(id uuid.UUID) (int, bool) {
-	status, ok := u.Roster[id]
-	if !ok {
-		return 0, false
-	}
-
-	return status.Version, status.Enabled
+func (u *view) Status(id uuid.UUID) (ret status, ok bool) {
+	ret, ok = u.Roster[id]
+	return
 }
 
 func (u *view) Get(id uuid.UUID, attr string) (ret item, found bool) {
-	memberVer, memberEnabled := u.Status(id)
-	if !memberEnabled {
+	status, found := u.Status(id)
+	if !found {
 		return
 	}
 
@@ -147,7 +143,7 @@ func (u *view) Get(id uuid.UUID, attr string) (ret item, found bool) {
 		return
 	}
 
-	if memberVer != rawVal.MemVer {
+	if status.Version != rawVal.MemVer {
 		return
 	}
 
@@ -162,6 +158,15 @@ func (u *view) ScanAll(fn func(amoeba.Scan, item)) {
 
 func (u *view) ScanLive(fn func(amoeba.Scan, item)) {
 	u.ScanAll(func(s amoeba.Scan, i item) {
+		status, found := u.Status(i.MemId)
+		if !found {
+			return
+		}
+
+		if status.Version != i.MemVer {
+			return
+		}
+
 		if !i.Del {
 			fn(s, i)
 		}
@@ -171,7 +176,7 @@ func (u *view) ScanLive(fn func(amoeba.Scan, item)) {
 // Transactional update
 type update struct {
 	*view
-	Raw    amoeba.RawUpdate
+	Raw    amoeba.Update
 	Roster map[uuid.UUID]status
 	Items  []item
 }
@@ -215,13 +220,14 @@ func (u *update) Leave(id uuid.UUID, ver int) bool {
 type storageKey struct {
 	Attr string
 	Id   uuid.UUID
+	Ver  int
 }
 
 func (k storageKey) String() string {
 	return fmt.Sprintf("/attr:%v/id:%v", k.Attr, k.Id)
 }
 
-func (k storageKey) Compare(other amoeba.Sortable) int {
+func (k storageKey) Compare(other amoeba.Key) int {
 	o := other.(storageKey)
 	if ret := amoeba.CompareStrings(k.Attr, o.Attr); ret != 0 {
 		return ret
@@ -231,7 +237,8 @@ func (k storageKey) Compare(other amoeba.Sortable) int {
 
 // the amoeba value type
 type storageValue struct {
-	MemVer  int
+	MemVer int
+
 	Ver int
 	Val string
 	Del bool
@@ -239,8 +246,8 @@ type storageValue struct {
 	Time time.Time
 }
 
-// low level data manipulation functions
-func storageGet(data amoeba.RawView, id uuid.UUID, attr string) (ret storageValue, found bool) {
+// low level data manipulation functions.  These only enforce low-level versioning requirements.
+func storageGet(data amoeba.View, id uuid.UUID, attr string) (ret storageValue, found bool) {
 	raw := data.Get(storageKey{attr, id})
 	if raw == nil {
 		return
@@ -249,7 +256,7 @@ func storageGet(data amoeba.RawView, id uuid.UUID, attr string) (ret storageValu
 	return raw.(storageValue), true
 }
 
-func storagePut(data amoeba.RawUpdate, time time.Time, memId uuid.UUID, memVer int, attr string, attrVal string, attrVer int) bool {
+func storagePut(data amoeba.Update, time time.Time, memId uuid.UUID, memVer int, attr string, attrVal string, attrVer int) bool {
 	if cur, found := storageGet(data, memId, attr); found {
 		if memVer < cur.MemVer {
 			return false
@@ -260,11 +267,11 @@ func storagePut(data amoeba.RawUpdate, time time.Time, memId uuid.UUID, memVer i
 		}
 	}
 
-	data.Put(storageKey{attr, memId}, storageValue{memVer, attrVer, attrVal, true, time})
+	data.Put(storageKey{attr, memId}, storageValue{memVer, attrVer, attrVal, false, time})
 	return true
 }
 
-func storageDel(data amoeba.RawUpdate, time time.Time, memId uuid.UUID, memVer int, attr string, attrVer int) bool {
+func storageDel(data amoeba.Update, time time.Time, memId uuid.UUID, memVer int, attr string, attrVer int) bool {
 	if cur, found := storageGet(data, memId, attr); found {
 		if memVer < cur.MemVer {
 			return false
@@ -279,7 +286,7 @@ func storageDel(data amoeba.RawUpdate, time time.Time, memId uuid.UUID, memVer i
 	return true
 }
 
-func storageScan(data amoeba.RawView, fn func(amoeba.Scan, storageKey, storageValue)) {
+func storageScan(data amoeba.View, fn func(amoeba.Scan, storageKey, storageValue)) {
 	data.Scan(func(s amoeba.Scan, k amoeba.Key, i interface{}) {
 		key := k.(storageKey)
 		val := i.(storageValue)
@@ -287,7 +294,7 @@ func storageScan(data amoeba.RawView, fn func(amoeba.Scan, storageKey, storageVa
 	})
 }
 
-// A simple garbage storeGc
+// A simple garbage collector for the storage api
 type storageGc struct {
 	store  *storage
 	logger common.Logger
@@ -308,8 +315,8 @@ func newStorageGc(store *storage) *storageGc {
 }
 
 func (c *storageGc) start() {
-	// c.store.Wait.Add(1)
-	// go c.run()
+	c.store.Wait.Add(1)
+	go c.run()
 }
 
 func (d *storageGc) run() {
@@ -337,7 +344,7 @@ func (d *storageGc) runGcCycle(gcExp time.Duration) {
 	})
 }
 
-func deleteDeadItems(u amoeba.RawUpdate, items []item) {
+func deleteDeadItems(u amoeba.Update, items []item) {
 	for _, i := range items {
 		u.Del(storageKey{i.Attr, i.MemId})
 	}

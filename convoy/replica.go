@@ -33,8 +33,8 @@ type replica struct {
 	// the view log.  maintains a listing of how many times an event has been viewed.
 	ViewLog *viewLog
 
-	// the time log. maintains a time based buffer of events - used for reconciliation
-	TimeLog *timeLog
+	// // the time log. maintains a time based buffer of events - used for reconciliation
+	// TimeLog *timeLog
 
 	// the core network server.
 	Server net.Server

@@ -10,45 +10,41 @@ import (
 
 func TestStorage_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	dir := newStorage(ctx, ctx.Logger())
-	assert.Nil(t, dir.Close())
+	core := newStorage(ctx, ctx.Logger())
+	assert.Nil(t, core.Close())
 }
 
-func TestStorage_Get_NoExist(t *testing.T) {
+func TestStorage_Join_NotJoined(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	dir := newStorage(ctx, ctx.Logger())
-	defer dir.Close()
+	core := newStorage(ctx, ctx.Logger())
+	defer core.Close()
 
-	var id uuid.UUID
+	id := uuid.NewV1()
+	core.Update(func(u *update) {
+		assert.True(t, u.Join(id, 0))
+	})
 
-	dir.View(func(v *dirView) {
-		assert.Nil(t, v.GetMember(id))
+	core.View(func(v *view) {
+		s, found := v.Status(id)
+		assert.True(t, found)
+		assert.True(t, s.Enabled)
+		assert.Equal(t, 0, s.Version)
+
+
+		i, ok := v.Get(id, memberEnabledAttr)
+		assert.Equal(t, true, ok)
+		assert.Equal(t, "true", i.Val)
 	})
 }
 
 //
-// func TestStorage_GetMember_Exist(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
-// defer dir.Close()
-//
-// member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
-// dir.update(func(u *dirUpdate) {
-// u.AddMember(member)
-// })
-//
-// dir.View(func(v *dirView) {
-// assert.Equal(t, member, v.GetMember(member.Id))
-// })
-// }
-//
 // func TestStorage_UpdateMember(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
-// defer dir.Close()
+// core := newStorage(ctx, ctx.Logger())
+// defer core.Close()
 //
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
-// dir.update(func(u *dirUpdate) {
+// core.update(func(u *coreUpdate) {
 // u.AddMember(member)
 // u.UpdateMember(member.Id, Failed, 2)
 // })
@@ -56,22 +52,22 @@ func TestStorage_Get_NoExist(t *testing.T) {
 // val := *member
 // val.Status = Failed
 // val.Version = 2
-// dir.View(func(v *dirView) {
+// core.View(func(v *coreView) {
 // assert.Equal(t, &val, v.GetMember(member.Id))
 // })
 // }
 //
 // func TestStorage_GetAttr_NoExist(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
-// defer dir.Close()
+// core := newStorage(ctx, ctx.Logger())
+// defer core.Close()
 //
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
-// dir.update(func(u *dirUpdate) {
+// core.update(func(u *coreUpdate) {
 // u.AddMember(member)
 // })
 //
-// dir.View(func(v *dirView) {
+// core.View(func(v *coreView) {
 // _, _, found := v.Get(member.Id, "attr")
 // assert.False(t, found)
 // })
@@ -79,16 +75,16 @@ func TestStorage_Get_NoExist(t *testing.T) {
 //
 // func TestStorage_DelAttr_NoExist(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
-// defer dir.Close()
+// core := newStorage(ctx, ctx.Logger())
+// defer core.Close()
 //
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
-// dir.update(func(u *dirUpdate) {
+// core.update(func(u *coreUpdate) {
 // u.AddMember(member)
 // u.Del(member.Id, "attr", 1)
 // })
 //
-// dir.View(func(v *dirView) {
+// core.View(func(v *coreView) {
 // _, _, found := v.Get(member.Id, "attr")
 // assert.False(t, found)
 // })
@@ -96,10 +92,10 @@ func TestStorage_Get_NoExist(t *testing.T) {
 //
 // func TestStorage_Scan(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
-// defer dir.Close()
+// core := newStorage(ctx, ctx.Logger())
+// defer core.Close()
 //
-// dir.update(func(u *dirUpdate) {
+// core.update(func(u *coreUpdate) {
 // for i := 0; i < 1024; i++ {
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
 // u.AddMember(member)
@@ -107,7 +103,7 @@ func TestStorage_Get_NoExist(t *testing.T) {
 // })
 //
 // count := 0
-// dir.View(func(v *dirView) {
+// core.View(func(v *coreView) {
 // v.Scan(func(s *amoeba.Scan, id uuid.UUID, attr string, val string, ver int) {
 // count++
 // })
@@ -117,12 +113,12 @@ func TestStorage_Get_NoExist(t *testing.T) {
 //
 // func TestStorage_ListMembers(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
-// defer dir.Close()
+// core := newStorage(ctx, ctx.Logger())
+// defer core.Close()
 //
 // members := make(map[uuid.UUID]*member)
 //
-// dir.update(func(u *dirUpdate) {
+// core.update(func(u *coreUpdate) {
 // for i := 0; i < 1024; i++ {
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
 // members[member.Id] = member
@@ -135,14 +131,14 @@ func TestStorage_Get_NoExist(t *testing.T) {
 // go func() {
 // defer wait.Done()
 // for i := 0; i < 10240; i++ {
-// dir.update(func(u *dirUpdate) {
+// core.update(func(u *coreUpdate) {
 // u.Put(uuid.NewV1(), "key", strconv.Itoa(i), 0)
 // })
 // }
 // }()
 //
 // for i := 0; i < 64; i++ {
-// assert.Equal(t, members, indexById(dir.All()))
+// assert.Equal(t, members, indexById(core.All()))
 // }
 //
 // wait.Wait()
@@ -158,7 +154,7 @@ func TestStorage_Get_NoExist(t *testing.T) {
 //
 // func TestStorage_ApplyDataEvent(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
+// core := newStorage(ctx, ctx.Logger())
 //
 // type item struct {
 // Id   uuid.UUID
@@ -169,13 +165,13 @@ func TestStorage_Get_NoExist(t *testing.T) {
 // }
 //
 // evt := &dataEvent{uuid.NewV1(), "key", "val", 0, false}
-// assert.True(t, dir.Apply(evt))
-// assert.False(t, dir.Apply(evt))
+// assert.True(t, core.Apply(evt))
+// assert.False(t, core.Apply(evt))
 // }
 //
 // func TestStorage_ApplyEvents(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
-// dir := newStorage(ctx, ctx.Logger())
+// core := newStorage(ctx, ctx.Logger())
 //
 // type item struct {
 // Id   uuid.UUID
@@ -185,7 +181,7 @@ func TestStorage_Get_NoExist(t *testing.T) {
 // Del  bool
 // }
 //
-// dir.update(func(u *dirUpdate) {
+// core.update(func(u *coreUpdate) {
 // for i := 0; i < 1; i++ {
 // member := newMember(uuid.NewV1(), "host", "0", 1, Alive)
 // u.AddMember(member)
@@ -193,17 +189,17 @@ func TestStorage_Get_NoExist(t *testing.T) {
 // })
 //
 // copy := newStorage(ctx, ctx.Logger())
-// copy.ApplyAll(dir.Events())
+// copy.ApplyAll(core.Events())
 //
 // expected := make([]item, 0, 128)
-// dir.View(func(v *dirView) {
+// core.View(func(v *coreView) {
 // v.Scan(func(s *amoeba.Scan, id uuid.UUID, attr string, val string, ver int) {
 // expected = append(expected, item{id, attr, val, ver, false})
 // })
 // })
 //
 // actual := make([]item, 0, 128)
-// copy.View(func(v *dirView) {
+// copy.View(func(v *coreView) {
 // v.Scan(func(s *amoeba.Scan, id uuid.UUID, attr string, val string, ver int) {
 // actual = append(actual, item{id, attr, val, ver, false})
 // })

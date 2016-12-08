@@ -25,7 +25,7 @@ func (i IntKey) Inc() IntKey {
 	return IntKey(i + 1)
 }
 
-func (i IntKey) Compare(s Sortable) int {
+func (i IntKey) Compare(s Key) int {
 	return int(i - s.(IntKey))
 }
 
@@ -36,7 +36,7 @@ func (i StringKey) Inc() StringKey {
 	return StringKey(IncrementString(string(i)))
 }
 
-func (i StringKey) Compare(s Sortable) int {
+func (i StringKey) Compare(s Key) int {
 	return strings.Compare(string(i), string(s.(StringKey)))
 }
 
@@ -49,7 +49,7 @@ func (i BytesKey) Inc() BytesKey {
 	return BytesKey(IncrementBytes(i))
 }
 
-func (i BytesKey) Compare(s Sortable) int {
+func (i BytesKey) Compare(s Key) int {
 	return bytes.Compare([]byte(i), []byte(s.(BytesKey)))
 }
 
@@ -62,7 +62,7 @@ func (k UUIDKey) Inc() UUIDKey {
 	return UUIDKey(IncrementUUID(uuid.UUID(k)))
 }
 
-func (k UUIDKey) Compare(s Sortable) int {
+func (k UUIDKey) Compare(s Key) int {
 	return bytes.Compare(uuid.UUID(k).Bytes(), uuid.UUID(s.(UUIDKey)).Bytes())
 }
 

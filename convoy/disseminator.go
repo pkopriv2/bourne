@@ -104,7 +104,6 @@ func (d *disseminator) Close() error {
 	case d.Closer <- struct{}{}:
 	}
 
-	d.Evts.Close()
 	close(d.Closed)
 	d.Wait.Wait()
 	return nil

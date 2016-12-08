@@ -1,21 +1,24 @@
 package amoeba
 
-import (
-	"sync"
-
-	"github.com/pkopriv2/bourne/btree"
-)
-
-type Sortable interface {
-	Compare(Sortable) int
-}
+// The core indexing abstraction and implementation.
+//
+// This indexer is designed for an eventually convergent,
+// distributed roster.  The eventing abstraction is inteneded to
+// be the primary mechanism of distribution. Because of its role
+// in a distributed datase, more focus was spent on correctness
+// than the performance of the implementation.  As a naive, first
+// attempt, each indexer will be managed by a global lock.  I think
+// a good next move would be to move to a persistent btree
+// implementation.  The hope is that the current abstraction
+// is expressive enough to support such a change without major changes
+// to the interfaces.
 
 // A generic key type.  The only requirement of keys is they sortable
 type Key interface {
-	Sortable
+	Compare(Key) int
 }
 
-// A scan gives consumers influence over scanning behavior.
+// Generic scanning abstraction.   Allows for halting and skipping
 type Scan interface {
 
 	// Communicates to the executing scan to move to the item
@@ -32,22 +35,22 @@ type Scan interface {
 
 // The core storage object.  Basically just manages read/write transactions
 // over the underlying index.
-type RawIndex interface {
+type Index interface {
 
 	// Returns the number of items in the index
 	Size() int
 
 	// Performs a read on the indexer. The indexer supports miltiple reader,
 	// single writer semantics.
-	Read(func(RawView))
+	Read(func(View))
 
 	// Performs an update on the indexer. The indexer supports miltiple reader,
 	// single writer semantics.
-	Update(func(RawUpdate))
+	Update(func(Update))
 }
 
 // Access methods for an index.
-type RawView interface {
+type View interface {
 
 	// Retrieves the item for the given key.  Nil if it doesn't exist.
 	Get(key Key) interface{}
@@ -60,8 +63,8 @@ type RawView interface {
 }
 
 // Update methods for an index.
-type RawUpdate interface {
-	RawView
+type Update interface {
+	View
 
 	// Puts the value at the key.
 	Put(key Key, val interface{})
@@ -71,42 +74,42 @@ type RawUpdate interface {
 }
 
 // Utility functions
-func RawGet(idx RawIndex, key Key) (ret interface{}) {
-	idx.Read(func(v RawView) {
+func Get(idx Index, key Key) (ret interface{}) {
+	idx.Read(func(v View) {
 		ret = v.Get(key)
 	})
 	return
 }
 
-func RawPut(idx RawIndex, key Key, val interface{}) {
-	idx.Update(func(u RawUpdate) {
+func Put(idx Index, key Key, val interface{}) {
+	idx.Update(func(u Update) {
 		u.Put(key, val)
 	})
 }
 
-func RawDel(idx RawIndex, key Key) {
-	idx.Update(func(u RawUpdate) {
+func Del(idx Index, key Key) {
+	idx.Update(func(u Update) {
 		u.Del(key)
 	})
 }
 
-func RawScan(idx RawIndex, fn func(Scan, Key, interface{})) {
-	idx.Read(func(u RawView) {
+func ScanAll(idx Index, fn func(Scan, Key, interface{})) {
+	idx.Read(func(u View) {
 		u.Scan(func(s Scan, k Key, v interface{}) {
 			fn(s, k, v)
 		})
 	})
 }
 
-func RawScanFrom(idx RawIndex, start Key, fn func(Scan, Key, interface{})) {
-	idx.Read(func(u RawView) {
+func ScanFrom(idx Index, start Key, fn func(Scan, Key, interface{})) {
+	idx.Read(func(u View) {
 		u.ScanFrom(start, func(s Scan, k Key, v interface{}) {
 			fn(s, k, v)
 		})
 	})
 }
 
-// Scan implementation
+// scan impl.
 type scan struct {
 	next Key
 	stop bool
@@ -118,98 +121,4 @@ func (s *scan) Next(i Key) {
 
 func (s *scan) Stop() {
 	s.stop = true
-}
-
-// Adapts a consumer key to a btree item
-type indexKey struct {
-	Key Key
-}
-
-func (i indexKey) Compare(o Sortable) int {
-	return i.Key.Compare(o.(indexKey).Key)
-}
-
-func (i indexKey) Less(than btree.Item) bool {
-	return i.Compare(than.(indexKey)) < 0
-}
-
-// the index implementation.
-type btreeIndex struct {
-	Tree  *btree.BTree
-	Table map[Key]interface{}
-	Lock  sync.RWMutex
-}
-
-func NewBTreeIndex(degree int) RawIndex {
-	return &btreeIndex{
-		Tree:  btree.New(degree),
-		Table: make(map[Key]interface{})}
-}
-
-func (r *btreeIndex) Size() int {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return len(r.Table)
-}
-
-func (r *btreeIndex) Read(fn func(RawView)) {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	fn(r)
-}
-
-func (r *btreeIndex) Update(fn func(RawUpdate)) {
-	r.Lock.Lock()
-	defer r.Lock.Unlock()
-	fn(r)
-}
-
-// Note: All following assume a lock has been taken
-func (i *btreeIndex) Put(key Key, val interface{}) {
-	i.Table[key] = val
-	i.Tree.ReplaceOrInsert(indexKey{key})
-}
-
-func (i *btreeIndex) Del(key Key) {
-	delete(i.Table, key)
-	i.Tree.Delete(indexKey{key})
-}
-
-func (i *btreeIndex) Get(key Key) interface{} {
-	return i.Table[key]
-}
-
-func (r *btreeIndex) Scan(fn func(Scan, Key, interface{})) {
-	if r.Tree.Len() == 0 {
-		return
-	}
-
-	r.ScanFrom(r.Tree.Min().(indexKey).Key, fn)
-}
-
-func (r *btreeIndex) ScanFrom(start Key, fn func(Scan, Key, interface{})) {
-	next := indexKey{start}
-	for {
-		if r.Tree.Len() == 0 {
-			return
-		}
-
-		if r.Tree.Max().Less(next) {
-			return
-		}
-
-		scan := &scan{}
-		r.Tree.AscendGreaterOrEqual(next, func(i btree.Item) bool {
-			key := i.(indexKey).Key
-			val := r.Table[key]
-			fn(scan, key, val)
-			return !scan.stop && scan.next == nil
-		})
-
-		if scan.stop || scan.next == nil {
-			return
-		}
-
-		next = indexKey{scan.next}
-	}
 }

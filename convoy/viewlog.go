@@ -19,7 +19,7 @@ func (e viewLogKey) Update(weight int) viewLogKey {
 	return viewLogKey{e.Id, weight}
 }
 
-func (e viewLogKey) Compare(other amoeba.Sortable) int {
+func (e viewLogKey) Compare(other amoeba.Key) int {
 	o := other.(viewLogKey)
 	if e.Remaining != o.Remaining {
 		return o.Remaining - e.Remaining // Reverse cnt order.
@@ -35,31 +35,10 @@ type viewLogEntry struct {
 }
 
 // this method is only here for parity.
-func viewLogUnpackAmoebaKey(k amoeba.Key) viewLogKey {
-	return k.(viewLogKey)
-}
-
-func viewLogUnpackAmoebaItem(item amoeba.Item) event {
-	if item == nil {
-		return nil
-	}
-
-	raw := item.Val()
-	if raw == nil {
-		return nil
-	}
-
-	return raw.(event)
-}
 
 func viewLogScan(data amoeba.View, fn func(amoeba.Scan, viewLogKey, event)) {
-	data.Scan(func(s amoeba.Scan, k amoeba.Key, i amoeba.Item) {
-		evt := viewLogUnpackAmoebaItem(i)
-		if evt == nil {
-			return // shouldn't be possible...but guarding anyway.
-		}
-
-		fn(s, viewLogUnpackAmoebaKey(k), evt)
+	data.Scan(func(s amoeba.Scan, k amoeba.Key, i interface{}) {
+		fn(s, k.(viewLogKey), i.(event))
 	})
 }
 
@@ -93,12 +72,12 @@ func viewLogPop(data amoeba.Update, num int) (batch []event) {
 	})
 
 	for i, v := range viewed {
-		data.DelNow(v)
+		data.Del(v)
 		if v.Remaining <= 1 {
 			continue
 		}
 
-		data.Put(viewLogKey{v.Id, v.Remaining - 1}, batch[i], 0)
+		data.Put(viewLogKey{v.Id, v.Remaining - 1}, batch[i])
 	}
 
 	return
@@ -110,11 +89,7 @@ type viewLog struct {
 }
 
 func newViewLog(ctx common.Context) *viewLog {
-	return &viewLog{amoeba.NewIndexer(ctx)}
-}
-
-func (c *viewLog) Close() error {
-	return c.Data.Close()
+	return &viewLog{amoeba.NewBTreeIndex(32)}
 }
 
 // returns, but does not remove a batch of entries from the log.  nil if none.
@@ -142,7 +117,7 @@ func (d *viewLog) Push(batch []event, n int) {
 
 	d.Data.Update(func(u amoeba.Update) {
 		for _, e := range batch {
-			u.Put(viewLogKey{uuid.NewV1(), n}, e, 0) // NOTE: using V1 uuid so we don't exhaust entropy.
+			u.Put(viewLogKey{uuid.NewV1(), n}, e) // NOTE: using V1 uuid so we don't exhaust entropy.
 		}
 	})
 }
