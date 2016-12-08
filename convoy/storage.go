@@ -220,7 +220,6 @@ func (u *update) Leave(id uuid.UUID, ver int) bool {
 type storageKey struct {
 	Attr string
 	Id   uuid.UUID
-	Ver  int
 }
 
 func (k storageKey) String() string {
