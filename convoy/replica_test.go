@@ -295,7 +295,7 @@ func TestReplica_Leave(t *testing.T) {
 	})
 
 	ctx := common.NewContext(conf)
-	// defer ctx.Close()
+	defer ctx.Close()
 
 	master := StartTestReplica(ctx, 8190)
 	masterClient := ReplicaClient(master)
@@ -305,46 +305,58 @@ func TestReplica_Leave(t *testing.T) {
 
 	replicaJoin(r1, masterClient)
 	replicaJoin(r2, masterClient)
-	WaitForJoin(master, r1, r2)
 
-	go r1.Close()
-	WaitForLeave(r1, master, r2)
+	WaitForDissemination([]*replica{master, r1, r2}, func(r *replica) bool {
+		return len(r.Dir.Active()) == 3
+	})
+
+	go r1.Leave()
+	WaitForDissemination([]*replica{master, r2}, func(r *replica) bool {
+		return len(r.Dir.Active()) == 2
+	})
 }
 
-func WaitForJoin(cluster ...*replica) {
-	joined := make(map[*member]struct{})
-	for len(joined) < len(cluster) {
-		cluster[0].Logger.Info("Number of joined: %v", len(joined))
-		for _, r := range cluster {
-			members := r.Dir.All()
-			if len(members) == len(cluster) {
-				joined[r.Self] = struct{}{}
-			}
+func TestReplica_Fail(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
 
-			if len(members) > len(cluster) {
-				panic("More members than cluster size!!!")
-			}
-		}
-		<-time.After(250 * time.Millisecond)
-	}
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
 
-	cluster[0].Logger.Info("Number of joined: %v", len(joined))
+	master := StartTestReplica(ctx, 8190)
+	masterClient := ReplicaClient(master)
+
+	r1 := StartTestReplica(ctx, 8191)
+	r2 := StartTestReplica(ctx, 8192)
+
+	replicaJoin(r1, masterClient)
+	replicaJoin(r2, masterClient)
+	WaitForDissemination([]*replica{master, r2}, func(r *replica) bool {
+		return len(r.Dir.Active()) == 3
+	})
+
+	go r1.Dir.Fail(r2.Self)
+	WaitForDissemination([]*replica{master, r2}, func(r *replica) bool {
+		return len(r.Dir.Unhealthy()) == 1
+	})
 }
 
-func WaitForLeave(m *replica, rest ...*replica) {
+
+func WaitForDissemination(cluster []*replica, fn func(r *replica) bool) {
 	done := make(map[*member]struct{})
-	for len(done) < len(rest) {
-		m.Logger.Info("Number of sync'ed: %v", len(done))
-		for _, r := range rest {
-			members := r.Dir.All()
-			if len(members) == len(rest) {
+	for len(done) < len(cluster) {
+		cluster[0].Logger.Info("Number of sync'ed: %v", len(done))
+		for _, r := range cluster {
+			if fn(r) {
 				done[r.Self] = struct{}{}
 			}
 		}
 		<-time.After(250 * time.Millisecond)
 	}
-	m.Logger.Info("Number of sync'ed: %v", len(done))
+	cluster[0].Logger.Info("Number of sync'ed: %v", len(done))
 }
+
 
 func ReplicaClient(r *replica) *client {
 	client, err := r.Client()

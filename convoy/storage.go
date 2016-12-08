@@ -14,10 +14,10 @@ import (
 
 // System reserved keys.  Consumers should consider the: /Convoy/ namespace off limits!
 const (
-	memberEnabledAttr = "Convoy.Member.Enabled"
-	memberHostAttr    = "Convoy.Member.Host"
-	memberPortAttr    = "Convoy.Member.Port"
-	memberHealthAttr  = "Convoy.Member.Status"
+	memberMembershipAttr = "Convoy.Member.Joined"
+	memberHealthAttr     = "Convoy.Member.Status"
+	memberHostAttr       = "Convoy.Member.Host"
+	memberPortAttr       = "Convoy.Member.Port"
 )
 
 // Core storage abstractions.
@@ -78,22 +78,39 @@ func (i item) Apply(u *update) bool {
 	}
 }
 
-// member status
-type status struct {
+// membership status
+type membership struct {
 	Version int
-	Enabled bool
+	Active  bool
 	Since   time.Time
 }
 
-func (s status) String() string {
+func (s membership) String() string {
 	var str string
-	if s.Enabled {
-		str = "Joined"
+	if s.Active {
+		str = "Active"
 	} else {
-		str = "Left"
+		str = "Inactive" // really means gone
 	}
 
 	return fmt.Sprintf("%v(%v)", str, s.Version)
+}
+
+type health struct {
+	Version int
+	Healthy bool
+	Since   time.Time
+}
+
+func (h health) String() string {
+	var str string
+	if h.Healthy {
+		str = "Healthy"
+	} else {
+		str = "Unhealthy"
+	}
+
+	return fmt.Sprintf("%v(%v) since %v", str, h.Version, h.Since)
 }
 
 // the core storage type
@@ -101,7 +118,8 @@ type storage struct {
 	Context common.Context
 	Logger  common.Logger
 	Data    amoeba.Index
-	Roster  map[uuid.UUID]status // sync'ed with data lock
+	roster  map[uuid.UUID]membership // sync'ed with data lock
+	health  map[uuid.UUID]health     // sync'ed with data lock
 	Wait    sync.WaitGroup
 	Closed  chan struct{}
 	Closer  chan struct{}
@@ -112,7 +130,8 @@ func newStorage(ctx common.Context, logger common.Logger) *storage {
 		Context: ctx,
 		Logger:  logger.Fmt("Storage"),
 		Data:    amoeba.NewBTreeIndex(32),
-		Roster:  make(map[uuid.UUID]status),
+		roster:  make(map[uuid.UUID]membership),
+		health:  make(map[uuid.UUID]health),
 		Closed:  make(chan struct{}),
 		Closer:  make(chan struct{}, 1)}
 
@@ -125,7 +144,7 @@ func newStorage(ctx common.Context, logger common.Logger) *storage {
 func (s *storage) Close() (err error) {
 	select {
 	case <-s.Closed:
-		return errors.New("Index already closing")
+		return errors.New("Storage already closing")
 	case s.Closer <- struct{}{}:
 	}
 
@@ -134,10 +153,20 @@ func (s *storage) Close() (err error) {
 	return nil
 }
 
-func (d *storage) Status() (ret map[uuid.UUID]status) {
-	ret = make(map[uuid.UUID]status)
+func (d *storage) Roster() (ret map[uuid.UUID]membership) {
+	ret = make(map[uuid.UUID]membership)
 	d.Data.Read(func(data amoeba.View) {
-		for k, v := range d.Roster {
+		for k, v := range d.roster {
+			ret[k] = v
+		}
+	})
+	return
+}
+
+func (d *storage) Health() (ret map[uuid.UUID]health) {
+	ret = make(map[uuid.UUID]health)
+	d.Data.Read(func(data amoeba.View) {
+		for k, v := range d.health {
 			ret[k] = v
 		}
 	})
@@ -146,15 +175,15 @@ func (d *storage) Status() (ret map[uuid.UUID]status) {
 
 func (d *storage) View(fn func(*view)) {
 	d.Data.Read(func(data amoeba.View) {
-		fn(&view{data, d.Roster, time.Now()})
+		fn(&view{data, d.roster, d.health, time.Now()})
 	})
 }
 
 func (d *storage) Update(fn func(*update)) (ret []item) {
 	d.Data.Update(func(data amoeba.Update) {
-		update := &update{&view{data, d.Roster, time.Now()}, data, make([]item, 0, 8)}
+		update := &update{&view{data, d.roster, d.health, time.Now()}, data, make([]item, 0, 8)}
 		defer func() {
-			ret = update.Items
+			ret = update.items
 		}()
 
 		fn(update)
@@ -174,27 +203,37 @@ func (d *storage) All() (ret []item) {
 
 // Transactional view
 type view struct {
-	Raw    amoeba.View
-	Roster map[uuid.UUID]status
-	Now    time.Time
+	raw    amoeba.View
+	Roster map[uuid.UUID]membership
+	Health map[uuid.UUID]health
+	now    time.Time
 }
 
 func (u *view) Time() time.Time {
-	return u.Now
+	return u.now
 }
 
-func (u *view) Status(id uuid.UUID) (ret status, ok bool) {
-	ret, ok = u.Roster[id]
-	return
-}
-
-func (u *view) GetLive(id uuid.UUID, attr string) (ret item, found bool) {
-	status, ok := u.Status(id)
-	if !ok || !status.Enabled {
+func (u *view) GetLatest(id uuid.UUID, attr string) (ret item, found bool) {
+	status, ok := u.Roster[id]
+	if !ok {
 		return
 	}
 
-	rawVal, rawFound := storageGet(u.Raw, id, status.Version, attr)
+	rawVal, rawFound := storageGet(u.raw, id, status.Version, attr)
+	if !rawFound {
+		return
+	}
+
+	return item{id, status.Version, attr, rawVal.Val, rawVal.Ver, false, rawVal.Time}, true
+}
+
+func (u *view) GetActive(id uuid.UUID, attr string) (ret item, found bool) {
+	status, ok := u.Roster[id]
+	if !ok || !status.Active {
+		return
+	}
+
+	rawVal, rawFound := storageGet(u.raw, id, status.Version, attr)
 	if !rawFound || rawVal.Del {
 		return
 	}
@@ -203,18 +242,18 @@ func (u *view) GetLive(id uuid.UUID, attr string) (ret item, found bool) {
 }
 
 func (u *view) ScanAll(fn func(amoeba.Scan, item)) {
-	storageScan(u.Raw, func(s amoeba.Scan, k storageKey, v storageValue) {
+	storageScan(u.raw, func(s amoeba.Scan, k storageKey, v storageValue) {
 		fn(s, item{k.MemId, k.MemVer, k.Attr, v.Val, v.Ver, v.Del, v.Time})
 	})
 }
 
-func (u *view) ScanLive(fn func(amoeba.Scan, item)) {
+func (u *view) ScanActive(fn func(amoeba.Scan, item)) {
 	u.ScanAll(func(s amoeba.Scan, i item) {
 		if i.Del {
 			return
 		}
 
-		status, found := u.Status(i.MemId)
+		status, found := u.Roster[i.MemId]
 		if !found {
 			return
 		}
@@ -230,60 +269,95 @@ func (u *view) ScanLive(fn func(amoeba.Scan, item)) {
 // Transactional update
 type update struct {
 	*view
-	Raw   amoeba.Update
-	Items []item
+	raw   amoeba.Update
+	items []item
 }
 
 func (u *update) Put(memId uuid.UUID, memVer int, attr string, attrVal string, attrVer int) bool {
-	ok := storagePut(u.Raw, u.Now, memId, memVer, attr, attrVal, attrVer)
+	ok := storagePut(u.raw, u.now, memId, memVer, attr, attrVal, attrVer)
 	if !ok {
 		return false
 	}
 
-	u.Items = append(u.Items, item{memId, memVer, attr, attrVal, attrVer, false, u.Now})
-	if attr != memberEnabledAttr {
+	u.items = append(u.items, item{memId, memVer, attr, attrVal, attrVer, false, u.now})
+	switch attr {
+	default:
+		return true
+	case memberMembershipAttr:
+		stat, ok := u.Roster[memId]
+		if ok {
+			if stat.Version >= attrVer {
+				return false
+			}
+		}
+
+		u.Roster[memId] = membership{memVer, true, u.now}
+		return true
+	case memberHealthAttr:
+		cur, ok := u.Health[memId]
+		if ok {
+			if cur.Version >= attrVer {
+				return false
+			}
+		}
+
+		u.Health[memId] = health{memVer, true, u.now}
 		return true
 	}
-
-	stat, ok := u.Status(memId)
-	if ok {
-		if stat.Version >= attrVer {
-			return false
-		}
-	}
-
-	u.Roster[memId] = status{memVer, true, u.Now}
-	return true
 }
 
 func (u *update) Del(memId uuid.UUID, memVer int, attr string, attrVer int) bool {
-	ok := storageDel(u.Raw, u.Now, memId, memVer, attr, attrVer)
+	ok := storageDel(u.raw, u.now, memId, memVer, attr, attrVer)
 	if !ok {
 		return false
 	}
 
-	u.Items = append(u.Items, item{memId, memVer, attr, "", attrVer, true, u.Now})
-	if attr != memberEnabledAttr {
+	u.items = append(u.items, item{memId, memVer, attr, "", attrVer, true, u.now})
+	switch attr {
+	default:
+		return true
+	case memberMembershipAttr:
+		cur, ok := u.Roster[memId]
+		if ok {
+			if cur.Version > attrVer {
+				return false
+			}
+		}
+
+		u.Roster[memId] = membership{memVer, false, u.now}
+		return true
+	case memberHealthAttr:
+		cur, ok := u.Health[memId]
+		if ok {
+			if cur.Version > attrVer {
+				return false
+			}
+		}
+
+		u.Health[memId] = health{memVer, false, u.now}
 		return true
 	}
+}
 
-	stat, ok := u.Status(memId)
-	if ok {
-		if stat.Version > attrVer {
-			return false
-		}
+func (u *update) Join(id uuid.UUID, ver int) bool {
+	if !u.Put(id, ver, memberMembershipAttr, "true", 0) {
+		return false
 	}
 
-	u.Roster[memId] = status{memVer, false, u.Now}
-	return true
+	// This shouldn't be able to return false...
+	return u.Put(id, ver, memberHealthAttr, "true", 0)
 }
 
-func (u *update) Enable(id uuid.UUID, ver int) bool {
-	return u.Put(id, ver, memberEnabledAttr, "true", 0)
+func (u *update) Evict(id uuid.UUID, ver int) bool {
+	if ! u.Del(id, ver, memberMembershipAttr, 0) {
+		return false
+	}
+
+	return u.Del(id, ver, memberHealthAttr, 0)
 }
 
-func (u *update) Disable(id uuid.UUID, ver int) bool {
-	return u.Del(id, ver, memberEnabledAttr, 0)
+func (u *update) Fail(id uuid.UUID, ver int) bool {
+	return u.Del(id, ver, memberHealthAttr, 0)
 }
 
 // the amoeba key type
@@ -404,8 +478,8 @@ func (d *storageGc) run() {
 func (d *storageGc) runGcCycle(gcExp time.Duration) {
 	d.store.Update(func(u *update) {
 		d.logger.Debug("GC cycle [%v] for items older than [%v]", u.Time(), gcExp)
-		deleteDeadItems(u.Raw, collectMemberItems(u.view, collectDeadMembers(u.Roster, u.Time(), gcExp)))
-		deleteDeadItems(u.Raw, collectDeadItems(u.view, u.Time(), gcExp))
+		deleteDeadItems(u.raw, collectMemberItems(u.view, collectDeadMembers(u.Roster, u.Time(), gcExp)))
+		deleteDeadItems(u.raw, collectDeadItems(u.view, u.Time(), gcExp))
 	})
 }
 
@@ -425,10 +499,10 @@ func collectMemberItems(v *view, dead map[uuid.UUID]struct{}) []item {
 	return ret
 }
 
-func collectDeadMembers(roster map[uuid.UUID]status, gcStart time.Time, gcDead time.Duration) map[uuid.UUID]struct{} {
+func collectDeadMembers(roster map[uuid.UUID]membership, gcStart time.Time, gcDead time.Duration) map[uuid.UUID]struct{} {
 	dead := make(map[uuid.UUID]struct{})
 	for id, status := range roster {
-		if !status.Enabled && gcStart.Sub(status.Since) > gcDead {
+		if !status.Active && gcStart.Sub(status.Since) > gcDead {
 			dead[id] = struct{}{}
 		}
 	}

@@ -128,14 +128,14 @@ func (d *directory) Events() []event {
 
 func (d *directory) Get(id uuid.UUID) (ret *member) {
 	d.Core.View(func(u *view) {
-		ret = dirGetMember(u, id)
+		ret = dirGetActiveMember(u, id)
 	})
 	return
 }
 
 func (d *directory) Join(m *member) (err error) {
 	items := d.Core.Update(func(u *update) {
-		if !u.Enable(m.Id, m.Version) {
+		if !u.Join(m.Id, m.Version) {
 			err = errors.Errorf("Member alread joined [%v]", m)
 			return
 		}
@@ -154,9 +154,9 @@ func (d *directory) Join(m *member) (err error) {
 	return
 }
 
-func (d *directory) Leave(m *member) (err error) {
+func (d *directory) Evict(m *member) (err error) {
 	items := d.Core.Update(func(u *update) {
-		if !u.Disable(m.Id, m.Version) {
+		if !u.Evict(m.Id, m.Version) {
 			err = errors.Errorf("Member already joined [%v]", m.Id)
 			return
 		}
@@ -182,7 +182,7 @@ func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []
 	d.Core.View(func(v *view) {
 		ids := make(map[uuid.UUID]struct{})
 
-		v.ScanLive(func(s amoeba.Scan, i item) {
+		v.ScanActive(func(s amoeba.Scan, i item) {
 			if filter(i.MemId, i.Attr, i.Val) {
 				ids[i.MemId] = struct{}{}
 			}
@@ -190,7 +190,7 @@ func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []
 
 		ret = make([]*member, 0, len(ids))
 		for id, _ := range ids {
-			if m := dirGetMember(v, id); m != nil {
+			if m := dirGetActiveMember(v, id); m != nil {
 				ret = append(ret, m)
 			}
 		}
@@ -200,42 +200,103 @@ func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []
 
 func (d *directory) First(filter func(uuid.UUID, string, string) bool) (ret *member) {
 	d.Core.View(func(v *view) {
-		v.ScanLive(func(s amoeba.Scan, i item) {
+		v.ScanActive(func(s amoeba.Scan, i item) {
 			if filter(i.MemId, i.Attr, i.Val) {
 				defer s.Stop()
-				ret = dirGetMember(v, i.MemId)
+				ret = dirGetActiveMember(v, i.MemId)
 			}
 		})
 	})
 	return
 }
 
-func (d *directory) All() (ret []*member) {
-	return d.Collect(func(uuid.UUID, string, string) bool {
-		return true
+func (d *directory) Healthy() (ret []*member) {
+	d.Core.View(func(v *view) {
+		ret = make([]*member, 0, len(v.Health))
+		for id, h := range v.Health {
+			if h.Healthy {
+				ret = append(ret, dirGetActiveMember(v, id))
+			}
+		}
 	})
 	return
 }
 
+func (d *directory) Unhealthy() (ret []*member) {
+	d.Core.View(func(v *view) {
+		ret = make([]*member, 0, len(v.Health))
+		for id, h := range v.Health {
+			if !h.Healthy {
+				ret = append(ret, dirGetActiveMember(v, id))
+			}
+		}
+	})
+	return
+}
 
-// Retrieves a member from the directory
+func (d *directory) Active() (ret []*member) {
+	d.Core.View(func(v *view) {
+		ret = make([]*member, 0, len(v.Health))
+		for id, m := range v.Roster {
+			if m.Active {
+				ret = append(ret, dirGetMember(v, id))
+			}
+		}
+	})
+	return
+}
+
+func (d *directory) Evicted() (ret []*member) {
+	d.Core.View(func(v *view) {
+		ret = make([]*member, 0, len(v.Health))
+		for id, m := range v.Roster {
+			if !m.Active {
+				ret = append(ret, dirGetMember(v, id))
+			}
+		}
+	})
+	return
+}
+
+// Retrieves an active member from the directory.  To be active,
+// means that no eviction has been seen for this memeber.
+func dirGetActiveMember(v *view, id uuid.UUID) *member {
+	if m := dirGetMember(v, id); m != nil {
+		if m.Active {
+			return m
+		}
+	}
+	return nil
+}
+
+// Retrieves the latest member
 func dirGetMember(v *view, id uuid.UUID) *member {
-	hostItem, found := v.GetLive(id, memberHostAttr)
+	hostItem, found := v.GetLatest(id, memberHostAttr)
 	if !found {
 		return nil
 	}
 
-	portItem, found := v.GetLive(id, memberPortAttr)
+	portItem, found := v.GetLatest(id, memberPortAttr)
 	if !found {
 		return nil
 	}
 
-	statItem, found := v.GetLive(id, memberHealthAttr)
+	mem, _ := v.Roster[id]
+	if mem.Version != hostItem.Ver {
+		return nil
+	}
+
+	health, _ := v.Health[id]
+	if health.Version != hostItem.Ver {
+		return nil
+	}
+
 	return &member{
 		Id:      id,
 		Host:    hostItem.Val,
 		Port:    portItem.Val,
-		Healthy: !statItem.Del,
+		Healthy: health.Healthy,
+		Active:  mem.Active,
 		Version: hostItem.Ver}
 }
 

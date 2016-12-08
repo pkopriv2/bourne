@@ -6,6 +6,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -93,18 +94,7 @@ func (r *replica) Close() error {
 
 	r.Logger.Info("Replica shutting down.")
 
-	// stop accepting requests...
 	r.Server.Close()
-
-	// initialize the leave
-	r.Dir.Leave(r.Self)
-
-	// wait for the dissem queue to empty
-	for r.Dissem.Evts.Data.Size() > 0 {
-		time.Sleep(1 * time.Second)
-	}
-
-	// finally, shut everything down
 	r.Dissem.Close()
 	r.Dir.Close()
 	close(r.Closed)
@@ -117,6 +107,26 @@ func (r *replica) Id() uuid.UUID {
 
 func (r *replica) Client() (*client, error) {
 	return replicaClient(r.Server)
+}
+
+func (r *replica) Leave() error {
+	r.Logger.Info("Leaving cluster")
+
+	if err := r.Dir.Evict(r.Self); err != nil {
+		return err
+	}
+
+	done, timeout := concurrent.NewBreaker(30*time.Minute, func() interface{} {
+		time.Sleep(5*time.Second)
+		return nil
+	})
+
+	select {
+	case <-done:
+		return nil
+	case <-timeout:
+		return errors.New("Timeout while leaving.")
+	}
 }
 
 // Helper functions

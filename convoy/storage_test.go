@@ -21,7 +21,7 @@ func TestStorage_Status_NotEnabled_NotDisabled(t *testing.T) {
 	defer core.Close()
 
 	core.Update(func(u *update) {
-		_, ok := u.Status(uuid.NewV1())
+		_, ok := u.Roster[uuid.NewV1()]
 		assert.False(t, ok)
 	})
 }
@@ -33,16 +33,16 @@ func TestStorage_Status_Enabled(t *testing.T) {
 
 	id := uuid.NewV1()
 	core.Update(func(u *update) {
-		assert.True(t, u.Enable(id, 0))
+		assert.True(t, u.Join(id, 0))
 	})
 
 	core.View(func(v *view) {
-		s, found := v.Status(id)
+		s, found := v.Roster[id]
 		assert.True(t, found)
-		assert.True(t, s.Enabled)
+		assert.True(t, s.Active)
 		assert.Equal(t, 0, s.Version)
 
-		i, ok := v.GetLive(id, memberEnabledAttr)
+		i, ok := v.GetActive(id, memberMembershipAttr)
 		assert.Equal(t, true, ok)
 		assert.Equal(t, "true", i.Val)
 	})
@@ -59,7 +59,7 @@ func TestStorage_Get_NotEnabled(t *testing.T) {
 	})
 
 	core.View(func(v *view) {
-		_, ok := v.GetLive(id, "key")
+		_, ok := v.GetActive(id, "key")
 		assert.False(t, ok)
 	})
 }
@@ -76,7 +76,7 @@ func TestStorage_Scan_NotEnabled(t *testing.T) {
 
 	core.View(func(v *view) {
 		i := 0
-		v.ScanLive(func(amoeba.Scan, item) {
+		v.ScanActive(func(amoeba.Scan, item) {
 			i++
 		})
 		assert.Equal(t, 0, i)
@@ -95,12 +95,12 @@ func TestStorage_Get_Enabled(t *testing.T) {
 
 	id := uuid.NewV1()
 	core.Update(func(u *update) {
-		assert.True(t, u.Enable(id, 0))
+		assert.True(t, u.Join(id, 0))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
 	})
 
 	core.View(func(v *view) {
-		i, ok := v.GetLive(id, "key")
+		i, ok := v.GetActive(id, "key")
 		assert.True(t, ok)
 		assert.Equal(t, "val", i.Val)
 		assert.Equal(t, 0, i.Ver)
@@ -114,12 +114,12 @@ func TestStorage_Get_Disabled(t *testing.T) {
 
 	id := uuid.NewV1()
 	core.Update(func(u *update) {
-		assert.True(t, u.Disable(id, 0))
+		assert.True(t, u.Evict(id, 0))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
 	})
 
 	core.View(func(v *view) {
-		_, ok := v.GetLive(id, "key")
+		_, ok := v.GetActive(id, "key")
 		assert.False(t, ok)
 	})
 }
@@ -131,13 +131,13 @@ func TestStorage_Get_Del(t *testing.T) {
 
 	id := uuid.NewV1()
 	core.Update(func(u *update) {
-		assert.True(t, u.Enable(id, 0))
+		assert.True(t, u.Join(id, 0))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
 		assert.True(t, u.Del(id, 0, "key", 0))
 	})
 
 	core.View(func(v *view) {
-		_, ok := v.GetLive(id, "key")
+		_, ok := v.GetActive(id, "key")
 		assert.False(t, ok)
 	})
 }
@@ -149,12 +149,12 @@ func TestStorage_Get_OldData(t *testing.T) {
 
 	id := uuid.NewV1()
 	core.Update(func(u *update) {
-		assert.True(t, u.Enable(id, 1))
+		assert.True(t, u.Join(id, 1))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
 	})
 
 	core.View(func(v *view) {
-		_, ok := v.GetLive(id, "key")
+		_, ok := v.GetActive(id, "key")
 		assert.False(t, ok)
 	})
 }
@@ -166,10 +166,10 @@ func TestStorage_Update(t *testing.T) {
 
 	id := uuid.NewV1()
 	items := core.Update(func(u *update) {
-		assert.True(t, u.Enable(id, 1))
+		assert.True(t, u.Join(id, 1))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
 		assert.False(t, u.Put(id, 0, "key", "val", 0))
 	})
 
-	assert.Equal(t, 2, len(items))
+	assert.Equal(t, 3, len(items))
 }

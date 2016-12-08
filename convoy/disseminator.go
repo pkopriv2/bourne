@@ -10,10 +10,6 @@ import (
 	"github.com/pkopriv2/bourne/common"
 )
 
-var (
-	dissemLastSeenThreshold = 8 * int(math.Log(1024)) // puts a soft limit of cluster size
-)
-
 // Sends an update to a randomly chosen recipient.
 //
 // The disseminator implements the most crucial aspects of epidemic algorithms.
@@ -121,7 +117,7 @@ func (d *disseminator) Push(e []event) error {
 		return nil
 	}
 
-	n := len(d.Dir.All())
+	n := len(d.Dir.Active())
 	if fanout := dissemFanout(d.Factor, n); fanout > 0 {
 		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
 		d.Evts.Push(e, fanout)
@@ -135,7 +131,9 @@ func (d *disseminator) nextMember() *member {
 	defer d.Lock.Unlock()
 
 	var iter *dissemIter
-	var m *member
+	defer func() {
+		d.Iter = iter
+	}()
 
 	iter = d.Iter
 	if iter == nil {
@@ -143,24 +141,17 @@ func (d *disseminator) nextMember() *member {
 	}
 
 	for {
-		m = iter.Next()
-		if m == nil {
-			iter = d.newIterator()
-			continue
+		if iter == nil {
+			return nil
 		}
 
-		if m.Id == d.Self.Id {
-			continue
+		m := iter.Next()
+		if m != nil {
+			return m
 		}
 
-		// if m.Status != Alive  {
-			// continue
-		// }
-
-		break
+		iter = d.newIterator()
 	}
-
-	return m
 }
 
 func (d *disseminator) start() error {
@@ -178,7 +169,12 @@ func (d *disseminator) start() error {
 			case <-tick.C:
 			}
 
-			if _, err := d.disseminate(d.nextMember()); err == nil {
+			m := d.nextMember()
+			if m == nil {
+				continue
+			}
+
+			if _, err := d.disseminate(m); err == nil {
 				continue
 			}
 
@@ -220,7 +216,15 @@ func (d *disseminator) disseminateTo(m *member, batch []event) error {
 }
 
 func (d *disseminator) newIterator() *dissemIter {
-	return dissemNewIter(dissemShuffleMembers(d.Dir.All()))
+	members := membersCollect(d.Dir.Healthy(), func(m *member) bool {
+		return m.Id != d.Self.Id
+	})
+
+	if len(members) == 0 {
+		return nil
+	}
+
+	return dissemNewIter(dissemShuffleMembers(members))
 }
 
 // Helper functions.
@@ -233,5 +237,5 @@ func dissemShuffleMembers(arr []*member) []*member {
 }
 
 func dissemFanout(factor int, numMembers int) int {
-	return factor * int(math.Ceil(math.Log(float64(numMembers)))) + 1
+	return factor*int(math.Ceil(math.Log(float64(numMembers)))) + 1
 }
