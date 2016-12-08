@@ -71,8 +71,11 @@ func viewLogPop(data amoeba.Update, num int) (batch []event) {
 		viewed = append(viewed, k)
 	})
 
+	for _, k := range viewed {
+		data.Del(k)
+	}
+
 	for i, v := range viewed {
-		data.Del(v)
 		if v.Remaining <= 1 {
 			continue
 		}

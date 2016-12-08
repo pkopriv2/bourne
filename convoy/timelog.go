@@ -42,9 +42,8 @@ package convoy
 // return amoeba.CompareUUIDs(e.Id, o.Id)
 // }
 //
-//
-// func timeLogScanFrom(start timeLogKey, data amoeba.RawView, fn func(amoeba.Scan, timeLogKey, event)) {
-// data.ScanFrom(start, func(s amoeba.Scan, k amoeba.Key, i amoeba.RawItem) {
+// func timeLogScanFrom(start timeLogKey, data amoeba.View, fn func(amoeba.Scan, timeLogKey, event)) {
+// data.ScanFrom(start, func(s amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 // evt := timeLogUnpackAmoebaItem(i)
 // if evt == nil {
 // return // shouldn't be possible...but guarding anyway.
@@ -54,8 +53,8 @@ package convoy
 // })
 // }
 //
-// func timeLogScan(data amoeba.RawView, fn func(amoeba.Scan, timeLogKey, event)) {
-// data.Scan(func(s amoeba.Scan, k amoeba.Key, i amoeba.RawItem) {
+// func timeLogScan(data amoeba.View, fn func(amoeba.Scan, timeLogKey, event)) {
+// data.Scan(func(s amoeba.Scan, k amoeba.Key, i amoeba.Item) {
 // evt := timeLogUnpackAmoebaItem(i)
 // if evt == nil {
 // return
@@ -68,7 +67,7 @@ package convoy
 // // timeLog implementation.
 // type timeLog struct {
 // Ctx      common.Context
-// Data     amoeba.RawIndex
+// Data     amoeba.Index
 // Dead     time.Duration
 // Handlers []func([]event)
 // Lock     sync.RWMutex
@@ -111,7 +110,7 @@ package convoy
 //
 // func (t *timeLog) Peek(after time.Time) (ret []event) {
 // ret = []event{}
-// t.Data.Read(func(data amoeba.RawView) {
+// t.Data.Read(func(data amoeba.View) {
 // horizon := data.Time().Add(-t.Dead)
 //
 // ret = make([]event, 0, 256)
@@ -128,7 +127,7 @@ package convoy
 // }
 //
 // func (t *timeLog) Push(batch []event) {
-// t.Data.Update(func(data amoeba.RawUpdate) {
+// t.Data.Update(func(data amoeba.Update) {
 // for _, e := range batch {
 // data.Put(timeLogKey{uuid.NewV1(), data.Time()}, e, 0)
 // }
@@ -139,7 +138,7 @@ package convoy
 // t.broadcast(batch)
 // }
 //
-// func (t *timeLog) gc(data amoeba.RawUpdate) {
+// func (t *timeLog) gc(data amoeba.Update) {
 // horizon := data.Time().Add(-t.Dead)
 //
 // dead := make([]timeLogKey, 0, 128)

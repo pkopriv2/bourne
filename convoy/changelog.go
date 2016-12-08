@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"sync"
+	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/scribe"
@@ -224,11 +225,7 @@ func changeLogReadAll(tx *bolt.Tx) ([]Change, error) {
 
 // Converts a change to a standard data event.
 //
-// NOTE: In order to support members joining and leaving multiple
-// we need to make sure taht we version the data such that any piece
-// of 'ACTIVE' data has a version greater to or equal to the member
-// version, where the member version essentially represents the moment
-// in time the change log was accessed.
-func changeToEvent(m *member, c Change) *dataEvent {
-	return &dataEvent{m.Id, c.Key, c.Val, m.Version + c.Ver, c.Del}
+// NOTE: See Storage for notes on reconciliation
+func changeToEvent(m *member, c Change) event {
+	return item{m.Id, m.Version, c.Key, c.Val, c.Ver, c.Del, time.Now()}
 }

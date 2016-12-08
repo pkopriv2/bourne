@@ -2,6 +2,7 @@ package convoy
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
@@ -124,7 +125,7 @@ func replicaInitSelf(ctx common.Context, db Database, port int) (mem *member, er
 		return
 	}
 
-	mem = newMember(id, "localhost", strconv.Itoa(port), seq, Alive)
+	mem = newMember(id, "localhost", strconv.Itoa(port), seq)
 	return
 }
 
@@ -139,7 +140,7 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self 
 	dir := newDirectory(ctx, logger)
 
 	// start indexing realtime changes.
-	// !!! MUST HAPPEN PRIOR TO READING LOG CHANGES !!!
+	// !!! MUST HAPPEN PRIOR TO BACKFILLING !!!
 	dirIndexEvents(
 		changeStreamToEventStream(
 			self, changeLogListen(db.Log())), dir)
@@ -150,29 +151,21 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self 
 		return nil, err
 	}
 
-	// // Add the self instance to the directory
-	// dir.update(func(u *dirUpdate) {
-	// u.AddMember(self)
-	// })
-
-	// Apply all the changes
+	dir.Join(self)
 	dir.ApplyAll(changesToEvents(self, chgs))
-
-	// Done.
 	return dir, nil
 }
 
 // Returns a newly initialized disseminator.
 func replicaInitDissem(ctx common.Context, logger common.Logger, self *member, dir *directory) (*disseminator, error) {
-	// dissem, err := newDisseminator(ctx, logger, self, dir, time.Second)
-	// if err != nil {
-	// return nil, errors.Wrap(err, "Error constructing disseminator")
-	// }
-	//
-	// // Start disseminating realtime changes.
-	// dissemEvents(timeLogListen(dir.Log), dissem)
-	// return dissem, nil
-	return nil, nil
+	dissem, err := newDisseminator(ctx, logger, self, dir, time.Second)
+	if err != nil {
+		return nil, errors.Wrap(err, "Error constructing disseminator")
+	}
+
+	// Start disseminating realtime changes.
+	dissemEvents(dirListen(dir), dissem)
+	return dissem, nil
 }
 
 // Returns a newly initialized server.
@@ -201,15 +194,13 @@ func replicaReconcile(dir *directory, peer *client) error {
 
 // Joins the replica to the given peer.
 func replicaJoin(self *replica, peer *client) error {
-	return nil
-
 	// Register self with the peer.  (Should result in realtime updates being delivered to self.)
-	// _, err := peer.DirApply([]event{newMemberAddEvent(self.Self)})
-	// if err != nil {
-	// return errors.Wrap(err, "Error registering self with peer")
-	// }
-	//
-	// return replicaReconcile(self.Dir, peer)
+	_, err := peer.DirApply(self.Dir.Events())
+	if err != nil {
+	return errors.Wrap(err, "Error registering self with peer")
+	}
+
+	return replicaReconcile(self.Dir, peer)
 }
 
 func replicaClient(server net.Server) (*client, error) {

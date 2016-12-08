@@ -1,20 +1,16 @@
 package convoy
 
 import (
-	"strconv"
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
-
-// System reserved keys.  Consumers should consider the: /Convoy/
-// namespace off limits!
-const ()
 
 // Reads from the channel of events and applies them to the directory.
 func dirIndexEvents(ch <-chan event, dir *directory) {
@@ -35,6 +31,21 @@ func dirIndexEvents(ch <-chan event, dir *directory) {
 	}()
 }
 
+// Adds a listener to the change log and returns a buffered channel of changes.
+// the channel is closed when the log is closed.
+func dirListen(dir *directory) <-chan []event {
+	ret := make(chan []event, 1024)
+	dir.Listen(func(batch []event) {
+		if batch == nil {
+			close(ret)
+			return
+		}
+
+		ret <- batch
+	})
+	return ret
+}
+
 // The event is the fundamental unit of change dissmenation.
 type event interface {
 	scribe.Writable
@@ -43,47 +54,13 @@ type event interface {
 	Apply(u *update) bool
 }
 
-// Retrieves a member from the directory
-func dirGetMember(v *view, id uuid.UUID) *member {
-	// hostItem, found := v.Get(id, memberHostAttr)
-	// if !found {
-	// return nil
-	// }
-	//
-	// portItem, found := v.Get(id, memberPortAttr)
-	// if !found {
-	// return nil
-	// }
-	//
-	// statItem, found := v.Get(id, memberStatusAttr)
-	// if !found {
-	// return nil
-	// }
-	//
-	// status, err := strconv.Atoi(stat)
-	// if err != nil {
-	// panic(err)
-	// }
-	//
-	// ver := int(math.Max(float64(ver1), math.Max(float64(ver2), float64(ver3))))
-	// return &member{
-	// Id:      id,
-	// Host:    host,
-	// Port:    port,
-	// Status:  MemberStatus(status),
-	// Version: ver}
-	return nil
+func readEvent(r scribe.Reader) (event, error) {
+	return readItem(r)
 }
 
-// the core storage type.
-// Invariants:
-//   * Members must always have: host, port, status attributes.
-//   * Members version is obtained by taking latest of host, port, status.
-//   * Status events at same version have LWW (last-win-write) semantics
 type directory struct {
-	Logger common.Logger
-	Core   *storage
-
+	Logger   common.Logger
+	Core     *storage
 	Handlers []func([]event)
 	Lock     sync.RWMutex
 }
@@ -95,42 +72,54 @@ func newDirectory(ctx common.Context, logger common.Logger) *directory {
 	}
 }
 
-func (t *directory) Listeners() []func([]event) {
-	t.Lock.RLock()
-	defer t.Lock.RUnlock()
-	ret := make([]func([]event), 0, len(t.Handlers))
-	for _, fn := range t.Handlers {
+func (d *directory) Listeners() []func([]event) {
+	d.Lock.RLock()
+	defer d.Lock.RUnlock()
+	ret := make([]func([]event), 0, len(d.Handlers))
+	for _, fn := range d.Handlers {
 		ret = append(ret, fn)
 	}
 	return ret
 }
 
-func (e *directory) Listen(fn func([]event)) {
-	e.Lock.Lock()
-	defer e.Lock.Unlock()
-	e.Handlers = append(e.Handlers, fn)
+func (d *directory) Listen(fn func([]event)) {
+	d.Lock.Lock()
+	defer d.Lock.Unlock()
+	d.Handlers = append(d.Handlers, fn)
 }
 
-func (t *directory) Close() (ret error) {
-	// ret = t.Core.Close()
-	t.broadcast(nil)
+func (d *directory) Close() (ret error) {
+	ret = d.Core.Close()
+	d.broadcast(nil)
 	return
 }
 
-func (t *directory) broadcast(batch []event) {
-	for _, fn := range t.Listeners() {
+func (d *directory) broadcast(batch []event) {
+	for _, fn := range d.Listeners() {
 		fn(batch)
 	}
 }
 
-func (d *directory) ApplyAll(events []event) []bool {
-	return nil
-	// return d.Core.Apply(events)
+func (d *directory) ApplyAll(events []event) (ret []bool) {
+	ret = make([]bool, 0, len(events))
+	d.Core.Update(func(u *update) {
+		for _, e := range events {
+			ret = append(ret, e.Apply(u))
+		}
+	})
+
+	d.broadcast(dirCollectSuccesses(events, ret))
+	return
 }
 
 func (d *directory) Events() []event {
-	return nil
-	// return d.Core.Events()
+	items := d.Core.All()
+
+	ret := make([]event, 0, len(items))
+	for _, i := range items {
+		ret = append(ret, i)
+	}
+	return ret
 }
 
 func (d *directory) Get(id uuid.UUID) (ret *member) {
@@ -180,63 +169,76 @@ func (d *directory) All() (ret []*member) {
 	return
 }
 
-func (d *directory) AddMember(m *member) {
+func (d *directory) Join(m *member) (err error) {
 	d.Core.Update(func(u *update) {
-		if ! u.Join(m.Id, m.Version) {
+		if !u.Enable(m.Id, m.Version) {
+			err = errors.Errorf("Member alread joined [%v]", m)
 			return
 		}
 
-		u.Put(m.Id, m.Version, memberStatusAttr, strconv.Itoa(int(m.Status)), m.Version)
+		if !m.Healthy {
+			err = errors.Errorf("Cannot join unhealthy member [%v]", m)
+			return
+		}
+
+		u.Put(m.Id, m.Version, memberHealthAttr, "", m.Version)
 		u.Put(m.Id, m.Version, memberHostAttr, m.Host, m.Version)
 		u.Put(m.Id, m.Version, memberPortAttr, m.Port, m.Version)
 	})
 	return
 }
 
-// The primary data event type.
-type dataEvent struct {
-	Id   uuid.UUID
-	Attr string
-	Val  string
-	Ver  int
-	Del  bool
+func (d *directory) Leave(m *member) (err error) {
+	d.Core.Update(func(u *update) {
+		if !u.Disable(m.Id, m.Version) {
+			err = errors.Errorf("Member already joined [%v]", m.Id)
+			return
+		}
+	})
+	return
 }
 
-func (e *dataEvent) Write(w scribe.Writer) {
-	w.Write("id", e.Id.String())
-	w.Write("attr", e.Attr)
-	w.Write("val", e.Val)
-	w.Write("ver", e.Ver)
-	w.Write("del", e.Del)
+func (d *directory) Fail(m *member) (err error) {
+	d.Core.Update(func(u *update) {
+		if !u.Del(m.Id, m.Version, memberHealthAttr, m.Version) {
+			err = errors.Errorf("Unable to fail member [%v]", m)
+		}
+	})
+	return
 }
 
-func readDataEvent(r scribe.Reader) (*dataEvent, error) {
-	id, err := scribe.ReadUUID(r, "id")
-	if err != nil {
-		return nil, err
+// Retrieves a member from the directory
+func dirGetMember(v *view, id uuid.UUID) *member {
+	hostItem, found := v.GetLive(id, memberHostAttr)
+	if !found {
+		return nil
 	}
 
-	event := &dataEvent{Id: id}
-	if err := r.Read("attr", &event.Attr); err != nil {
-		return nil, err
+	portItem, found := v.GetLive(id, memberPortAttr)
+	if !found {
+		return nil
 	}
-	if err := r.Read("val", &event.Val); err != nil {
-		return nil, err
-	}
-	if err := r.Read("ver", &event.Ver); err != nil {
-		return nil, err
-	}
-	if err := r.Read("del", &event.Del); err != nil {
-		return nil, err
-	}
-	return event, nil
+
+	statItem, found := v.GetLive(id, memberHealthAttr)
+	return &member{
+		Id:      id,
+		Host:    hostItem.Val,
+		Port:    portItem.Val,
+		Healthy: !statItem.Del,
+		Version: hostItem.Ver}
 }
 
-func (e *dataEvent) Apply(tx *update) bool {
-	return false
-	// if e.Del {
-	// return tx.Del(e.Id, e.Attr, e.Ver)
-	// } else {
-	// return tx.Put(e.Id, e.Attr, e.Val, e.Ver)
-	// }
+func dirCollectSuccesses(events []event, success []bool) []event {
+	if len(events) != len(success) {
+		panic("Unequal array length")
+	}
+
+	ret := make([]event, 0, len(events))
+	for i, s := range success {
+		if s {
+			ret = append(ret, events[i])
+		}
+	}
+
+	return ret
 }

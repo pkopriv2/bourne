@@ -127,7 +127,7 @@ func serverReadEvents(msg scribe.Reader, field string) ([]event, error) {
 
 	events := make([]event, 0, len(msgs))
 	for _, msg := range msgs {
-		e, err := readDataEvent(msg)
+		e, err := readEvent(msg)
 		if err != nil {
 			return nil, errors.Wrap(err, "Parsing event requests")
 		}

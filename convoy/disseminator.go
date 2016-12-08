@@ -153,7 +153,7 @@ func (d *disseminator) nextMember() *member {
 			continue
 		}
 
-		// if m.Status != Alive  {
+		// if ! m.Healthy {
 			// continue
 		// }
 
@@ -191,6 +191,7 @@ func (d *disseminator) start() error {
 
 func (d *disseminator) disseminate(m *member) ([]event, error) {
 	batch := d.Evts.Pop(256)
+	d.Logger.Debug("Disseminating events [%v]", len(batch))
 	if len(batch) == 0 {
 		return batch, nil
 	}

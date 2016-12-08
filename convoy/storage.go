@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -16,7 +17,7 @@ const (
 	memberEnabledAttr = "Convoy.Member.Enabled"
 	memberHostAttr    = "Convoy.Member.Host"
 	memberPortAttr    = "Convoy.Member.Port"
-	memberStatusAttr  = "Convoy.Member.Status"
+	memberHealthAttr  = "Convoy.Member.Status"
 )
 
 // Core storage abstractions.
@@ -30,7 +31,51 @@ type item struct {
 	Ver  int
 	Del  bool
 
+	// Internal only.
 	Time time.Time
+}
+
+func readItem(r scribe.Reader) (item, error) {
+	item := &item{}
+
+	id, err := scribe.ReadUUID(r, "memId")
+	if err != nil {
+		return *item, err
+	}
+
+	item.MemId = id
+
+	if err := r.Read("attr", &item.Attr); err != nil {
+		return *item, err
+	}
+	if err := r.Read("val", &item.Val); err != nil {
+		return *item, err
+	}
+	if err := r.Read("ver", &item.Ver); err != nil {
+		return *item, err
+	}
+	if err := r.Read("del", &item.Del); err != nil {
+		return *item, err
+	}
+
+	return *item, nil
+}
+
+func (i item) Write(w scribe.Writer) {
+	w.Write("memId", i.MemId.String())
+	w.Write("memVer", i.MemVer)
+	w.Write("attr", i.Attr)
+	w.Write("val", i.Val)
+	w.Write("ver", i.Ver)
+	w.Write("del", i.Del)
+}
+
+func (i item) Apply(u *update) bool {
+	if i.Del {
+		return u.Del(i.MemId, i.MemVer, i.Attr, i.Ver)
+	} else {
+		return u.Put(i.MemId, i.MemVer, i.Attr, i.Val, i.Ver)
+	}
 }
 
 // member status
@@ -38,6 +83,17 @@ type status struct {
 	Version int
 	Enabled bool
 	Since   time.Time
+}
+
+func (s status) String() string {
+	var str string
+	if s.Enabled {
+		str = "Joined"
+	} else {
+		str = "Left"
+	}
+
+	return fmt.Sprintf("%v(%v)", str, s.Version)
 }
 
 // the core storage type
@@ -96,7 +152,7 @@ func (d *storage) View(fn func(*view)) {
 
 func (d *storage) Update(fn func(*update)) (ret []item) {
 	d.Data.Update(func(data amoeba.Update) {
-		update := &update{&view{data, d.Roster, time.Now()}, data, d.Roster, make([]item, 0, 8)}
+		update := &update{&view{data, d.Roster, time.Now()}, data, make([]item, 0, 8)}
 		defer func() {
 			ret = update.Items
 		}()
@@ -132,32 +188,32 @@ func (u *view) Status(id uuid.UUID) (ret status, ok bool) {
 	return
 }
 
-func (u *view) Get(id uuid.UUID, attr string) (ret item, found bool) {
-	status, found := u.Status(id)
-	if !found {
+func (u *view) GetLive(id uuid.UUID, attr string) (ret item, found bool) {
+	status, ok := u.Status(id)
+	if !ok || !status.Enabled {
 		return
 	}
 
-	rawVal, rawFound := storageGet(u.Raw, id, attr)
+	rawVal, rawFound := storageGet(u.Raw, id, status.Version, attr)
 	if !rawFound || rawVal.Del {
 		return
 	}
 
-	if status.Version != rawVal.MemVer {
-		return
-	}
-
-	return item{id, rawVal.MemVer, attr, rawVal.Val, rawVal.Ver, false, rawVal.Time}, true
+	return item{id, status.Version, attr, rawVal.Val, rawVal.Ver, false, rawVal.Time}, true
 }
 
 func (u *view) ScanAll(fn func(amoeba.Scan, item)) {
 	storageScan(u.Raw, func(s amoeba.Scan, k storageKey, v storageValue) {
-		fn(s, item{k.Id, v.MemVer, k.Attr, v.Val, v.Ver, v.Del, v.Time})
+		fn(s, item{k.MemId, k.MemVer, k.Attr, v.Val, v.Ver, v.Del, v.Time})
 	})
 }
 
 func (u *view) ScanLive(fn func(amoeba.Scan, item)) {
 	u.ScanAll(func(s amoeba.Scan, i item) {
+		if i.Del {
+			return
+		}
+
 		status, found := u.Status(i.MemId)
 		if !found {
 			return
@@ -167,63 +223,78 @@ func (u *view) ScanLive(fn func(amoeba.Scan, item)) {
 			return
 		}
 
-		if !i.Del {
-			fn(s, i)
-		}
+		fn(s, i)
 	})
 }
 
 // Transactional update
 type update struct {
 	*view
-	Raw    amoeba.Update
-	Roster map[uuid.UUID]status
-	Items  []item
+	Raw   amoeba.Update
+	Items []item
 }
 
-func (u *update) Put(memId uuid.UUID, memVer int, attr string, attrVal string, attrVer int) (ret bool) {
-	ret = storagePut(u.Raw, u.Now, memId, memVer, attr, attrVal, attrVer)
-	if !ret {
-		return
+func (u *update) Put(memId uuid.UUID, memVer int, attr string, attrVal string, attrVer int) bool {
+	ok := storagePut(u.Raw, u.Now, memId, memVer, attr, attrVal, attrVer)
+	if !ok {
+		return false
 	}
 
 	u.Items = append(u.Items, item{memId, memVer, attr, attrVal, attrVer, false, u.Now})
-	if attr == memberEnabledAttr {
-		u.Roster[memId] = status{memVer, attrVal == "true", u.Now}
+	if attr != memberEnabledAttr {
+		return true
 	}
 
-	return
+	stat, ok := u.Status(memId)
+	if ok {
+		if stat.Version >= attrVer {
+			return false
+		}
+	}
+
+	u.Roster[memId] = status{memVer, true, u.Now}
+	return true
 }
 
-func (u *update) Del(memId uuid.UUID, memVer int, attr string, attrVer int) (ret bool) {
-	ret = storageDel(u.Raw, u.Now, memId, memVer, attr, attrVer)
-	if !ret {
-		return
+func (u *update) Del(memId uuid.UUID, memVer int, attr string, attrVer int) bool {
+	ok := storageDel(u.Raw, u.Now, memId, memVer, attr, attrVer)
+	if !ok {
+		return false
 	}
 
 	u.Items = append(u.Items, item{memId, memVer, attr, "", attrVer, true, u.Now})
-	if attr == memberEnabledAttr {
-		u.Roster[memId] = status{memVer, false, u.Now}
+	if attr != memberEnabledAttr {
+		return true
 	}
-	return
+
+	stat, ok := u.Status(memId)
+	if ok {
+		if stat.Version > attrVer {
+			return false
+		}
+	}
+
+	u.Roster[memId] = status{memVer, false, u.Now}
+	return true
 }
 
-func (u *update) Join(id uuid.UUID, ver int) bool {
+func (u *update) Enable(id uuid.UUID, ver int) bool {
 	return u.Put(id, ver, memberEnabledAttr, "true", 0)
 }
 
-func (u *update) Leave(id uuid.UUID, ver int) bool {
+func (u *update) Disable(id uuid.UUID, ver int) bool {
 	return u.Del(id, ver, memberEnabledAttr, 0)
 }
 
 // the amoeba key type
 type storageKey struct {
-	Attr string
-	Id   uuid.UUID
+	Attr   string
+	MemId  uuid.UUID
+	MemVer int
 }
 
 func (k storageKey) String() string {
-	return fmt.Sprintf("/attr:%v/id:%v", k.Attr, k.Id)
+	return fmt.Sprintf("/attr:%v/id:%v/ver:%v", k.Attr, k.MemId, k.MemVer)
 }
 
 func (k storageKey) Compare(other amoeba.Key) int {
@@ -231,13 +302,16 @@ func (k storageKey) Compare(other amoeba.Key) int {
 	if ret := amoeba.CompareStrings(k.Attr, o.Attr); ret != 0 {
 		return ret
 	}
-	return amoeba.CompareUUIDs(k.Id, o.Id)
+
+	if ret := amoeba.CompareUUIDs(k.MemId, o.MemId); ret != 0 {
+		return ret
+	}
+
+	return k.MemVer - o.MemVer
 }
 
 // the amoeba value type
 type storageValue struct {
-	MemVer int
-
 	Ver int
 	Val string
 	Del bool
@@ -246,8 +320,8 @@ type storageValue struct {
 }
 
 // low level data manipulation functions.  These only enforce low-level versioning requirements.
-func storageGet(data amoeba.View, id uuid.UUID, attr string) (ret storageValue, found bool) {
-	raw := data.Get(storageKey{attr, id})
+func storageGet(data amoeba.View, memId uuid.UUID, memVer int, attr string) (ret storageValue, found bool) {
+	raw := data.Get(storageKey{attr, memId, memVer})
 	if raw == nil {
 		return
 	}
@@ -256,32 +330,24 @@ func storageGet(data amoeba.View, id uuid.UUID, attr string) (ret storageValue, 
 }
 
 func storagePut(data amoeba.Update, time time.Time, memId uuid.UUID, memVer int, attr string, attrVal string, attrVer int) bool {
-	if cur, found := storageGet(data, memId, attr); found {
-		if memVer < cur.MemVer {
-			return false
-		}
-
-		if memVer == cur.MemVer && attrVer <= cur.Ver {
+	if cur, found := storageGet(data, memId, memVer, attr); found {
+		if attrVer <= cur.Ver {
 			return false
 		}
 	}
 
-	data.Put(storageKey{attr, memId}, storageValue{memVer, attrVer, attrVal, false, time})
+	data.Put(storageKey{attr, memId, memVer}, storageValue{attrVer, attrVal, false, time})
 	return true
 }
 
 func storageDel(data amoeba.Update, time time.Time, memId uuid.UUID, memVer int, attr string, attrVer int) bool {
-	if cur, found := storageGet(data, memId, attr); found {
-		if memVer < cur.MemVer {
-			return false
-		}
-
-		if memVer == cur.MemVer && attrVer < cur.Ver {
+	if cur, found := storageGet(data, memId, memVer, attr); found {
+		if attrVer < cur.Ver {
 			return false
 		}
 	}
 
-	data.Put(storageKey{attr, memId}, storageValue{memVer, attrVer, "", true, time})
+	data.Put(storageKey{attr, memId, memVer}, storageValue{attrVer, "", true, time})
 	return true
 }
 
@@ -345,7 +411,7 @@ func (d *storageGc) runGcCycle(gcExp time.Duration) {
 
 func deleteDeadItems(u amoeba.Update, items []item) {
 	for _, i := range items {
-		u.Del(storageKey{i.Attr, i.MemId})
+		u.Del(storageKey{i.Attr, i.MemId, i.MemVer})
 	}
 }
 
@@ -374,6 +440,18 @@ func collectDeadItems(v *view, gcStart time.Time, gcDead time.Duration) []item {
 	v.ScanAll(func(s amoeba.Scan, i item) {
 		if !i.Del && gcStart.Sub(i.Time) > gcDead {
 			dead = append(dead, i)
+			return
+		}
+
+		stat, ok := v.Roster[i.MemId]
+		if !ok {
+			return // roster status hasn't shown up yet...leave it alone for now
+		}
+
+		// old, invisible data.
+		if i.Ver < stat.Version {
+			dead = append(dead, i)
+			return
 		}
 	})
 
