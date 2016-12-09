@@ -115,13 +115,26 @@ func (h health) String() string {
 	return fmt.Sprintf("%v(%v) since %v", str, h.Version, h.Since)
 }
 
+type rosterHandler func(memId uuid.UUID, memVer int, active bool)
+type healthHandler func(memId uuid.UUID, memVer int, healthy bool)
+
 // the core storage type
 type storage struct {
 	ctx    common.Context
 	logger common.Logger
-	data   amoeba.Index
-	roster map[uuid.UUID]membership // sync'ed with data lock
-	health map[uuid.UUID]health     // sync'ed with data lock
+
+	// Data objects.  Roster and health split for random read performance
+	datItems  amoeba.Index
+	datRoster map[uuid.UUID]membership // sync'ed with data lock
+	datHealth map[uuid.UUID]health     // sync'ed with data lock
+
+	// listeners.
+	fnsLock   sync.RWMutex
+	fnsItems  []func([]item)
+	fnsRoster []rosterHandler
+	fnsHealth []healthHandler
+
+	// Utility
 	wait   sync.WaitGroup
 	closed chan struct{}
 	closer chan struct{}
@@ -129,13 +142,13 @@ type storage struct {
 
 func newStorage(ctx common.Context, logger common.Logger) *storage {
 	s := &storage{
-		ctx:    ctx,
-		logger: logger.Fmt("Storage"),
-		data:   amoeba.NewBTreeIndex(32),
-		roster: make(map[uuid.UUID]membership),
-		health: make(map[uuid.UUID]health),
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1)}
+		ctx:       ctx,
+		logger:    logger.Fmt("Storage"),
+		datItems:  amoeba.NewBTreeIndex(32),
+		datRoster: make(map[uuid.UUID]membership),
+		datHealth: make(map[uuid.UUID]health),
+		closed:    make(chan struct{}),
+		closer:    make(chan struct{}, 1)}
 
 	coll := newStorageGc(s)
 	coll.start()
@@ -157,8 +170,8 @@ func (s *storage) Close() (err error) {
 
 func (d *storage) Roster() (ret map[uuid.UUID]membership) {
 	ret = make(map[uuid.UUID]membership)
-	d.data.Read(func(data amoeba.View) {
-		for k, v := range d.roster {
+	d.datItems.Read(func(data amoeba.View) {
+		for k, v := range d.datRoster {
 			ret[k] = v
 		}
 	})
@@ -167,34 +180,95 @@ func (d *storage) Roster() (ret map[uuid.UUID]membership) {
 
 func (d *storage) Health() (ret map[uuid.UUID]health) {
 	ret = make(map[uuid.UUID]health)
-	d.data.Read(func(data amoeba.View) {
-		for k, v := range d.health {
+	d.datItems.Read(func(data amoeba.View) {
+		for k, v := range d.datHealth {
 			ret[k] = v
 		}
 	})
 	return
 }
 
+func (d *storage) ListenRoster(fn rosterHandler) {
+	d.fnsLock.Lock()
+	defer d.fnsLock.Unlock()
+	d.fnsRoster = append(d.fnsRoster, fn)
+}
+
+func (d *storage) ListenHealth(fn healthHandler) {
+	d.fnsLock.Lock()
+	defer d.fnsLock.Unlock()
+	d.fnsHealth = append(d.fnsHealth, fn)
+}
+
+func (d *storage) Listen(fn func([]item)) {
+	d.fnsLock.Lock()
+	defer d.fnsLock.Unlock()
+	d.fnsItems = append(d.fnsItems, fn)
+}
+
+func (d *storage) listeners() (r []rosterHandler, h []healthHandler, i []func([]item)) {
+	d.fnsLock.RLock()
+	defer d.fnsLock.RUnlock()
+	r = make([]rosterHandler, 0, len(d.fnsRoster))
+	h = make([]healthHandler, 0, len(d.fnsHealth))
+	i = make([]func([]item), 0, len(d.fnsHealth))
+
+	for _, fn := range d.fnsRoster {
+		r = append(r, fn)
+	}
+
+	for _, fn := range d.fnsHealth {
+		h = append(h, fn)
+	}
+
+	for _, fn := range d.fnsItems {
+		i = append(i, fn)
+	}
+
+	return
+}
+
 func (d *storage) View(fn func(*view)) {
-	d.data.Read(func(data amoeba.View) {
-		fn(&view{data, d.roster, d.health, time.Now()})
+	d.datItems.Read(func(data amoeba.View) {
+		fn(&view{data, d.datRoster, d.datHealth, time.Now()})
 	})
 }
 
-func (d *storage) Update(fn func(*update)) (ret []item) {
-	d.data.Update(func(data amoeba.Update) {
-		update := &update{&view{data, d.roster, d.health, time.Now()}, data, make([]item, 0, 8)}
+func (d *storage) Update(fn func(*update)) {
+	var ret []item
+	d.datItems.Update(func(data amoeba.Update) {
+		update := &update{&view{data, d.datRoster, d.datHealth, time.Now()}, data, make([]item, 0, 8)}
 		defer func() {
 			ret = update.items
 		}()
 
 		fn(update)
 	})
-	return
+
+	// Because this is outside of update, ordering is no longer guaranteed.
+	// Consumers must be idempotent
+	fnsRoster, fnsHealth, fnsItems := d.listeners()
+
+	for _, fn := range fnsItems {
+		fn(ret)
+	}
+
+	for _, i := range ret {
+		switch i.Attr {
+		case memberMembershipAttr:
+			for _, fn := range fnsRoster {
+				fn(i.MemId, i.MemVer, !i.Del)
+			}
+		case memberHealthAttr:
+			for _, fn := range fnsHealth {
+				fn(i.MemId, i.MemVer, !i.Del)
+			}
+		}
+	}
 }
 
 func (d *storage) All() (ret []item) {
-	ret = make([]item, 0, d.data.Size())
+	ret = make([]item, 0, d.datItems.Size())
 	d.View(func(v *view) {
 		v.ScanAll(func(s amoeba.Scan, i item) {
 			ret = append(ret, i)
@@ -298,7 +372,6 @@ func (u *update) Put(memId uuid.UUID, memVer int, attr string, attrVal string, a
 	case memberHealthAttr:
 		cur, ok := u.Health[memId]
 		if ok {
-			fmt.Println("Current: ", cur)
 			if cur.Version >= memVer {
 				return false
 			}

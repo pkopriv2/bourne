@@ -1,8 +1,6 @@
 package convoy
 
 import (
-	"sync"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
@@ -23,7 +21,7 @@ func dirIndexEvents(ch <-chan event, dir *directory) {
 // the channel is closed when the log is closed.
 func dirListen(dir *directory) <-chan []event {
 	ret := make(chan []event, 1024)
-	dir.Listen(func(batch []event) {
+	dir.OnUpdate(func(batch []event) {
 		if batch == nil {
 			close(ret)
 			return
@@ -47,10 +45,8 @@ func readEvent(r scribe.Reader) (event, error) {
 }
 
 type directory struct {
-	Logger   common.Logger
-	Core     *storage
-	Handlers []func([]event)
-	Lock     sync.RWMutex
+	Logger common.Logger
+	Core   *storage
 }
 
 func newDirectory(ctx common.Context, logger common.Logger) *directory {
@@ -60,36 +56,8 @@ func newDirectory(ctx common.Context, logger common.Logger) *directory {
 	}
 }
 
-func (d *directory) Listeners() []func([]event) {
-	d.Lock.RLock()
-	defer d.Lock.RUnlock()
-	ret := make([]func([]event), 0, len(d.Handlers))
-	for _, fn := range d.Handlers {
-		ret = append(ret, fn)
-	}
-	return ret
-}
-
-func (d *directory) Listen(fn func([]event)) {
-	d.Lock.Lock()
-	defer d.Lock.Unlock()
-	d.Handlers = append(d.Handlers, fn)
-}
-
 func (d *directory) Close() (ret error) {
-	ret = d.Core.Close()
-	d.broadcast(nil)
-	return
-}
-
-func (d *directory) broadcast(batch []event) {
-	if len(batch) == 0 {
-		return
-	}
-
-	for _, fn := range d.Listeners() {
-		fn(batch)
-	}
+	return d.Core.Close()
 }
 
 func (d *directory) Apply(events []event) (ret []bool) {
@@ -99,9 +67,13 @@ func (d *directory) Apply(events []event) (ret []bool) {
 			ret = append(ret, e.Apply(u))
 		}
 	})
-
-	d.broadcast(dirCollectSuccesses(events, ret))
 	return
+}
+
+func (d *directory) OnUpdate(fn func([]event)) {
+	d.Core.Listen(func(batch []item) {
+		fn(dirItemsToEvents(batch))
+	})
 }
 
 func (d *directory) Events() []event {
@@ -114,15 +86,8 @@ func (d *directory) Events() []event {
 	return ret
 }
 
-func (d *directory) Get(id uuid.UUID) (ret member, ok bool) {
-	d.Core.View(func(u *view) {
-		ret, ok = dirGetActiveMember(u, id)
-	})
-	return
-}
-
 func (d *directory) Join(m member) (err error) {
-	items := d.Core.Update(func(u *update) {
+	d.Core.Update(func(u *update) {
 		if !m.Healthy {
 			err = errors.Errorf("Cannot join unhealthy member [%v]", m)
 			return
@@ -136,65 +101,50 @@ func (d *directory) Join(m member) (err error) {
 		u.Put(m.Id, m.Version, memberHostAttr, m.Host, m.Version)
 		u.Put(m.Id, m.Version, memberPortAttr, m.Port, m.Version)
 	})
-
-	d.broadcast(dirItemsToEvents(items))
 	return
 }
 
+func (d *directory) OnJoin(fn func(uuid.UUID, int)) {
+	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
+		if status {
+			fn(id, ver)
+		}
+	})
+}
+
 func (d *directory) Evict(m member) (err error) {
-	items := d.Core.Update(func(u *update) {
+	d.Core.Update(func(u *update) {
 		if !u.Evict(m.Id, m.Version) {
 			err = errors.Errorf("Member already evicted [%v]", m.Id)
 			return
 		}
 	})
-
-	d.broadcast(dirItemsToEvents(items))
 	return
 }
 
+func (d *directory) OnEviction(fn func(uuid.UUID, int)) {
+	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
+		if !status {
+			fn(id, ver)
+		}
+	})
+}
+
 func (d *directory) Fail(m member) (err error) {
-	items := d.Core.Update(func(u *update) {
+	d.Core.Update(func(u *update) {
 		if !u.Del(m.Id, m.Version, memberHealthAttr, m.Version) {
 			err = errors.Errorf("Unable to fail member [%v]", m)
 		}
 	})
-
-	d.broadcast(dirItemsToEvents(items))
 	return
 }
 
-func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []member) {
-	ret = []member{}
-	d.Core.View(func(v *view) {
-		ids := make(map[uuid.UUID]struct{})
-
-		v.ScanActive(func(s amoeba.Scan, i item) {
-			if filter(i.MemId, i.Attr, i.Val) {
-				ids[i.MemId] = struct{}{}
-			}
-		})
-
-		ret = make([]member, 0, len(ids))
-		for id, _ := range ids {
-			if m, ok := dirGetActiveMember(v, id); ok {
-				ret = append(ret, m)
-			}
+func (d *directory) OnFailure(fn func(uuid.UUID, int)) {
+	d.Core.ListenHealth(func(id uuid.UUID, ver int, status bool) {
+		if !status {
+			fn(id, ver)
 		}
 	})
-	return
-}
-
-func (d *directory) First(filter func(uuid.UUID, string, string) bool) (ret member, ok bool) {
-	d.Core.View(func(v *view) {
-		v.ScanActive(func(s amoeba.Scan, i item) {
-			if filter(i.MemId, i.Attr, i.Val) {
-				defer s.Stop()
-				ret, ok = dirGetActiveMember(v, i.MemId)
-			}
-		})
-	})
-	return
 }
 
 func (d *directory) Healthy() (ret []member) {
@@ -211,7 +161,7 @@ func (d *directory) Healthy() (ret []member) {
 	return
 }
 
-func (d *directory) Unhealthy() (ret []member) {
+func (d *directory) Failed() (ret []member) {
 	d.Core.View(func(v *view) {
 		ret = make([]member, 0, len(v.Health))
 		for id, h := range v.Health {
@@ -249,6 +199,46 @@ func (d *directory) Evicted() (ret []member) {
 				}
 			}
 		}
+	})
+	return
+}
+
+func (d *directory) Get(id uuid.UUID) (ret member, ok bool) {
+	d.Core.View(func(u *view) {
+		ret, ok = dirGetActiveMember(u, id)
+	})
+	return
+}
+
+func (d *directory) Search(filter func(uuid.UUID, string, string) bool) (ret []member) {
+	ret = []member{}
+	d.Core.View(func(v *view) {
+		ids := make(map[uuid.UUID]struct{})
+
+		v.ScanActive(func(s amoeba.Scan, i item) {
+			if filter(i.MemId, i.Attr, i.Val) {
+				ids[i.MemId] = struct{}{}
+			}
+		})
+
+		ret = make([]member, 0, len(ids))
+		for id, _ := range ids {
+			if m, ok := dirGetActiveMember(v, id); ok {
+				ret = append(ret, m)
+			}
+		}
+	})
+	return
+}
+
+func (d *directory) First(filter func(uuid.UUID, string, string) bool) (ret member, ok bool) {
+	d.Core.View(func(v *view) {
+		v.ScanActive(func(s amoeba.Scan, i item) {
+			if filter(i.MemId, i.Attr, i.Val) {
+				defer s.Stop()
+				ret, ok = dirGetActiveMember(v, i.MemId)
+			}
+		})
 	})
 	return
 }

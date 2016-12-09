@@ -181,17 +181,46 @@ func TestStorage_Get_OldData(t *testing.T) {
 	})
 }
 
-func TestStorage_Update(t *testing.T) {
+func TestStorage_Update_RosterListener(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	core := newStorage(ctx, ctx.Logger())
 	defer core.Close()
 
 	id := uuid.NewV1()
-	items := core.Update(func(u *update) {
-		assert.True(t, u.Join(id, 1))
-		assert.True(t, u.Put(id, 0, "key", "val", 0))
-		assert.False(t, u.Put(id, 0, "key", "val", 0))
+
+	called := false
+	core.ListenRoster(func(i uuid.UUID, v int, s bool) {
+		called = true
+		assert.Equal(t, id, i)
+		assert.Equal(t, 1, v)
+		assert.True(t, s)
 	})
 
-	assert.Equal(t, 3, len(items))
+	core.Update(func(u *update) {
+		assert.True(t, u.Join(id, 1))
+	})
+
+	assert.True(t, called)
+}
+
+func TestStorage_Update_HealthListener(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	core := newStorage(ctx, ctx.Logger())
+	defer core.Close()
+
+	id := uuid.NewV1()
+
+	called := false
+	core.ListenHealth(func(i uuid.UUID, v int, s bool) {
+		called = true
+		assert.Equal(t, id, i)
+		assert.Equal(t, 1, v)
+		assert.False(t, s)
+	})
+
+	core.Update(func(u *update) {
+		assert.True(t, u.Fail(id, 1))
+	})
+
+	assert.True(t, called)
 }

@@ -11,8 +11,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// The replica instance.  This is what ultimately implements the
-// "Cluster" abstraction for actual members of the cluster group.
+// A replica represents a live, connected instance of a convoy db.
+// The instance itself is managed by the cluster object.
 type replica struct {
 	// the central context.
 	Ctx common.Context
@@ -116,14 +116,14 @@ func (r *replica) Leave() error {
 
 	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
 		for r.Dissem.Evts.Data.Size() > 0 {
-			time.Sleep(5*time.Second)
+			time.Sleep(5 * time.Second)
 		}
 		return nil
 	})
 
 	select {
 	case <-done:
-		return nil
+		return r.Close()
 	case <-timeout:
 		return errors.New("Timeout while leaving.")
 	}
@@ -174,6 +174,7 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self 
 
 	dir.Join(self)
 	dir.Apply(changesToEvents(self, chgs))
+
 	return dir, nil
 }
 

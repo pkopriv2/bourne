@@ -45,7 +45,7 @@ func TestReplica_Init_NonEmptyDb(t *testing.T) {
 	defer replica.Close()
 
 	// make sure self exists
-	members := replica.Dir.Collect(func(id uuid.UUID, key string, val string) bool {
+	members := replica.Dir.Search(func(id uuid.UUID, key string, val string) bool {
 		return key == "key"
 	})
 
@@ -62,7 +62,7 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 	replica.Db.Put("key2", "val")
 	done, timeout := concurrent.NewBreaker(5*time.Second, func() interface{} {
 		for {
-			members := replica.Dir.Collect(func(id uuid.UUID, key string, val string) bool {
+			members := replica.Dir.Search(func(id uuid.UUID, key string, val string) bool {
 				return key == "key2"
 			})
 
@@ -100,9 +100,9 @@ func TestReplica_Join(t *testing.T) {
 
 	r1 := StartTestReplica(ctx, 8191)
 	r2 := StartTestReplica(ctx, 8192)
-
 	replicaJoin(r1, masterClient)
 	replicaJoin(r2, masterClient)
+
 	WaitFor([]*replica{master, r1, r2}, func(r *replica) bool {
 		return len(r.Dir.Active()) == 3
 	})
@@ -116,11 +116,14 @@ func TestReplica_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 3
+	size := 10
 	cluster := StartTestCluster(ctx, size)
 
-	go cluster[rand.Intn(size)].Leave()
-	WaitFor(cluster, func(r *replica) bool {
+	idx := rand.Intn(size)
+	rep := cluster[rand.Intn(size)]
+	go rep.Leave()
+
+	WaitFor(removeReplica(cluster, idx), func(r *replica) bool {
 		return len(r.Dir.Active()) == size-1
 	})
 }
@@ -136,8 +139,9 @@ func TestReplica_Evict(t *testing.T) {
 	size := 32
 	cluster := StartTestCluster(ctx, size)
 
-	r1 := cluster[rand.Intn(size)]
-	r2 := cluster[rand.Intn(size)] // they don't have to be unique
+	indices := rand.Perm(size)
+	r1 := cluster[indices[0]]
+	r2 := cluster[indices[1]]
 
 	r1.Logger.Info("Evicting member [%v]", r2.Self)
 	go r1.Dir.Evict(r2.Self)
@@ -185,7 +189,7 @@ func TestReplica_Fail_Manual(t *testing.T) {
 
 	go r1.Dir.Fail(r2.Self)
 	WaitFor(cluster, func(r *replica) bool {
-		return len(r.Dir.Unhealthy()) == 1
+		return len(r.Dir.Failed()) == 1
 	})
 
 	WaitFor(cluster, func(r *replica) bool {
@@ -210,7 +214,7 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 
 	cluster = removeReplica(cluster, i)
 	WaitFor(cluster, func(r *replica) bool {
-		return len(r.Dir.Unhealthy()) == 1
+		return len(r.Dir.Failed()) == 1
 	})
 
 	WaitFor(cluster, func(r *replica) bool {

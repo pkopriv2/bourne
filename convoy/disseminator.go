@@ -62,9 +62,9 @@ func (i *dissemIter) Next() (m member, ok bool) {
 type disseminator struct {
 	Ctx    common.Context
 	Logger common.Logger
+	Self   member
 	Evts   *viewLog
 	Dir    *directory
-	Self   member
 	Iter   *dissemIter
 	Lock   sync.Mutex
 	Period time.Duration
@@ -78,9 +78,9 @@ func newDisseminator(ctx common.Context, logger common.Logger, self member, dir 
 	ret := &disseminator{
 		Ctx:    ctx,
 		Logger: logger.Fmt("Disseminator"),
+		Self:   self,
 		Evts:   newViewLog(ctx),
 		Dir:    dir,
-		Self:   self,
 		Period: period,
 		Factor: ctx.Config().OptionalInt("convoy.dissem.fanout.factor", 4),
 		Closed: make(chan struct{}),
