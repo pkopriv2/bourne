@@ -35,9 +35,6 @@ type replica struct {
 	// the view log.  maintains a listing of how many times an event has been viewed.
 	ViewLog *viewLog
 
-	// // the time log. maintains a time based buffer of events - used for reconciliation
-	// TimeLog *timeLog
-
 	// the core network server.
 	Server net.Server
 
@@ -113,6 +110,7 @@ func (r *replica) Leave() error {
 	r.Logger.Info("Leaving cluster")
 
 	if err := r.Dir.Evict(r.Self); err != nil {
+		r.Logger.Error("Error leaving cluster [%v]", err)
 		return err
 	}
 
@@ -142,7 +140,7 @@ func replicaInitSelf(ctx common.Context, db Database, port int) (mem member, err
 		return
 	}
 
-	seq, err = db.Log().Seq()
+	seq, err = db.Log().Inc()
 	if err != nil {
 		return
 	}
@@ -163,9 +161,10 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self 
 
 	// start indexing realtime changes.
 	// !!! MUST HAPPEN PRIOR TO BACKFILLING !!!
+	chgStream, _ := changeLogListen(db.Log())
 	dirIndexEvents(
 		changeStreamToEventStream(
-			self, changeLogListen(db.Log())), dir)
+			self, chgStream), dir)
 
 	// Grab all the changes from the database
 	chgs, err := db.Log().All()

@@ -152,7 +152,7 @@ func newEvtPushPullResponse(success []bool, events []event) net.Response {
 	}))
 }
 
-func readEvtPushPullRequest(req net.Request) (events []event, err error) {
+func readEvtPushPullRequest(req net.Request) ([]event, error) {
 	return serverReadEvents(req.Body(), "events")
 }
 

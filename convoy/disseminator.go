@@ -169,11 +169,12 @@ func (d *disseminator) start() error {
 			}
 
 			m, ok := d.nextMember()
-			if ! ok {
+			if !ok {
 				continue
 			}
 
 			if _, err := d.disseminate(m); err != nil {
+				d.Logger.Error("Detected failed member [%v]", m)
 				d.Dir.Fail(m)
 			}
 		}
@@ -230,5 +231,5 @@ func dissemShuffleMembers(arr []member) []member {
 }
 
 func dissemFanout(factor int, numMembers int) int {
-	return factor*int(math.Ceil(math.Log(float64(numMembers)))) + 1
+	return factor * int(math.Ceil(math.Log(float64(numMembers))))
 }

@@ -118,7 +118,7 @@ func TestChangeLog_Listen(t *testing.T) {
 	defer ctx.Close()
 
 	cl := OpenTestChangeLog(ctx)
-	ch := changeLogListen(cl)
+	ch,_ := changeLogListen(cl)
 
 	chg1, _ := cl.Append("key", "val", false)
 	chg2, _ := cl.Append("key", "val1", false)

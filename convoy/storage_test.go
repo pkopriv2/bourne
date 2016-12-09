@@ -124,6 +124,28 @@ func TestStorage_Get_Disabled(t *testing.T) {
 	})
 }
 
+func TestStorage_Get_Rejoin(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	core := newStorage(ctx, ctx.Logger())
+	defer core.Close()
+
+	id := uuid.NewV1()
+	core.Update(func(u *update) {
+		assert.True(t, u.Evict(id, 0))
+		assert.True(t, u.Put(id, 0, "key", "val", 0))
+		assert.True(t, u.Join(id, 1))
+		assert.True(t, u.Put(id, 1, "key2", "val", 0))
+	})
+
+	var ok bool
+	core.View(func(v *view) {
+		_, ok = v.GetActive(id, "key")
+		assert.False(t, ok)
+		_, ok = v.GetActive(id, "key2")
+		assert.True(t, ok)
+	})
+}
+
 func TestStorage_Get_Del(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	core := newStorage(ctx, ctx.Logger())

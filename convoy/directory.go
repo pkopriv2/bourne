@@ -2,12 +2,10 @@ package convoy
 
 import (
 	"sync"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
@@ -16,17 +14,7 @@ import (
 func dirIndexEvents(ch <-chan event, dir *directory) {
 	go func() {
 		for e := range ch {
-			done, timeout := concurrent.NewBreaker(365*24*time.Hour, func() interface{} {
-				dir.Apply([]event{e})
-				return nil
-			})
-
-			select {
-			case <-done:
-				continue
-			case <-timeout:
-				return
-			}
+			dir.Apply([]event{e})
 		}
 	}()
 }
@@ -135,17 +123,16 @@ func (d *directory) Get(id uuid.UUID) (ret member, ok bool) {
 
 func (d *directory) Join(m member) (err error) {
 	items := d.Core.Update(func(u *update) {
-		if !u.Join(m.Id, m.Version) {
-			err = errors.Errorf("Member alread joined [%v]", m)
-			return
-		}
-
 		if !m.Healthy {
 			err = errors.Errorf("Cannot join unhealthy member [%v]", m)
 			return
 		}
 
-		u.Put(m.Id, m.Version, memberHealthAttr, "", m.Version)
+		if !u.Join(m.Id, m.Version) {
+			err = errors.Errorf("Member alread joined [%v]", m)
+			return
+		}
+
 		u.Put(m.Id, m.Version, memberHostAttr, m.Host, m.Version)
 		u.Put(m.Id, m.Version, memberPortAttr, m.Port, m.Version)
 	})
@@ -157,7 +144,7 @@ func (d *directory) Join(m member) (err error) {
 func (d *directory) Evict(m member) (err error) {
 	items := d.Core.Update(func(u *update) {
 		if !u.Evict(m.Id, m.Version) {
-			err = errors.Errorf("Member already joined [%v]", m.Id)
+			err = errors.Errorf("Member already evicted [%v]", m.Id)
 			return
 		}
 	})
@@ -269,7 +256,7 @@ func (d *directory) Evicted() (ret []member) {
 // Retrieves an active member from the directory.  To be active,
 // means that no eviction has been seen for this memeber.
 func dirGetActiveMember(v *view, id uuid.UUID) (member, bool) {
-	if m, ok := dirGetMember(v, id);  ok {
+	if m, ok := dirGetMember(v, id); ok {
 		if m.Active {
 			return m, true
 		}

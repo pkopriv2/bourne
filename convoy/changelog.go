@@ -19,18 +19,29 @@ var (
 	idKey     = []byte("id")
 )
 
-// Adds a listener to the change log and returns a buffered channel of changes.
-// the channel is closed when the log is closed.
-func changeLogListen(cl ChangeLog) <-chan Change {
-	ret := make(chan Change, 1024)
+// Adds a listener to the change log and returns a buffered channel of changes
+// and a control channel used to close
+// The change channel is closed when either log is closed or when the control channel
+// is closed.
+func changeLogListen(cl ChangeLog) (<-chan Change, chan<- struct{}) {
+	ret, done := make(chan Change, 1024), make(chan struct{})
+
+	var once sync.Once
 	cl.Listen(func(chg Change, ok bool) {
+		select {
+		case <-done:
+			once.Do(func() { close(ret) })
+			return
+		default:
+		}
+
 		if ok {
 			ret <- chg
 		} else {
-			close(ret)
+			once.Do(func() { close(ret) })
 		}
 	})
-	return ret
+	return ret, done
 }
 
 // Converts a stream of changes to events.

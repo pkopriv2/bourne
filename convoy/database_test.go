@@ -41,7 +41,7 @@ func TestDatabase_Put(t *testing.T) {
 	log := OpenTestChangeLog(ctx)
 
 	// should this be buffered???
-	ch := changeLogListen(log)
+	ch,_ := changeLogListen(log)
 
 	db := OpenTestDatabase(ctx, log)
 	db.Put("key", "val")
@@ -58,7 +58,7 @@ func TestDatabase_Del(t *testing.T) {
 	log := OpenTestChangeLog(ctx)
 
 	// should this be buffered???
-	ch := changeLogListen(log)
+	ch,_ := changeLogListen(log)
 
 	db := OpenTestDatabase(ctx, log)
 	db.Del("key")

@@ -9,6 +9,8 @@ import (
 // The event log maintains a set of events sorted (descending) by the
 // number of remainaing attempts to be shared.
 
+// TODO: replace uuid with integer
+
 // the index key
 type viewLogKey struct {
 	Id        uuid.UUID

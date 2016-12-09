@@ -79,7 +79,7 @@ type ChangeLog interface {
 	// Returns the current sequence of the log
 	Seq() (int, error)
 
-	// Increments and returns the seq
+	// Increments and returns the sequence of the log
 	Inc() (int, error)
 
 	// Appends a change to the log and notifies any listeners.

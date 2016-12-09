@@ -15,7 +15,7 @@ import (
 // System reserved keys.  Consumers should consider the: /Convoy/ namespace off limits!
 const (
 	memberMembershipAttr = "Convoy.Member.Joined"
-	memberHealthAttr     = "Convoy.Member.Status"
+	memberHealthAttr     = "Convoy.Member.Health"
 	memberHostAttr       = "Convoy.Member.Host"
 	memberPortAttr       = "Convoy.Member.Port"
 )
@@ -44,7 +44,9 @@ func readItem(r scribe.Reader) (item, error) {
 	}
 
 	item.MemId = id
-
+	if err := r.Read("memVer", &item.MemVer); err != nil {
+		return *item, err
+	}
 	if err := r.Read("attr", &item.Attr); err != nil {
 		return *item, err
 	}
@@ -115,25 +117,25 @@ func (h health) String() string {
 
 // the core storage type
 type storage struct {
-	Context common.Context
-	Logger  common.Logger
-	Data    amoeba.Index
-	roster  map[uuid.UUID]membership // sync'ed with data lock
-	health  map[uuid.UUID]health     // sync'ed with data lock
-	Wait    sync.WaitGroup
-	Closed  chan struct{}
-	Closer  chan struct{}
+	ctx    common.Context
+	logger common.Logger
+	data   amoeba.Index
+	roster map[uuid.UUID]membership // sync'ed with data lock
+	health map[uuid.UUID]health     // sync'ed with data lock
+	wait   sync.WaitGroup
+	closed chan struct{}
+	closer chan struct{}
 }
 
 func newStorage(ctx common.Context, logger common.Logger) *storage {
 	s := &storage{
-		Context: ctx,
-		Logger:  logger.Fmt("Storage"),
-		Data:    amoeba.NewBTreeIndex(32),
-		roster:  make(map[uuid.UUID]membership),
-		health:  make(map[uuid.UUID]health),
-		Closed:  make(chan struct{}),
-		Closer:  make(chan struct{}, 1)}
+		ctx:    ctx,
+		logger: logger.Fmt("Storage"),
+		data:   amoeba.NewBTreeIndex(32),
+		roster: make(map[uuid.UUID]membership),
+		health: make(map[uuid.UUID]health),
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}
 
 	coll := newStorageGc(s)
 	coll.start()
@@ -143,19 +145,19 @@ func newStorage(ctx common.Context, logger common.Logger) *storage {
 
 func (s *storage) Close() (err error) {
 	select {
-	case <-s.Closed:
+	case <-s.closed:
 		return errors.New("Storage already closing")
-	case s.Closer <- struct{}{}:
+	case s.closer <- struct{}{}:
 	}
 
-	close(s.Closed)
-	s.Wait.Wait()
+	close(s.closed)
+	s.wait.Wait()
 	return nil
 }
 
 func (d *storage) Roster() (ret map[uuid.UUID]membership) {
 	ret = make(map[uuid.UUID]membership)
-	d.Data.Read(func(data amoeba.View) {
+	d.data.Read(func(data amoeba.View) {
 		for k, v := range d.roster {
 			ret[k] = v
 		}
@@ -165,7 +167,7 @@ func (d *storage) Roster() (ret map[uuid.UUID]membership) {
 
 func (d *storage) Health() (ret map[uuid.UUID]health) {
 	ret = make(map[uuid.UUID]health)
-	d.Data.Read(func(data amoeba.View) {
+	d.data.Read(func(data amoeba.View) {
 		for k, v := range d.health {
 			ret[k] = v
 		}
@@ -174,13 +176,13 @@ func (d *storage) Health() (ret map[uuid.UUID]health) {
 }
 
 func (d *storage) View(fn func(*view)) {
-	d.Data.Read(func(data amoeba.View) {
+	d.data.Read(func(data amoeba.View) {
 		fn(&view{data, d.roster, d.health, time.Now()})
 	})
 }
 
 func (d *storage) Update(fn func(*update)) (ret []item) {
-	d.Data.Update(func(data amoeba.Update) {
+	d.data.Update(func(data amoeba.Update) {
 		update := &update{&view{data, d.roster, d.health, time.Now()}, data, make([]item, 0, 8)}
 		defer func() {
 			ret = update.items
@@ -192,7 +194,7 @@ func (d *storage) Update(fn func(*update)) (ret []item) {
 }
 
 func (d *storage) All() (ret []item) {
-	ret = make([]item, 0, d.Data.Size())
+	ret = make([]item, 0, d.data.Size())
 	d.View(func(v *view) {
 		v.ScanAll(func(s amoeba.Scan, i item) {
 			ret = append(ret, i)
@@ -284,9 +286,9 @@ func (u *update) Put(memId uuid.UUID, memVer int, attr string, attrVal string, a
 	default:
 		return true
 	case memberMembershipAttr:
-		stat, ok := u.Roster[memId]
+		cur, ok := u.Roster[memId]
 		if ok {
-			if stat.Version >= attrVer {
+			if cur.Version >= memVer {
 				return false
 			}
 		}
@@ -296,7 +298,8 @@ func (u *update) Put(memId uuid.UUID, memVer int, attr string, attrVal string, a
 	case memberHealthAttr:
 		cur, ok := u.Health[memId]
 		if ok {
-			if cur.Version >= attrVer {
+			fmt.Println("Current: ", cur)
+			if cur.Version >= memVer {
 				return false
 			}
 		}
@@ -319,7 +322,7 @@ func (u *update) Del(memId uuid.UUID, memVer int, attr string, attrVer int) bool
 	case memberMembershipAttr:
 		cur, ok := u.Roster[memId]
 		if ok {
-			if cur.Version > attrVer {
+			if cur.Version > memVer {
 				return false
 			}
 		}
@@ -329,7 +332,7 @@ func (u *update) Del(memId uuid.UUID, memVer int, attr string, attrVer int) bool
 	case memberHealthAttr:
 		cur, ok := u.Health[memId]
 		if ok {
-			if cur.Version > attrVer {
+			if cur.Version > memVer {
 				return false
 			}
 		}
@@ -349,7 +352,7 @@ func (u *update) Join(id uuid.UUID, ver int) bool {
 }
 
 func (u *update) Evict(id uuid.UUID, ver int) bool {
-	if ! u.Del(id, ver, memberMembershipAttr, 0) {
+	if !u.Del(id, ver, memberMembershipAttr, 0) {
 		return false
 	}
 
@@ -446,24 +449,24 @@ type storageGc struct {
 }
 
 func newStorageGc(store *storage) *storageGc {
-	conf := store.Context.Config()
+	conf := store.ctx.Config()
 	c := &storageGc{
 		store:  store,
-		logger: store.Logger.Fmt("Gc"),
-		gcExp:  conf.OptionalDuration("convoy.index.gc.expiration", 30*time.Minute),
-		gcPer:  conf.OptionalDuration("convoy.index.gc.cycle", time.Minute),
+		logger: store.logger.Fmt("Gc"),
+		gcExp:  conf.OptionalDuration("convoy.storage.gc.expiration", 30*time.Minute),
+		gcPer:  conf.OptionalDuration("convoy.storage.gc.cycle", time.Minute),
 	}
 
 	return c
 }
 
 func (c *storageGc) start() {
-	c.store.Wait.Add(1)
+	c.store.wait.Add(1)
 	go c.run()
 }
 
 func (d *storageGc) run() {
-	defer d.store.Wait.Done()
+	defer d.store.wait.Done()
 	defer d.logger.Debug("GC shutting down")
 
 	d.logger.Debug("Running GC every [%v] with expiration [%v]", d.gcPer, d.gcExp)
@@ -471,7 +474,7 @@ func (d *storageGc) run() {
 	ticker := time.Tick(d.gcPer)
 	for {
 		select {
-		case <-d.store.Closed:
+		case <-d.store.closed:
 			return
 		case <-ticker:
 			d.runGcCycle(d.gcExp)
@@ -481,15 +484,30 @@ func (d *storageGc) run() {
 
 func (d *storageGc) runGcCycle(gcExp time.Duration) {
 	d.store.Update(func(u *update) {
-		d.logger.Debug("GC cycle [%v] for items older than [%v]", u.Time(), gcExp)
-		deleteDeadItems(u.raw, collectMemberItems(u.view, collectDeadMembers(u.Roster, u.Time(), gcExp)))
-		deleteDeadItems(u.raw, collectDeadItems(u.view, u.Time(), gcExp))
+		d.logger.Debug("Starting GC cycle [%v] for items older than [%v]", u.Time(), gcExp)
+
+		dead := collectDeadMembers(u.Roster, u.now, gcExp)
+		items1 := collectMemberItems(u.view, dead)
+		items2 := collectDeadItems(u.view, u.Time(), gcExp)
+
+		deleteDeadItems(u.raw, items1)
+		deleteDeadItems(u.raw, items2)
+		deleteDeadMembers(u, dead)
+
+		d.logger.Info("Summary: Collected [%v] members and [%v] items", len(dead), len(items1)+len(items2))
 	})
 }
 
 func deleteDeadItems(u amoeba.Update, items []item) {
 	for _, i := range items {
 		u.Del(storageKey{i.Attr, i.MemId, i.MemVer})
+	}
+}
+
+func deleteDeadMembers(u *update, dead map[uuid.UUID]struct{}) {
+	for k, _ := range dead {
+		delete(u.Roster, k)
+		delete(u.Health, k)
 	}
 }
 
