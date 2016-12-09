@@ -126,14 +126,14 @@ func (d *directory) Events() []event {
 	return ret
 }
 
-func (d *directory) Get(id uuid.UUID) (ret *member) {
+func (d *directory) Get(id uuid.UUID) (ret member, ok bool) {
 	d.Core.View(func(u *view) {
-		ret = dirGetActiveMember(u, id)
+		ret, ok = dirGetActiveMember(u, id)
 	})
 	return
 }
 
-func (d *directory) Join(m *member) (err error) {
+func (d *directory) Join(m member) (err error) {
 	items := d.Core.Update(func(u *update) {
 		if !u.Join(m.Id, m.Version) {
 			err = errors.Errorf("Member alread joined [%v]", m)
@@ -154,7 +154,7 @@ func (d *directory) Join(m *member) (err error) {
 	return
 }
 
-func (d *directory) Evict(m *member) (err error) {
+func (d *directory) Evict(m member) (err error) {
 	items := d.Core.Update(func(u *update) {
 		if !u.Evict(m.Id, m.Version) {
 			err = errors.Errorf("Member already joined [%v]", m.Id)
@@ -166,7 +166,7 @@ func (d *directory) Evict(m *member) (err error) {
 	return
 }
 
-func (d *directory) Fail(m *member) (err error) {
+func (d *directory) Fail(m member) (err error) {
 	items := d.Core.Update(func(u *update) {
 		if !u.Del(m.Id, m.Version, memberHealthAttr, m.Version) {
 			err = errors.Errorf("Unable to fail member [%v]", m)
@@ -177,8 +177,8 @@ func (d *directory) Fail(m *member) (err error) {
 	return
 }
 
-func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []*member) {
-	ret = []*member{}
+func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []member) {
+	ret = []member{}
 	d.Core.View(func(v *view) {
 		ids := make(map[uuid.UUID]struct{})
 
@@ -188,9 +188,9 @@ func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []
 			}
 		})
 
-		ret = make([]*member, 0, len(ids))
+		ret = make([]member, 0, len(ids))
 		for id, _ := range ids {
-			if m := dirGetActiveMember(v, id); m != nil {
+			if m, ok := dirGetActiveMember(v, id); ok {
 				ret = append(ret, m)
 			}
 		}
@@ -198,60 +198,68 @@ func (d *directory) Collect(filter func(uuid.UUID, string, string) bool) (ret []
 	return
 }
 
-func (d *directory) First(filter func(uuid.UUID, string, string) bool) (ret *member) {
+func (d *directory) First(filter func(uuid.UUID, string, string) bool) (ret member, ok bool) {
 	d.Core.View(func(v *view) {
 		v.ScanActive(func(s amoeba.Scan, i item) {
 			if filter(i.MemId, i.Attr, i.Val) {
 				defer s.Stop()
-				ret = dirGetActiveMember(v, i.MemId)
+				ret, ok = dirGetActiveMember(v, i.MemId)
 			}
 		})
 	})
 	return
 }
 
-func (d *directory) Healthy() (ret []*member) {
+func (d *directory) Healthy() (ret []member) {
 	d.Core.View(func(v *view) {
-		ret = make([]*member, 0, len(v.Health))
+		ret = make([]member, 0, len(v.Health))
 		for id, h := range v.Health {
 			if h.Healthy {
-				ret = append(ret, dirGetActiveMember(v, id))
+				if m, ok := dirGetActiveMember(v, id); ok {
+					ret = append(ret, m)
+				}
 			}
 		}
 	})
 	return
 }
 
-func (d *directory) Unhealthy() (ret []*member) {
+func (d *directory) Unhealthy() (ret []member) {
 	d.Core.View(func(v *view) {
-		ret = make([]*member, 0, len(v.Health))
+		ret = make([]member, 0, len(v.Health))
 		for id, h := range v.Health {
 			if !h.Healthy {
-				ret = append(ret, dirGetActiveMember(v, id))
+				if m, ok := dirGetActiveMember(v, id); ok {
+					ret = append(ret, m)
+				}
 			}
 		}
 	})
 	return
 }
 
-func (d *directory) Active() (ret []*member) {
+func (d *directory) Active() (ret []member) {
 	d.Core.View(func(v *view) {
-		ret = make([]*member, 0, len(v.Health))
+		ret = make([]member, 0, len(v.Health))
 		for id, m := range v.Roster {
 			if m.Active {
-				ret = append(ret, dirGetMember(v, id))
+				if m, ok := dirGetActiveMember(v, id); ok {
+					ret = append(ret, m)
+				}
 			}
 		}
 	})
 	return
 }
 
-func (d *directory) Evicted() (ret []*member) {
+func (d *directory) Evicted() (ret []member) {
 	d.Core.View(func(v *view) {
-		ret = make([]*member, 0, len(v.Health))
+		ret = make([]member, 0, len(v.Health))
 		for id, m := range v.Roster {
 			if !m.Active {
-				ret = append(ret, dirGetMember(v, id))
+				if m, ok := dirGetMember(v, id); ok {
+					ret = append(ret, m)
+				}
 			}
 		}
 	})
@@ -260,44 +268,44 @@ func (d *directory) Evicted() (ret []*member) {
 
 // Retrieves an active member from the directory.  To be active,
 // means that no eviction has been seen for this memeber.
-func dirGetActiveMember(v *view, id uuid.UUID) *member {
-	if m := dirGetMember(v, id); m != nil {
+func dirGetActiveMember(v *view, id uuid.UUID) (member, bool) {
+	if m, ok := dirGetMember(v, id);  ok {
 		if m.Active {
-			return m
+			return m, true
 		}
 	}
-	return nil
+	return member{}, false
 }
 
 // Retrieves the latest member
-func dirGetMember(v *view, id uuid.UUID) *member {
+func dirGetMember(v *view, id uuid.UUID) (member, bool) {
 	hostItem, found := v.GetLatest(id, memberHostAttr)
 	if !found {
-		return nil
+		return member{}, false
 	}
 
 	portItem, found := v.GetLatest(id, memberPortAttr)
 	if !found {
-		return nil
+		return member{}, false
 	}
 
 	mem, _ := v.Roster[id]
 	if mem.Version != hostItem.Ver {
-		return nil
+		return member{}, false
 	}
 
 	health, _ := v.Health[id]
 	if health.Version != hostItem.Ver {
-		return nil
+		return member{}, false
 	}
 
-	return &member{
+	return member{
 		Id:      id,
 		Host:    hostItem.Val,
 		Port:    portItem.Val,
 		Healthy: health.Healthy,
 		Active:  mem.Active,
-		Version: hostItem.Ver}
+		Version: hostItem.Ver}, true
 }
 
 func dirCollectSuccesses(events []event, success []bool) []event {

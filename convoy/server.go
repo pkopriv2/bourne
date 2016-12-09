@@ -30,7 +30,7 @@ type server struct {
 	Logger common.Logger
 
 	// the member that is represented by this server.
-	Self *member
+	Self member
 
 	// the central storage abstraction. the directory is distributed amongst all members
 	Dir *directory
@@ -40,7 +40,7 @@ type server struct {
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, logger common.Logger, self *member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
+func newServer(ctx common.Context, logger common.Logger, self member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
 	server := &server{
 		Ctx:    ctx,
 		Logger: logger.Fmt("Server"),

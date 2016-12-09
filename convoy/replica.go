@@ -24,7 +24,7 @@ type replica struct {
 	Db Database
 
 	// the member hosted by this instance.
-	Self *member
+	Self member
 
 	// the central directory - contains the local view of all replica's dbs
 	Dir *directory
@@ -116,8 +116,10 @@ func (r *replica) Leave() error {
 		return err
 	}
 
-	done, timeout := concurrent.NewBreaker(30*time.Minute, func() interface{} {
-		time.Sleep(5*time.Second)
+	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
+		for r.Dissem.Evts.Data.Size() > 0 {
+			time.Sleep(5*time.Second)
+		}
 		return nil
 	})
 
@@ -132,7 +134,7 @@ func (r *replica) Leave() error {
 // Helper functions
 
 // Returns the member representing "self"
-func replicaInitSelf(ctx common.Context, db Database, port int) (mem *member, err error) {
+func replicaInitSelf(ctx common.Context, db Database, port int) (mem member, err error) {
 	var id uuid.UUID
 	var seq int
 	id, err = db.Log().Id()
@@ -150,13 +152,13 @@ func replicaInitSelf(ctx common.Context, db Database, port int) (mem *member, er
 }
 
 // Returns a logger decorated with membership info.
-func replicaInitLogger(ctx common.Context, self *member) common.Logger {
+func replicaInitLogger(ctx common.Context, self member) common.Logger {
 	return ctx.Logger().Fmt(self.String())
 }
 
 // Returns a newly initialized directory that is populated with the given db and member
 // and is indexing realtime changes to the db.
-func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self *member) (*directory, error) {
+func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self member) (*directory, error) {
 	dir := newDirectory(ctx, logger)
 
 	// start indexing realtime changes.
@@ -177,8 +179,8 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self 
 }
 
 // Returns a newly initialized disseminator.
-func replicaInitDissem(ctx common.Context, logger common.Logger, self *member, dir *directory) (*disseminator, error) {
-	dissem, err := newDisseminator(ctx, logger, self, dir, time.Second)
+func replicaInitDissem(ctx common.Context, logger common.Logger, self member, dir *directory) (*disseminator, error) {
+	dissem, err := newDisseminator(ctx, logger, self, dir, 1*time.Millisecond)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error constructing disseminator")
 	}
@@ -189,7 +191,7 @@ func replicaInitDissem(ctx common.Context, logger common.Logger, self *member, d
 }
 
 // Returns a newly initialized server.
-func replicaInitServer(ctx common.Context, log common.Logger, self *member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
+func replicaInitServer(ctx common.Context, log common.Logger, self member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
 	return newServer(ctx, log, self, dir, dissem, port)
 }
 

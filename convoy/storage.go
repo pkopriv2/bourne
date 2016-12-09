@@ -419,6 +419,10 @@ func storageDel(data amoeba.Update, time time.Time, memId uuid.UUID, memVer int,
 		if attrVer < cur.Ver {
 			return false
 		}
+
+		if cur.Del {
+			return false
+		}
 	}
 
 	data.Put(storageKey{attr, memId, memVer}, storageValue{attrVer, "", true, time})

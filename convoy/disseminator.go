@@ -37,10 +37,10 @@ func dissemEvents(ch <-chan []event, dissem *disseminator) {
 
 // A simple member iterator
 type dissemIter struct {
-	rest []*member
+	rest []member
 }
 
-func dissemNewIter(all []*member) *dissemIter {
+func dissemNewIter(all []member) *dissemIter {
 	return &dissemIter{all}
 }
 
@@ -48,14 +48,14 @@ func (i *dissemIter) Size() int {
 	return len(i.rest)
 }
 
-func (i *dissemIter) Next() (m *member) {
+func (i *dissemIter) Next() (m member, ok bool) {
 	if len(i.rest) == 0 {
-		return nil
+		return member{}, false
 	}
 
 	m = i.rest[0]
 	i.rest = i.rest[1:]
-	return
+	return m, true
 }
 
 // disseminator implementation.
@@ -64,7 +64,7 @@ type disseminator struct {
 	Logger common.Logger
 	Evts   *viewLog
 	Dir    *directory
-	Self   *member
+	Self   member
 	Iter   *dissemIter
 	Lock   sync.Mutex
 	Period time.Duration
@@ -74,7 +74,7 @@ type disseminator struct {
 	Wait   sync.WaitGroup
 }
 
-func newDisseminator(ctx common.Context, logger common.Logger, self *member, dir *directory, period time.Duration) (*disseminator, error) {
+func newDisseminator(ctx common.Context, logger common.Logger, self member, dir *directory, period time.Duration) (*disseminator, error) {
 	ret := &disseminator{
 		Ctx:    ctx,
 		Logger: logger.Fmt("Disseminator"),
@@ -126,7 +126,7 @@ func (d *disseminator) Push(e []event) error {
 	return nil
 }
 
-func (d *disseminator) nextMember() *member {
+func (d *disseminator) nextMember() (member, bool) {
 	d.Lock.Lock()
 	defer d.Lock.Unlock()
 
@@ -142,12 +142,11 @@ func (d *disseminator) nextMember() *member {
 
 	for {
 		if iter == nil {
-			return nil
+			return member{}, false
 		}
 
-		m := iter.Next()
-		if m != nil {
-			return m
+		if m, ok := iter.Next(); ok {
+			return m, true
 		}
 
 		iter = d.newIterator()
@@ -169,8 +168,8 @@ func (d *disseminator) start() error {
 			case <-tick.C:
 			}
 
-			m := d.nextMember()
-			if m == nil {
+			m, ok := d.nextMember()
+			if ! ok {
 				continue
 			}
 
@@ -185,7 +184,7 @@ func (d *disseminator) start() error {
 	return nil
 }
 
-func (d *disseminator) disseminate(m *member) ([]event, error) {
+func (d *disseminator) disseminate(m member) ([]event, error) {
 	batch := d.Evts.Pop(256)
 	if len(batch) == 0 {
 		return batch, nil
@@ -194,7 +193,7 @@ func (d *disseminator) disseminate(m *member) ([]event, error) {
 	return batch, d.disseminateTo(m, batch)
 }
 
-func (d *disseminator) disseminateTo(m *member, batch []event) error {
+func (d *disseminator) disseminateTo(m member, batch []event) error {
 	client, err := m.Client(d.Ctx)
 	if err != nil {
 		return errors.Wrapf(err, "Error retrieving member client [%v]", m)
@@ -216,7 +215,7 @@ func (d *disseminator) disseminateTo(m *member, batch []event) error {
 }
 
 func (d *disseminator) newIterator() *dissemIter {
-	members := membersCollect(d.Dir.Healthy(), func(m *member) bool {
+	members := membersCollect(d.Dir.Healthy(), func(m member) bool {
 		return m.Id != d.Self.Id
 	})
 
@@ -228,8 +227,8 @@ func (d *disseminator) newIterator() *dissemIter {
 }
 
 // Helper functions.
-func dissemShuffleMembers(arr []*member) []*member {
-	ret := make([]*member, len(arr))
+func dissemShuffleMembers(arr []member) []member {
+	ret := make([]member, len(arr))
 	for i, j := range rand.Perm(len(arr)) {
 		ret[i] = arr[j]
 	}

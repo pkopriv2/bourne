@@ -34,7 +34,7 @@ func changeLogListen(cl ChangeLog) <-chan Change {
 }
 
 // Converts a stream of changes to events.
-func changeStreamToEventStream(m *member, ch <-chan Change) <-chan event {
+func changeStreamToEventStream(m member, ch <-chan Change) <-chan event {
 	ret := make(chan event)
 	go func() {
 		for chg := range ch {
@@ -46,7 +46,7 @@ func changeStreamToEventStream(m *member, ch <-chan Change) <-chan event {
 	return ret
 }
 
-func changesToEvents(m *member, chgs []Change) []event {
+func changesToEvents(m member, chgs []Change) []event {
 	ret := make([]event, 0, len(chgs))
 	for _, c := range chgs {
 		ret = append(ret, changeToEvent(m, c))
@@ -248,6 +248,6 @@ func changeLogReadAll(tx *bolt.Tx) ([]Change, error) {
 // Converts a change to a standard data event.
 //
 // NOTE: See Storage for notes on reconciliation
-func changeToEvent(m *member, c Change) event {
+func changeToEvent(m member, c Change) event {
 	return item{m.Id, m.Version, c.Key, c.Val, c.Ver, c.Del, time.Now()}
 }
