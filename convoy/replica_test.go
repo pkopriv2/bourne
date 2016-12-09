@@ -125,7 +125,7 @@ func TestReplica_Leave(t *testing.T) {
 	})
 }
 
-func TestReplica_Fail(t *testing.T) {
+func TestReplica_Fail_Manual(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Info),
 	})
@@ -140,6 +140,28 @@ func TestReplica_Fail(t *testing.T) {
 	r2 := cluster[rand.Intn(size)] // they don't have to be unique
 
 	go r1.Dir.Fail(r2.Self)
+	WaitFor(cluster, func(r *replica) bool {
+		return len(r.Dir.Unhealthy()) == 1
+	})
+
+	WaitFor(cluster, func(r *replica) bool {
+		return r.Dissem.Evts.Data.Size() == 0
+	})
+}
+
+func TestReplica_Fail_Automatic(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	size := 32
+	cluster := StartTestCluster(ctx, size)
+
+	cluster[rand.Intn(size)].Close() // simulate a failure
+
 	WaitFor(cluster, func(r *replica) bool {
 		return len(r.Dir.Unhealthy()) == 1
 	})

@@ -173,11 +173,9 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			if _, err := d.disseminate(m); err == nil {
-				continue
+			if _, err := d.disseminate(m); err != nil {
+				d.Dir.Fail(m)
 			}
-
-			// TODO: Handle error!
 		}
 	}()
 
@@ -186,10 +184,6 @@ func (d *disseminator) start() error {
 
 func (d *disseminator) disseminate(m member) ([]event, error) {
 	batch := d.Evts.Pop(256)
-	if len(batch) == 0 {
-		return batch, nil
-	}
-
 	return batch, d.disseminateTo(m, batch)
 }
 
