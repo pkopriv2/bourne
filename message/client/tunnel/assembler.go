@@ -1,7 +1,7 @@
 package tunnel
 
 import (
-	"github.com/emirpasic/gods/sets/hashset"
+	"github.com/emirpasic/gods/maps/treemap"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/machine"
 	"github.com/pkopriv2/bourne/message/wire"

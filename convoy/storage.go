@@ -80,6 +80,14 @@ func (i item) Apply(u *update) bool {
 	}
 }
 
+func (i item) String() string {
+	if i.Del {
+		return fmt.Sprintf("Del(%v, %v)", storageKey{i.Attr, i.MemId, i.MemVer}, i.Ver)
+	} else {
+		return fmt.Sprintf("Put(%v, %v): %v", storageKey{i.Attr, i.MemId, i.MemVer}, i.Ver, i.Val)
+	}
+}
+
 // membership status
 type membership struct {
 	Version int
@@ -216,11 +224,9 @@ func (d *storage) listeners() (r []rosterHandler, h []healthHandler, i []func([]
 	for _, fn := range d.fnsRoster {
 		r = append(r, fn)
 	}
-
 	for _, fn := range d.fnsHealth {
 		h = append(h, fn)
 	}
-
 	for _, fn := range d.fnsItems {
 		i = append(i, fn)
 	}

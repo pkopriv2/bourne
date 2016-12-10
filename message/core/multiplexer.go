@@ -97,9 +97,9 @@ func (m *mux) AddSocket(addr interface{}) (StandardSocket, error) {
 		return nil, err
 	}
 
-	if err := m.sockets.Put(addr, socket); err != nil {
-		return nil, err
-	}
+	// if err := m.sockets.Put(addr, socket); err != nil {
+		// return nil, err
+	// }
 
 	return socket, nil
 }

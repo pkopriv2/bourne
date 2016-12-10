@@ -17,7 +17,6 @@ var (
 	replicaFailureError = errors.New("Replica failed")
 )
 
-
 // A replica represents a live, possibly joined instance of a convoy db.
 // The instance itself is managed by the cluster object.
 type replica struct {
@@ -53,7 +52,215 @@ type replica struct {
 
 	// Channel will be closed when instance is closed.
 	Closed chan struct{}
+
+	// UGH!!!
+	leaving concurrent.AtomicBool
 }
+
+func newMasterReplica(ctx common.Context, db Database, hostname string, port int) (r *replica, err error) {
+	return initReplica(ctx, db, hostname, port)
+}
+
+func newMemberReplica(ctx common.Context, db Database, hostname string, port int, peer *client) (r *replica, err error) {
+	r, err = initReplica(ctx, db, hostname, port)
+	if err != nil {
+		return
+	}
+	defer common.RunIf(func() { r.shutdown(err) })(err)
+
+	if err = replicaJoin(r, peer); err != nil {
+		return nil, err
+	}
+	return
+}
+
+// Initializes and returns a generic replica instance.
+func initReplica(ctx common.Context, db Database, host string, port int) (r *replica, err error) {
+	var self member
+	var dir *directory
+	var log chan<- struct{}
+	var diss *disseminator
+	var server net.Server
+
+	// The replica will be inextricably bound to this exact version of itself.
+	self, err = replicaInitSelf(ctx, db, host, port)
+	if err != nil {
+		return nil, errors.Wrap(err, "Error initializing self")
+	}
+
+	// Decorate the root logger with the 'self' instance
+	logger := replicaInitLogger(ctx, self)
+	logger.Info("Starting replica.")
+
+	dir, log, err = replicaInitDir(ctx, logger, db, self)
+	if err != nil {
+		return
+	}
+	defer common.RunIf(func() { dir.Close() })(err)
+	defer common.RunIf(func() { close(log) })(err)
+
+	diss, err = replicaInitDissem(ctx, logger, self, dir)
+	if err != nil {
+		return
+	}
+	defer common.RunIf(func() { diss.Close() })(err)
+
+	server, err = replicaInitServer(ctx, logger, self, dir, diss, port)
+	if err != nil {
+		return
+	}
+	defer common.RunIf(func() { server.Close() })(err)
+
+	r = &replica{
+		Self:       self,
+		Ctx:        ctx,
+		Dir:        dir,
+		Db:         db,
+		Logger:     logger,
+		Dissem:     diss,
+		Server:     server,
+		disconnect: log,
+		Closed:     make(chan struct{})}
+
+	r.Dir.OnEviction(func(id uuid.UUID, ver int) {
+		if r.leaving.Get() {
+			return
+		}
+
+		if id == r.Self.Id {
+			r.Logger.Info("Evicted")
+			r.shutdown(replicaEvictedError)
+		}
+	})
+
+	r.Dir.OnFailure(func(id uuid.UUID, ver int) {
+		if r.leaving.Get() {
+			return
+		}
+
+		if id == r.Self.Id {
+			r.Logger.Info("Failed")
+			r.shutdown(replicaFailureError)
+		}
+	})
+
+	return r, nil
+}
+
+func (r *replica) Close() error {
+	return r.shutdown(nil)
+}
+
+func (r *replica) Id() uuid.UUID {
+	return r.Self.Id
+}
+
+func (r *replica) Client() (*client, error) {
+	if err := r.ensureNotClosed(); err != nil {
+		return nil, err
+	}
+
+	return replicaClient(r.Server)
+}
+
+func (r *replica) Leave() error {
+	r.Logger.Info("Leaving cluster")
+	r.leaving.Set(true)
+	return r.shutdown(r.leaveAndDrain())
+}
+
+func (r *replica) ensureNotClosed() error {
+	select {
+	case <-r.Closed:
+		return common.Or(r.Failure, errors.New("Replica closed"))
+	default:
+		return nil
+	}
+}
+
+func (r *replica) shutdown(err error) error {
+	r.closer.Lock()
+	defer r.closer.Unlock()
+
+	if tmp := r.ensureNotClosed(); tmp != nil {
+		return tmp
+	}
+
+	// r.Logger.Info("Shutting down [%v]", err)
+	defer common.RunIf(func() { r.Logger.Error("Shutdown error: %v", err) })(err)
+	defer common.RunIf(func() { r.Failure = err })(err)
+
+	close(r.Closed)
+	close(r.disconnect)
+
+	var err1 error
+	done1, timeout1 := concurrent.NewBreaker(5*time.Second, func() interface{} {
+		err1 = r.Server.Close()
+		return nil
+	})
+	var err2 error
+	done2, timeout2 := concurrent.NewBreaker(5*time.Second, func() interface{} {
+		err2 = r.Dissem.Close()
+		return nil
+	})
+	var err3 error
+	done3, timeout3 := concurrent.NewBreaker(5*time.Second, func() interface{} {
+		err3 = r.Dir.Close()
+		return nil
+	})
+
+	select {
+	case <-done1:
+		err = common.Or(err, err1)
+	case <-timeout1:
+		err = common.Or(err, errors.New("Timeout Closing Server"))
+	}
+
+	select {
+	case <-done2:
+		err = common.Or(err, err2)
+	case <-timeout2:
+		err = common.Or(err, errors.New("Timeout Closing Disseminator"))
+	}
+
+	select {
+	case <-done3:
+		err = common.Or(err, err3)
+	case <-timeout3:
+		err = common.Or(err, errors.New("Timeout Closing Directory"))
+	}
+
+	return err
+}
+
+func (r *replica) leaveAndDrain() error {
+	r.closer.Lock()
+	defer r.closer.Unlock()
+	if err := r.ensureNotClosed(); err != nil {
+		return err
+	}
+
+	if err := r.Dir.Evict(r.Self); err != nil {
+		r.Logger.Error("Error evicting self [%v]", err)
+		return errors.Wrap(err, "Error evicting self")
+	}
+
+	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
+		for r.Dissem.Evts.Data.Size() > 0 {
+			time.Sleep(5 * time.Second)
+		}
+		return nil
+	})
+
+	select {
+	case <-done:
+		return nil
+	case <-timeout:
+		return errors.New("Timeout while emptying queue")
+	}
+}
+
+// Helper functions
 
 // Joins the replica to the given peer.
 func replicaJoin(self *replica, peer *client) error {
@@ -73,200 +280,8 @@ func replicaJoin(self *replica, peer *client) error {
 	return nil
 }
 
-func newMasterReplica(ctx common.Context, db Database, hostname string, port int) (r *replica, err error) {
-	// TODO: FIGURE OUT HOW TO GET IP....BOUNC
-	return initReplica(ctx, db, hostname, port)
-}
-
-func newMemberReplica(ctx common.Context, db Database, hostname string, port int, peer *client) (r *replica, err error) {
-	r, err = initReplica(ctx, db, hostname, port)
-	if err != nil {
-		return
-	}
-	defer common.RunIfNotNil(err, func() { r.Shutdown(err) })
-
-	if err = replicaJoin(r, peer); err != nil {
-		return nil, err
-	}
-
-	return
-}
-
-// Initializes and returns a generic replica instance.
-func initReplica(ctx common.Context, db Database, host string, port int) (r *replica, err error) {
-
-	var self member
-	var dir *directory
-	var log chan<- struct{}
-	var diss *disseminator
-	var server net.Server
-
-	// The replica will be inextricably bound to this exact version of itself.
-	self, err = replicaInitSelf(ctx, db, port)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error initializing self")
-	}
-
-	// Decorate the root logger with the 'self' instance
-	logger := replicaInitLogger(ctx, self)
-	logger.Info("Starting replica.")
-
-	dir, log, err = replicaInitDir(ctx, logger, db, self)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error initializing directory")
-	}
-	defer common.RunIfNotNil(err, func() { dir.Close() })
-	defer common.RunIfNotNil(err, func() { close(log) })
-
-	diss, err = replicaInitDissem(ctx, logger, self, dir)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error initializing disseminator")
-	}
-	defer common.RunIfNotNil(err, func() { diss.Close() })
-
-	server, err = replicaInitServer(ctx, logger, self, dir, diss, port)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error initializing server")
-	}
-	defer common.RunIfNotNil(err, func() { server.Close() })
-
-	r = &replica{
-		Self:       self,
-		Ctx:        ctx,
-		Dir:        dir,
-		Db:         db,
-		Logger:     logger,
-		Dissem:     diss,
-		Server:     server,
-		disconnect: log,
-		Closed:     make(chan struct{})}
-
-	r.Dir.OnEviction(func(id uuid.UUID, ver int) {
-		if id == r.Self.Id {
-			r.Shutdown(replicaEvictedError)
-		}
-	})
-
-	r.Dir.OnFailure(func(id uuid.UUID, ver int) {
-		if id == r.Self.Id {
-			r.Shutdown(replicaFailureError)
-		}
-	})
-
-	return r, nil
-}
-
-func (r *replica) ensureNotClosed() error {
-	select {
-	case <-r.Closed:
-		return r.Failure
-	default:
-		return nil
-	}
-}
-
-func (r *replica) Shutdown(err error) error {
-	r.closer.Lock()
-	defer r.closer.Unlock()
-	if err := r.ensureNotClosed(); err != nil {
-		return err
-	}
-
-	defer func() {
-		if err != nil {
-			r.Logger.Error("Shutdown error: %v", err)
-		}
-	}()
-	defer func() { r.Failure = err }()
-	defer close(r.Closed)
-
-	close(r.disconnect)
-	done1, timeout1 := concurrent.NewBreaker(time.Second, func() interface{} {
-		return r.Server.Close()
-	})
-	done2, timeout2 := concurrent.NewBreaker(time.Second, func() interface{} {
-		return r.Dissem.Close()
-	})
-	done3, timeout3 := concurrent.NewBreaker(time.Second, func() interface{} {
-		return r.Dir.Close()
-	})
-
-	select {
-	case e := <-done1:
-		if e != nil {
-			err = common.ErrOr(err, e.(error))
-		}
-	case <-timeout1:
-		err = common.ErrOr(err, errors.New("Timeout Closing Server"))
-	}
-
-	select {
-	case e := <-done2:
-		if e != nil {
-			err = common.ErrOr(err, e.(error))
-		}
-	case <-timeout2:
-		err = common.ErrOr(err, errors.New("Timeout Closing Disseminator"))
-	}
-
-	select {
-	case e := <-done3:
-		if e != nil {
-			err = common.ErrOr(err, e.(error))
-		}
-	case <-timeout3:
-		err = common.ErrOr(err, errors.New("Timeout Closing Directory"))
-	}
-
-	return err
-}
-
-func (r *replica) Close() error {
-	return r.Shutdown(nil)
-}
-
-func (r *replica) Id() uuid.UUID {
-	return r.Self.Id
-}
-
-func (r *replica) Client() (*client, error) {
-	if err := r.ensureNotClosed(); err != nil {
-		return nil, err
-	}
-
-	return replicaClient(r.Server)
-}
-
-func (r *replica) Leave() error {
-	if err := r.ensureNotClosed(); err != nil {
-		return err
-	}
-
-	r.Logger.Info("Leaving cluster")
-	if err := r.Dir.Evict(r.Self); err != nil {
-		r.Logger.Error("Error evicting self [%v]", err)
-		return errors.Wrap(err, "Error evicting self")
-	}
-
-	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
-		for r.Dissem.Evts.Data.Size() > 0 {
-			time.Sleep(5 * time.Second)
-		}
-		return nil
-	})
-
-	select {
-	case <-done:
-		return r.Shutdown(nil)
-	case <-timeout:
-		return r.Shutdown(errors.New("Timeout while leaving"))
-	}
-}
-
-// Helper functions
-
 // Returns the member representing "self"
-func replicaInitSelf(ctx common.Context, db Database, port int) (mem member, err error) {
+func replicaInitSelf(ctx common.Context, db Database, hostname string, port int) (mem member, err error) {
 	var id uuid.UUID
 	var seq int
 	id, err = db.Log().Id()
@@ -279,7 +294,7 @@ func replicaInitSelf(ctx common.Context, db Database, port int) (mem member, err
 		return
 	}
 
-	mem = newMember(id, "localhost", strconv.Itoa(port), seq)
+	mem = newMember(id, hostname, strconv.Itoa(port), seq)
 	return
 }
 
@@ -327,7 +342,6 @@ func replicaInitDissem(ctx common.Context, logger common.Logger, self member, di
 func replicaInitServer(ctx common.Context, log common.Logger, self member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
 	return newServer(ctx, log, self, dir, dissem, port)
 }
-
 
 func replicaClient(server net.Server) (*client, error) {
 	raw, err := server.Client()

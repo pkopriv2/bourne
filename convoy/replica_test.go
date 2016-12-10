@@ -18,9 +18,9 @@ func TestReplica_Close(t *testing.T) {
 	defer ctx.Close()
 
 	replica := StartTestReplica(ctx, 0)
-	defer replica.Close()
 
 	assert.Nil(t, replica.Close())
+	assert.NotNil(t, replica.Close())
 }
 
 func TestReplica_Init_EmptyDb(t *testing.T) {
@@ -31,7 +31,7 @@ func TestReplica_Init_EmptyDb(t *testing.T) {
 	defer replica.Close()
 
 	// make sure self exists
-	assert.Equal(t, []member{replica.Self}, replica.Dir.Active())
+	assert.Equal(t, []member{replica.Self}, replica.Dir.AllActive())
 }
 
 func TestReplica_Init_NonEmptyDb(t *testing.T) {
@@ -104,7 +104,7 @@ func TestReplica_Join(t *testing.T) {
 	replicaJoin(r2, masterClient)
 
 	WaitFor([]*replica{master, r1, r2}, func(r *replica) bool {
-		return len(r.Dir.Active()) == 3
+		return len(r.Dir.AllActive()) == 3
 	})
 }
 
@@ -116,27 +116,28 @@ func TestReplica_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 10
+	size := 3
 	cluster := StartTestCluster(ctx, size)
 
+	// choose a random member
 	idx := rand.Intn(size)
-	rep := cluster[rand.Intn(size)]
+	rep := cluster[idx]
 	go rep.Leave()
 
 	WaitFor(removeReplica(cluster, idx), func(r *replica) bool {
-		return len(r.Dir.Active()) == size-1
+		return !r.Dir.IsActive(rep.Id())
 	})
 }
 
 func TestReplica_Evict(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
+		"bourne.log.level": int(common.Debug),
 	})
 
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 64
+	size := 5
 	cluster := StartTestCluster(ctx, size)
 
 	indices := rand.Perm(size)
@@ -148,11 +149,36 @@ func TestReplica_Evict(t *testing.T) {
 
 	r1.Logger.Info("Waiting to detect evicted member")
 	WaitFor(removeReplica(cluster, indices[1]), func(r *replica) bool {
-		return len(r.Dir.Active()) == size-1
+		return !r.Dir.IsActive(r2.Id())
 	})
+
+	WaitFor([]*replica{r2}, func(r *replica) bool {
+		err := r.ensureNotClosed()
+		return err != nil
+	})
+
+	assert.Equal(t, replicaEvictedError, r2.ensureNotClosed())
 }
 
-// func TestReplica_Leave_Rejoin(t *testing.T) {
+//
+// // func TestReplica_Leave_Rejoin(t *testing.T) {
+// // conf := common.NewConfig(map[string]interface{}{
+// // "bourne.log.level": int(common.Info),
+// // })
+// //
+// // ctx := common.NewContext(conf)
+// // defer ctx.Close()
+// //
+// // size := 32
+// // cluster := StartTestCluster(ctx, size)
+// //
+// // go cluster[rand.Intn(size)].Leave()
+// // WaitFor(cluster, func(r *replica) bool {
+// // return len(r.Dir.Active()) == size-1
+// // })
+// // }
+//
+// func TestReplica_Fail_Manual(t *testing.T) {
 // conf := common.NewConfig(map[string]interface{}{
 // "bourne.log.level": int(common.Info),
 // })
@@ -163,60 +189,51 @@ func TestReplica_Evict(t *testing.T) {
 // size := 32
 // cluster := StartTestCluster(ctx, size)
 //
-// go cluster[rand.Intn(size)].Leave()
+// r1 := cluster[rand.Intn(size)]
+// r2 := cluster[rand.Intn(size)] // they don't have to be unique
+//
+// go r1.Dir.Fail(r2.Self)
 // WaitFor(cluster, func(r *replica) bool {
-// return len(r.Dir.Active()) == size-1
+// return len(r.Dir.Failed()) == 1
+// })
+//
+// WaitFor(cluster, func(r *replica) bool {
+// return r.Dissem.Evts.Data.Size() == 0
+// })
+// }
+//
+// func TestReplica_Fail_Automatic(t *testing.T) {
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Info),
+// })
+//
+// ctx := common.NewContext(conf)
+// defer ctx.Close()
+//
+// size := 32
+// cluster := StartTestCluster(ctx, size)
+//
+// i := rand.Intn(size)
+// r := cluster[i]
+// r.Server.Close()
+//
+// cluster = removeReplica(cluster, i)
+// WaitFor(cluster, func(r *replica) bool {
+// return len(r.Dir.Failed()) == 1
+// })
+//
+// WaitFor(cluster, func(r *replica) bool {
+// return r.Dissem.Evts.Data.Size() == 0
 // })
 // }
 
-func TestReplica_Fail_Manual(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	size := 32
-	cluster := StartTestCluster(ctx, size)
-
-	r1 := cluster[rand.Intn(size)]
-	r2 := cluster[rand.Intn(size)] // they don't have to be unique
-
-	go r1.Dir.Fail(r2.Self)
-	WaitFor(cluster, func(r *replica) bool {
-		return len(r.Dir.Failed()) == 1
-	})
-
-	WaitFor(cluster, func(r *replica) bool {
-		return r.Dissem.Evts.Data.Size() == 0
-	})
-}
-
-func TestReplica_Fail_Automatic(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	size := 32
-	cluster := StartTestCluster(ctx, size)
-
-	i := rand.Intn(size)
-	r := cluster[i]
-	r.Server.Close()
-
-	cluster = removeReplica(cluster, i)
-	WaitFor(cluster, func(r *replica) bool {
-		return len(r.Dir.Failed()) == 1
-	})
-
-	WaitFor(cluster, func(r *replica) bool {
-		return r.Dissem.Evts.Data.Size() == 0
-	})
-}
+// func randomReplica(cluster []*replica) *replica {
+//
+// }
+//
+// func removeRandomReplica(cluster []*replica) (*replica, []*replica) {
+//
+// }
 
 func removeReplica(cluster []*replica, i int) []*replica {
 	return append(cluster[:i], cluster[i+1:]...)
@@ -251,14 +268,14 @@ func StartTestCluster(ctx common.Context, num int) []*replica {
 	// default:
 	// }
 	// for _, r := range cluster {
-	// r.Logger.Debug("Queue depth: %v", r.Dissem.Evts.Data.Size())
+	// // r.Logger.Debug("Queue depth: %v", r.Dissem.Evts.Data.Size())
 	// <-time.After(5 * time.Millisecond)
 	// }
 	// }
 	// }(cluster)
 
 	WaitFor(cluster, func(r *replica) bool {
-		return len(r.Dir.Active()) == len(cluster)
+		return len(r.Dir.AllActive()) == len(cluster)
 	})
 
 	return cluster

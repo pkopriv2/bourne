@@ -21,7 +21,7 @@ func dirIndexEvents(ch <-chan event, dir *directory) {
 // the channel is closed when the log is closed.
 func dirListen(dir *directory) <-chan []event {
 	ret := make(chan []event, 1024)
-	dir.OnUpdate(func(batch []event) {
+	dir.OnChange(func(batch []event) {
 		if batch == nil {
 			close(ret)
 			return
@@ -60,6 +60,36 @@ func (d *directory) Close() (ret error) {
 	return d.Core.Close()
 }
 
+func (d *directory) OnChange(fn func([]event)) {
+	d.Core.Listen(func(batch []item) {
+		fn(dirItemsToEvents(batch))
+	})
+}
+
+func (d *directory) OnJoin(fn func(uuid.UUID, int)) {
+	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
+		if status {
+			fn(id, ver)
+		}
+	})
+}
+
+func (d *directory) OnEviction(fn func(uuid.UUID, int)) {
+	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
+		if !status {
+			fn(id, ver)
+		}
+	})
+}
+
+func (d *directory) OnFailure(fn func(uuid.UUID, int)) {
+	d.Core.ListenHealth(func(id uuid.UUID, ver int, status bool) {
+		if !status {
+			fn(id, ver)
+		}
+	})
+}
+
 func (d *directory) Apply(events []event) (ret []bool) {
 	ret = make([]bool, 0, len(events))
 	d.Core.Update(func(u *update) {
@@ -68,12 +98,6 @@ func (d *directory) Apply(events []event) (ret []bool) {
 		}
 	})
 	return
-}
-
-func (d *directory) OnUpdate(fn func([]event)) {
-	d.Core.Listen(func(batch []item) {
-		fn(dirItemsToEvents(batch))
-	})
 }
 
 func (d *directory) Events() []event {
@@ -104,14 +128,6 @@ func (d *directory) Join(m member) (err error) {
 	return
 }
 
-func (d *directory) OnJoin(fn func(uuid.UUID, int)) {
-	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
-		if status {
-			fn(id, ver)
-		}
-	})
-}
-
 func (d *directory) Evict(m member) (err error) {
 	d.Core.Update(func(u *update) {
 		if !u.Evict(m.Id, m.Version) {
@@ -120,14 +136,6 @@ func (d *directory) Evict(m member) (err error) {
 		}
 	})
 	return
-}
-
-func (d *directory) OnEviction(fn func(uuid.UUID, int)) {
-	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
-		if !status {
-			fn(id, ver)
-		}
-	})
 }
 
 func (d *directory) Fail(m member) (err error) {
@@ -139,15 +147,21 @@ func (d *directory) Fail(m member) (err error) {
 	return
 }
 
-func (d *directory) OnFailure(fn func(uuid.UUID, int)) {
-	d.Core.ListenHealth(func(id uuid.UUID, ver int, status bool) {
-		if !status {
-			fn(id, ver)
-		}
+func (d *directory) IsHealthy(id uuid.UUID) (ret bool) {
+	d.Core.View(func(v *view) {
+		ret = v.Health[id].Healthy
 	})
+	return
 }
 
-func (d *directory) Healthy() (ret []member) {
+func (d *directory) IsActive(id uuid.UUID) (ret bool) {
+	d.Core.View(func(v *view) {
+		ret = v.Roster[id].Active
+	})
+	return
+}
+
+func (d *directory) AllHealthy() (ret []member) {
 	d.Core.View(func(v *view) {
 		ret = make([]member, 0, len(v.Health))
 		for id, h := range v.Health {
@@ -161,7 +175,7 @@ func (d *directory) Healthy() (ret []member) {
 	return
 }
 
-func (d *directory) Failed() (ret []member) {
+func (d *directory) AllFailed() (ret []member) {
 	d.Core.View(func(v *view) {
 		ret = make([]member, 0, len(v.Health))
 		for id, h := range v.Health {
@@ -175,7 +189,7 @@ func (d *directory) Failed() (ret []member) {
 	return
 }
 
-func (d *directory) Active() (ret []member) {
+func (d *directory) AllActive() (ret []member) {
 	d.Core.View(func(v *view) {
 		ret = make([]member, 0, len(v.Health))
 		for id, m := range v.Roster {
@@ -189,7 +203,7 @@ func (d *directory) Active() (ret []member) {
 	return
 }
 
-func (d *directory) Evicted() (ret []member) {
+func (d *directory) RecentlyEvicted() (ret []member) {
 	d.Core.View(func(v *view) {
 		ret = make([]member, 0, len(v.Health))
 		for id, m := range v.Roster {

@@ -117,7 +117,7 @@ func (d *disseminator) Push(e []event) error {
 		return nil
 	}
 
-	n := len(d.Dir.Active())
+	n := len(d.Dir.AllActive())
 	if fanout := dissemFanout(d.Factor, n); fanout > 0 {
 		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
 		d.Evts.Push(e, fanout)
@@ -173,9 +173,11 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			if _, err := d.disseminate(m); err != nil {
-				d.Logger.Error("Detected failed member [%v]", m)
+			if batch, err := d.disseminate(m); err != nil {
+				d.Logger.Info("Detected failed member [%v]: %v", m, err)
+
 				d.Dir.Fail(m)
+				d.Evts.Push(batch, 1)
 			}
 		}
 	}()
@@ -199,10 +201,9 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 	}
 
 	defer client.Close()
-
 	_, events, err := client.EvtPushPull(batch)
 	if err != nil {
-		return errors.Wrapf(err, "Error pushing events", m)
+		return errors.Wrapf(err, "Error pushing events to member [%v]", m)
 	}
 
 	d.Dir.Apply(events)
@@ -210,7 +211,7 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 }
 
 func (d *disseminator) newIterator() *dissemIter {
-	members := membersCollect(d.Dir.Healthy(), func(m member) bool {
+	members := membersCollect(d.Dir.AllHealthy(), func(m member) bool {
 		return m.Id != d.Self.Id
 	})
 
