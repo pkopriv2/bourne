@@ -5,6 +5,22 @@ import (
 	"github.com/pkopriv2/bourne/concurrent"
 )
 
+func RunIfNotNil(val interface{}, fn func()) func() {
+	return func() {
+		if val != nil {
+			fn()
+		}
+	}
+}
+
+func ErrOr(l error, r error) error {
+	if l != nil {
+		return l
+	} else {
+		return r
+	}
+}
+
 type Env interface {
 	Closed() <-chan struct{}
 	OnClose(func())

@@ -519,9 +519,7 @@ func (s *server) handle(req Request) (Response, error) {
 	}
 }
 
-func (s *server) recv(dec scribe.Decoder) (Request, error) {
-	var req Request
-	var err error
+func (s *server) recv(dec scribe.Decoder) (req Request, err error) {
 	done, timer := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
 		req, err = readRequest(dec)
 		return nil
@@ -537,8 +535,7 @@ func (s *server) recv(dec scribe.Decoder) (Request, error) {
 	}
 }
 
-func (s *server) send(encoder scribe.Encoder, res Response) error {
-	var err error
+func (s *server) send(encoder scribe.Encoder, res Response) (err error) {
 	done, timer := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
 		err = scribe.Encode(encoder, res)
 		return nil

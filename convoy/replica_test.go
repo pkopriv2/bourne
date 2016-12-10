@@ -136,7 +136,7 @@ func TestReplica_Evict(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 32
+	size := 64
 	cluster := StartTestCluster(ctx, size)
 
 	indices := rand.Perm(size)
@@ -147,12 +147,8 @@ func TestReplica_Evict(t *testing.T) {
 	go r1.Dir.Evict(r2.Self)
 
 	r1.Logger.Info("Waiting to detect evicted member")
-	WaitFor(cluster, func(r *replica) bool {
+	WaitFor(removeReplica(cluster, indices[1]), func(r *replica) bool {
 		return len(r.Dir.Active()) == size-1
-	})
-
-	WaitFor(cluster, func(r *replica) bool {
-		return r.Dissem.Evts.Data.Size() == 0
 	})
 }
 
@@ -210,7 +206,7 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 
 	i := rand.Intn(size)
 	r := cluster[i]
-	r.Close() // simulate a failure
+	r.Server.Close()
 
 	cluster = removeReplica(cluster, i)
 	WaitFor(cluster, func(r *replica) bool {
@@ -229,6 +225,7 @@ func removeReplica(cluster []*replica, i int) []*replica {
 func StartTestCluster(ctx common.Context, num int) []*replica {
 	master := StartTestReplica(ctx, 8190)
 	masterClient := ReplicaClient(master)
+	defer masterClient.Close()
 
 	cluster := []*replica{master}
 	for i := num - 1; i > 0; i-- {
@@ -246,20 +243,19 @@ func StartTestCluster(ctx common.Context, num int) []*replica {
 	ctx.Env().OnClose(func() {
 		closed <- struct{}{}
 	})
-	go func(cluster []*replica) {
-		for {
-			select {
-			case <-closed:
-				return
-			default:
-			}
-			for _, r := range cluster {
-				r.Logger.Debug("Queue depth: %v", r.Dissem.Evts.Data.Size())
-				<-time.After(5 * time.Millisecond)
-			}
-
-		}
-	}(cluster)
+	// go func(cluster []*replica) {
+	// for {
+	// select {
+	// case <-closed:
+	// return
+	// default:
+	// }
+	// for _, r := range cluster {
+	// r.Logger.Debug("Queue depth: %v", r.Dissem.Evts.Data.Size())
+	// <-time.After(5 * time.Millisecond)
+	// }
+	// }
+	// }(cluster)
 
 	WaitFor(cluster, func(r *replica) bool {
 		return len(r.Dir.Active()) == len(cluster)
@@ -303,7 +299,7 @@ func StartTestReplica(ctx common.Context, port int) *replica {
 }
 
 func StartTestReplicaFromDb(ctx common.Context, db Database, port int) *replica {
-	replica, err := newReplica(ctx, db, port)
+	replica, err := initReplica(ctx, db, "localhost", port)
 	if err != nil {
 		panic(err)
 	}

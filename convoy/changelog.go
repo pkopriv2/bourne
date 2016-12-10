@@ -27,6 +27,8 @@ func changeLogListen(cl ChangeLog) (<-chan Change, chan<- struct{}) {
 	ret, done := make(chan Change, 1024), make(chan struct{})
 
 	var once sync.Once
+
+	// TODO: this is a slight memory leak on the listener....
 	cl.Listen(func(chg Change, ok bool) {
 		select {
 		case <-done:
