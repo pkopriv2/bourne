@@ -146,17 +146,35 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 	return r, nil
 }
 
+func (r *replica) ensureOpen() error {
+	select {
+	case <-r.Closed:
+		return common.Or(r.Failure, errors.New("Replica closed"))
+	default:
+		return nil
+	}
+}
+
+func (r *replica) wait() error {
+	<-r.Closed
+	return r.Failure
+}
+
 func (r *replica) Close() error {
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
+
 	return r.Fail(nil)
 }
 
 func (r *replica) Fail(err error) (ret error) {
-	return r.Shutdown(func() error { return err; })
+	return r.Shutdown(func() error { return err })
 }
 
 func (r *replica) Shutdown(fn func() error) (ret error) {
 	r.closer.Do(func() { ret = r.shutdown(fn()) })
-	return ret
+	return r.wait()
 }
 
 func (r *replica) Leave() error {
@@ -170,21 +188,13 @@ func (r *replica) Id() uuid.UUID {
 }
 
 func (r *replica) Client() (*client, error) {
-	if err := r.EnsureNotClosed(); err != nil {
+	if err := r.ensureOpen(); err != nil {
 		return nil, err
 	}
 
 	return replicaClient(r.Server)
 }
 
-func (r *replica) EnsureNotClosed() error {
-	select {
-	case <-r.Closed:
-		return common.Or(r.Failure, errors.New("Replica closed"))
-	default:
-		return nil
-	}
-}
 
 // guaranteed to be called only once.
 func (r *replica) shutdown(err error) (ret error) {

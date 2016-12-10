@@ -125,7 +125,7 @@ func TestReplica_Leave(t *testing.T) {
 	go rep.Leave()
 
 	WaitFor(removeReplica(cluster, idx), func(r *replica) bool {
-		return !r.Dir.IsHealthy(rep.Id()) || ! r.Dir.IsActive(rep.Id())
+		return !r.Dir.IsHealthy(rep.Id()) || !r.Dir.IsActive(rep.Id())
 	})
 }
 
@@ -153,11 +153,11 @@ func TestReplica_Evict(t *testing.T) {
 	})
 
 	WaitFor([]*replica{r2}, func(r *replica) bool {
-		err := r.EnsureNotClosed()
+		err := r.ensureOpen()
 		return err != nil
 	})
 
-	assert.Equal(t, replicaEvictedError, r2.EnsureNotClosed())
+	assert.Equal(t, replicaEvictedError, r2.ensureOpen())
 }
 
 //
