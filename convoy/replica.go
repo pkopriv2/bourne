@@ -65,7 +65,7 @@ func newMemberReplica(ctx common.Context, db Database, hostname string, port int
 	if err != nil {
 		return
 	}
-	defer common.RunIf(func() { r.shutdown(err) })(err)
+	defer common.RunIf(func() { r.Close() })(err)
 
 	if err = replicaJoin(r, peer); err != nil {
 		return nil, err
@@ -128,7 +128,7 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 
 		if id == r.Self.Id {
 			r.Logger.Info("Evicted")
-			r.Fail(replicaEvictedError)
+			r.fail(replicaEvictedError)
 		}
 	})
 
@@ -139,7 +139,7 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 
 		if id == r.Self.Id {
 			r.Logger.Info("Failed")
-			r.Fail(replicaFailureError)
+			r.fail(replicaFailureError)
 		}
 	})
 
@@ -160,31 +160,41 @@ func (r *replica) wait() error {
 	return r.Failure
 }
 
+func (r *replica) fail(err error) error {
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
+
+	return r.cleanup(func() error { return err })
+}
+
+func (r *replica) cleanup(fn func() error) error {
+	r.closer.Do(func() { r.shutdown(fn()) })
+	return r.wait()
+}
+
+func (r *replica) Id() uuid.UUID {
+	return r.Self.Id
+}
+
 func (r *replica) Close() error {
 	if err := r.ensureOpen(); err != nil {
 		return err
 	}
 
-	return r.Fail(nil)
-}
-
-func (r *replica) Fail(err error) (ret error) {
-	return r.Shutdown(func() error { return err })
-}
-
-func (r *replica) Shutdown(fn func() error) (ret error) {
-	r.closer.Do(func() { ret = r.shutdown(fn()) })
-	return r.wait()
+	return r.fail(nil)
 }
 
 func (r *replica) Leave() error {
-	r.leaving.Set(true)
-	defer r.leaving.Set(false)
-	return r.Shutdown(r.leaveAndDrain)
-}
+	if err := r.ensureOpen(); err != nil {
+		return err
+	}
 
-func (r *replica) Id() uuid.UUID {
-	return r.Self.Id
+	if !r.leaving.Swap(false, true) {
+		return errors.New("Already leaving")
+	}
+
+	return r.cleanup(r.leaveAndDrain)
 }
 
 func (r *replica) Client() (*client, error) {
@@ -195,13 +205,12 @@ func (r *replica) Client() (*client, error) {
 	return replicaClient(r.Server)
 }
 
-
 // guaranteed to be called only once.
 func (r *replica) shutdown(err error) (ret error) {
 	ret = err
 
 	r.Logger.Info("Shutting down [%v]", err)
-	defer common.RunIf(func() { r.Logger.Error("Shutdown error: %v", err) })(err)
+	defer common.RunIf(func() { r.Logger.Error("shutdown error: %v", err) })(err)
 
 	defer close(r.Closed)
 	defer common.RunIf(func() { r.Failure = ret })(ret)

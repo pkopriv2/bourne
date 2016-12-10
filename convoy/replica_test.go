@@ -116,7 +116,7 @@ func TestReplica_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 3
+	size := 32
 	cluster := StartTestCluster(ctx, size)
 
 	// choose a random member
@@ -137,7 +137,7 @@ func TestReplica_Evict(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 5
+	size := 32
 	cluster := StartTestCluster(ctx, size)
 
 	indices := rand.Perm(size)
