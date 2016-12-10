@@ -47,14 +47,13 @@ type replica struct {
 	// Guaranteed to be set after closed returns values.
 	Failure error
 
-	// Closing lock
-	closer sync.Mutex
-
 	// Channel will be closed when instance is closed.
 	Closed chan struct{}
 
-	// UGH!!!
-	leaving concurrent.AtomicBool
+	// closing utils.
+	closer    sync.Once
+	closeLock sync.Mutex
+	leaving   concurrent.AtomicBool
 }
 
 func newMasterReplica(ctx common.Context, db Database, hostname string, port int) (r *replica, err error) {
@@ -129,7 +128,7 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 
 		if id == r.Self.Id {
 			r.Logger.Info("Evicted")
-			r.shutdown(replicaEvictedError)
+			r.Fail(replicaEvictedError)
 		}
 	})
 
@@ -140,7 +139,7 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 
 		if id == r.Self.Id {
 			r.Logger.Info("Failed")
-			r.shutdown(replicaFailureError)
+			r.Fail(replicaFailureError)
 		}
 	})
 
@@ -148,7 +147,22 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 }
 
 func (r *replica) Close() error {
-	return r.shutdown(nil)
+	return r.Fail(nil)
+}
+
+func (r *replica) Fail(err error) (ret error) {
+	return r.Shutdown(func() error { return err; })
+}
+
+func (r *replica) Shutdown(fn func() error) (ret error) {
+	r.closer.Do(func() { ret = r.shutdown(fn()) })
+	return ret
+}
+
+func (r *replica) Leave() error {
+	r.leaving.Set(true)
+	defer r.leaving.Set(false)
+	return r.Shutdown(r.leaveAndDrain)
 }
 
 func (r *replica) Id() uuid.UUID {
@@ -156,20 +170,14 @@ func (r *replica) Id() uuid.UUID {
 }
 
 func (r *replica) Client() (*client, error) {
-	if err := r.ensureNotClosed(); err != nil {
+	if err := r.EnsureNotClosed(); err != nil {
 		return nil, err
 	}
 
 	return replicaClient(r.Server)
 }
 
-func (r *replica) Leave() error {
-	r.Logger.Info("Leaving cluster")
-	r.leaving.Set(true)
-	return r.shutdown(r.leaveAndDrain())
-}
-
-func (r *replica) ensureNotClosed() error {
+func (r *replica) EnsureNotClosed() error {
 	select {
 	case <-r.Closed:
 		return common.Or(r.Failure, errors.New("Replica closed"))
@@ -178,20 +186,15 @@ func (r *replica) ensureNotClosed() error {
 	}
 }
 
-func (r *replica) shutdown(err error) error {
-	r.closer.Lock()
-	defer r.closer.Unlock()
+// guaranteed to be called only once.
+func (r *replica) shutdown(err error) (ret error) {
+	ret = err
 
-	if tmp := r.ensureNotClosed(); tmp != nil {
-		return tmp
-	}
-
-	// r.Logger.Info("Shutting down [%v]", err)
+	r.Logger.Info("Shutting down [%v]", err)
 	defer common.RunIf(func() { r.Logger.Error("Shutdown error: %v", err) })(err)
-	defer common.RunIf(func() { r.Failure = err })(err)
 
-	close(r.Closed)
-	close(r.disconnect)
+	defer close(r.Closed)
+	defer common.RunIf(func() { r.Failure = ret })(ret)
 
 	var err1 error
 	done1, timeout1 := concurrent.NewBreaker(5*time.Second, func() interface{} {
@@ -211,35 +214,31 @@ func (r *replica) shutdown(err error) error {
 
 	select {
 	case <-done1:
-		err = common.Or(err, err1)
+		ret = common.Or(ret, err1)
 	case <-timeout1:
-		err = common.Or(err, errors.New("Timeout Closing Server"))
+		ret = common.Or(ret, errors.New("Timeout Closing Server"))
 	}
 
 	select {
 	case <-done2:
-		err = common.Or(err, err2)
+		ret = common.Or(ret, err2)
 	case <-timeout2:
-		err = common.Or(err, errors.New("Timeout Closing Disseminator"))
+		ret = common.Or(ret, errors.New("Timeout Closing Disseminator"))
 	}
 
 	select {
 	case <-done3:
-		err = common.Or(err, err3)
+		ret = common.Or(ret, err3)
 	case <-timeout3:
-		err = common.Or(err, errors.New("Timeout Closing Directory"))
+		ret = common.Or(ret, errors.New("Timeout Closing Directory"))
 	}
 
-	return err
+	close(r.disconnect)
+	return
 }
 
+// guaranteed to be called only once.
 func (r *replica) leaveAndDrain() error {
-	r.closer.Lock()
-	defer r.closer.Unlock()
-	if err := r.ensureNotClosed(); err != nil {
-		return err
-	}
-
 	if err := r.Dir.Evict(r.Self); err != nil {
 		r.Logger.Error("Error evicting self [%v]", err)
 		return errors.Wrap(err, "Error evicting self")
