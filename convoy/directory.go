@@ -90,6 +90,7 @@ func (d *directory) OnFailure(fn func(uuid.UUID, int)) {
 	})
 }
 
+
 func (d *directory) Apply(events []event) (ret []bool) {
 	ret = make([]bool, 0, len(events))
 	d.Core.Update(func(u *update) {
@@ -143,6 +144,20 @@ func (d *directory) Fail(m member) (err error) {
 		if !u.Del(m.Id, m.Version, memberHealthAttr, m.Version) {
 			err = errors.Errorf("Unable to fail member [%v]", m)
 		}
+	})
+	return
+}
+
+func (d *directory) Health(id uuid.UUID) (h health, ok bool) {
+	d.Core.View(func(v *view) {
+		h, ok = v.Health[id]
+	})
+	return
+}
+
+func (d *directory) Membership(id uuid.UUID) (m membership, ok bool) {
+	d.Core.View(func(v *view) {
+		m, ok = v.Roster[id]
 	})
 	return
 }

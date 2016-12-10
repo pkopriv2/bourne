@@ -176,8 +176,17 @@ func (d *disseminator) start() error {
 			if batch, err := d.disseminate(m); err != nil {
 				d.Logger.Info("Detected failed member [%v]: %v", m, err)
 
-				d.Dir.Fail(m)
-				d.Evts.Push(batch, 1)
+				switch err {
+				default:
+					d.Dir.Fail(m)
+					d.Evts.Push(batch, 1)
+				case replicaEvictedError:
+					d.Logger.Error("Evicted")
+					d.Dir.Evict(d.Self)
+				case replicaFailureError:
+					d.Logger.Error("Failed")
+					d.Dir.Fail(d.Self)
+				}
 			}
 		}
 	}()
@@ -201,9 +210,9 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 	}
 
 	defer client.Close()
-	_, events, err := client.EvtPushPull(batch)
+	_, events, err := client.PushPull(d.Self.Id, batch)
 	if err != nil {
-		return errors.Wrapf(err, "Error pushing events to member [%v]", m)
+		return err
 	}
 
 	d.Dir.Apply(events)

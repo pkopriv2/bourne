@@ -3,6 +3,7 @@ package convoy
 import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
+	uuid "github.com/satori/go.uuid"
 )
 
 // A thin member client.
@@ -47,11 +48,19 @@ func (m *client) DirApply(events []event) ([]bool, error) {
 	return readDirApplyResponse(resp)
 }
 
-func (m *client) EvtPushPull(events []event) ([]bool, []event, error) {
-	resp, err := m.Raw.Send(newEvtPushPullRequest(events))
+func (m *client) PushPull(source uuid.UUID, events []event) ([]bool, []event, error) {
+	resp, err := m.Raw.Send(newPushPullRequest(source, events))
 	if err != nil {
-		return nil, nil, err
+		switch err.Error() {
+		default:
+			return nil, nil, err
+		case replicaEvictedError.Error():
+			return nil, nil, replicaEvictedError
+		case replicaFailureError.Error():
+			return nil, nil, replicaFailureError
+		}
 	}
 
-	return readEvtPushPullResponse(resp)
+
+	return readPushPullResponse(resp)
 }

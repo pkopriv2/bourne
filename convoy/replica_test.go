@@ -110,7 +110,7 @@ func TestReplica_Join(t *testing.T) {
 
 func TestReplica_Leave(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
@@ -127,6 +127,13 @@ func TestReplica_Leave(t *testing.T) {
 	WaitFor(removeReplica(cluster, idx), func(r *replica) bool {
 		return !r.Dir.IsHealthy(rep.Id()) || !r.Dir.IsActive(rep.Id())
 	})
+
+	WaitFor([]*replica{rep}, func(r *replica) bool {
+		err := r.ensureOpen()
+		return err != nil
+	})
+
+	assert.Equal(t, replicaEvictedError, rep.ensureOpen())
 }
 
 func TestReplica_Evict(t *testing.T) {
@@ -260,19 +267,19 @@ func StartTestCluster(ctx common.Context, num int) []*replica {
 	ctx.Env().OnClose(func() {
 		closed <- struct{}{}
 	})
-	// go func(cluster []*replica) {
-	// for {
-	// select {
-	// case <-closed:
-	// return
-	// default:
-	// }
-	// for _, r := range cluster {
-	// // r.Logger.Debug("Queue depth: %v", r.Dissem.Evts.Data.Size())
-	// <-time.After(5 * time.Millisecond)
-	// }
-	// }
-	// }(cluster)
+	go func(cluster []*replica) {
+		for {
+			select {
+			case <-closed:
+				return
+			default:
+			}
+			for _, r := range cluster {
+				r.Logger.Debug("Queue depth: %v", r.Dissem.Evts.Data.Size())
+				<-time.After(5 * time.Millisecond)
+			}
+		}
+	}(cluster)
 
 	WaitFor(cluster, func(r *replica) bool {
 		return len(r.Dir.AllActive()) == len(cluster)

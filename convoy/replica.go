@@ -15,6 +15,7 @@ import (
 var (
 	replicaEvictedError = errors.New("Replica evicted from cluster")
 	replicaFailureError = errors.New("Replica failed")
+	replicaClosedError = errors.New("Replica closed")
 )
 
 // A replica represents a live, possibly joined instance of a convoy db.
@@ -51,9 +52,8 @@ type replica struct {
 	Closed chan struct{}
 
 	// closing utils.
-	closer    sync.Once
-	closeLock sync.Mutex
-	leaving   concurrent.AtomicBool
+	closer  sync.Once
+	leaving concurrent.AtomicBool
 }
 
 func newMasterReplica(ctx common.Context, db Database, hostname string, port int) (r *replica, err error) {
@@ -258,14 +258,17 @@ func (r *replica) shutdown(err error) (ret error) {
 
 // guaranteed to be called only once.
 func (r *replica) leaveAndDrain() error {
+	r.Logger.Info("Leaving")
+
 	if err := r.Dir.Evict(r.Self); err != nil {
 		r.Logger.Error("Error evicting self [%v]", err)
 		return errors.Wrap(err, "Error evicting self")
 	}
 
 	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
-		for r.Dissem.Evts.Data.Size() > 0 {
-			time.Sleep(5 * time.Second)
+		for size := r.Dissem.Evts.Data.Size(); size > 0; size = r.Dissem.Evts.Data.Size() {
+			r.Logger.Debug("Remainaing items: %v", size)
+			time.Sleep(1 * time.Second)
 		}
 		return nil
 	})

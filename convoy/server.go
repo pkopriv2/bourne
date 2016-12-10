@@ -7,6 +7,7 @@ import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
+	uuid "github.com/satori/go.uuid"
 )
 
 // server actions
@@ -98,12 +99,24 @@ func (s *server) DirApply(req net.Request) net.Response {
 
 // Handles a /evt/push request
 func (s *server) EvtPushPull(req net.Request) net.Response {
-	events, err := readEvtPushPullRequest(req)
+	source, events, err := readPushPullRequest(req)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return newEvtPushPullResponse(s.Dir.Apply(events), s.Dissem.Evts.Pop(256))
+	// s.Logger.Info("Received events from [%v]", source)
+
+	if h, ok := s.Dir.Health(source); ok && ! h.Healthy {
+		s.Logger.Error("Unhealthy member detected [%v]", source)
+		return net.NewErrorResponse(replicaFailureError)
+	}
+
+	if _, ok := s.Dir.Membership(source); ! ok {
+		s.Logger.Error("Inactive member detected [%v]", source)
+		return net.NewErrorResponse(replicaEvictedError)
+	}
+
+	return newPushPullResponse(s.Dir.Apply(events), s.Dissem.Evts.Pop(256))
 }
 
 // Helper functions
@@ -139,24 +152,32 @@ func serverReadEvents(msg scribe.Reader, field string) ([]event, error) {
 }
 
 // /events/pull
-func newEvtPushPullRequest(events []event) net.Request {
+func newPushPullRequest(source uuid.UUID, events []event) net.Request {
 	return net.NewRequest(metaEvtPushPull, scribe.Build(func(w scribe.Writer) {
+		scribe.WriteUUID(w, "source", source)
 		w.Write("events", events)
 	}))
 }
 
-func newEvtPushPullResponse(success []bool, events []event) net.Response {
+func newPushPullResponse(success []bool, events []event) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
 		w.Write("success", success)
 		w.Write("events", events)
 	}))
 }
 
-func readEvtPushPullRequest(req net.Request) ([]event, error) {
-	return serverReadEvents(req.Body(), "events")
+func readPushPullRequest(req net.Request) (id uuid.UUID, events []event, err error) {
+	id, err = scribe.ReadUUID(req.Body(), "source")
+	if err != nil {
+		return
+	}
+
+	events, err = serverReadEvents(req.Body(), "events")
+	return
 }
 
-func readEvtPushPullResponse(res net.Response) (success []bool, events []event, err error) {
+
+func readPushPullResponse(res net.Response) (success []bool, events []event, err error) {
 	if err = res.Error(); err != nil {
 		return
 	}

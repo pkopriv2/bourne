@@ -34,7 +34,7 @@ func newMember(id uuid.UUID, host string, port string, ver int) member {
 }
 
 func (m member) String() string {
-	return fmt.Sprintf("Member(id=%v)[addr=%v:%v](v=%v)", m.Id.String()[:7], m.Host, m.Port, m.Version)
+	return fmt.Sprintf("Member(id=%v)[addr=%v:%v](v=%v)", m.Id.String()[:8], m.Host, m.Port, m.Version)
 }
 
 func (m member) connect(port string) (net.Connection, error) {
