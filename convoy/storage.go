@@ -431,11 +431,7 @@ func (u *update) Join(id uuid.UUID, ver int) bool {
 }
 
 func (u *update) Evict(id uuid.UUID, ver int) bool {
-	if !u.Del(id, ver, memberMembershipAttr, 0) {
-		return false
-	}
-
-	return u.Del(id, ver, memberHealthAttr, 0)
+	return u.Del(id, ver, memberMembershipAttr, 0)
 }
 
 func (u *update) Fail(id uuid.UUID, ver int) bool {

@@ -2,7 +2,6 @@ package convoy
 
 import (
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -15,7 +14,7 @@ import (
 var (
 	replicaEvictedError = errors.New("Replica evicted from cluster")
 	replicaFailureError = errors.New("Replica failed")
-	replicaClosedError = errors.New("Replica closed")
+	replicaClosedError  = errors.New("Replica closed")
 )
 
 // A replica represents a live, possibly joined instance of a convoy db.
@@ -52,7 +51,7 @@ type replica struct {
 	Closed chan struct{}
 
 	// closing utils.
-	closer  sync.Once
+	closer  chan struct{}
 	leaving concurrent.AtomicBool
 }
 
@@ -119,28 +118,31 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 		Dissem:     diss,
 		Server:     server,
 		disconnect: log,
-		Closed:     make(chan struct{})}
+		Closed:     make(chan struct{}),
+		closer:     make(chan struct{}, 1)}
 
 	r.Dir.OnEviction(func(id uuid.UUID, ver int) {
-		if r.leaving.Get() {
+		if id != r.Self.Id {
 			return
 		}
 
-		if id == r.Self.Id {
-			r.Logger.Info("Evicted")
-			r.fail(replicaEvictedError)
+		if r.leaving.Get() {
+			return
 		}
+		r.Logger.Info("Evicted")
+		r.fail(replicaEvictedError)
 	})
 
 	r.Dir.OnFailure(func(id uuid.UUID, ver int) {
-		if r.leaving.Get() {
+		if id != r.Self.Id {
 			return
 		}
 
-		if id == r.Self.Id {
-			r.Logger.Info("Failed")
-			r.fail(replicaFailureError)
+		if r.leaving.Get() {
+			return
 		}
+		r.Logger.Info("Failed")
+		r.fail(replicaFailureError)
 	})
 
 	return r, nil
@@ -165,12 +167,7 @@ func (r *replica) fail(err error) error {
 		return err
 	}
 
-	return r.cleanup(func() error { return err })
-}
-
-func (r *replica) cleanup(fn func() error) error {
-	r.closer.Do(func() { r.shutdown(fn()) })
-	return r.wait()
+	return r.shutdown(err)
 }
 
 func (r *replica) Id() uuid.UUID {
@@ -194,7 +191,7 @@ func (r *replica) Leave() error {
 		return errors.New("Already leaving")
 	}
 
-	return r.cleanup(r.leaveAndDrain)
+	return r.shutdown(r.leaveAndDrain())
 }
 
 func (r *replica) Client() (*client, error) {
@@ -206,14 +203,18 @@ func (r *replica) Client() (*client, error) {
 }
 
 // guaranteed to be called only once.
-func (r *replica) shutdown(err error) (ret error) {
-	ret = err
-
-	r.Logger.Info("Shutting down [%v]", err)
+func (r *replica) shutdown(err error) error {
 	defer common.RunIf(func() { r.Logger.Error("shutdown error: %v", err) })(err)
 
+	select {
+	case <-r.Closed:
+		return r.Failure
+	case r.closer<-struct{}{}:
+	}
+
+	defer func() { <-r.closer }()
 	defer close(r.Closed)
-	defer common.RunIf(func() { r.Failure = ret })(ret)
+	defer common.RunIf(func() { r.Failure = err })(err)
 
 	var err1 error
 	done1, timeout1 := concurrent.NewBreaker(5*time.Second, func() interface{} {
@@ -233,32 +234,40 @@ func (r *replica) shutdown(err error) (ret error) {
 
 	select {
 	case <-done1:
-		ret = common.Or(ret, err1)
+		err = common.Or(err, err1)
 	case <-timeout1:
-		ret = common.Or(ret, errors.New("Timeout Closing Server"))
+		err = common.Or(err, errors.New("Timeout Closing Server"))
 	}
 
 	select {
 	case <-done2:
-		ret = common.Or(ret, err2)
+		err = common.Or(err, err2)
 	case <-timeout2:
-		ret = common.Or(ret, errors.New("Timeout Closing Disseminator"))
+		err = common.Or(err, errors.New("Timeout Closing Disseminator"))
 	}
 
 	select {
 	case <-done3:
-		ret = common.Or(ret, err3)
+		err = common.Or(err, err3)
 	case <-timeout3:
-		ret = common.Or(ret, errors.New("Timeout Closing Directory"))
+		err = common.Or(err, errors.New("Timeout Closing Directory"))
 	}
 
 	close(r.disconnect)
-	return
+	return err
 }
 
 // guaranteed to be called only once.
 func (r *replica) leaveAndDrain() error {
 	r.Logger.Info("Leaving")
+
+	select {
+	case <-r.Closed:
+		return r.Failure
+	case r.closer<-struct{}{}:
+	}
+
+	defer func() { <-r.closer }()
 
 	if err := r.Dir.Evict(r.Self); err != nil {
 		r.Logger.Error("Error evicting self [%v]", err)
@@ -267,7 +276,7 @@ func (r *replica) leaveAndDrain() error {
 
 	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
 		for size := r.Dissem.Evts.Data.Size(); size > 0; size = r.Dissem.Evts.Data.Size() {
-			r.Logger.Debug("Remainaing items: %v", size)
+			r.Logger.Debug("Remaining items: %v", size)
 			time.Sleep(1 * time.Second)
 		}
 		return nil
