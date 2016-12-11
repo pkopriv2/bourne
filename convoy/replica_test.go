@@ -125,7 +125,7 @@ func TestReplica_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 16
+	size := 128
 	cluster := StartTestCluster(ctx, size)
 
 	assert.True(t, true)
@@ -133,17 +133,13 @@ func TestReplica_Leave(t *testing.T) {
 	//choose a random member
 	idx := rand.Intn(size)
 	rep := cluster[idx]
-	go rep.Leave()
+	rep.Leave()
 
 	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
 		Sync(removeReplica(cluster, idx), func(r *replica) bool {
 			return !r.Dir.IsHealthy(rep.Id()) || !r.Dir.IsActive(rep.Id())
 		})
 
-		Sync([]*replica{rep}, func(r *replica) bool {
-			err := r.ensureOpen()
-			return err != nil
-		})
 		return nil
 	})
 
@@ -164,7 +160,7 @@ func TestReplica_Evict(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 16
+	size := 128
 	cluster := StartTestCluster(ctx, size)
 
 	indices := rand.Perm(size)
@@ -189,7 +185,7 @@ func TestReplica_Evict(t *testing.T) {
 	select {
 	case <-done:
 	case <-timeout:
-		t.FailNow()
+		t.Fail()
 	}
 
 	assert.Equal(t, replicaEvictedError, r2.ensureOpen())
@@ -203,7 +199,7 @@ func TestReplica_Fail_Manual(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 16
+	size := 128
 	cluster := StartTestCluster(ctx, size)
 
 	r1 := cluster[rand.Intn(size)]
@@ -240,7 +236,7 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 16
+	size := 128
 	cluster := StartTestCluster(ctx, size)
 
 	i := rand.Intn(size)
@@ -249,17 +245,17 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 	m.Logger.Info("Triggering failure.")
 	m.Server.Close()
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(30*time.Second, func() interface{} {
 		remaining := removeReplica(cluster, i)
 		Sync(remaining, func(r *replica) bool {
 			h, _ := r.Dir.Health(m.Self.Id)
 			return !h.Healthy
 		})
 
-		// Sync([]*replica{m}, func(r *replica) bool {
-			// err := r.ensureOpen()
-			// return err != nil
-		// })
+		Sync([]*replica{m}, func(r *replica) bool {
+			err := r.ensureOpen()
+			return err != nil
+		})
 		return nil
 	})
 
@@ -268,8 +264,6 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 	case <-timeout:
 		t.FailNow()
 	}
-
-	// assert.Equal(t, replicaClosedError, m.ensureOpen())
 }
 
 func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
@@ -280,7 +274,7 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 16
+	size := 128
 	cluster := StartTestCluster(ctx, size)
 
 	i := rand.Intn(size)
@@ -331,19 +325,6 @@ func StartTestCluster(ctx common.Context, num int) []*replica {
 	ctx.Env().OnClose(func() {
 		closed <- struct{}{}
 	})
-	go func(cluster []*replica) {
-		for {
-			select {
-			case <-closed:
-				return
-			default:
-			}
-			for _, r := range cluster {
-				r.Logger.Debug("Queue depth: %v", r.Dissem.Evts.Data.Size())
-				<-time.After(5 * time.Millisecond)
-			}
-		}
-	}(cluster)
 
 	Sync(cluster, func(r *replica) bool {
 		return len(r.Dir.AllActive()) == len(cluster)
@@ -368,8 +349,9 @@ func Sync(cluster []*replica, fn func(r *replica) bool) {
 				continue
 			}
 
-			if time.Now().Sub(start) > 5*time.Second {
+			if time.Now().Sub(start) > 10*time.Second {
 				r.Logger.Info("Still not sync'ed")
+				r.Logger.Info("Queue depth: %v", r.Dissem.Evts.Data.Size())
 			}
 		}
 		<-time.After(250 * time.Millisecond)

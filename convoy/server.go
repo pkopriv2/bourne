@@ -10,18 +10,22 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// server actions
+// server endpoints
 const (
-	actEvtPushPull = "/events/pushPull"
-	actDirApply    = "/dir/apply"
-	actDirList     = "/dir/list"
+	actPing      = "/health/ping"
+	actPingProxy = "/health/pingProxy"
+	actPushPull  = "/dissem/pushPull"
+	actDirApply  = "/dir/apply"
+	actDirList   = "/dir/list"
 )
 
 // Meta messages
 var (
-	metaDirApply    = serverNewMeta(actDirApply)
-	metaDirList     = serverNewMeta(actDirList)
-	metaEvtPushPull = serverNewMeta(actEvtPushPull)
+	metaPing      = serverNewMeta(actPing)
+	metaPingProxy = serverNewMeta(actPingProxy)
+	metaDirApply  = serverNewMeta(actDirApply)
+	metaDirList   = serverNewMeta(actDirList)
+	metaPushPull  = serverNewMeta(actPushPull)
 )
 
 type server struct {
@@ -63,14 +67,44 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 		switch action {
 		default:
 			return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
+		case actPing:
+			return s.Ping(req)
+		case actPingProxy:
+			return s.ProxyPing(req)
 		case actDirApply:
 			return s.DirApply(req)
 		case actDirList:
 			return s.DirList(req)
-		case actEvtPushPull:
+		case actPushPull:
 			return s.PushPull(req)
 		}
 	}
+}
+
+func (s *server) Ping(req net.Request) net.Response {
+	return net.NewEmptyResponse()
+}
+
+// Handles a /dir/list request
+func (s *server) ProxyPing(req net.Request) net.Response {
+	id, err := readPingProxyRequest(req)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	m, ok := s.Dir.Get(id)
+	if ! ok {
+		return newPingProxyResponse(false)
+	}
+
+	c, err := m.Client(s.Ctx)
+	if err != nil || c == nil {
+		return newPingProxyResponse(false)
+	}
+	defer c.Close()
+
+	err = c.Ping()
+	return newPingProxyResponse(err == nil)
 }
 
 // Handles a /dir/list request
@@ -108,7 +142,7 @@ func (s *server) PushPull(req net.Request) net.Response {
 	s.Dir.Core.View(func(v *view) {
 		m, ok := v.Roster[source]
 		h, _ := v.Health[source]
-		unHealthy = ok && m.Active && ! h.Healthy
+		unHealthy = ok && m.Active && !h.Healthy
 	})
 
 	if unHealthy {
@@ -116,7 +150,7 @@ func (s *server) PushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(replicaFailureError)
 	}
 
-	return newPushPullResponse(s.Dir.Apply(events), s.Dissem.Evts.Pop(256))
+	return newPushPullResponse(s.Dir.Apply(events), s.Dissem.Evts.Pop(1024))
 }
 
 // Helper functions
@@ -151,9 +185,40 @@ func serverReadEvents(msg scribe.Reader, field string) ([]event, error) {
 	return events, nil
 }
 
+// /health/ping
+func newPingRequest() net.Request {
+	return net.NewRequest(metaPing, scribe.EmptyMessage)
+}
+
+// /health/pingProxy
+func newPingProxyRequest(target uuid.UUID) net.Request {
+	return net.NewRequest(metaPingProxy, scribe.Build(func(w scribe.Writer) {
+		scribe.WriteUUID(w, "target", target)
+	}))
+}
+
+func newPingProxyResponse(success bool) net.Response {
+	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
+		w.Write("success", success)
+	}))
+}
+
+func readPingProxyRequest(req net.Request) (id uuid.UUID, err error) {
+	return scribe.ReadUUID(req.Body(), "target")
+}
+
+func readPingProxyResponse(res net.Response) (success bool, err error) {
+	if err = res.Error(); err != nil {
+		return
+	}
+
+	err = res.Body().Read("success", &success)
+	return
+}
+
 // /events/pull
 func newPushPullRequest(source uuid.UUID, events []event) net.Request {
-	return net.NewRequest(metaEvtPushPull, scribe.Build(func(w scribe.Writer) {
+	return net.NewRequest(metaPushPull, scribe.Build(func(w scribe.Writer) {
 		scribe.WriteUUID(w, "source", source)
 		w.Write("events", events)
 	}))

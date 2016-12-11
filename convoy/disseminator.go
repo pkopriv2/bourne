@@ -8,6 +8,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -164,9 +165,7 @@ func (d *disseminator) start() error {
 		defer d.Wait.Done()
 
 		tick := time.NewTicker(d.Period)
-
 		for {
-
 			select {
 			case <-d.Closed:
 				return
@@ -178,39 +177,97 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			if _, err := d.disseminate(m); err != nil {
-				d.Logger.Info("Detected failed member [%v]: %v", m, err)
-
-				switch err {
-				default:
-					d.Dir.Fail(m)
-
-					// TODO: ??????
-					// d.Evts.Push(batch, 1)
-				case replicaFailureError:
-					d.Logger.Error("Failed")
-					d.Dir.Fail(d.Self)
-				}
+			_, err := d.disseminate(m)
+			if err == nil {
+				continue
 			}
+
+			if err == replicaFailureError {
+				d.Logger.Error("Received failure response from [%v].  Evicting self.", m)
+				d.Dir.Fail(d.Self)
+				continue
+			}
+
+			done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+				for {
+					ch := d.probe(m, 3)
+					if <-ch {
+						return true
+					}
+					if <-ch {
+						return true
+					}
+					return <-ch
+				}
+			})
+
+			var success bool
+			select {
+			case <-d.Closed:
+				return
+			case <-timeout:
+				continue
+			case e := <-done:
+				success = e.(bool)
+			}
+
+			if success {
+				d.Logger.Info("Successfully probed member [%v]", m)
+				continue
+			}
+
+			d.Logger.Info("Detected failed member [%v]: %v", m, err)
+			d.Dir.Fail(m)
 		}
+
 	}()
 
 	return nil
 }
 
+func (d *disseminator) probe(m member, num int) <-chan bool {
+	iter := d.newIterator()
+	if iter == nil {
+		ret := make(chan bool, num)
+		for i := 0; i < num; i++ {
+			ret <- false
+		}
+		return ret
+	}
+
+	ret := make(chan bool, num)
+	for i := 0; i < num; i++ {
+		proxy, ok := iter.Next()
+		if !ok {
+			ret <- false
+		}
+
+		go func() {
+			ok, _ = d.tryProxyPing(m, proxy)
+			ret <- ok
+		}()
+	}
+	return ret
+}
+
+func (d *disseminator) tryProxyPing(target member, via member) (bool, error) {
+	client, err := via.Client(d.Ctx)
+	if err != nil || client == nil {
+		return false, errors.Wrapf(err, "Error retrieving member client [%v]", via)
+	}
+	defer client.Close()
+	return client.PingProxy(target.Id)
+}
+
 func (d *disseminator) disseminate(m member) ([]event, error) {
-	batch := d.Evts.Pop(256)
+	batch := d.Evts.Pop(1024)
 	return batch, d.disseminateTo(m, batch)
 }
 
 func (d *disseminator) disseminateTo(m member, batch []event) error {
 	client, err := m.Client(d.Ctx)
-	if err != nil {
+	if err != nil || client == nil {
 		return errors.Wrapf(err, "Error retrieving member client [%v]", m)
-	}
-
-	if client == nil {
-		return errors.Errorf("Unable to retrieve member client [%v]", m)
 	}
 
 	defer client.Close()
@@ -225,32 +282,44 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 
 func (d *disseminator) newIterator() *dissemIter {
 	var ids []uuid.UUID
+	var total int
 	d.Dir.Core.View(func(v *view) {
 		ids = storageHealthCollect(v.Health, func(id uuid.UUID, h health) bool {
 			if id == d.Self.Id {
 				return false
 			}
 
-			if _, ok := v.Roster[id]; ! ok {
+			m, ok := v.Roster[id]
+			if !ok {
 				return false
 			}
 
-			return h.Healthy
+			total++
+			return m.Active && h.Healthy
 		})
 	})
 
 	if len(ids) == 0 {
+
+		// if we get into a state where the rest of the cluster is failed...it's
+		// very likely we're in a network partition.  the disseminator won't be
+		// able to detect this state and will spin indefinitely, never being
+		// able to recover...we need to fail to bail out
+		if total > 0 {
+			d.Dir.Fail(d.Self)
+		}
+
 		return nil
 	}
 
 	// delaying retrieval of member until actual dissemination time...
 	// so we can cut down on the number of failures while membership
 	// is volatile...
-	return dissemNewIter(dissemShuffleMembers(ids), d.Dir)
+	return dissemNewIter(dissemShuffleIds(ids), d.Dir)
 }
 
 // Helper functions.
-func dissemShuffleMembers(arr []uuid.UUID) []uuid.UUID {
+func dissemShuffleIds(arr []uuid.UUID) []uuid.UUID {
 	ret := make([]uuid.UUID, len(arr))
 	for i, j := range rand.Perm(len(arr)) {
 		ret[i] = arr[j]

@@ -30,6 +30,23 @@ func (c *client) Close() error {
 	return c.Raw.Close()
 }
 
+func (m *client) Ping() error {
+	_, err := m.Raw.Send(newPingRequest())
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *client) PingProxy(target uuid.UUID) (bool, error) {
+	resp, err := m.Raw.Send(newPingProxyRequest(target))
+	if err != nil {
+		return false, err
+	}
+
+	return readPingProxyResponse(resp)
+}
+
 func (m *client) DirList() ([]event, error) {
 	resp, err := m.Raw.Send(newDirListRequest())
 	if err != nil {
@@ -51,6 +68,11 @@ func (m *client) DirApply(events []event) ([]bool, error) {
 func (m *client) PushPull(source uuid.UUID, events []event) ([]bool, []event, error) {
 	resp, err := m.Raw.Send(newPushPullRequest(source, events))
 	if err != nil {
+		return nil, nil, err
+	}
+
+	success, events, err := readPushPullResponse(resp)
+	if err != nil {
 		switch err.Error() {
 		default:
 			return nil, nil, err
@@ -61,6 +83,5 @@ func (m *client) PushPull(source uuid.UUID, events []event) ([]bool, []event, er
 		}
 	}
 
-
-	return readPushPullResponse(resp)
+	return success, events, nil
 }
