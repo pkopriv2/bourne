@@ -184,6 +184,8 @@ func (d *disseminator) start() error {
 				switch err {
 				default:
 					d.Dir.Fail(m)
+
+					// TODO: ??????
 					// d.Evts.Push(batch, 1)
 				case replicaFailureError:
 					d.Logger.Error("Failed")

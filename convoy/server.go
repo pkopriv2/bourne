@@ -104,7 +104,6 @@ func (s *server) PushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	// s.Logger.Info("Received events from [%v]", source)
 	var unHealthy bool
 	s.Dir.Core.View(func(v *view) {
 		m, ok := v.Roster[source]

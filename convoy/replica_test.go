@@ -89,7 +89,7 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 
 func TestReplica_Join(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
@@ -103,9 +103,18 @@ func TestReplica_Join(t *testing.T) {
 	replicaJoin(r1, masterClient)
 	replicaJoin(r2, masterClient)
 
-	WaitFor([]*replica{master, r1, r2}, func(r *replica) bool {
-		return len(r.Dir.AllActive()) == 3
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		Sync([]*replica{master, r1, r2}, func(r *replica) bool {
+			return len(r.Dir.AllActive()) == 3
+		})
+		return nil
 	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		t.FailNow()
+	}
 }
 
 func TestReplica_Leave(t *testing.T) {
@@ -116,7 +125,7 @@ func TestReplica_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 64
+	size := 16
 	cluster := StartTestCluster(ctx, size)
 
 	assert.True(t, true)
@@ -124,16 +133,25 @@ func TestReplica_Leave(t *testing.T) {
 	//choose a random member
 	idx := rand.Intn(size)
 	rep := cluster[idx]
-	rep.Leave()
+	go rep.Leave()
 
-	WaitFor(removeReplica(cluster, idx), func(r *replica) bool {
-		return !r.Dir.IsHealthy(rep.Id()) || !r.Dir.IsActive(rep.Id())
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		Sync(removeReplica(cluster, idx), func(r *replica) bool {
+			return !r.Dir.IsHealthy(rep.Id()) || !r.Dir.IsActive(rep.Id())
+		})
+
+		Sync([]*replica{rep}, func(r *replica) bool {
+			err := r.ensureOpen()
+			return err != nil
+		})
+		return nil
 	})
 
-	WaitFor([]*replica{rep}, func(r *replica) bool {
-		err := r.ensureOpen()
-		return err != nil
-	})
+	select {
+	case <-done:
+	case <-timeout:
+		t.FailNow()
+	}
 
 	assert.Equal(t, replicaClosedError, rep.ensureOpen())
 }
@@ -146,7 +164,7 @@ func TestReplica_Evict(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 64
+	size := 16
 	cluster := StartTestCluster(ctx, size)
 
 	indices := rand.Perm(size)
@@ -156,15 +174,23 @@ func TestReplica_Evict(t *testing.T) {
 	r1.Logger.Info("Evicting member [%v]", r2.Self)
 	r1.Dir.Evict(r2.Self)
 
-	r1.Logger.Info("Waiting to detect evicted member")
-	WaitFor(removeReplica(cluster, indices[1]), func(r *replica) bool {
-		return !r.Dir.IsActive(r2.Id())
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		Sync(removeReplica(cluster, indices[1]), func(r *replica) bool {
+			return !r.Dir.IsActive(r2.Id())
+		})
+
+		Sync([]*replica{r2}, func(r *replica) bool {
+			err := r.ensureOpen()
+			return err != nil
+		})
+		return nil
 	})
 
-	WaitFor([]*replica{r2}, func(r *replica) bool {
-		err := r.ensureOpen()
-		return err != nil
-	})
+	select {
+	case <-done:
+	case <-timeout:
+		t.FailNow()
+	}
 
 	assert.Equal(t, replicaEvictedError, r2.ensureOpen())
 }
@@ -177,17 +203,33 @@ func TestReplica_Fail_Manual(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 64
+	size := 16
 	cluster := StartTestCluster(ctx, size)
 
 	r1 := cluster[rand.Intn(size)]
 	r2 := cluster[rand.Intn(size)] // they don't have to be unique
 	r1.Dir.Fail(r2.Self)
 
-	WaitFor(cluster, func(r *replica) bool {
-		h, _ := r.Dir.Health(r2.Self.Id)
-		return ! h.Healthy
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		Sync(cluster, func(r *replica) bool {
+			h, _ := r.Dir.Health(r2.Self.Id)
+			return !h.Healthy
+		})
+
+		Sync([]*replica{r2}, func(r *replica) bool {
+			err := r.ensureOpen()
+			return err != nil
+		})
+		return nil
 	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		t.FailNow()
+	}
+
+	assert.Equal(t, replicaFailureError, r2.ensureOpen())
 }
 
 func TestReplica_Fail_Automatic(t *testing.T) {
@@ -198,17 +240,36 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 64
+	size := 16
 	cluster := StartTestCluster(ctx, size)
 
 	i := rand.Intn(size)
-	r := cluster[i]
-	r.Server.Close()
+	m := cluster[i]
 
-	cluster = removeReplica(cluster, i)
-	WaitFor(cluster, func(r *replica) bool {
-		return len(r.Dir.AllFailed()) == 1
+	m.Logger.Info("Triggering failure.")
+	m.Server.Close()
+
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		remaining := removeReplica(cluster, i)
+		Sync(remaining, func(r *replica) bool {
+			h, _ := r.Dir.Health(m.Self.Id)
+			return !h.Healthy
+		})
+
+		// Sync([]*replica{m}, func(r *replica) bool {
+			// err := r.ensureOpen()
+			// return err != nil
+		// })
+		return nil
 	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		t.FailNow()
+	}
+
+	// assert.Equal(t, replicaClosedError, m.ensureOpen())
 }
 
 func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
@@ -219,22 +280,30 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 64
+	size := 16
 	cluster := StartTestCluster(ctx, size)
 
 	i := rand.Intn(size)
-	r := cluster[i]
-	r.Db.Put("key", "val")
+	m := cluster[i]
+	m.Db.Put("key", "val")
 
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		remaining := removeReplica(cluster, i)
+		Sync(remaining, func(r *replica) bool {
+			found := r.Dir.Search(func(id uuid.UUID, key string, val string) bool {
+				return id == m.Self.Id && key == "key" && val == "val"
+			})
 
-	remaining := removeReplica(cluster, i)
-	WaitFor(remaining, func(r *replica) bool {
-		found := r.Dir.Search(func(id uuid.UUID, key string, val string) bool {
-			return id == r.Self.Id && key == "key" && val == "val"
+			return len(found) == 1
 		})
-
-		return len(found) == 1
+		return nil
 	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		t.FailNow()
+	}
 }
 
 func removeReplica(cluster []*replica, i int) []*replica {
@@ -276,14 +345,14 @@ func StartTestCluster(ctx common.Context, num int) []*replica {
 		}
 	}(cluster)
 
-	WaitFor(cluster, func(r *replica) bool {
+	Sync(cluster, func(r *replica) bool {
 		return len(r.Dir.AllActive()) == len(cluster)
 	})
 
 	return cluster
 }
 
-func WaitFor(cluster []*replica, fn func(r *replica) bool) {
+func Sync(cluster []*replica, fn func(r *replica) bool) {
 	done := make(map[member]struct{})
 	start := time.Now()
 
@@ -299,7 +368,7 @@ func WaitFor(cluster []*replica, fn func(r *replica) bool) {
 				continue
 			}
 
-			if time.Now().Sub(start) > 5 * time.Second {
+			if time.Now().Sub(start) > 5*time.Second {
 				r.Logger.Info("Still not sync'ed")
 			}
 		}
