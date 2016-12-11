@@ -68,7 +68,7 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 		case actDirList:
 			return s.DirList(req)
 		case actEvtPushPull:
-			return s.EvtPushPull(req)
+			return s.PushPull(req)
 		}
 	}
 }
@@ -90,7 +90,7 @@ func (s *server) DirApply(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	if 0 == len(events) {
+	if len(events) == 0 {
 		return net.NewErrorResponse(errors.New("Empty events."))
 	}
 
@@ -98,7 +98,7 @@ func (s *server) DirApply(req net.Request) net.Response {
 }
 
 // Handles a /evt/push request
-func (s *server) EvtPushPull(req net.Request) net.Response {
+func (s *server) PushPull(req net.Request) net.Response {
 	source, events, err := readPushPullRequest(req)
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -106,14 +106,13 @@ func (s *server) EvtPushPull(req net.Request) net.Response {
 
 	// s.Logger.Info("Received events from [%v]", source)
 
-	if h, ok := s.Dir.Health(source); ok && ! h.Healthy {
+	// data race....
+	h, _ := s.Dir.Health(source)
+	m, ok := s.Dir.Membership(source)
+
+	if ok && !h.Healthy && m.Active {
 		s.Logger.Error("Unhealthy member detected [%v]", source)
 		return net.NewErrorResponse(replicaFailureError)
-	}
-
-	if _, ok := s.Dir.Membership(source); ! ok {
-		s.Logger.Error("Inactive member detected [%v]", source)
-		return net.NewErrorResponse(replicaEvictedError)
 	}
 
 	return newPushPullResponse(s.Dir.Apply(events), s.Dissem.Evts.Pop(256))
@@ -175,7 +174,6 @@ func readPushPullRequest(req net.Request) (id uuid.UUID, events []event, err err
 	events, err = serverReadEvents(req.Body(), "events")
 	return
 }
-
 
 func readPushPullResponse(res net.Response) (success []bool, events []event, err error) {
 	if err = res.Error(); err != nil {

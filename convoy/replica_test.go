@@ -116,13 +116,15 @@ func TestReplica_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 32
+	size := 64
 	cluster := StartTestCluster(ctx, size)
 
-	// choose a random member
+	assert.True(t, true)
+
+	//choose a random member
 	idx := rand.Intn(size)
 	rep := cluster[idx]
-	go rep.Leave()
+	rep.Leave()
 
 	WaitFor(removeReplica(cluster, idx), func(r *replica) bool {
 		return !r.Dir.IsHealthy(rep.Id()) || !r.Dir.IsActive(rep.Id())
@@ -133,18 +135,18 @@ func TestReplica_Leave(t *testing.T) {
 		return err != nil
 	})
 
-	assert.Equal(t, replicaEvictedError, rep.ensureOpen())
+	assert.Equal(t, replicaClosedError, rep.ensureOpen())
 }
 
 func TestReplica_Evict(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 32
+	size := 64
 	cluster := StartTestCluster(ctx, size)
 
 	indices := rand.Perm(size)
@@ -152,7 +154,7 @@ func TestReplica_Evict(t *testing.T) {
 	r2 := cluster[indices[1]]
 
 	r1.Logger.Info("Evicting member [%v]", r2.Self)
-	go r1.Dir.Evict(r2.Self)
+	r1.Dir.Evict(r2.Self)
 
 	r1.Logger.Info("Waiting to detect evicted member")
 	WaitFor(removeReplica(cluster, indices[1]), func(r *replica) bool {
@@ -167,80 +169,46 @@ func TestReplica_Evict(t *testing.T) {
 	assert.Equal(t, replicaEvictedError, r2.ensureOpen())
 }
 
-//
-// // func TestReplica_Leave_Rejoin(t *testing.T) {
-// // conf := common.NewConfig(map[string]interface{}{
-// // "bourne.log.level": int(common.Info),
-// // })
-// //
-// // ctx := common.NewContext(conf)
-// // defer ctx.Close()
-// //
-// // size := 32
-// // cluster := StartTestCluster(ctx, size)
-// //
-// // go cluster[rand.Intn(size)].Leave()
-// // WaitFor(cluster, func(r *replica) bool {
-// // return len(r.Dir.Active()) == size-1
-// // })
-// // }
-//
-// func TestReplica_Fail_Manual(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Info),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// size := 32
-// cluster := StartTestCluster(ctx, size)
-//
-// r1 := cluster[rand.Intn(size)]
-// r2 := cluster[rand.Intn(size)] // they don't have to be unique
-//
-// go r1.Dir.Fail(r2.Self)
-// WaitFor(cluster, func(r *replica) bool {
-// return len(r.Dir.Failed()) == 1
-// })
-//
-// WaitFor(cluster, func(r *replica) bool {
-// return r.Dissem.Evts.Data.Size() == 0
-// })
-// }
-//
-// func TestReplica_Fail_Automatic(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Info),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// size := 32
-// cluster := StartTestCluster(ctx, size)
-//
-// i := rand.Intn(size)
-// r := cluster[i]
-// r.Server.Close()
-//
-// cluster = removeReplica(cluster, i)
-// WaitFor(cluster, func(r *replica) bool {
-// return len(r.Dir.Failed()) == 1
-// })
-//
-// WaitFor(cluster, func(r *replica) bool {
-// return r.Dissem.Evts.Data.Size() == 0
-// })
-// }
+func TestReplica_Fail_Manual(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
 
-// func randomReplica(cluster []*replica) *replica {
-//
-// }
-//
-// func removeRandomReplica(cluster []*replica) (*replica, []*replica) {
-//
-// }
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	size := 64
+	cluster := StartTestCluster(ctx, size)
+
+	r1 := cluster[rand.Intn(size)]
+	r2 := cluster[rand.Intn(size)] // they don't have to be unique
+	r1.Dir.Fail(r2.Self)
+
+	WaitFor(cluster, func(r *replica) bool {
+		return len(r.Dir.AllFailed()) == 1
+	})
+}
+
+func TestReplica_Fail_Automatic(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	size := 64
+	cluster := StartTestCluster(ctx, size)
+
+	i := rand.Intn(size)
+	r := cluster[i]
+	r.Server.Close()
+
+	cluster = removeReplica(cluster, i)
+	WaitFor(cluster, func(r *replica) bool {
+		return len(r.Dir.AllFailed()) == 1
+	})
+}
 
 func removeReplica(cluster []*replica, i int) []*replica {
 	return append(cluster[:i], cluster[i+1:]...)

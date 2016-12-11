@@ -149,7 +149,7 @@ func initReplica(ctx common.Context, db Database, host string, port int) (r *rep
 func (r *replica) ensureOpen() error {
 	select {
 	case <-r.Closed:
-		return common.Or(r.Failure, errors.New("Replica closed"))
+		return common.Or(r.Failure, replicaClosedError)
 	default:
 		return nil
 	}
