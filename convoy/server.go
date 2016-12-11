@@ -29,32 +29,32 @@ var (
 )
 
 type server struct {
-	Ctx common.Context
+	ctx common.Context
 
 	// the root server logger.
-	Logger common.Logger
+	logger common.Logger
 
 	// the member that is represented by this server.
-	Self member
+	self member
 
 	// the central storage abstraction. the directory is distributed amongst all members
-	Dir *directory
+	dir *directory
 
 	// the disseminator
-	Dissem *disseminator
+	dissem *disseminator
 }
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, logger common.Logger, self member, dir *directory, dissem *disseminator, port int) (net.Server, error) {
 	server := &server{
-		Ctx:    ctx,
-		Logger: logger.Fmt("Server"),
-		Self:   self,
-		Dir:    dir,
-		Dissem: dissem,
+		ctx:    ctx,
+		logger: logger.Fmt("Server"),
+		self:   self,
+		dir:    dir,
+		dissem: dissem,
 	}
 
-	return net.NewTcpServer(ctx, server.Logger, strconv.Itoa(port), serverInitHandler(server))
+	return net.NewTcpServer(ctx, server.logger, strconv.Itoa(port), serverInitHandler(server))
 }
 
 func serverInitHandler(s *server) func(net.Request) net.Response {
@@ -92,12 +92,12 @@ func (s *server) ProxyPing(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	m, ok := s.Dir.Get(id)
-	if ! ok {
+	m, ok := s.dir.Get(id)
+	if !ok {
 		return newPingProxyResponse(false)
 	}
 
-	c, err := m.Client(s.Ctx)
+	c, err := m.Client(s.ctx)
 	if err != nil || c == nil {
 		return newPingProxyResponse(false)
 	}
@@ -109,7 +109,7 @@ func (s *server) ProxyPing(req net.Request) net.Response {
 
 // Handles a /dir/list request
 func (s *server) DirList(req net.Request) net.Response {
-	return newDirListResponse(s.Dir.Events())
+	return newDirListResponse(s.dir.Events())
 }
 
 // Handles a /dir/size request.  TODO: Finish
@@ -128,7 +128,7 @@ func (s *server) DirApply(req net.Request) net.Response {
 		return net.NewErrorResponse(errors.New("Empty events."))
 	}
 
-	return newDirApplyResponse(s.Dir.Apply(events))
+	return newDirApplyResponse(s.dir.Apply(events))
 }
 
 // Handles a /evt/push request
@@ -139,18 +139,18 @@ func (s *server) PushPull(req net.Request) net.Response {
 	}
 
 	var unHealthy bool
-	s.Dir.Core.View(func(v *view) {
+	s.dir.Core.View(func(v *view) {
 		m, ok := v.Roster[source]
 		h, _ := v.Health[source]
 		unHealthy = ok && m.Active && !h.Healthy
 	})
 
 	if unHealthy {
-		s.Logger.Error("Unhealthy member detected [%v]", source)
+		s.logger.Error("Unhealthy member detected [%v]", source)
 		return net.NewErrorResponse(replicaFailureError)
 	}
 
-	return newPushPullResponse(s.Dir.Apply(events), s.Dissem.Evts.Pop(1024))
+	return newPushPullResponse(s.dir.Apply(events), s.dissem.events.Pop(1024))
 }
 
 // Helper functions

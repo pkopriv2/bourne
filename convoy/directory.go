@@ -45,13 +45,13 @@ func readEvent(r scribe.Reader) (event, error) {
 }
 
 type directory struct {
-	Logger common.Logger
+	logger common.Logger
 	Core   *storage
 }
 
 func newDirectory(ctx common.Context, logger common.Logger) *directory {
 	return &directory{
-		Logger: logger.Fmt("Directory"),
+		logger: logger.Fmt("Directory"),
 		Core:   newStorage(ctx, logger),
 	}
 }
@@ -89,7 +89,6 @@ func (d *directory) OnFailure(fn func(uuid.UUID, int)) {
 		}
 	})
 }
-
 
 func (d *directory) Apply(events []event) (ret []bool) {
 	ret = make([]bool, 0, len(events))

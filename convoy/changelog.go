@@ -71,14 +71,14 @@ func changesToEvents(m member, chgs []Change) []event {
 // built on a bolt DB instance, so it is guaranteed
 // both durable and thread-safe.
 type changeLog struct {
-	Stash    stash.Stash
-	Handlers []func(Change, bool)
-	Lock     sync.RWMutex
+	stash    stash.Stash
+	handlers []func(Change, bool)
+	lock     sync.RWMutex
 }
 
 // Opens the change log.  This uses the shared store
 func openChangeLog(db stash.Stash) *changeLog {
-	return &changeLog{Stash: db, Handlers: make([]func(Change, bool), 0, 4)}
+	return &changeLog{stash: db, handlers: make([]func(Change, bool), 0, 4)}
 }
 
 func (c *changeLog) Close() error {
@@ -88,13 +88,13 @@ func (c *changeLog) Close() error {
 }
 
 func (c *changeLog) Listen(fn func(Change, bool)) {
-	c.Lock.Lock()
-	defer c.Lock.Unlock()
-	c.Handlers = append(c.Handlers, fn)
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.handlers = append(c.handlers, fn)
 }
 
 func (c *changeLog) Seq() (seq int, err error) {
-	err = c.Stash.View(func(tx *bolt.Tx) error {
+	err = c.stash.View(func(tx *bolt.Tx) error {
 		seq = changeLogGetSeq(tx)
 		return err
 	})
@@ -102,7 +102,7 @@ func (c *changeLog) Seq() (seq int, err error) {
 }
 
 func (c *changeLog) Inc() (seq int, err error) {
-	err = c.Stash.Update(func(tx *bolt.Tx) error {
+	err = c.stash.Update(func(tx *bolt.Tx) error {
 		seq, err = changeLogIncSeq(tx)
 		return err
 	})
@@ -110,7 +110,7 @@ func (c *changeLog) Inc() (seq int, err error) {
 }
 
 func (c *changeLog) Id() (id uuid.UUID, err error) {
-	err = c.Stash.Update(func(tx *bolt.Tx) error {
+	err = c.stash.Update(func(tx *bolt.Tx) error {
 		id, err = changeLogGetId(tx)
 		return err
 	})
@@ -118,17 +118,17 @@ func (c *changeLog) Id() (id uuid.UUID, err error) {
 }
 
 func (c *changeLog) Listeners() []func(Change, bool) {
-	c.Lock.RLock()
-	defer c.Lock.RUnlock()
-	ret := make([]func(Change, bool), 0, len(c.Handlers))
-	for _, fn := range c.Handlers {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	ret := make([]func(Change, bool), 0, len(c.handlers))
+	for _, fn := range c.handlers {
 		ret = append(ret, fn)
 	}
 	return ret
 }
 
 func (c *changeLog) Append(key string, val string, del bool) (chg Change, err error) {
-	err = c.Stash.Update(func(tx *bolt.Tx) error {
+	err = c.stash.Update(func(tx *bolt.Tx) error {
 		chg, err = changeLogAppend(tx, key, val, del)
 		return err
 	})
@@ -142,7 +142,7 @@ func (c *changeLog) Append(key string, val string, del bool) (chg Change, err er
 }
 
 func (c *changeLog) All() (chgs []Change, err error) {
-	err = c.Stash.View(func(tx *bolt.Tx) error {
+	err = c.stash.View(func(tx *bolt.Tx) error {
 		chgs, err = changeLogReadAll(tx)
 		return err
 	})

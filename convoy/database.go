@@ -7,9 +7,9 @@ import (
 )
 
 type database struct {
-	Ctx    common.Context
-	Data   amoeba.Index
-	ChgLog ChangeLog
+	ctx    common.Context
+	data   amoeba.Index
+	chgLog ChangeLog
 }
 
 // Opens the database using the path to the given db file.
@@ -25,9 +25,9 @@ func OpenDatabase(ctx common.Context, path string) (Database, error) {
 // Opens the database using the given changelog
 func initDatabase(ctx common.Context, log ChangeLog) (Database, error) {
 	db := &database{
-		Ctx:    ctx,
-		Data:   amoeba.NewBTreeIndex(8),
-		ChgLog: log,
+		ctx:    ctx,
+		data:   amoeba.NewBTreeIndex(8),
+		chgLog: log,
 	}
 
 	return db, db.init()
@@ -38,12 +38,12 @@ func (d *database) Close() error {
 }
 
 func (d *database) init() error {
-	chgs, err := d.ChgLog.All()
+	chgs, err := d.chgLog.All()
 	if err != nil {
 		return err
 	}
 
-	d.Data.Update(func(u amoeba.Update) {
+	d.data.Update(func(u amoeba.Update) {
 		for _, chg := range chgs {
 			if chg.Del {
 				u.Del(amoeba.StringKey(chg.Key))
@@ -56,28 +56,28 @@ func (d *database) init() error {
 }
 
 func (d *database) Get(key string) (ret string, ok bool, err error) {
-	d.Data.Read(func(v amoeba.View) {
+	d.data.Read(func(v amoeba.View) {
 		ret, ok = dbGetVal(v, key)
 	})
 	return
 }
 
 func (d *database) Put(key string, val string) (err error) {
-	d.Data.Update(func(u amoeba.Update) {
-		err = dbPutVal(d.ChgLog, u, key, val)
+	d.data.Update(func(u amoeba.Update) {
+		err = dbPutVal(d.chgLog, u, key, val)
 	})
 	return
 }
 
 func (d *database) Del(key string) (err error) {
-	d.Data.Update(func(u amoeba.Update) {
-		err = dbDelVal(d.ChgLog, u, key)
+	d.data.Update(func(u amoeba.Update) {
+		err = dbDelVal(d.chgLog, u, key)
 	})
 	return
 }
 
 func (d *database) Log() ChangeLog {
-	return d.ChgLog
+	return d.chgLog
 }
 
 // Helper functions.

@@ -66,31 +66,31 @@ func (i *dissemIter) Next() (m member, ok bool) {
 
 // disseminator implementation.
 type disseminator struct {
-	Ctx    common.Context
-	Logger common.Logger
-	Self   member
-	Evts   *viewLog
-	Dir    *directory
-	Iter   *dissemIter
-	Lock   sync.Mutex
-	Period time.Duration
-	Factor int
-	Closed chan struct{}
-	Closer chan struct{}
-	Wait   sync.WaitGroup
+	ctx    common.Context
+	logger common.Logger
+	self   member
+	events *viewLog
+	dir    *directory
+	iter   *dissemIter
+	lock   sync.Mutex
+	period time.Duration
+	factor int
+	closed chan struct{}
+	closer chan struct{}
+	wait   sync.WaitGroup
 }
 
 func newDisseminator(ctx common.Context, logger common.Logger, self member, dir *directory, period time.Duration) (*disseminator, error) {
 	ret := &disseminator{
-		Ctx:    ctx,
-		Logger: logger.Fmt("Disseminator"),
-		Self:   self,
-		Evts:   newViewLog(ctx),
-		Dir:    dir,
-		Period: period,
-		Factor: ctx.Config().OptionalInt("convoy.dissem.fanout.factor", 4),
-		Closed: make(chan struct{}),
-		Closer: make(chan struct{}, 1)}
+		ctx:    ctx,
+		logger: logger.Fmt("Disseminator"),
+		self:   self,
+		events: newViewLog(ctx),
+		dir:    dir,
+		period: period,
+		factor: ctx.Config().OptionalInt("convoy.dissem.fanout.factor", 3),
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}
 
 	if err := ret.start(); err != nil {
 		return nil, err
@@ -101,21 +101,21 @@ func newDisseminator(ctx common.Context, logger common.Logger, self member, dir 
 
 func (d *disseminator) Close() error {
 	select {
-	case <-d.Closed:
+	case <-d.closed:
 		return nil
-	case d.Closer <- struct{}{}:
+	case d.closer <- struct{}{}:
 	}
 
-	close(d.Closed)
-	d.Wait.Wait()
+	close(d.closed)
+	d.wait.Wait()
 	return nil
 }
 
 func (d *disseminator) Push(e []event) error {
 	select {
-	default:
-	case <-d.Closed:
+	case <-d.closed:
 		return errors.Errorf("Disseminator closed")
+	default:
 	}
 
 	num := len(e)
@@ -123,25 +123,26 @@ func (d *disseminator) Push(e []event) error {
 		return nil
 	}
 
-	n := len(d.Dir.AllActive())
-	if fanout := dissemFanout(d.Factor, n); fanout > 0 {
-		d.Logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
-		d.Evts.Push(e, fanout)
+	n := len(d.dir.AllActive())
+	if fanout := dissemFanout(d.factor, n); fanout > 0 {
+		d.logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
+		d.events.Push(e, fanout)
 	}
 
 	return nil
 }
 
+// TODO: Inline this into dissem loop
 func (d *disseminator) nextMember() (member, bool) {
-	d.Lock.Lock()
-	defer d.Lock.Unlock()
+	d.lock.Lock()
+	defer d.lock.Unlock()
 
 	var iter *dissemIter
 	defer func() {
-		d.Iter = iter
+		d.iter = iter
 	}()
 
-	iter = d.Iter
+	iter = d.iter
 	if iter == nil {
 		iter = d.newIterator()
 	}
@@ -160,14 +161,14 @@ func (d *disseminator) nextMember() (member, bool) {
 }
 
 func (d *disseminator) start() error {
-	d.Wait.Add(1)
+	d.wait.Add(1)
 	go func() {
-		defer d.Wait.Done()
+		defer d.wait.Done()
 
-		tick := time.NewTicker(d.Period)
+		tick := time.NewTicker(d.period)
 		for {
 			select {
-			case <-d.Closed:
+			case <-d.closed:
 				return
 			case <-tick.C:
 			}
@@ -183,8 +184,8 @@ func (d *disseminator) start() error {
 			}
 
 			if err == replicaFailureError {
-				d.Logger.Error("Received failure response from [%v].  Evicting self.", m)
-				d.Dir.Fail(d.Self)
+				d.logger.Error("Received failure response from [%v].  Evicting self.", m)
+				d.dir.Fail(d.self)
 				continue
 			}
 
@@ -203,7 +204,7 @@ func (d *disseminator) start() error {
 
 			var success bool
 			select {
-			case <-d.Closed:
+			case <-d.closed:
 				return
 			case <-timeout:
 				continue
@@ -212,12 +213,12 @@ func (d *disseminator) start() error {
 			}
 
 			if success {
-				d.Logger.Info("Successfully probed member [%v]", m)
+				d.logger.Info("Successfully probed member [%v]", m)
 				continue
 			}
 
-			d.Logger.Info("Detected failed member [%v]: %v", m, err)
-			d.Dir.Fail(m)
+			d.logger.Info("Detected failed member [%v]: %v", m, err)
+			d.dir.Fail(m)
 		}
 
 	}()
@@ -243,15 +244,15 @@ func (d *disseminator) probe(m member, num int) <-chan bool {
 		}
 
 		go func() {
-			ok, _ = d.tryProxyPing(m, proxy)
+			ok, _ = d.tryPingProxy(m, proxy)
 			ret <- ok
 		}()
 	}
 	return ret
 }
 
-func (d *disseminator) tryProxyPing(target member, via member) (bool, error) {
-	client, err := via.Client(d.Ctx)
+func (d *disseminator) tryPingProxy(target member, via member) (bool, error) {
+	client, err := via.Client(d.ctx)
 	if err != nil || client == nil {
 		return false, errors.Wrapf(err, "Error retrieving member client [%v]", via)
 	}
@@ -260,32 +261,32 @@ func (d *disseminator) tryProxyPing(target member, via member) (bool, error) {
 }
 
 func (d *disseminator) disseminate(m member) ([]event, error) {
-	batch := d.Evts.Pop(1024)
+	batch := d.events.Pop(1024)
 	return batch, d.disseminateTo(m, batch)
 }
 
 func (d *disseminator) disseminateTo(m member, batch []event) error {
-	client, err := m.Client(d.Ctx)
+	client, err := m.Client(d.ctx)
 	if err != nil || client == nil {
 		return errors.Wrapf(err, "Error retrieving member client [%v]", m)
 	}
 
 	defer client.Close()
-	_, events, err := client.PushPull(d.Self.Id, batch)
+	_, events, err := client.PushPull(d.self.Id, batch)
 	if err != nil {
 		return err
 	}
 
-	d.Dir.Apply(events)
+	d.dir.Apply(events)
 	return nil
 }
 
 func (d *disseminator) newIterator() *dissemIter {
 	var ids []uuid.UUID
 	var total int
-	d.Dir.Core.View(func(v *view) {
+	d.dir.Core.View(func(v *view) {
 		ids = storageHealthCollect(v.Health, func(id uuid.UUID, h health) bool {
-			if id == d.Self.Id {
+			if id == d.self.Id {
 				return false
 			}
 
@@ -306,7 +307,7 @@ func (d *disseminator) newIterator() *dissemIter {
 		// able to detect this state and will spin indefinitely, never being
 		// able to recover...we need to fail to bail out
 		if total > 0 {
-			d.Dir.Fail(d.Self)
+			d.dir.Fail(d.self)
 		}
 
 		return nil
@@ -315,7 +316,7 @@ func (d *disseminator) newIterator() *dissemIter {
 	// delaying retrieval of member until actual dissemination time...
 	// so we can cut down on the number of failures while membership
 	// is volatile...
-	return dissemNewIter(dissemShuffleIds(ids), d.Dir)
+	return dissemNewIter(dissemShuffleIds(ids), d.dir)
 }
 
 // Helper functions.

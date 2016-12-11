@@ -11,6 +11,45 @@ import (
 
 // TODO: replace uuid with integer
 
+// The event log implementation.  The event log
+type viewLog struct {
+	data amoeba.Index
+}
+
+func newViewLog(ctx common.Context) *viewLog {
+	return &viewLog{amoeba.NewBTreeIndex(32)}
+}
+
+// returns, but does not remove a batch of entries from the log.  nil if none.
+func (d *viewLog) Peek(size int) (batch []event) {
+	batch = []event{}
+	d.data.Read(func(v amoeba.View) {
+		batch = viewLogPeek(v, size)
+	})
+	return
+}
+
+// returns and removes a batch of entries from the log.  nil if none.
+func (d *viewLog) Pop(size int) (batch []event) {
+	batch = []event{}
+	d.data.Update(func(u amoeba.Update) {
+		batch = viewLogPop(u, size)
+	})
+	return
+}
+
+func (d *viewLog) Push(batch []event, n int) {
+	if len(batch) == 0 || n < 1 {
+		return
+	}
+
+	d.data.Update(func(u amoeba.Update) {
+		for _, e := range batch {
+			u.Put(viewLogKey{uuid.NewV1(), n}, e) // NOTE: using V1 uuid so we don't exhaust entropy.
+		}
+	})
+}
+
 // the index key
 type viewLogKey struct {
 	Id        uuid.UUID
@@ -88,41 +127,3 @@ func viewLogPop(data amoeba.Update, num int) (batch []event) {
 	return
 }
 
-// The event log implementation.  The event log
-type viewLog struct {
-	Data amoeba.Index
-}
-
-func newViewLog(ctx common.Context) *viewLog {
-	return &viewLog{amoeba.NewBTreeIndex(32)}
-}
-
-// returns, but does not remove a batch of entries from the log.  nil if none.
-func (d *viewLog) Peek(size int) (batch []event) {
-	batch = []event{}
-	d.Data.Read(func(v amoeba.View) {
-		batch = viewLogPeek(v, size)
-	})
-	return
-}
-
-// returns and removes a batch of entries from the log.  nil if none.
-func (d *viewLog) Pop(size int) (batch []event) {
-	batch = []event{}
-	d.Data.Update(func(u amoeba.Update) {
-		batch = viewLogPop(u, size)
-	})
-	return
-}
-
-func (d *viewLog) Push(batch []event, n int) {
-	if len(batch) == 0 || n < 1 {
-		return
-	}
-
-	d.Data.Update(func(u amoeba.Update) {
-		for _, e := range batch {
-			u.Put(viewLogKey{uuid.NewV1(), n}, e) // NOTE: using V1 uuid so we don't exhaust entropy.
-		}
-	})
-}

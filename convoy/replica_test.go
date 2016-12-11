@@ -351,7 +351,7 @@ func Sync(cluster []*replica, fn func(r *replica) bool) {
 
 			if time.Now().Sub(start) > 10*time.Second {
 				r.Logger.Info("Still not sync'ed")
-				r.Logger.Info("Queue depth: %v", r.Dissem.Evts.Data.Size())
+				r.Logger.Info("Queue depth: %v", r.Dissem.events.data.Size())
 			}
 		}
 		<-time.After(250 * time.Millisecond)
@@ -386,7 +386,7 @@ func StartTestReplicaFromDb(ctx common.Context, db Database, port int) *replica 
 	}
 
 	ctx.Env().OnClose(func() {
-		db.Log().(*changeLog).Stash.Close()
+		db.Log().(*changeLog).stash.Close()
 	})
 
 	ctx.Env().OnClose(func() {

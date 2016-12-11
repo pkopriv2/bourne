@@ -21,7 +21,6 @@ const (
 )
 
 // Core storage abstractions.
-
 type item struct {
 	MemId  uuid.UUID
 	MemVer int

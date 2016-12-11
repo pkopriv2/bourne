@@ -209,7 +209,7 @@ func (r *replica) shutdown(err error) error {
 	select {
 	case <-r.Closed:
 		return r.Failure
-	case r.closer<-struct{}{}:
+	case r.closer <- struct{}{}:
 	}
 
 	defer func() { <-r.closer }()
@@ -264,7 +264,7 @@ func (r *replica) leaveAndDrain() error {
 	select {
 	case <-r.Closed:
 		return r.Failure
-	case r.closer<-struct{}{}:
+	case r.closer <- struct{}{}:
 	}
 
 	defer func() { <-r.closer }()
@@ -275,7 +275,7 @@ func (r *replica) leaveAndDrain() error {
 	}
 
 	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
-		for size := r.Dissem.Evts.Data.Size(); size > 0; size = r.Dissem.Evts.Data.Size() {
+		for size := r.Dissem.events.data.Size(); size > 0; size = r.Dissem.events.data.Size() {
 			r.Logger.Debug("Remaining items: %v", size)
 			time.Sleep(1 * time.Second)
 		}
