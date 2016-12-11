@@ -8,6 +8,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	uuid "github.com/satori/go.uuid"
 )
 
 // Sends an update to a randomly chosen recipient.
@@ -37,11 +38,12 @@ func dissemEvents(ch <-chan []event, dissem *disseminator) {
 
 // A simple member iterator
 type dissemIter struct {
-	rest []member
+	rest []uuid.UUID
+	dir  *directory
 }
 
-func dissemNewIter(all []member) *dissemIter {
-	return &dissemIter{all}
+func dissemNewIter(ids []uuid.UUID, dir *directory) *dissemIter {
+	return &dissemIter{ids, dir}
 }
 
 func (i *dissemIter) Size() int {
@@ -49,13 +51,16 @@ func (i *dissemIter) Size() int {
 }
 
 func (i *dissemIter) Next() (m member, ok bool) {
-	if len(i.rest) == 0 {
-		return member{}, false
-	}
+	for !ok {
+		if len(i.rest) == 0 {
+			return member{}, false
+		}
 
-	m = i.rest[0]
-	i.rest = i.rest[1:]
-	return m, true
+		id := i.rest[0]
+		i.rest = i.rest[1:]
+		m, ok = i.dir.Get(id)
+	}
+	return
 }
 
 // disseminator implementation.
@@ -173,16 +178,13 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			if batch, err := d.disseminate(m); err != nil {
+			if _, err := d.disseminate(m); err != nil {
 				d.Logger.Info("Detected failed member [%v]: %v", m, err)
 
 				switch err {
 				default:
 					d.Dir.Fail(m)
-					d.Evts.Push(batch, 1)
-				case replicaEvictedError:
-					d.Logger.Error("Evicted")
-					d.Dir.Evict(d.Self)
+					// d.Evts.Push(batch, 1)
 				case replicaFailureError:
 					d.Logger.Error("Failed")
 					d.Dir.Fail(d.Self)
@@ -220,20 +222,34 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 }
 
 func (d *disseminator) newIterator() *dissemIter {
-	members := membersCollect(d.Dir.AllHealthy(), func(m member) bool {
-		return m.Id != d.Self.Id
+	var ids []uuid.UUID
+	d.Dir.Core.View(func(v *view) {
+		ids = storageHealthCollect(v.Health, func(id uuid.UUID, h health) bool {
+			if id == d.Self.Id {
+				return false
+			}
+
+			if _, ok := v.Roster[id]; ! ok {
+				return false
+			}
+
+			return h.Healthy
+		})
 	})
 
-	if len(members) == 0 {
+	if len(ids) == 0 {
 		return nil
 	}
 
-	return dissemNewIter(dissemShuffleMembers(members))
+	// delaying retrieval of member until actual dissemination time...
+	// so we can cut down on the number of failures while membership
+	// is volatile...
+	return dissemNewIter(dissemShuffleMembers(ids), d.Dir)
 }
 
 // Helper functions.
-func dissemShuffleMembers(arr []member) []member {
-	ret := make([]member, len(arr))
+func dissemShuffleMembers(arr []uuid.UUID) []uuid.UUID {
+	ret := make([]uuid.UUID, len(arr))
 	for i, j := range rand.Perm(len(arr)) {
 		ret[i] = arr[j]
 	}

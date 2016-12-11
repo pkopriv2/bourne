@@ -105,12 +105,14 @@ func (s *server) PushPull(req net.Request) net.Response {
 	}
 
 	// s.Logger.Info("Received events from [%v]", source)
+	var unHealthy bool
+	s.Dir.Core.View(func(v *view) {
+		m, ok := v.Roster[source]
+		h, _ := v.Health[source]
+		unHealthy = ok && m.Active && ! h.Healthy
+	})
 
-	// data race....
-	h, _ := s.Dir.Health(source)
-	m, ok := s.Dir.Membership(source)
-
-	if ok && !h.Healthy && m.Active {
+	if unHealthy {
 		s.Logger.Error("Unhealthy member detected [%v]", source)
 		return net.NewErrorResponse(replicaFailureError)
 	}

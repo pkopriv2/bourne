@@ -9,7 +9,7 @@ import (
 )
 
 func ListenTcp(port string) (*TcpListener, error) {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%v", port))
+	listener, err := net.Listen("tcp4", fmt.Sprintf(":%v", port))
 	if err != nil {
 		return nil, err
 	}

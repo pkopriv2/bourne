@@ -185,7 +185,8 @@ func TestReplica_Fail_Manual(t *testing.T) {
 	r1.Dir.Fail(r2.Self)
 
 	WaitFor(cluster, func(r *replica) bool {
-		return len(r.Dir.AllFailed()) == 1
+		h, _ := r.Dir.Health(r2.Self.Id)
+		return ! h.Healthy
 	})
 }
 
@@ -207,6 +208,32 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 	cluster = removeReplica(cluster, i)
 	WaitFor(cluster, func(r *replica) bool {
 		return len(r.Dir.AllFailed()) == 1
+	})
+}
+
+func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	size := 64
+	cluster := StartTestCluster(ctx, size)
+
+	i := rand.Intn(size)
+	r := cluster[i]
+	r.Db.Put("key", "val")
+
+
+	remaining := removeReplica(cluster, i)
+	WaitFor(remaining, func(r *replica) bool {
+		found := r.Dir.Search(func(id uuid.UUID, key string, val string) bool {
+			return id == r.Self.Id && key == "key" && val == "val"
+		})
+
+		return len(found) == 1
 	})
 }
 
@@ -258,11 +285,22 @@ func StartTestCluster(ctx common.Context, num int) []*replica {
 
 func WaitFor(cluster []*replica, fn func(r *replica) bool) {
 	done := make(map[member]struct{})
+	start := time.Now()
+
 	for len(done) < len(cluster) {
 		cluster[0].Logger.Info("Number of sync'ed: %v", len(done))
 		for _, r := range cluster {
+			if _, ok := done[r.Self]; ok {
+				continue
+			}
+
 			if fn(r) {
 				done[r.Self] = struct{}{}
+				continue
+			}
+
+			if time.Now().Sub(start) > 5 * time.Second {
+				r.Logger.Info("Still not sync'ed")
 			}
 		}
 		<-time.After(250 * time.Millisecond)

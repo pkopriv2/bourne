@@ -426,7 +426,7 @@ func (u *update) Join(id uuid.UUID, ver int) bool {
 		return false
 	}
 
-	// This shouldn't be able to return false...
+	// This shouldn't be able to return false...panic??
 	return u.Put(id, ver, memberHealthAttr, "true", 0)
 }
 
@@ -513,6 +513,34 @@ func storageScan(data amoeba.View, fn func(amoeba.Scan, storageKey, storageValue
 		val := i.(storageValue)
 		fn(s, key, val)
 	})
+}
+
+func storageRosterCollect(roster map[uuid.UUID]membership, fn func(uuid.UUID, membership) bool) []uuid.UUID {
+	if len(roster) == 0 {
+		return []uuid.UUID{}
+	}
+
+	ret := make([]uuid.UUID, 0, len(roster))
+	for id, m := range roster {
+		if fn(id, m) {
+			ret = append(ret, id)
+		}
+	}
+	return ret
+}
+
+func storageHealthCollect(health map[uuid.UUID]health, fn func(uuid.UUID, health) bool) []uuid.UUID {
+	if len(health) == 0 {
+		return []uuid.UUID{}
+	}
+
+	ret := make([]uuid.UUID, 0, len(health))
+	for id, m := range health {
+		if fn(id, m) {
+			ret = append(ret, id)
+		}
+	}
+	return ret
 }
 
 // A simple garbage collector for the storage api
