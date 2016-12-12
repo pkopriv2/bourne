@@ -6,6 +6,20 @@ import (
 	"github.com/pkopriv2/bourne/stash"
 )
 
+// The database is the local version of a publiseh
+type Database interface {
+	// Store
+
+	// Returns the log of the database.  These are required to be durable
+	// in the event of failures.  In order to rejoin a cluster,  a failed
+	// replica is required to retransmit any incomplete state along with
+	// its versioning information.
+	//
+	// See the changelog documentation for more info on what state is required
+	// to qualify as a database.
+	Log() ChangeLog
+}
+
 type database struct {
 	ctx    common.Context
 	data   amoeba.Index

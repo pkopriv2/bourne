@@ -80,15 +80,15 @@ type disseminator struct {
 	wait   sync.WaitGroup
 }
 
-func newDisseminator(ctx common.Context, logger common.Logger, self member, dir *directory, period time.Duration) (*disseminator, error) {
+func newDisseminator(ctx common.Context, logger common.Logger, self member, dir *directory) (*disseminator, error) {
 	ret := &disseminator{
 		ctx:    ctx,
 		logger: logger.Fmt("Disseminator"),
 		self:   self,
 		events: newViewLog(ctx),
 		dir:    dir,
-		period: period,
-		factor: ctx.Config().OptionalInt("convoy.dissem.fanout.factor", 3),
+		period: ctx.Config().OptionalDuration("convoy.dissem.period", 750*time.Millisecond),
+		factor: ctx.Config().OptionalInt("convoy.dissem.fanout.factor", 4),
 		closed: make(chan struct{}),
 		closer: make(chan struct{}, 1)}
 
@@ -189,7 +189,7 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+			done, timeout := concurrent.NewBreaker(5*time.Second, func() interface{} {
 				for {
 					ch := d.probe(m, 3)
 					if <-ch {

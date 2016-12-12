@@ -279,6 +279,8 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 
 	i := rand.Intn(size)
 	m := cluster[i]
+
+	m.Logger.Info("Writing key=>val")
 	m.Db.Put("key", "val")
 
 	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {

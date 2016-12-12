@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
+	"io"
 	"sync"
 	"time"
 
@@ -26,23 +27,9 @@ var (
 func changeLogListen(cl ChangeLog) (<-chan Change, chan<- struct{}) {
 	ret, done := make(chan Change, 1024), make(chan struct{})
 
-	var once sync.Once
-
-	// TODO: this is a slight memory leak on the listener....
-	cl.Listen(func(chg Change, ok bool) {
-		select {
-		case <-done:
-			once.Do(func() { close(ret) })
-			return
-		default:
-		}
-
-		if ok {
-			ret <- chg
-		} else {
-			once.Do(func() { close(ret) })
-		}
-	})
+	// // TODO: this is a slight memory leak on the listener....
+	// cl.Listen(func(chg Change, ok bool) {
+	// })
 	return ret, done
 }
 
@@ -65,6 +52,77 @@ func changesToEvents(m member, chgs []Change) []event {
 		ret = append(ret, changeToEvent(m, c))
 	}
 	return ret
+}
+
+// A change log is nothing but an ordered list of changes.
+type ChangeLog interface {
+	io.Closer
+
+	// Every change log must be globally unique.  The standard
+	// database
+	Id() (uuid.UUID, error)
+
+	// Returns the current sequence of the log
+	Seq() (int, error)
+
+	// Increments and returns the sequence of the log.  This is
+	// guaranteed to be transactionally safe.
+	Inc() (int, error)
+
+	// Appends a change to the log and notifies any listeners.
+	Append(key string, val string, del bool) (Change, error)
+
+	// Returns all the changes in the lifetime of the change log.
+	All() ([]Change, error)
+
+	// Returns the next change in the changelog, blocking until a change
+	// is available.  When connecting the changelog to the external system
+	// this should be triggered before backfilling any data
+	// Subscribe() Stream
+}
+
+// Stream
+type Stream interface {
+	io.Closer
+
+	Next() (Change, error)
+}
+
+// Fundamental unit of change within the published database
+type Change struct {
+	Seq int
+	Key string
+	Val string
+	Ver int
+	Del bool
+}
+
+func ReadChange(r scribe.Reader) (Change, error) {
+	c := &Change{}
+	if err := r.Read("seq", &c.Seq); err != nil {
+		return *c, err
+	}
+	if err := r.Read("key", &c.Key); err != nil {
+		return *c, err
+	}
+	if err := r.Read("val", &c.Val); err != nil {
+		return *c, err
+	}
+	if err := r.Read("ver", &c.Ver); err != nil {
+		return *c, err
+	}
+	if err := r.Read("del", &c.Del); err != nil {
+		return *c, err
+	}
+	return *c, nil
+}
+
+func (c Change) Write(w scribe.Writer) {
+	w.Write("seq", c.Seq)
+	w.Write("key", c.Key)
+	w.Write("val", c.Val)
+	w.Write("ver", c.Ver)
+	w.Write("del", c.Del)
 }
 
 // The change log implementation.  The change log is

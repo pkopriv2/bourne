@@ -276,7 +276,7 @@ func (r *replica) leaveAndDrain() error {
 
 	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
 		for size := r.Dissem.events.data.Size(); size > 0; size = r.Dissem.events.data.Size() {
-			r.Logger.Debug("Remaining items: %v", size)
+			r.Logger.Info("Remaining items: %v", size)
 			time.Sleep(1 * time.Second)
 		}
 		return nil
@@ -358,7 +358,7 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self 
 
 // Returns a newly initialized disseminator.
 func replicaInitDissem(ctx common.Context, logger common.Logger, self member, dir *directory) (*disseminator, error) {
-	dissem, err := newDisseminator(ctx, logger, self, dir, 500*time.Millisecond)
+	dissem, err := newDisseminator(ctx, logger, self, dir)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error constructing disseminator")
 	}
