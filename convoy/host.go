@@ -22,7 +22,7 @@ type host struct {
 	logger common.Logger
 
 	// the published database.  Updates to this are merged and distributed within host.
-	db Database
+	db *database
 
 	// the local hostname of the host.  Other members use THIS address to contact the member.
 	hostname string
@@ -51,11 +51,11 @@ type host struct {
 	closer chan struct{}
 }
 
-func newMasterHost(ctx common.Context, db Database, hostname string, port int) (*host, error) {
+func newMasterHost(ctx common.Context, db *database, hostname string, port int) (*host, error) {
 	return newMemberHost(ctx, db, hostname, port, "") // TODO: figure out how to reliably address localhost
 }
 
-func newMemberHost(ctx common.Context, db Database, hostname string, port int, peer string) (*host, error) {
+func newMemberHost(ctx common.Context, db *database, hostname string, port int, peer string) (*host, error) {
 	h := &host{
 		ctx:      ctx,
 		logger:   ctx.Logger(),

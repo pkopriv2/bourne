@@ -39,7 +39,7 @@ func TestReplica_Init_NonEmptyDb(t *testing.T) {
 	defer ctx.Close()
 
 	db := OpenTestDatabase(ctx, OpenTestChangeLog(ctx))
-	db.Put("key", "val")
+	db.Put("key", "val", 0)
 
 	replica := StartTestReplicaFromDb(ctx, db, 0)
 	defer replica.Close()
@@ -59,7 +59,7 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 	replica := StartTestReplica(ctx, 0)
 	defer replica.Close()
 
-	replica.Db.Put("key2", "val")
+	replica.Db.Put("key2", "val", 0)
 	done, timeout := concurrent.NewBreaker(5*time.Second, func() interface{} {
 		for {
 			members := replica.Dir.Search(func(id uuid.UUID, key string, val string) bool {
@@ -281,7 +281,7 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 	m := cluster[i]
 
 	m.Logger.Info("Writing key=>val")
-	m.Db.Put("key", "val")
+	m.Db.Put("key", "val", 0)
 
 	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
 		remaining := removeReplica(cluster, i)
@@ -381,7 +381,7 @@ func StartTestReplica(ctx common.Context, port int) *replica {
 	return StartTestReplicaFromDb(ctx, OpenTestDatabase(ctx, OpenTestChangeLog(ctx)), port)
 }
 
-func StartTestReplicaFromDb(ctx common.Context, db Database, port int) *replica {
+func StartTestReplicaFromDb(ctx common.Context, db *database, port int) *replica {
 	replica, err := initReplica(ctx, db, "localhost", port)
 	if err != nil {
 		panic(err)

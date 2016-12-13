@@ -244,7 +244,7 @@ func (d *directory) Search(filter func(uuid.UUID, string, string) bool) (ret []m
 		ids := make(map[uuid.UUID]struct{})
 
 		v.ScanActive(func(s amoeba.Scan, i item) {
-			if filter(i.MemId, i.Attr, i.Val) {
+			if filter(i.MemId, i.Key, i.Val) {
 				ids[i.MemId] = struct{}{}
 			}
 		})
@@ -262,7 +262,7 @@ func (d *directory) Search(filter func(uuid.UUID, string, string) bool) (ret []m
 func (d *directory) First(filter func(uuid.UUID, string, string) bool) (ret member, ok bool) {
 	d.Core.View(func(v *view) {
 		v.ScanActive(func(s amoeba.Scan, i item) {
-			if filter(i.MemId, i.Attr, i.Val) {
+			if filter(i.MemId, i.Key, i.Val) {
 				defer s.Stop()
 				ret, ok = dirGetActiveMember(v, i.MemId)
 			}

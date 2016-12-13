@@ -27,9 +27,23 @@ var (
 func changeLogListen(cl ChangeLog) (<-chan Change, chan<- struct{}) {
 	ret, done := make(chan Change, 1024), make(chan struct{})
 
-	// // TODO: this is a slight memory leak on the listener....
-	// cl.Listen(func(chg Change, ok bool) {
-	// })
+	// TODO: this is a slight memory leak on the listener....
+	// Move to subscription style listening.
+	var once sync.Once
+	cl.Listen(func(chg Change, ok bool) {
+		select {
+		case <-done:
+			once.Do(func() { close(ret) })
+			return
+		default:
+		}
+
+		if ok {
+			ret <- chg
+		} else {
+			once.Do(func() { close(ret) })
+		}
+	})
 	return ret, done
 }
 
@@ -58,15 +72,13 @@ func changesToEvents(m member, chgs []Change) []event {
 type ChangeLog interface {
 	io.Closer
 
-	// Every change log must be globally unique.  The standard
-	// database
+	// Every change log must be globally unique
 	Id() (uuid.UUID, error)
 
 	// Returns the current sequence of the log
 	Seq() (int, error)
 
-	// Increments and returns the sequence of the log.  This is
-	// guaranteed to be transactionally safe.
+	// Increments and returns the sequence of the log
 	Inc() (int, error)
 
 	// Appends a change to the log and notifies any listeners.
@@ -75,17 +87,9 @@ type ChangeLog interface {
 	// Returns all the changes in the lifetime of the change log.
 	All() ([]Change, error)
 
-	// Returns the next change in the changelog, blocking until a change
-	// is available.  When connecting the changelog to the external system
-	// this should be triggered before backfilling any data
-	// Subscribe() Stream
-}
-
-// Stream
-type Stream interface {
-	io.Closer
-
-	Next() (Change, error)
+	// Registers a handler to be invoked on any change to the log.
+	// The zero value and false are sent when the log is closed.
+	Listen(func(Change, bool))
 }
 
 // Fundamental unit of change within the published database

@@ -27,7 +27,7 @@ type replica struct {
 	Logger common.Logger
 
 	// the db hosted by this instance.
-	Db Database
+	Db *database
 
 	// the member hosted by this instance.
 	Self member
@@ -55,11 +55,11 @@ type replica struct {
 	leaving concurrent.AtomicBool
 }
 
-func newMasterReplica(ctx common.Context, db Database, hostname string, port int) (r *replica, err error) {
+func newMasterReplica(ctx common.Context, db *database, hostname string, port int) (r *replica, err error) {
 	return initReplica(ctx, db, hostname, port)
 }
 
-func newMemberReplica(ctx common.Context, db Database, hostname string, port int, peer *client) (r *replica, err error) {
+func newMemberReplica(ctx common.Context, db *database, hostname string, port int, peer *client) (r *replica, err error) {
 	r, err = initReplica(ctx, db, hostname, port)
 	if err != nil {
 		return
@@ -73,7 +73,7 @@ func newMemberReplica(ctx common.Context, db Database, hostname string, port int
 }
 
 // Initializes and returns a generic replica instance.
-func initReplica(ctx common.Context, db Database, host string, port int) (r *replica, err error) {
+func initReplica(ctx common.Context, db *database, host string, port int) (r *replica, err error) {
 	var self member
 	var dir *directory
 	var log chan<- struct{}
@@ -202,16 +202,14 @@ func (r *replica) Client() (*client, error) {
 	return replicaClient(r.Server)
 }
 
-// guaranteed to be called only once.
 func (r *replica) shutdown(err error) error {
-	defer common.RunIf(func() { r.Logger.Error("shutdown error: %v", err) })(err)
-
 	select {
 	case <-r.Closed:
 		return r.Failure
 	case r.closer <- struct{}{}:
 	}
 
+	defer common.RunIf(func() { r.Logger.Error("shutdown error: %v", err) })(err)
 	defer func() { <-r.closer }()
 	defer close(r.Closed)
 	defer common.RunIf(func() { r.Failure = err })(err)
@@ -311,7 +309,7 @@ func replicaJoin(self *replica, peer *client) error {
 }
 
 // Returns the member representing "self"
-func replicaInitSelf(ctx common.Context, db Database, hostname string, port int) (mem member, err error) {
+func replicaInitSelf(ctx common.Context, db *database, hostname string, port int) (mem member, err error) {
 	var id uuid.UUID
 	var seq int
 	id, err = db.Log().Id()
@@ -335,7 +333,7 @@ func replicaInitLogger(ctx common.Context, self member) common.Logger {
 
 // Returns a newly initialized directory that is populated with the given db and member
 // and is indexing realtime changes to the db.
-func replicaInitDir(ctx common.Context, logger common.Logger, db Database, self member) (*directory, chan<- struct{}, error) {
+func replicaInitDir(ctx common.Context, logger common.Logger, db *database, self member) (*directory, chan<- struct{}, error) {
 	dir := newDirectory(ctx, logger)
 
 	// start indexing realtime changes.

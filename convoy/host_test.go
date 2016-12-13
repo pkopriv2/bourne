@@ -1,12 +1,5 @@
 package convoy
 
-import (
-	"strconv"
-
-	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/net"
-)
-
 // TODO: Figure out how to randomize ports!!!
 
 // func TestHost_Close(t *testing.T) {
@@ -54,31 +47,31 @@ import (
 // // assert.Equal(t, replicaClosedError, rep.ensureOpen())
 // }
 
-func StartTestMasterHost(ctx common.Context, port int) *host {
-	return StartTestHostFromDb(ctx, OpenTestDatabase(ctx, OpenTestChangeLog(ctx)), port, "")
-}
-
-func StartTestMemberHost(ctx common.Context, selfPort int, peerPort int) *host {
-	return StartTestHostFromDb(ctx, OpenTestDatabase(ctx, OpenTestChangeLog(ctx)), selfPort, net.NewAddr("localhost", strconv.Itoa(peerPort)))
-}
-
-func StartTestHostFromDb(ctx common.Context, db Database, port int, peer string) *host {
-	host, err := newMemberHost(ctx, db, "localhost", port, peer)
-	if err != nil {
-		panic(err)
-	}
-
-	ctx.Env().OnClose(func() {
-		db.Log().(*changeLog).stash.Close()
-	})
-
-	ctx.Env().OnClose(func() {
-		db.Close()
-	})
-
-	ctx.Env().OnClose(func() {
-		host.Close()
-	})
-
-	return host
-}
+// func StartTestMasterHost(ctx common.Context, port int) *host {
+// return StartTestHostFromDb(ctx, OpenTestDatabase(ctx, OpenTestChangeLog(ctx)), port, "")
+// }
+//
+// func StartTestMemberHost(ctx common.Context, selfPort int, peerPort int) *host {
+// return StartTestHostFromDb(ctx, OpenTestDatabase(ctx, OpenTestChangeLog(ctx)), selfPort, net.NewAddr("localhost", strconv.Itoa(peerPort)))
+// }
+//
+// func StartTestHostFromDb(ctx common.Context, db Database, port int, peer string) *host {
+// host, err := newMemberHost(ctx, db, "localhost", port, peer)
+// if err != nil {
+// panic(err)
+// }
+//
+// ctx.Env().OnClose(func() {
+// db.Log().(*changeLog).stash.Close()
+// })
+//
+// ctx.Env().OnClose(func() {
+// db.Close()
+// })
+//
+// ctx.Env().OnClose(func() {
+// host.Close()
+// })
+//
+// return host
+// }

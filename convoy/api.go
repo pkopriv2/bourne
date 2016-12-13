@@ -51,10 +51,9 @@ func StartHost(ctx common.Context, port int, addr string) (Host, error) {
 	return nil, nil
 }
 
-// A very simple key,value store abstraction. Updates to the store
-// are transactionally safe - regardless of whether the store is
-// local or remote.  The store uses optimistic versioning to
-// maintain thread safety - even for network stores.
+// A very simple key,value store abstraction. This store uses
+// optimistic locking to provide a single thread-safe api for
+// both local and remote stores.
 //
 // If this is the local store, closing the store will NOT disconnect
 // the replica, it simply prevents any changes to the store from
@@ -63,13 +62,20 @@ type Store interface {
 	io.Closer
 
 	// Returns the item value and version
-	Get(key []byte) (val []byte, ver int, err error)
+	Get(key string) (Item, error)
 
 	// Returns a handle to a batch of changes to apply to the store.
-	Put(key []byte, val []byte, ver int) error
+	Put(key string, val string, expected int) (bool, Item, error)
 
 	// Deletes the value associated with the key
-	Del(key []byte, ver int) error
+	Del(key string, expected int) (bool, Item, error)
+}
+
+// An item in a store.
+type Item struct {
+	Val string
+	Ver int
+	Del bool
 }
 
 // A member is just that - a member of a cluster.
@@ -84,20 +90,32 @@ type Member interface {
 	Store() (Store, error)
 }
 
+// The directory is the central storage unit that hostsl information
+// on all other members of the cluster.
 type Directory interface {
 
 	// Retrieves the replica with the given id.  Nil if the member
 	// doesn't exist.
 	Get(id uuid.UUID) (Member, error)
 
+	// Evicts a member from the cluster.  The member will NOT automatically
+	// rejoin on eviction.
+	Evict(id uuid.UUID)
+
+	// Marks a member as being failed.  The next time the member
+	// contacts an infected member, he will be forced to leave
+	// the cluster and rejoin.
+	Fail(id uuid.UUID)
+
 	// Runs the input filter function over all active members's stores -
 	// returning those for which the function returns true.  Searches
 	// block concurrent updates to the store.
-	Search(filter func(uuid.UUID, []byte, []byte) bool) ([]Member, error)
+	Search(filter func(uuid.UUID, string, string) bool) ([]Member, error)
 }
 
-// A host is a member participating in disseminating a shrred directory.
+// A host is a member participating in and disseminating a shared directory.
 type Host interface {
+	io.Closer
 	Member
 
 	// Provides access to the distributed directory.

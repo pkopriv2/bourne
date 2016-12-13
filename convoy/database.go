@@ -1,27 +1,10 @@
 package convoy
 
 import (
-	"io"
-
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
 )
-
-// The database is the local version of a publiseh
-type Database interface {
-	io.Closer
-	// Store
-
-	// Returns the log of the database.  These are required to be durable
-	// in the event of failures.  In order to rejoin a cluster,  a failed
-	// replica is required to retransmit any incomplete state along with
-	// its versioning information.
-	//
-	// See the changelog documentation for more info on what state is required
-	// to qualify as a database.
-	Log() ChangeLog
-}
 
 type database struct {
 	ctx    common.Context
@@ -29,8 +12,8 @@ type database struct {
 	chgLog ChangeLog
 }
 
-// Opens the database using the path to the given db file.
-func OpenDatabase(ctx common.Context, path string) (Database, error) {
+// Opens the localStore using the path to the given ls file.
+func openDatabase(ctx common.Context, path string) (*database, error) {
 	stash, err := stash.Open(ctx, path)
 	if err != nil {
 		return nil, err
@@ -39,18 +22,19 @@ func OpenDatabase(ctx common.Context, path string) (Database, error) {
 	return initDatabase(ctx, openChangeLog(stash))
 }
 
-// Opens the database using the given changelog
-func initDatabase(ctx common.Context, log ChangeLog) (Database, error) {
-	db := &database{
+// Opens the localStore using the given changelog
+func initDatabase(ctx common.Context, log ChangeLog) (*database, error) {
+	ls := &database{
 		ctx:    ctx,
 		data:   amoeba.NewBTreeIndex(8),
 		chgLog: log,
 	}
 
-	return db, db.init()
+	return ls, ls.init()
 }
 
 func (d *database) Close() error {
+	d.Log().Close()
 	return nil
 }
 
@@ -63,32 +47,32 @@ func (d *database) init() error {
 	d.data.Update(func(u amoeba.Update) {
 		for _, chg := range chgs {
 			if chg.Del {
-				u.Del(amoeba.StringKey(chg.Key))
+				u.Put(amoeba.StringKey(chg.Key), Item{chg.Val, chg.Ver, true})
 			} else {
-				u.Put(amoeba.StringKey(chg.Key), chg.Val)
+				u.Put(amoeba.StringKey(chg.Key), Item{chg.Val, chg.Ver, false})
 			}
 		}
 	})
 	return nil
 }
 
-func (d *database) Get(key string) (ret string, ok bool, err error) {
-	d.data.Read(func(v amoeba.View) {
-		ret, ok = dbGetVal(v, key)
+func (l *database) Get(key string) (item Item, ok bool) {
+	l.data.Read(func(v amoeba.View) {
+		item, ok = lsGetItem(v, key)
 	})
 	return
 }
 
-func (d *database) Put(key string, val string) (err error) {
-	d.data.Update(func(u amoeba.Update) {
-		err = dbPutVal(d.chgLog, u, key, val)
+func (l *database) Put(key string, val string, expected int) (ok bool, new Item, err error) {
+	l.data.Update(func(u amoeba.Update) {
+		ok, new, err = lsPutItem(l.chgLog, u, key, val, expected)
 	})
 	return
 }
 
-func (d *database) Del(key string) (err error) {
-	d.data.Update(func(u amoeba.Update) {
-		err = dbDelVal(d.chgLog, u, key)
+func (l *database) Del(key string, expected int) (ok bool, new Item, err error) {
+	l.data.Update(func(u amoeba.Update) {
+		ok, new, err = lsDelItem(l.chgLog, u, key, expected)
 	})
 	return
 }
@@ -98,29 +82,42 @@ func (d *database) Log() ChangeLog {
 }
 
 // Helper functions.
-func dbGetVal(data amoeba.View, key string) (str string, ok bool) {
+
+func lsGetItem(data amoeba.View, key string) (item Item, ok bool) {
 	if raw := data.Get(amoeba.StringKey(key)); raw != nil {
-		return raw.(string), true
+		return raw.(Item), true
 	}
 	return
 }
 
-func dbDelVal(log ChangeLog, data amoeba.Update, key string) error {
-	_, err := log.Append(key, "", true)
-	if err != nil {
-		return err
+func lsDelItem(log ChangeLog, data amoeba.Update, key string, ver int) (bool, Item, error) {
+	exp, _ := lsGetItem(data, key)
+	if exp.Ver != ver {
+		return false, Item{}, nil
 	}
 
-	data.Del(amoeba.StringKey(key))
-	return nil
+	chg, err := log.Append(key, "", true)
+	if err != nil {
+		return false, Item{}, err
+	}
+
+	new := Item{"", chg.Ver, true}
+	data.Put(amoeba.StringKey(key), new)
+	return true, new, nil
 }
 
-func dbPutVal(log ChangeLog, data amoeba.Update, key string, val string) error {
-	_, err := log.Append(key, val, false)
-	if err != nil {
-		return err
+func lsPutItem(log ChangeLog, data amoeba.Update, key string, val string, expVer int) (bool, Item, error) {
+	cur, _ := lsGetItem(data, key)
+	if expVer != cur.Ver {
+		return false, Item{}, nil
 	}
 
-	data.Put(amoeba.StringKey(key), val)
-	return nil
+	chg, err := log.Append(key, val, false)
+	if err != nil {
+		return false, Item{}, err
+	}
+
+	new := Item{val, chg.Ver, false}
+	data.Put(amoeba.StringKey(key), new)
+	return true, new, nil
 }
