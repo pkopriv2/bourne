@@ -5,16 +5,19 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/net"
+	uuid "github.com/satori/go.uuid"
 )
 
 var (
-	instanceEvicted     = errors.New("Replica evicted from host")
-	instanceClosedError = errors.New("Intance closed")
+	instanceEvicted     = errors.New("HOST:EVICTED")
+	instanceClosedError = errors.New("HOST:CLOSED")
 )
 
 // A host manages a single replica instance.  Most importantly, if an
 // instance is deemed unhealthy and shutdown,
 type host struct {
+
 	// the central context.  Shared amongst all objects with the host graph.
 	ctx common.Context
 
@@ -51,11 +54,11 @@ type host struct {
 	closer chan struct{}
 }
 
-func newMasterHost(ctx common.Context, db *database, hostname string, port int) (*host, error) {
-	return newMemberHost(ctx, db, hostname, port, "") // TODO: figure out how to reliably address localhost
+func newSeedHost(ctx common.Context, db *database, hostname string, port int) (*host, error) {
+	return newHost(ctx, db, hostname, port, "") // TODO: figure out how to reliably address localhost
 }
 
-func newMemberHost(ctx common.Context, db *database, hostname string, port int, peer string) (*host, error) {
+func newHost(ctx common.Context, db *database, hostname string, port int, peer string) (*host, error) {
 	h := &host{
 		ctx:      ctx,
 		logger:   ctx.Logger(),
@@ -122,7 +125,7 @@ func (h *host) start() error {
 				continue
 			case <-cur.Closed:
 
-				// if it naturally shutdown, just bail out
+				// if it shutdown due to irrecoverable failure, just bail out
 				if cur.Failure != replicaFailureError {
 					h.shutdown(cur.Failure)
 					return
@@ -168,4 +171,176 @@ func (h *host) Close() error {
 	}
 
 	return h.shutdown(nil)
+}
+
+func (h *host) Connect(port int) (net.Connection, error) {
+	rep, err := h.instance()
+	if err != nil {
+		return nil, err
+	}
+
+	return rep.Self.Connect(port)
+}
+
+func (h *host) Store() (Store, error) {
+	select {
+	case <-h.closed:
+		return nil, instanceClosedError
+	default:
+	}
+
+	return &hostDb{h}, nil
+}
+
+func (h *host) Directory() (Directory, error) {
+	select {
+	case <-h.closed:
+		return nil, instanceClosedError
+	default:
+	}
+
+	return &hostDir{h}, nil
+}
+
+// The host db simply manages access to the underlying local store.
+// It is able to shield consumers from connection changes in the host
+type hostDb struct {
+	h *host
+}
+
+func (d *hostDb) Close() error {
+	return nil
+}
+
+func (d *hostDb) Get(key string) (*Item, error) {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			return nil, err
+		}
+
+		item, err := replica.Db.Get(key)
+		if err == databaseClosedError {
+			continue
+		}
+
+		return item, nil
+	}
+}
+
+func (d *hostDb) Put(key string, val string, expected int) (bool, Item, error) {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			return false, Item{}, err
+		}
+
+		ok, item, err := replica.Db.Put(key, val, expected)
+		if err == databaseClosedError {
+			continue
+		}
+
+		return ok, item, err
+	}
+}
+
+func (d *hostDb) Del(key string, expected int) (bool, Item, error) {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			return false, Item{}, err
+		}
+
+		ok, item, err := replica.Db.Del(key, expected)
+		if err == databaseClosedError {
+			continue
+		}
+
+		return ok, item, err
+	}
+}
+
+// directory wrapper...
+type hostDir struct {
+	h *host
+}
+
+func (d *hostDir) Get(id uuid.UUID) (Member, error) {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			continue
+		}
+
+		m, ok := replica.Dir.Get(id)
+		if ok {
+			return m, nil
+		} else {
+			return nil, nil
+		}
+	}
+}
+
+func (d *hostDir) Evict(m Member) error {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			return err
+		}
+
+		err = replica.Dir.Evict(m)
+		if err != dirClosedError {
+			return err
+		}
+	}
+}
+
+func (d *hostDir) Fail(m Member) error {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			return err
+		}
+
+		err = replica.Dir.Fail(m)
+		if err != dirClosedError {
+			return err
+		}
+	}
+}
+
+func (d *hostDir) Search(filter func(uuid.UUID, string, string) bool) ([]Member, error) {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			return nil, err
+		}
+
+		return hostmemberToMember(replica.Dir.Search(filter)), nil
+	}
+}
+
+func (d *hostDir) First(filter func(uuid.UUID, string, string) bool) (Member, error) {
+	for {
+		replica, err := d.h.instance()
+		if err != nil {
+			return nil, err
+		}
+
+		m, ok := replica.Dir.First(filter)
+		if ok {
+			return m, nil
+		} else {
+			return nil, nil
+		}
+	}
+}
+
+func hostmemberToMember(arr []member) []Member {
+	ret := make([]Member, 0, len(arr))
+	for _, m := range arr {
+		ret = append(ret, m)
+	}
+
+	return ret
 }

@@ -324,5 +324,5 @@ func changeLogReadAll(tx *bolt.Tx) ([]Change, error) {
 //
 // NOTE: See Storage for notes on reconciliation
 func changeToEvent(m member, c Change) event {
-	return item{m.Id, m.Version, c.Key, c.Val, c.Ver, c.Del, time.Now()}
+	return item{m.id, m.version, c.Key, c.Val, c.Ver, c.Del, time.Now()}
 }

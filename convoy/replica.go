@@ -17,8 +17,8 @@ var (
 	replicaClosedError  = errors.New("Replica closed")
 )
 
-// A replica represents a live, possibly joined instance of a convoy db.
-// The instance itself is managed by the cluster object.
+// A replica represents a live, joined instance of a convoy db. The instance itself is managed by the
+// host object.
 type replica struct {
 	// the central context.
 	Ctx common.Context
@@ -122,7 +122,7 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 		closer:     make(chan struct{}, 1)}
 
 	r.Dir.OnEviction(func(id uuid.UUID, ver int) {
-		if id != r.Self.Id {
+		if id != r.Self.id {
 			return
 		}
 
@@ -134,7 +134,7 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 	})
 
 	r.Dir.OnFailure(func(id uuid.UUID, ver int) {
-		if id != r.Self.Id {
+		if id != r.Self.id {
 			return
 		}
 
@@ -171,7 +171,7 @@ func (r *replica) fail(err error) error {
 }
 
 func (r *replica) Id() uuid.UUID {
-	return r.Self.Id
+	return r.Self.id
 }
 
 func (r *replica) Close() error {
@@ -349,7 +349,7 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db *database, self
 		return nil, nil, err
 	}
 
-	dir.Join(self)
+	dir.Add(self)
 	dir.Apply(changesToEvents(self, chgs))
 	return dir, ctrl, nil
 }

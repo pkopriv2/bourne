@@ -1,11 +1,17 @@
 package convoy
 
 import (
+	"sync"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
+)
+
+var (
+	dirClosedError = errors.New("DIR:CLOSED")
 )
 
 // Reads from the channel of events and applies them to the directory.
@@ -47,6 +53,8 @@ func readEvent(r scribe.Reader) (event, error) {
 type directory struct {
 	logger common.Logger
 	Core   *storage
+	lock   sync.RWMutex
+	closed bool
 }
 
 func newDirectory(ctx common.Context, logger common.Logger) *directory {
@@ -57,40 +65,82 @@ func newDirectory(ctx common.Context, logger common.Logger) *directory {
 }
 
 func (d *directory) Close() (ret error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	return d.Core.Close()
 }
 
-func (d *directory) OnChange(fn func([]event)) {
+func (d *directory) OnChange(fn func([]event)) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	d.Core.Listen(func(batch []item) {
 		fn(dirItemsToEvents(batch))
 	})
+
+	return nil
 }
 
-func (d *directory) OnJoin(fn func(uuid.UUID, int)) {
+func (d *directory) OnJoin(fn func(uuid.UUID, int)) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
 		if status {
 			fn(id, ver)
 		}
 	})
+
+	return nil
 }
 
-func (d *directory) OnEviction(fn func(uuid.UUID, int)) {
+func (d *directory) OnEviction(fn func(uuid.UUID, int)) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
 		if !status {
 			fn(id, ver)
 		}
 	})
+	return nil
 }
 
-func (d *directory) OnFailure(fn func(uuid.UUID, int)) {
+func (d *directory) OnFailure(fn func(uuid.UUID, int)) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	d.Core.ListenHealth(func(id uuid.UUID, ver int, status bool) {
 		if !status {
 			fn(id, ver)
 		}
 	})
+	return nil
 }
 
-func (d *directory) Apply(events []event) (ret []bool) {
+func (d *directory) Apply(events []event) (ret []bool, err error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return nil, dirClosedError
+	}
+
 	ret = make([]bool, 0, len(events))
 	d.Core.Update(func(u *update) {
 		for _, e := range events {
@@ -110,37 +160,55 @@ func (d *directory) Events() []event {
 	return ret
 }
 
-func (d *directory) Join(m member) (err error) {
+func (d *directory) Add(m member) (err error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	d.Core.Update(func(u *update) {
 		if !m.Healthy {
 			err = errors.Errorf("Cannot join unhealthy member [%v]", m)
 			return
 		}
 
-		if !u.Join(m.Id, m.Version) {
+		if !u.Join(m.id, m.version) {
 			err = errors.Errorf("Member alread joined [%v]", m)
 			return
 		}
 
-		u.Put(m.Id, m.Version, memberHostAttr, m.Host, m.Version)
-		u.Put(m.Id, m.Version, memberPortAttr, m.Port, m.Version)
+		u.Put(m.id, m.version, memberHostAttr, m.Host, m.version)
+		u.Put(m.id, m.version, memberPortAttr, m.Port, m.version)
 	})
 	return
 }
 
-func (d *directory) Evict(m member) (err error) {
+func (d *directory) Evict(m Member) (err error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	d.Core.Update(func(u *update) {
-		if !u.Evict(m.Id, m.Version) {
-			err = errors.Errorf("Member already evicted [%v]", m.Id)
+		if !u.Evict(m.Id(), m.Version()) {
+			err = errors.Errorf("Member already evicted [%v]")
 			return
 		}
 	})
 	return
 }
 
-func (d *directory) Fail(m member) (err error) {
+func (d *directory) Fail(m Member) (err error) {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return dirClosedError
+	}
+
 	d.Core.Update(func(u *update) {
-		if !u.Del(m.Id, m.Version, memberHealthAttr, m.Version) {
+		if !u.Del(m.Id(), m.Version(), memberHealthAttr, m.Version()) {
 			err = errors.Errorf("Unable to fail member [%v]", m)
 		}
 	})
@@ -305,12 +373,12 @@ func dirGetMember(v *view, id uuid.UUID) (member, bool) {
 	}
 
 	return member{
-		Id:      id,
+		id:      id,
 		Host:    hostItem.Val,
 		Port:    portItem.Val,
 		Healthy: health.Healthy,
 		Active:  mem.Active,
-		Version: hostItem.Ver}, true
+		version: hostItem.Ver}, true
 }
 
 func dirCollectSuccesses(events []event, success []bool) []event {

@@ -208,7 +208,7 @@ func TestReplica_Fail_Manual(t *testing.T) {
 
 	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
 		Sync(cluster, func(r *replica) bool {
-			h, _ := r.Dir.Health(r2.Self.Id)
+			h, _ := r.Dir.Health(r2.Self.id)
 			return !h.Healthy
 		})
 
@@ -248,7 +248,7 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 	done, timeout := concurrent.NewBreaker(30*time.Second, func() interface{} {
 		remaining := removeReplica(cluster, i)
 		Sync(remaining, func(r *replica) bool {
-			h, _ := r.Dir.Health(m.Self.Id)
+			h, _ := r.Dir.Health(m.Self.id)
 			return !h.Healthy
 		})
 
@@ -287,7 +287,7 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 		remaining := removeReplica(cluster, i)
 		Sync(remaining, func(r *replica) bool {
 			found := r.Dir.Search(func(id uuid.UUID, key string, val string) bool {
-				return id == m.Self.Id && key == "key" && val == "val"
+				return id == m.Self.id && key == "key" && val == "val"
 			})
 
 			return len(found) == 1

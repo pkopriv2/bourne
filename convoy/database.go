@@ -1,18 +1,27 @@
 package convoy
 
 import (
+	"sync"
+
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
+)
+
+var (
+	databaseClosedError = errors.New("DB:CLOSED")
 )
 
 type database struct {
 	ctx    common.Context
 	data   amoeba.Index
 	chgLog ChangeLog
+	lock   sync.RWMutex
+	closed bool
 }
 
-// Opens the localStore using the path to the given ls file.
+// Opens the database using the path to the given db file.
 func openDatabase(ctx common.Context, path string) (*database, error) {
 	stash, err := stash.Open(ctx, path)
 	if err != nil {
@@ -22,20 +31,15 @@ func openDatabase(ctx common.Context, path string) (*database, error) {
 	return initDatabase(ctx, openChangeLog(stash))
 }
 
-// Opens the localStore using the given changelog
+// Opens the database using the given changelog
 func initDatabase(ctx common.Context, log ChangeLog) (*database, error) {
-	ls := &database{
+	db := &database{
 		ctx:    ctx,
 		data:   amoeba.NewBTreeIndex(8),
 		chgLog: log,
 	}
 
-	return ls, ls.init()
-}
-
-func (d *database) Close() error {
-	d.Log().Close()
-	return nil
+	return db, db.init()
 }
 
 func (d *database) init() error {
@@ -56,23 +60,55 @@ func (d *database) init() error {
 	return nil
 }
 
-func (l *database) Get(key string) (item Item, ok bool) {
-	l.data.Read(func(v amoeba.View) {
-		item, ok = lsGetItem(v, key)
+func (d *database) Close() error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.closed {
+		return databaseClosedError
+	}
+
+	d.Log().Close()
+	return nil
+}
+
+func (d *database) Get(key string) (item *Item, err error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+	if d.closed {
+		return nil, databaseClosedError
+	}
+
+	d.data.Read(func(v amoeba.View) {
+		i, found := dbGetItem(v, key)
+		if found {
+			item = &i
+		}
 	})
 	return
 }
 
-func (l *database) Put(key string, val string, expected int) (ok bool, new Item, err error) {
-	l.data.Update(func(u amoeba.Update) {
-		ok, new, err = lsPutItem(l.chgLog, u, key, val, expected)
+func (d *database) Put(key string, val string, expected int) (ok bool, new Item, err error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+	if d.closed {
+		return false, Item{}, databaseClosedError
+	}
+
+	d.data.Update(func(u amoeba.Update) {
+		ok, new, err = dbPutItem(d.chgLog, u, key, val, expected)
 	})
 	return
 }
 
-func (l *database) Del(key string, expected int) (ok bool, new Item, err error) {
-	l.data.Update(func(u amoeba.Update) {
-		ok, new, err = lsDelItem(l.chgLog, u, key, expected)
+func (d *database) Del(key string, expected int) (ok bool, new Item, err error) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+	if d.closed {
+		return false, Item{}, databaseClosedError
+	}
+
+	d.data.Update(func(u amoeba.Update) {
+		ok, new, err = dbDelItem(d.chgLog, u, key, expected)
 	})
 	return
 }
@@ -83,15 +119,15 @@ func (d *database) Log() ChangeLog {
 
 // Helper functions.
 
-func lsGetItem(data amoeba.View, key string) (item Item, ok bool) {
+func dbGetItem(data amoeba.View, key string) (item Item, ok bool) {
 	if raw := data.Get(amoeba.StringKey(key)); raw != nil {
 		return raw.(Item), true
 	}
 	return
 }
 
-func lsDelItem(log ChangeLog, data amoeba.Update, key string, ver int) (bool, Item, error) {
-	exp, _ := lsGetItem(data, key)
+func dbDelItem(log ChangeLog, data amoeba.Update, key string, ver int) (bool, Item, error) {
+	exp, _ := dbGetItem(data, key)
 	if exp.Ver != ver {
 		return false, Item{}, nil
 	}
@@ -106,8 +142,8 @@ func lsDelItem(log ChangeLog, data amoeba.Update, key string, ver int) (bool, It
 	return true, new, nil
 }
 
-func lsPutItem(log ChangeLog, data amoeba.Update, key string, val string, expVer int) (bool, Item, error) {
-	cur, _ := lsGetItem(data, key)
+func dbPutItem(log ChangeLog, data amoeba.Update, key string, val string, expVer int) (bool, Item, error) {
+	cur, _ := dbGetItem(data, key)
 	if expVer != cur.Ver {
 		return false, Item{}, nil
 	}

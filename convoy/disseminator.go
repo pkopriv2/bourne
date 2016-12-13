@@ -257,7 +257,7 @@ func (d *disseminator) tryPingProxy(target member, via member) (bool, error) {
 		return false, errors.Wrapf(err, "Error retrieving member client [%v]", via)
 	}
 	defer client.Close()
-	return client.PingProxy(target.Id)
+	return client.PingProxy(target.id)
 }
 
 func (d *disseminator) disseminate(m member) ([]event, error) {
@@ -272,7 +272,7 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 	}
 
 	defer client.Close()
-	_, events, err := client.PushPull(d.self.Id, batch)
+	_, events, err := client.PushPull(d.self.id, batch)
 	if err != nil {
 		return err
 	}
@@ -286,7 +286,7 @@ func (d *disseminator) newIterator() *dissemIter {
 	var total int
 	d.dir.Core.View(func(v *view) {
 		ids = storageHealthCollect(v.Health, func(id uuid.UUID, h health) bool {
-			if id == d.self.Id {
+			if id == d.self.id {
 				return false
 			}
 

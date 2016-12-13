@@ -13,6 +13,10 @@ import (
 )
 
 // System reserved keys.  Consumers should consider the: /Convoy/ namespace off limits!
+var (
+	storageClosedError = errors.New("Storage closed")
+)
+
 const (
 	memberMembershipAttr = "Convoy.Member.Joined"
 	memberHealthAttr     = "Convoy.Member.Health"
@@ -122,6 +126,27 @@ func (h health) String() string {
 	return fmt.Sprintf("%v(%v) since %v", str, h.Version, h.Since)
 }
 
+// type rosterListener struct {
+	// store *storage
+	// ch    chan item
+	// cl    chan struct{}
+// }
+//
+// func newRosterListener(store *storage) *rosterListener {
+	// return &rosterListener{store, make(chan item, 1024)}
+// }
+//
+// func (l *rosterlistener) Next() (id uuid.UUID, ver int, status bool, err error) {
+	// select {
+	// case <-l.cl:
+		// return
+	// case <-l.store.Closed:
+		// return
+	// case i := <-l.ch:
+//
+	// }
+// }
+
 type rosterHandler func(memId uuid.UUID, memVer int, active bool)
 type healthHandler func(memId uuid.UUID, memVer int, healthy bool)
 
@@ -166,7 +191,7 @@ func newStorage(ctx common.Context, logger common.Logger) *storage {
 func (s *storage) Close() (err error) {
 	select {
 	case <-s.closed:
-		return errors.New("Storage already closing")
+		return errors.New("Storage already closed")
 	case s.closer <- struct{}{}:
 	}
 

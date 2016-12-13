@@ -21,10 +21,10 @@ func membersCollect(arr []member, fn func(m member) bool) []member {
 
 // member implementation.  For now, these should be considered immutable.
 type member struct {
-	Id      uuid.UUID
+	id      uuid.UUID
 	Host    string
 	Port    string // no need for int representation
-	Version int
+	version int
 	Healthy bool
 	Active  bool
 }
@@ -33,8 +33,16 @@ func newMember(id uuid.UUID, host string, port string, ver int) member {
 	return member{id, host, port, ver, true, true}
 }
 
+func (m member) Id() uuid.UUID {
+	return m.id
+}
+
+func (m member) Version() int {
+	return m.version
+}
+
 func (m member) String() string {
-	return fmt.Sprintf("Member(id=%v)[addr=%v:%v](v=%v)", m.Id.String()[:8], m.Host, m.Port, m.Version)
+	return fmt.Sprintf("Member(id=%v)[addr=%v:%v](v=%v)", m.id.String()[:8], m.Host, m.Port, m.version)
 }
 
 func (m member) connect(port string) (net.Connection, error) {

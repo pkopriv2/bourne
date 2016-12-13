@@ -128,7 +128,12 @@ func (s *server) DirApply(req net.Request) net.Response {
 		return net.NewErrorResponse(errors.New("Empty events."))
 	}
 
-	return newDirApplyResponse(s.dir.Apply(events))
+	ret, err := s.dir.Apply(events)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return newDirApplyResponse(ret)
 }
 
 // Handles a /evt/push request
@@ -150,7 +155,13 @@ func (s *server) PushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(replicaFailureError)
 	}
 
-	return newPushPullResponse(s.dir.Apply(events), s.dissem.events.Pop(1024))
+
+	ret, err := s.dir.Apply(events)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return newPushPullResponse(ret, s.dissem.events.Pop(1024))
 }
 
 // Helper functions
