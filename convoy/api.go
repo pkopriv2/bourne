@@ -54,31 +54,13 @@ func StartHost(ctx common.Context, addr string, peer string) (Host, error) {
 	return nil, nil
 }
 
-// A very simple key,value store abstraction. This store uses
-// optimistic locking to provide a single thread-safe api for
-// both local and remote stores.
-//
-// If this is the local store, closing the store will NOT disconnect
-// the replica, it simply prevents any changes to the store from
-// occurring.
-type Store interface {
+// A host is a member participating in and disseminating a shared directory.
+type Host interface {
 	io.Closer
+	Member
 
-	// Returns the item value and version
-	Get(key string) (*Item, error)
-
-	// Returns a handle to a batch of changes to apply to the store.
-	Put(key string, val string, expected int) (bool, Item, error)
-
-	// Deletes the value associated with the key
-	Del(key string, expected int) (bool, Item, error)
-}
-
-// An item in a store.
-type Item struct {
-	Val string
-	Ver int
-	Del bool
+	// Provides access to the distributed directory.
+	Directory() (Directory, error)
 }
 
 // A member is just that - a member of a cluster.
@@ -125,11 +107,29 @@ type Directory interface {
 	First(filter func(uuid.UUID, string, string) bool) (Member, error)
 }
 
-// A host is a member participating in and disseminating a shared directory.
-type Host interface {
+// A very simple key,value store abstraction. This store uses
+// optimistic locking to provide a single thread-safe api for
+// both local and remote stores.
+//
+// If this is the local store, closing the store will NOT disconnect
+// the replica, it simply prevents any changes to the store from
+// occurring.
+type Store interface {
 	io.Closer
-	Member
 
-	// Provides access to the distributed directory.
-	Directory() (Directory, error)
+	// Returns the item value and version
+	Get(key string) (*Item, error)
+
+	// Returns a handle to a batch of changes to apply to the store.
+	Put(key string, val string, expected int) (bool, Item, error)
+
+	// Deletes the value associated with the key
+	Del(key string, expected int) (bool, Item, error)
+}
+
+// An item in a store.
+type Item struct {
+	Val string
+	Ver int
+	Del bool
 }
