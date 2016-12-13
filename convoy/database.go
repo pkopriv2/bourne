@@ -1,6 +1,8 @@
 package convoy
 
 import (
+	"io"
+
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
@@ -8,6 +10,7 @@ import (
 
 // The database is the local version of a publiseh
 type Database interface {
+	io.Closer
 	// Store
 
 	// Returns the log of the database.  These are required to be durable

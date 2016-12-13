@@ -43,11 +43,11 @@ const (
 
 // Publishes the db to the given port.  This is the "first" member of the
 // cluster and will not discover anyone else until it is contacted.
-func StartSeedReplica(ctx common.Context, port int) (Replica, error) {
+func StartSeedHost(ctx common.Context, port int) (Host, error) {
 	return nil, nil
 }
 
-func StartReplica(ctx common.Context, port int, addr string) (Replica, error) {
+func StartHost(ctx common.Context, port int, addr string) (Host, error) {
 	return nil, nil
 }
 
@@ -75,10 +75,6 @@ type Store interface {
 // A member is just that - a member of a cluster.
 type Member interface {
 
-	// The published hostname.  It must be resolvable by the underlying
-	// network resources.
-	Hostname() string
-
 	// Connects to the member on the provided port.  Consumers
 	// are responsible for closing the connection.
 	Connect(int) (net.Connection, error)
@@ -88,16 +84,22 @@ type Member interface {
 	Store() (Store, error)
 }
 
-// A replica is a connected member of a cluster.
-type Replica interface {
-	Member
+type Directory interface {
 
 	// Retrieves the replica with the given id.  Nil if the member
 	// doesn't exist.
-	GetMember(id uuid.UUID) (Member, error)
+	Get(id uuid.UUID) (Member, error)
 
 	// Runs the input filter function over all active members's stores -
 	// returning those for which the function returns true.  Searches
 	// block concurrent updates to the store.
 	Search(filter func(uuid.UUID, []byte, []byte) bool) ([]Member, error)
+}
+
+// A host is a member participating in disseminating a shrred directory.
+type Host interface {
+	Member
+
+	// Provides access to the distributed directory.
+	Directory() Directory
 }
