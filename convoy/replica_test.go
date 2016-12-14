@@ -388,7 +388,7 @@ func StartTestReplicaFromDb(ctx common.Context, db *database, port int) *replica
 	}
 
 	ctx.Env().OnClose(func() {
-		db.Log().(*changeLog).stash.Close()
+		db.Log().stash.Close()
 	})
 
 	ctx.Env().OnClose(func() {

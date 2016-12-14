@@ -33,7 +33,7 @@ type replica struct {
 	Dissem *disseminator
 
 	// A simple control channel.  Used to disconnect the changelog.
-	disconnect chan<- struct{}
+	Changes *changeLogListener
 
 	// the core network server.
 	Server net.Server
@@ -70,7 +70,7 @@ func newReplica(ctx common.Context, db *database, hostname string, port int, pee
 func initReplica(ctx common.Context, db *database, host string, port int) (r *replica, err error) {
 	var self member
 	var dir *directory
-	var log chan<- struct{}
+	var chgs *changeLogListener
 	var diss *disseminator
 	var server net.Server
 
@@ -84,12 +84,12 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 	logger := replicaInitLogger(ctx, self)
 	logger.Info("Starting replica.")
 
-	dir, log, err = replicaInitDir(ctx, logger, db, self)
+	dir, chgs, err = replicaInitDir(ctx, logger, db, self)
 	if err != nil {
 		return
 	}
 	defer common.RunIf(func() { dir.Close() })(err)
-	defer common.RunIf(func() { close(log) })(err)
+	defer common.RunIf(func() { chgs.Close() })(err)
 
 	diss, err = replicaInitDissem(ctx, logger, self, dir)
 	if err != nil {
@@ -104,46 +104,46 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 	defer common.RunIf(func() { server.Close() })(err)
 
 	r = &replica{
-		Self:       self,
-		Ctx:        ctx,
-		Dir:        dir,
-		Db:         db,
-		Logger:     logger,
-		Dissem:     diss,
-		Server:     server,
-		disconnect: log,
-		Closed:     make(chan struct{}),
-		closer:     make(chan struct{}, 1)}
+		Self:    self,
+		Ctx:     ctx,
+		Dir:     dir,
+		Db:      db,
+		Logger:  logger,
+		Dissem:  diss,
+		Server:  server,
+		Changes: chgs,
+		Closed:  make(chan struct{}),
+		closer:  make(chan struct{}, 1)}
 
-	r.Dir.OnJoin(func(id uuid.UUID, ver int) {
-		r.Logger.Debug("Welcome member [%v,%v]", id, ver)
-	})
-
-	r.Dir.OnEviction(func(id uuid.UUID, ver int) {
-		r.Logger.Debug("Member evicted [%v]", id, ver)
-		if id != r.Self.id || ver != r.Self.version {
-			return
+	joins := r.Dir.Joins()
+	go func() {
+		for j := range joins {
+			r.Logger.Debug("Member joined [%v,%v]", j.Id, j.Version)
 		}
+	}()
 
-		if r.leaving.Get() {
-			return
+	evictions := r.Dir.Evictions()
+	go func() {
+		for e := range evictions {
+			r.Logger.Debug("Member evicted [%v]", e.Id, e.Version)
+			if e.Id == r.Self.id && e.Version == r.Self.version && !r.leaving.Get() {
+				r.Logger.Info("Self evicted. Shutting down.")
+				// r.Leave()
+				r.shutdown(EvictedError)
+			}
 		}
-		r.Logger.Info("Evicted")
-		r.shutdown(EvictedError)
-	})
+	}()
 
-	r.Dir.OnFailure(func(id uuid.UUID, ver int) {
-		r.Logger.Debug("Member failed [%v]", id, ver)
-		if id != r.Self.id || ver != r.Self.version {
-			return
+	failures := r.Dir.Failures()
+	go func() {
+		for f := range failures {
+			r.Logger.Debug("Member failed [%v]", f.Id, f.Version)
+			if f.Id == r.Self.id && f.Version == r.Self.version {
+				r.Logger.Error("Self Failed. Shutting down.")
+				r.shutdown(FailedError)
+			}
 		}
-
-		if r.leaving.Get() {
-			return
-		}
-		r.Logger.Info("Self failed.  Shutting down.")
-		r.shutdown(FailedError)
-	})
+	}()
 
 	return r, nil
 }
@@ -237,8 +237,7 @@ func (r *replica) shutdown(err error) error {
 		err = common.Or(err, errors.New("Timeout Closing Directory"))
 	}
 
-	close(r.disconnect)
-	return err
+	return common.Or(err, r.Changes.Close())
 }
 
 // guaranteed to be called only once.
@@ -318,15 +317,21 @@ func replicaInitLogger(ctx common.Context, self member) common.Logger {
 
 // Returns a newly initialized directory that is populated with the given db and member
 // and is indexing realtime changes to the db.
-func replicaInitDir(ctx common.Context, logger common.Logger, db *database, self member) (*directory, chan<- struct{}, error) {
-	dir := newDirectory(ctx, logger)
+func replicaInitDir(ctx common.Context, logger common.Logger, db *database, self member) (dir *directory, cl *changeLogListener, err error) {
+	dir = newDirectory(ctx, logger)
+	defer common.RunIf(func() { dir.Close() })(err)
 
 	// start indexing realtime changes.
 	// !!! MUST HAPPEN PRIOR TO BACKFILLING !!!
-	chgStream, ctrl := changeLogListen(db.Log())
+	listener, err := db.Log().Listen()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defer common.RunIf(func() { listener.Close() })(err)
 	dirIndexEvents(
 		changeStreamToEventStream(
-			self, chgStream), dir)
+			self, listener.ch), dir)
 
 	// Grab all the changes from the database
 	chgs, err := db.Log().All()
@@ -336,7 +341,7 @@ func replicaInitDir(ctx common.Context, logger common.Logger, db *database, self
 
 	dir.Add(self)
 	dir.Apply(changesToEvents(self, chgs))
-	return dir, ctrl, nil
+	return dir, listener, nil
 }
 
 // Returns a newly initialized disseminator.

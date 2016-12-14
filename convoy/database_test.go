@@ -45,13 +45,13 @@ func TestDatabase_Put(t *testing.T) {
 	log := OpenTestChangeLog(ctx)
 
 	// should this be buffered???
-	ch, _ := changeLogListen(log)
+	l, _ := log.Listen()
 
 	db := OpenTestDatabase(ctx, log)
 	db.Put("key", "val", 0)
 
-	chg := <-ch
-	exp := Change{1, "key", "val", 1, false}
+	chg := <-l.Ch()
+	exp := change{1, "key", "val", 1, false}
 	assert.Equal(t, exp, chg)
 }
 
@@ -62,17 +62,17 @@ func TestDatabase_Del(t *testing.T) {
 	log := OpenTestChangeLog(ctx)
 
 	// should this be buffered???
-	ch, _ := changeLogListen(log)
+	l, _ := log.Listen()
 
 	db := OpenTestDatabase(ctx, log)
 	db.Del("key", 0)
 
-	chg := <-ch
-	exp := Change{1, "key", "", 1, true}
+	chg := <-l.Ch()
+	exp := change{1, "key", "", 1, true}
 	assert.Equal(t, exp, chg)
 }
 
-func OpenTestDatabase(ctx common.Context, log ChangeLog) *database {
+func OpenTestDatabase(ctx common.Context, log *changeLog) *database {
 	db, err := initDatabase(ctx, log)
 	if err != nil {
 		panic(err)

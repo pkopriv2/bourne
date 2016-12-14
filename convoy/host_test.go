@@ -18,10 +18,14 @@ func TestHost_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
+	// fmt.Println("Before: ", runtime.NumGoroutine())
+	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 	host := StartTestSeedHost(ctx, 0)
 
 	assert.Nil(t, host.Close())
 	assert.NotNil(t, host.Close())
+	// fmt.Println("After: ", runtime.NumGoroutine())
+	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 }
 
 func TestHost_Leave(t *testing.T) {
@@ -56,28 +60,22 @@ func TestHost_Failed(t *testing.T) {
 	idx := rand.Intn(len(hosts))
 	failed := hosts[idx]
 
-	for i:=0; i<10; i++ {
+	for i := 0; i < 10; i++ {
 		r := <-failed.inst
 		r.Server.Close()
 
 		r.Logger.Info("Sleeping")
-		time.Sleep(3*time.Second)
+		time.Sleep(3 * time.Second)
 		r.Logger.Info("Done Sleeping")
 
 		SyncHostCluster(hosts, func(h *host) bool {
-			dir, err := h.Directory()
-			if err != nil {
-				panic(err)
-			}
-
-			all, err := dir.All()
+			all, err := h.Directory().All()
 			if err != nil {
 				panic(err)
 			}
 
 			return len(all) == len(hosts)
 		})
-
 	}
 }
 
@@ -95,12 +93,7 @@ func StartTestHostCluster(ctx common.Context, num int) []*host {
 	}
 
 	SyncHostCluster(cluster, func(h *host) bool {
-		dir, err := h.Directory()
-		if err != nil {
-			panic(err)
-		}
-
-		all, err := dir.All()
+		all, err := h.Directory().All()
 		if err != nil {
 			panic(err)
 		}
@@ -155,7 +148,7 @@ func StartTestHostFromDb(ctx common.Context, db *database, port int, peer string
 	}
 
 	ctx.Env().OnClose(func() {
-		db.Log().(*changeLog).stash.Close()
+		db.Log().stash.Close()
 	})
 
 	ctx.Env().OnClose(func() {

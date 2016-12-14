@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
@@ -93,6 +94,7 @@ func (i item) String() string {
 
 // membership status
 type membership struct {
+	Id      uuid.UUID
 	Version int
 	Active  bool
 	Since   time.Time
@@ -110,6 +112,7 @@ func (s membership) String() string {
 }
 
 type health struct {
+	Id      uuid.UUID
 	Version int
 	Healthy bool
 	Since   time.Time
@@ -126,45 +129,83 @@ func (h health) String() string {
 	return fmt.Sprintf("%v(%v) since %v", str, h.Version, h.Since)
 }
 
-// type rosterListener struct {
-	// store *storage
-	// ch    chan item
-	// cl    chan struct{}
-// }
-//
-// func newRosterListener(store *storage) *rosterListener {
-	// return &rosterListener{store, make(chan item, 1024)}
-// }
-//
-// func (l *rosterlistener) Next() (id uuid.UUID, ver int, status bool, err error) {
-	// select {
-	// case <-l.cl:
-		// return
-	// case <-l.store.Closed:
-		// return
-	// case i := <-l.ch:
-//
-	// }
-// }
+// Storage item listener
+type storageListener struct {
+	storage *storage
+	ch      chan []item
+	closed  chan struct{}
+	closer  chan struct{}
+}
 
-type rosterHandler func(memId uuid.UUID, memVer int, active bool)
-type healthHandler func(memId uuid.UUID, memVer int, healthy bool)
+func newStorageListener(storage *storage) *storageListener {
+	return &storageListener{storage, make(chan []item, 1024), make(chan struct{}), make(chan struct{}, 1)}
+}
+
+func (l *storageListener) Close() error {
+	select {
+	case <-l.storage.closed:
+		return ClosedError
+	case <-l.closed:
+		return ClosedError
+	case l.closer <- struct{}{}:
+	}
+
+	l.storage.subs.Remove(l)
+
+	close(l.ch)
+	l.ch = nil
+	return nil
+}
+
+func (l *storageListener) Ch() <-chan []item {
+	return l.ch
+}
+
+func streamMemberships(l *storageListener) <-chan membership {
+	ret := make(chan membership)
+	go func() {
+		for batch := range l.Ch() {
+			for _, i := range batch {
+				if i.Key == memberMembershipAttr {
+					ret <- membership{i.MemId, i.MemVer, !i.Del, i.Time}
+				}
+			}
+		}
+
+		close(ret)
+	}()
+	return ret
+}
+
+func streamHealth(l *storageListener) <-chan health {
+	ret := make(chan health)
+	go func() {
+		for batch := range l.Ch() {
+			for _, i := range batch {
+				if i.Key == memberHealthAttr {
+					ret <- health{i.MemId, i.MemVer, !i.Del, i.Time}
+				}
+			}
+		}
+
+		close(ret)
+	}()
+	return ret
+}
 
 // the core storage type
 type storage struct {
 	ctx    common.Context
 	logger common.Logger
 
-	// Data objects.  Roster and health split for random read performance
+	// All mutable fields sync'ed on datItems
+	// Data objects.
 	datItems  amoeba.Index
-	datRoster map[uuid.UUID]membership // sync'ed with data lock
-	datHealth map[uuid.UUID]health     // sync'ed with data lock
+	datRoster map[uuid.UUID]membership
+	datHealth map[uuid.UUID]health
 
-	// listeners.
-	fnsLock   sync.RWMutex
-	fnsItems  []func([]item)
-	fnsRoster []rosterHandler
-	fnsHealth []healthHandler
+	// subscriptions
+	subs concurrent.Map
 
 	// Utility
 	wait   sync.WaitGroup
@@ -179,83 +220,29 @@ func newStorage(ctx common.Context, logger common.Logger) *storage {
 		datItems:  amoeba.NewBTreeIndex(32),
 		datRoster: make(map[uuid.UUID]membership),
 		datHealth: make(map[uuid.UUID]health),
+		subs:      concurrent.NewMap(),
 		closed:    make(chan struct{}),
 		closer:    make(chan struct{}, 1)}
 
 	coll := newStorageGc(s)
 	coll.start()
-
 	return s
 }
 
-func (s *storage) Close() (err error) {
+func (s *storage) Close() error {
 	select {
 	case <-s.closed:
-		return errors.New("Storage already closed")
+		return ClosedError
 	case s.closer <- struct{}{}:
+	}
+
+	for _, l := range s.listeners() {
+		l.Close()
 	}
 
 	close(s.closed)
 	s.wait.Wait()
 	return nil
-}
-
-func (d *storage) Roster() (ret map[uuid.UUID]membership) {
-	ret = make(map[uuid.UUID]membership)
-	d.datItems.Read(func(data amoeba.View) {
-		for k, v := range d.datRoster {
-			ret[k] = v
-		}
-	})
-	return
-}
-
-func (d *storage) Health() (ret map[uuid.UUID]health) {
-	ret = make(map[uuid.UUID]health)
-	d.datItems.Read(func(data amoeba.View) {
-		for k, v := range d.datHealth {
-			ret[k] = v
-		}
-	})
-	return
-}
-
-func (d *storage) ListenRoster(fn rosterHandler) {
-	d.fnsLock.Lock()
-	defer d.fnsLock.Unlock()
-	d.fnsRoster = append(d.fnsRoster, fn)
-}
-
-func (d *storage) ListenHealth(fn healthHandler) {
-	d.fnsLock.Lock()
-	defer d.fnsLock.Unlock()
-	d.fnsHealth = append(d.fnsHealth, fn)
-}
-
-func (d *storage) Listen(fn func([]item)) {
-	d.fnsLock.Lock()
-	defer d.fnsLock.Unlock()
-	d.fnsItems = append(d.fnsItems, fn)
-}
-
-func (d *storage) listeners() (r []rosterHandler, h []healthHandler, i []func([]item)) {
-	d.fnsLock.RLock()
-	defer d.fnsLock.RUnlock()
-	r = make([]rosterHandler, 0, len(d.fnsRoster))
-	h = make([]healthHandler, 0, len(d.fnsHealth))
-	i = make([]func([]item), 0, len(d.fnsHealth))
-
-	for _, fn := range d.fnsRoster {
-		r = append(r, fn)
-	}
-	for _, fn := range d.fnsHealth {
-		h = append(h, fn)
-	}
-	for _, fn := range d.fnsItems {
-		i = append(i, fn)
-	}
-
-	return
 }
 
 func (d *storage) View(fn func(*view)) {
@@ -264,7 +251,13 @@ func (d *storage) View(fn func(*view)) {
 	})
 }
 
-func (d *storage) Update(fn func(*update)) {
+func (d *storage) Update(fn func(*update) error) (err error) {
+	select {
+	case <-d.closed:
+		return ClosedError
+	default:
+	}
+
 	var ret []item
 	d.datItems.Update(func(data amoeba.Update) {
 		update := &update{&view{data, d.datRoster, d.datHealth, time.Now()}, data, make([]item, 0, 8)}
@@ -272,29 +265,57 @@ func (d *storage) Update(fn func(*update)) {
 			ret = update.items
 		}()
 
-		fn(update)
+		err = fn(update)
 	})
 
 	// Because this is outside of update, ordering is no longer guaranteed.
 	// Consumers must be idempotent
-	fnsRoster, fnsHealth, fnsItems := d.listeners()
-
-	for _, fn := range fnsItems {
-		fn(ret)
-	}
-
-	for _, i := range ret {
-		switch i.Key {
-		case memberMembershipAttr:
-			for _, fn := range fnsRoster {
-				fn(i.MemId, i.MemVer, !i.Del)
-			}
-		case memberHealthAttr:
-			for _, fn := range fnsHealth {
-				fn(i.MemId, i.MemVer, !i.Del)
-			}
+	for _, l := range d.listeners() {
+		select {
+		case <-d.closed:
+		case <-l.closed:
+		case l.ch <- ret:
+		default:
+			// drop
 		}
 	}
+
+	return
+}
+
+func (s *storage) Roster() (ret map[uuid.UUID]membership) {
+	ret = make(map[uuid.UUID]membership)
+	s.View(func(v *view) {
+		for k, v := range v.Roster {
+			ret[k] = v
+		}
+	})
+	return
+}
+
+func (s *storage) Health() (ret map[uuid.UUID]health) {
+	ret = make(map[uuid.UUID]health)
+	s.View(func(v *view) {
+		for k, v := range v.Health {
+			ret[k] = v
+		}
+	})
+	return
+}
+
+func (s *storage) listeners() (ret []*storageListener) {
+	all := s.subs.All()
+	ret = make([]*storageListener, 0, len(all))
+	for k, _ := range all {
+		ret = append(ret, k.(*storageListener))
+	}
+	return
+}
+
+func (s *storage) Listen() (ret *storageListener) {
+	ret = newStorageListener(s)
+	s.subs.Put(ret, struct{}{})
+	return
 }
 
 func (d *storage) All() (ret []item) {
@@ -397,7 +418,7 @@ func (u *update) Put(memId uuid.UUID, memVer int, key string, keyVal string, key
 			}
 		}
 
-		u.Roster[memId] = membership{memVer, true, u.now}
+		u.Roster[memId] = membership{memId, memVer, true, u.now}
 		return true
 	case memberHealthAttr:
 		cur, ok := u.Health[memId]
@@ -407,7 +428,7 @@ func (u *update) Put(memId uuid.UUID, memVer int, key string, keyVal string, key
 			}
 		}
 
-		u.Health[memId] = health{memVer, true, u.now}
+		u.Health[memId] = health{memId, memVer, true, u.now}
 		return true
 	}
 }
@@ -430,7 +451,7 @@ func (u *update) Del(memId uuid.UUID, memVer int, key string, keyVer int) bool {
 			}
 		}
 
-		u.Roster[memId] = membership{memVer, false, u.now}
+		u.Roster[memId] = membership{memId, memVer, false, u.now}
 		return true
 	case memberHealthAttr:
 		cur, ok := u.Health[memId]
@@ -440,7 +461,7 @@ func (u *update) Del(memId uuid.UUID, memVer int, key string, keyVer int) bool {
 			}
 		}
 
-		u.Health[memId] = health{memVer, false, u.now}
+		u.Health[memId] = health{memId, memVer, false, u.now}
 		return true
 	}
 }
@@ -610,7 +631,7 @@ func (d *storageGc) run() {
 }
 
 func (d *storageGc) runGcCycle(gcExp time.Duration) {
-	d.store.Update(func(u *update) {
+	d.store.Update(func(u *update) error {
 		d.logger.Debug("Starting GC cycle [%v] for items older than [%v]", u.Time(), gcExp)
 
 		dead := collectDeadMembers(u.Roster, u.now, gcExp)
@@ -622,6 +643,7 @@ func (d *storageGc) runGcCycle(gcExp time.Duration) {
 		deleteDeadMembers(u, dead)
 
 		d.logger.Info("Summary: Collected [%v] members and [%v] items", len(dead), len(items1)+len(items2))
+		return nil
 	})
 }
 

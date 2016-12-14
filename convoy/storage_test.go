@@ -20,9 +20,10 @@ func TestStorage_Status_NotEnabled_NotDisabled(t *testing.T) {
 	core := newStorage(ctx, ctx.Logger())
 	defer core.Close()
 
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		_, ok := u.Roster[uuid.NewV1()]
 		assert.False(t, ok)
+		return nil
 	})
 }
 
@@ -32,8 +33,9 @@ func TestStorage_Status_Enabled(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Join(id, 0))
+		return nil
 	})
 
 	core.View(func(v *view) {
@@ -54,8 +56,9 @@ func TestStorage_Get_NotEnabled(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
+		return nil
 	})
 
 	core.View(func(v *view) {
@@ -70,8 +73,9 @@ func TestStorage_Scan_NotEnabled(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
+		return nil
 	})
 
 	core.View(func(v *view) {
@@ -94,9 +98,10 @@ func TestStorage_Get_Enabled(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Join(id, 0))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
+		return nil
 	})
 
 	core.View(func(v *view) {
@@ -113,9 +118,10 @@ func TestStorage_Get_Disabled(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Evict(id, 0))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
+		return nil
 	})
 
 	core.View(func(v *view) {
@@ -130,11 +136,12 @@ func TestStorage_Get_Rejoin(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Evict(id, 0))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
 		assert.True(t, u.Join(id, 1))
 		assert.True(t, u.Put(id, 1, "key2", "val", 0))
+		return nil
 	})
 
 	var ok bool
@@ -152,10 +159,11 @@ func TestStorage_Get_Del(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Join(id, 0))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
 		assert.True(t, u.Del(id, 0, "key", 0))
+		return nil
 	})
 
 	core.View(func(v *view) {
@@ -170,9 +178,10 @@ func TestStorage_Get_OldData(t *testing.T) {
 	defer core.Close()
 
 	id := uuid.NewV1()
-	core.Update(func(u *update) {
+	core.Update(func(u *update) error {
 		assert.True(t, u.Join(id, 1))
 		assert.True(t, u.Put(id, 0, "key", "val", 0))
+		return nil
 	})
 
 	core.View(func(v *view) {
@@ -188,19 +197,25 @@ func TestStorage_Update_RosterListener(t *testing.T) {
 
 	id := uuid.NewV1()
 
-	called := false
-	core.ListenRoster(func(i uuid.UUID, v int, s bool) {
-		called = true
-		assert.Equal(t, id, i)
-		assert.Equal(t, 1, v)
-		assert.True(t, s)
+	list := core.Listen()
+	core.Update(func(u *update) error {
+		u.Join(id, 1)
+		return nil
 	})
 
-	core.Update(func(u *update) {
-		assert.True(t, u.Join(id, 1))
+	ch := streamMemberships(list)
+
+	m := <-ch
+	assert.Equal(t, m.Id, id)
+
+	list.Close()
+	core.Update(func(u *update) error {
+		u.Join(id, 2)
+		return nil
 	})
 
-	assert.True(t, called)
+	m, ok := <-ch
+	assert.False(t, ok)
 }
 
 func TestStorage_Update_HealthListener(t *testing.T) {
@@ -210,17 +225,23 @@ func TestStorage_Update_HealthListener(t *testing.T) {
 
 	id := uuid.NewV1()
 
-	called := false
-	core.ListenHealth(func(i uuid.UUID, v int, s bool) {
-		called = true
-		assert.Equal(t, id, i)
-		assert.Equal(t, 1, v)
-		assert.False(t, s)
+	list := core.Listen()
+	core.Update(func(u *update) error {
+		u.Fail(id, 1)
+		return nil
 	})
 
-	core.Update(func(u *update) {
-		assert.True(t, u.Fail(id, 1))
+	ch := streamHealth(list)
+
+	h := <-ch
+	assert.Equal(t, h.Id, id)
+
+	list.Close()
+	core.Update(func(u *update) error {
+		u.Fail(id, 2)
+		return nil
 	})
 
-	assert.True(t, called)
+	h, ok := <-ch
+	assert.False(t, ok)
 }

@@ -1,8 +1,6 @@
 package convoy
 
 import (
-	"sync"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
@@ -10,10 +8,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// var (
-	// ClosedError = errors.New("DIR:CLOSED")
-// )
-//
 // Reads from the channel of events and applies them to the directory.
 func dirIndexEvents(ch <-chan event, dir *directory) {
 	go func() {
@@ -26,16 +20,7 @@ func dirIndexEvents(ch <-chan event, dir *directory) {
 // Adds a listener to the change log and returns a buffered channel of changes.
 // the channel is closed when the log is closed.
 func dirListen(dir *directory) <-chan []event {
-	ret := make(chan []event, 1024)
-	dir.OnChange(func(batch []event) {
-		if batch == nil {
-			close(ret)
-			return
-		}
-
-		ret <- batch
-	})
-	return ret
+	return dir.Listen()
 }
 
 // The event is the fundamental unit of change dissmenation.
@@ -53,8 +38,6 @@ func readEvent(r scribe.Reader) (event, error) {
 type directory struct {
 	logger common.Logger
 	Core   *storage
-	lock   sync.RWMutex
-	closed bool
 }
 
 func newDirectory(ctx common.Context, logger common.Logger) *directory {
@@ -65,87 +48,70 @@ func newDirectory(ctx common.Context, logger common.Logger) *directory {
 }
 
 func (d *directory) Close() (ret error) {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
 	return d.Core.Close()
 }
 
-func (d *directory) OnChange(fn func([]event)) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
-	d.Core.Listen(func(batch []item) {
-		fn(dirItemsToEvents(batch))
-	})
-
-	return nil
+func (d *directory) Listen() <-chan []event {
+	lis := d.Core.Listen()
+	ret := make(chan []event)
+	go func() {
+		for batch := range lis.Ch() {
+			ret <- dirItemsToEvents(batch)
+		}
+		close(ret)
+	}()
+	return ret
 }
 
-func (d *directory) OnJoin(fn func(uuid.UUID, int)) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
-	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
-		if status {
-			fn(id, ver)
+func (d *directory) Joins() <-chan membership {
+	ch := streamMemberships(d.Core.Listen())
+	ret := make(chan membership)
+	go func() {
+		for m := range ch {
+			if m.Active {
+				ret<-m
+			}
 		}
-	})
-
-	return nil
+		close(ret)
+	}()
+	return ret
 }
 
-func (d *directory) OnEviction(fn func(uuid.UUID, int)) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
-	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
-		if !status {
-			fn(id, ver)
+func (d *directory) Evictions() <-chan membership {
+	ch := streamMemberships(d.Core.Listen())
+	ret := make(chan membership)
+	go func() {
+		for m := range ch {
+			if ! m.Active {
+				ret<-m
+			}
 		}
-	})
-	return nil
+		close(ret)
+	}()
+	return ret
 }
 
-func (d *directory) OnFailure(fn func(uuid.UUID, int)) error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
-	d.Core.ListenHealth(func(id uuid.UUID, ver int, status bool) {
-		if !status {
-			fn(id, ver)
+func (d *directory) Failures() <-chan health {
+	ch := streamHealth(d.Core.Listen())
+	ret := make(chan health)
+	go func() {
+		for h := range ch {
+			if ! h.Healthy {
+				ret<-h
+			}
 		}
-	})
-	return nil
+		close(ret)
+	}()
+	return ret
 }
 
 func (d *directory) Apply(events []event) (ret []bool, err error) {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return nil, ClosedError
-	}
-
 	ret = make([]bool, 0, len(events))
-	d.Core.Update(func(u *update) {
+	err = d.Core.Update(func(u *update) error {
 		for _, e := range events {
 			ret = append(ret, e.Apply(u))
 		}
+		return nil
 	})
 	return
 }
@@ -160,60 +126,39 @@ func (d *directory) Events() []event {
 	return ret
 }
 
-func (d *directory) Add(m member) (err error) {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
-	d.Core.Update(func(u *update) {
+func (d *directory) Add(m member) error {
+	return d.Core.Update(func(u *update) error {
 		if !m.Healthy {
-			err = errors.Errorf("Cannot join unhealthy member [%v]", m)
-			return
+			return errors.Errorf("Cannot join unhealthy member [%v]", m)
 		}
 
 		if !u.Join(m.id, m.version) {
-			err = errors.Errorf("Member alread joined [%v]", m)
-			return
+			return errors.Errorf("Member alread joined [%v]", m)
 		}
 
 		u.Put(m.id, m.version, memberHostAttr, m.Host, m.version)
 		u.Put(m.id, m.version, memberPortAttr, m.Port, m.version)
+		return nil
 	})
-	return
 }
 
-func (d *directory) Evict(m Member) (err error) {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
-	d.Core.Update(func(u *update) {
+func (d *directory) Evict(m Member) error {
+	return d.Core.Update(func(u *update) error {
 		if !u.Evict(m.Id(), m.Version()) {
-			err = errors.Errorf("Member already evicted [%v]", m)
-			return
+			return errors.Errorf("Member already evicted [%v]", m)
 		}
+		return nil
 	})
-	return
 }
 
-func (d *directory) Fail(m Member) (err error) {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return ClosedError
-	}
-
+func (d *directory) Fail(m Member) error {
 	d.logger.Error("Failing member [%v]", m)
-	d.Core.Update(func(u *update) {
+	return d.Core.Update(func(u *update) error {
 		if !u.Del(m.Id(), m.Version(), memberHealthAttr, m.Version()) {
-			err = errors.Errorf("Unable to fail member [%v]", m)
+			return errors.Errorf("Unable to fail member [%v]", m)
 		}
+		return nil
 	})
-	return
 }
 
 func (d *directory) Health(id uuid.UUID) (h health, ok bool) {

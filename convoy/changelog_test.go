@@ -21,7 +21,6 @@ func TestChangeLog_Id_Consistency(t *testing.T) {
 	defer ctx.Close()
 
 	cl := OpenTestChangeLog(ctx)
-	assert.Nil(t, cl.Close())
 
 	id1, err := cl.Id()
 	assert.Nil(t, err)
@@ -62,7 +61,6 @@ func TestChangeLog_Seq_Empty(t *testing.T) {
 	defer ctx.Close()
 
 	cl := OpenTestChangeLog(ctx)
-	assert.Nil(t, cl.Close())
 
 	seq, err := cl.Seq()
 	assert.Nil(t, err)
@@ -74,8 +72,6 @@ func TestChangeLog_Seq_Single(t *testing.T) {
 	defer ctx.Close()
 
 	cl := OpenTestChangeLog(ctx)
-	assert.Nil(t, cl.Close())
-
 	cl.Append("key", "val", false)
 
 	seq, err := cl.Seq()
@@ -88,8 +84,6 @@ func TestChangeLog_Seq_Multi(t *testing.T) {
 	defer ctx.Close()
 
 	cl := OpenTestChangeLog(ctx)
-	assert.Nil(t, cl.Close())
-
 	cl.Append("key", "val", false)
 	cl.Append("key", "val", false)
 	cl.Append("key", "val", false)
@@ -104,12 +98,10 @@ func TestChangeLog_Append(t *testing.T) {
 	defer ctx.Close()
 
 	cl := OpenTestChangeLog(ctx)
-	assert.Nil(t, cl.Close())
-
 	chg, err := cl.Append("key", "val", false)
 	assert.Nil(t, err)
 
-	exp := Change{1, "key", "val", 1, false}
+	exp := change{1, "key", "val", 1, false}
 	assert.Equal(t, exp, chg)
 }
 
@@ -118,12 +110,13 @@ func TestChangeLog_Listen(t *testing.T) {
 	defer ctx.Close()
 
 	cl := OpenTestChangeLog(ctx)
-	ch,_ := changeLogListen(cl)
+	listener, _ := cl.Listen()
 
 	chg1, _ := cl.Append("key", "val", false)
 	chg2, _ := cl.Append("key", "val1", false)
 	chg3, _ := cl.Append("key", "", true)
 
+	ch := listener.Ch()
 	assert.Equal(t, chg1, <-ch)
 	assert.Equal(t, chg2, <-ch)
 	assert.Equal(t, chg3, <-ch)
@@ -142,7 +135,7 @@ func TestChangeLog_All(t *testing.T) {
 	all, err := cl.All()
 	assert.Nil(t, err)
 
-	assert.Equal(t, []Change{chg1, chg2, chg3}, all)
+	assert.Equal(t, []change{chg1, chg2, chg3}, all)
 }
 
 func OpenTestStash(ctx common.Context) stash.Stash {

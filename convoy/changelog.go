@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
-	"io"
-	"sync"
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
@@ -20,35 +19,8 @@ var (
 	idKey     = []byte("id")
 )
 
-// Adds a listener to the change log and returns a buffered channel of changes
-// and a control channel used to close
-// The change channel is closed when either log is closed or when the control channel
-// is closed.
-func changeLogListen(cl ChangeLog) (<-chan Change, chan<- struct{}) {
-	ret, done := make(chan Change, 1024), make(chan struct{})
-
-	// TODO: this is a slight memory leak on the listener....
-	// Move to subscription style listening.
-	var once sync.Once
-	cl.Listen(func(chg Change, ok bool) {
-		select {
-		case <-done:
-			once.Do(func() { close(ret) })
-			return
-		default:
-		}
-
-		if ok {
-			ret <- chg
-		} else {
-			once.Do(func() { close(ret) })
-		}
-	})
-	return ret, done
-}
-
 // Converts a stream of changes to events.
-func changeStreamToEventStream(m member, ch <-chan Change) <-chan event {
+func changeStreamToEventStream(m member, ch <-chan change) <-chan event {
 	ret := make(chan event)
 	go func() {
 		for chg := range ch {
@@ -60,7 +32,7 @@ func changeStreamToEventStream(m member, ch <-chan Change) <-chan event {
 	return ret
 }
 
-func changesToEvents(m member, chgs []Change) []event {
+func changesToEvents(m member, chgs []change) []event {
 	ret := make([]event, 0, len(chgs))
 	for _, c := range chgs {
 		ret = append(ret, changeToEvent(m, c))
@@ -68,32 +40,8 @@ func changesToEvents(m member, chgs []Change) []event {
 	return ret
 }
 
-// A change log is nothing but an ordered list of changes.
-type ChangeLog interface {
-	io.Closer
-
-	// Every change log must be globally unique
-	Id() (uuid.UUID, error)
-
-	// Returns the current sequence of the log
-	Seq() (int, error)
-
-	// Increments and returns the sequence of the log
-	Inc() (int, error)
-
-	// Appends a change to the log and notifies any listeners.
-	Append(key string, val string, del bool) (Change, error)
-
-	// Returns all the changes in the lifetime of the change log.
-	All() ([]Change, error)
-
-	// Registers a handler to be invoked on any change to the log.
-	// The zero value and false are sent when the log is closed.
-	Listen(func(Change, bool))
-}
-
 // Fundamental unit of change within the published database
-type Change struct {
+type change struct {
 	Seq int
 	Key string
 	Val string
@@ -101,8 +49,8 @@ type Change struct {
 	Del bool
 }
 
-func ReadChange(r scribe.Reader) (Change, error) {
-	c := &Change{}
+func ReadChange(r scribe.Reader) (change, error) {
+	c := &change{}
 	if err := r.Read("seq", &c.Seq); err != nil {
 		return *c, err
 	}
@@ -121,7 +69,7 @@ func ReadChange(r scribe.Reader) (Change, error) {
 	return *c, nil
 }
 
-func (c Change) Write(w scribe.Writer) {
+func (c change) Write(w scribe.Writer) {
 	w.Write("seq", c.Seq)
 	w.Write("key", c.Key)
 	w.Write("val", c.Val)
@@ -129,41 +77,116 @@ func (c Change) Write(w scribe.Writer) {
 	w.Write("del", c.Del)
 }
 
+type changeLogListener struct {
+	cl     *changeLog
+	ch     chan change
+	closed chan struct{}
+	closer chan struct{}
+}
+
+func newChangeLogListener(cl *changeLog) *changeLogListener {
+	return &changeLogListener{cl, make(chan change, 1024), make(chan struct{}), make(chan struct{}, 1)}
+}
+
+func (l *changeLogListener) Ch() <-chan change {
+	return l.ch
+}
+
+func (l *changeLogListener) Close() error {
+	select {
+	case <-l.cl.closed:
+		return ClosedError
+	case <-l.closed:
+		return ClosedError
+	case l.closer <- struct{}{}:
+	}
+
+	l.cl.subs.Remove(l)
+
+	close(l.ch)
+	l.ch = nil
+	return nil
+}
+
 // The change log implementation.  The change log is
 // built on a bolt DB instance, so it is guaranteed
 // both durable and thread-safe.
 type changeLog struct {
-	stash    stash.Stash
-	handlers []func(Change, bool)
-	lock     sync.RWMutex
+	stash  stash.Stash
+	subs   concurrent.Map
+	closed chan struct{}
+	closer chan struct{}
 }
 
 // Opens the change log.  This uses the shared store
 func openChangeLog(db stash.Stash) *changeLog {
-	return &changeLog{stash: db, handlers: make([]func(Change, bool), 0, 4)}
+	return &changeLog{
+		stash:  db,
+		subs:   concurrent.NewMap(),
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}
 }
 
 func (c *changeLog) Close() error {
-	var zero Change
-	c.broadcast(zero, false)
+	select {
+	case <-c.closed:
+		return ClosedError
+	case c.closer <- struct{}{}:
+	}
+
+	for _, l := range c.listeners() {
+		l.Close()
+	}
+
+	close(c.closed)
 	return nil
 }
 
-func (c *changeLog) Listen(fn func(Change, bool)) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	c.handlers = append(c.handlers, fn)
+func (c *changeLog) ensureOpen() error {
+	select {
+	case <-c.closed:
+		return ClosedError
+	default:
+		return nil
+	}
+}
+
+func (c *changeLog) listeners() (ret []*changeLogListener) {
+	all := c.subs.All()
+	ret = make([]*changeLogListener, 0, len(all))
+	for k, _ := range all {
+		ret = append(ret, k.(*changeLogListener))
+	}
+	return
+}
+
+func (c *changeLog) Listen() (*changeLogListener, error) {
+	if err := c.ensureOpen(); err != nil {
+		return nil, err
+	}
+
+	ret := newChangeLogListener(c)
+	c.subs.Put(ret, struct{}{})
+	return ret, nil
 }
 
 func (c *changeLog) Seq() (seq int, err error) {
+	if err := c.ensureOpen(); err != nil {
+		return 0, err
+	}
+
 	err = c.stash.View(func(tx *bolt.Tx) error {
 		seq = changeLogGetSeq(tx)
-		return err
+		return nil
 	})
 	return
 }
 
 func (c *changeLog) Inc() (seq int, err error) {
+	if err := c.ensureOpen(); err != nil {
+		return 0, err
+	}
+
 	err = c.stash.Update(func(tx *bolt.Tx) error {
 		seq, err = changeLogIncSeq(tx)
 		return err
@@ -172,6 +195,10 @@ func (c *changeLog) Inc() (seq int, err error) {
 }
 
 func (c *changeLog) Id() (id uuid.UUID, err error) {
+	if err := c.ensureOpen(); err != nil {
+		return uuid.UUID{}, err
+	}
+
 	err = c.stash.Update(func(tx *bolt.Tx) error {
 		id, err = changeLogGetId(tx)
 		return err
@@ -179,17 +206,11 @@ func (c *changeLog) Id() (id uuid.UUID, err error) {
 	return
 }
 
-func (c *changeLog) Listeners() []func(Change, bool) {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-	ret := make([]func(Change, bool), 0, len(c.handlers))
-	for _, fn := range c.handlers {
-		ret = append(ret, fn)
+func (c *changeLog) Append(key string, val string, del bool) (chg change, err error) {
+	if err := c.ensureOpen(); err != nil {
+		return change{}, err
 	}
-	return ret
-}
 
-func (c *changeLog) Append(key string, val string, del bool) (chg Change, err error) {
 	err = c.stash.Update(func(tx *bolt.Tx) error {
 		chg, err = changeLogAppend(tx, key, val, del)
 		return err
@@ -199,22 +220,28 @@ func (c *changeLog) Append(key string, val string, del bool) (chg Change, err er
 		return
 	}
 
-	c.broadcast(chg, true)
+	for _, l := range c.listeners() {
+		select {
+		case <-c.closed:
+		case <-l.closed:
+		case l.ch <- chg:
+		default:
+			// drop
+		}
+	}
 	return
 }
 
-func (c *changeLog) All() (chgs []Change, err error) {
+func (c *changeLog) All() (chgs []change, err error) {
+	if err := c.ensureOpen(); err != nil {
+		return nil, err
+	}
+
 	err = c.stash.View(func(tx *bolt.Tx) error {
 		chgs, err = changeLogReadAll(tx)
 		return err
 	})
 	return
-}
-
-func (c *changeLog) broadcast(chg Change, ok bool) {
-	for _, fn := range c.Listeners() {
-		fn(chg, ok)
-	}
 }
 
 // Helper functions
@@ -228,16 +255,16 @@ func changeLogParseKey(val []byte) uint64 {
 	return binary.BigEndian.Uint64(val)
 }
 
-func changeLogValBytes(c Change) []byte {
+func changeLogValBytes(c change) []byte {
 	buf := new(bytes.Buffer)
 	scribe.Encode(gob.NewEncoder(buf), c)
 	return buf.Bytes()
 }
 
-func changeLogParseVal(val []byte) (Change, error) {
+func changeLogParseVal(val []byte) (change, error) {
 	msg, err := scribe.Decode(gob.NewDecoder(bytes.NewBuffer(val)))
 	if err != nil {
-		var chg Change
+		var chg change
 		return chg, err
 	}
 
@@ -285,8 +312,8 @@ func changeLogGetId(tx *bolt.Tx) (uuid.UUID, error) {
 	return id, bucket.Put(idKey, id.Bytes())
 }
 
-func changeLogAppend(tx *bolt.Tx, key string, val string, del bool) (Change, error) {
-	var chg Change
+func changeLogAppend(tx *bolt.Tx, key string, val string, del bool) (change, error) {
+	var chg change
 
 	bucket, err := tx.CreateBucketIfNotExists(logBucket)
 	if err != nil {
@@ -298,17 +325,17 @@ func changeLogAppend(tx *bolt.Tx, key string, val string, del bool) (Change, err
 		return chg, err
 	}
 
-	chg = Change{int(id), key, val, int(id), del}
+	chg = change{int(id), key, val, int(id), del}
 	return chg, bucket.Put(changeLogKeyBytes(id), changeLogValBytes(chg))
 }
 
-func changeLogReadAll(tx *bolt.Tx) ([]Change, error) {
+func changeLogReadAll(tx *bolt.Tx) ([]change, error) {
 	bucket := tx.Bucket(logBucket)
 	if bucket == nil {
 		return nil, nil
 	}
 
-	chgs := make([]Change, 0, 1024)
+	chgs := make([]change, 0, 1024)
 	return chgs, bucket.ForEach(func(_ []byte, val []byte) error {
 		chg, err := changeLogParseVal(val)
 		if err != nil {
@@ -323,6 +350,6 @@ func changeLogReadAll(tx *bolt.Tx) ([]Change, error) {
 // Converts a change to a standard data event.
 //
 // NOTE: See Storage for notes on reconciliation
-func changeToEvent(m member, c Change) event {
+func changeToEvent(m member, c change) event {
 	return item{m.id, m.version, c.Key, c.Val, c.Ver, c.Del, time.Now()}
 }

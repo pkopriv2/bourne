@@ -138,20 +138,12 @@ func (h *host) Connect(port int) (net.Connection, error) {
 	return rep.Self.Connect(port)
 }
 
-func (h *host) Store() (Store, error) {
-	if err := h.ensureOpen(); err != nil {
-		return nil, err
-	}
-
-	return h.db, nil
+func (h *host) Store() Store {
+	return h.db
 }
 
-func (h *host) Directory() (Directory, error) {
-	if err := h.ensureOpen(); err != nil {
-		return nil, err
-	}
-
-	return &hostDir{h}, nil
+func (h *host) Directory() Directory {
+	return &hostDir{h}
 }
 
 func (h *host) instance() (r *replica, err error) {

@@ -16,7 +16,7 @@ var (
 type database struct {
 	ctx    common.Context
 	data   amoeba.Index
-	chgLog ChangeLog
+	chgLog *changeLog
 	lock   sync.RWMutex
 	closed bool
 }
@@ -32,7 +32,7 @@ func openDatabase(ctx common.Context, path string) (*database, error) {
 }
 
 // Opens the database using the given changelog
-func initDatabase(ctx common.Context, log ChangeLog) (*database, error) {
+func initDatabase(ctx common.Context, log *changeLog) (*database, error) {
 	db := &database{
 		ctx:    ctx,
 		data:   amoeba.NewBTreeIndex(8),
@@ -113,7 +113,7 @@ func (d *database) Del(key string, expected int) (ok bool, new Item, err error) 
 	return
 }
 
-func (d *database) Log() ChangeLog {
+func (d *database) Log() *changeLog {
 	return d.chgLog
 }
 
@@ -126,7 +126,7 @@ func dbGetItem(data amoeba.View, key string) (item Item, ok bool) {
 	return
 }
 
-func dbDelItem(log ChangeLog, data amoeba.Update, key string, ver int) (bool, Item, error) {
+func dbDelItem(log *changeLog, data amoeba.Update, key string, ver int) (bool, Item, error) {
 	exp, _ := dbGetItem(data, key)
 	if exp.Ver != ver {
 		return false, Item{}, nil
@@ -142,7 +142,7 @@ func dbDelItem(log ChangeLog, data amoeba.Update, key string, ver int) (bool, It
 	return true, new, nil
 }
 
-func dbPutItem(log ChangeLog, data amoeba.Update, key string, val string, expVer int) (bool, Item, error) {
+func dbPutItem(log *changeLog, data amoeba.Update, key string, val string, expVer int) (bool, Item, error) {
 	cur, _ := dbGetItem(data, key)
 	if expVer != cur.Ver {
 		return false, Item{}, nil
