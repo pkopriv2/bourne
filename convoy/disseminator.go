@@ -66,35 +66,35 @@ func (i *dissemIter) Next() (m member, ok bool) {
 
 // disseminator implementation.
 type disseminator struct {
-	ctx     common.Context
-	logger  common.Logger
-	self    member
-	events  *viewLog
-	dir     *directory
-	iter    *dissemIter
-	timeout time.Duration
-	period  time.Duration
-	factor  int
-	probes  int
-	lock    sync.Mutex
-	closed  chan struct{}
-	closer  chan struct{}
-	wait    sync.WaitGroup
+	ctx          common.Context
+	logger       common.Logger
+	self         member
+	events       *viewLog
+	dir          *directory
+	iter         *dissemIter
+	dissemPeriod time.Duration
+	dissemFactor int
+	probeCount   int
+	probeTimeout time.Duration
+	lock         sync.Mutex
+	closed       chan struct{}
+	closer       chan struct{}
+	wait         sync.WaitGroup
 }
 
 func newDisseminator(ctx common.Context, logger common.Logger, self member, dir *directory) (*disseminator, error) {
 	ret := &disseminator{
-		ctx:     ctx,
-		logger:  logger.Fmt("Disseminator"),
-		self:    self,
-		events:  newViewLog(ctx),
-		dir:     dir,
-		timeout: ctx.Config().OptionalDuration(HealthProbeTimeout, defaultHealthProbeTimeout),
-		period:  ctx.Config().OptionalDuration(DisseminationPeriod, defaultDisseminationPeriod),
-		factor:  ctx.Config().OptionalInt(DisseminationFactor, defaultDisseminationFactor),
-		probes:  ctx.Config().OptionalInt(HealthProbeCount, defaultHealthProbeCount),
-		closed:  make(chan struct{}),
-		closer:  make(chan struct{}, 1)}
+		ctx:          ctx,
+		logger:       logger.Fmt("Disseminator"),
+		self:         self,
+		events:       newViewLog(ctx),
+		dir:          dir,
+		dissemPeriod: ctx.Config().OptionalDuration(Config.DisseminationPeriod, defaultDisseminationPeriod),
+		dissemFactor: ctx.Config().OptionalInt(Config.DisseminationFactor, defaultDisseminationFactor),
+		probeCount:   ctx.Config().OptionalInt(Config.HealthProbeCount, defaultHealthProbeCount),
+		probeTimeout: ctx.Config().OptionalDuration(Config.HealthProbeTimeout, defaultHealthProbeTimeout),
+		closed:       make(chan struct{}),
+		closer:       make(chan struct{}, 1)}
 
 	if err := ret.start(); err != nil {
 		return nil, err
@@ -128,7 +128,7 @@ func (d *disseminator) Push(e []event) error {
 	}
 
 	n := len(d.dir.AllActive())
-	if fanout := dissemFanout(d.factor, n); fanout > 0 {
+	if fanout := dissemFanout(d.dissemFactor, n); fanout > 0 {
 		d.logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
 		d.events.Push(e, fanout)
 	}
@@ -169,7 +169,7 @@ func (d *disseminator) start() error {
 	go func() {
 		defer d.wait.Done()
 
-		tick := time.NewTicker(d.period)
+		tick := time.NewTicker(d.dissemPeriod)
 		for {
 			select {
 			case <-d.closed:
@@ -193,10 +193,10 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			done, timeout := concurrent.NewBreaker(d.timeout, func() interface{} {
+			done, timeout := concurrent.NewBreaker(d.probeTimeout, func() interface{} {
 				for {
-					ch := d.probe(m, d.probes)
-					for i := 0; i < d.probes; i++ {
+					ch := d.probe(m, d.probeCount)
+					for i := 0; i < d.probeCount; i++ {
 						if <-ch {
 							return true
 						}
