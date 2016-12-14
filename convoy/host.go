@@ -139,7 +139,7 @@ func (h *host) Connect(port int) (net.Connection, error) {
 }
 
 func (h *host) Store() Store {
-	return h.db
+	return &hostDb{h}
 }
 
 func (h *host) Directory() Directory {
@@ -236,7 +236,7 @@ func (h *host) start() error {
 				}
 
 				if err != nil {
-					h.logger.Info("Unable to rejoin cluster")
+					h.logger.Error("Unable to rejoin cluster")
 					h.shutdown(nil, err)
 					return
 				}
@@ -248,7 +248,32 @@ func (h *host) start() error {
 	return nil
 }
 
-// directory wrapper...
+// The host db simply manages access to the underlying local store.
+// Mostly it prevents consumers from erroneously disconnecting the
+// local database.
+type hostDb struct {
+	h *host
+}
+
+func (d *hostDb) Close() error {
+	return nil
+}
+
+func (d *hostDb) Get(key string) (*Item, error) {
+	return d.h.db.Get(key)
+}
+
+func (d *hostDb) Put(key string, val string, expected int) (bool, Item, error) {
+	return d.h.db.Put(key, val, expected)
+}
+
+func (d *hostDb) Del(key string, expected int) (bool, Item, error) {
+	return d.h.db.Del(key, expected)
+}
+
+// The host directory.  The goal of the directory is to ensure that the user
+// is always working on the latest version of the directory - even in the
+// event of disconnects, failures, or evictions.
 type hostDir struct {
 	h *host
 }

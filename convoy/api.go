@@ -10,14 +10,16 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// Public Error Types
 var (
 	EvictedError = errors.New("Convoy:Evicted")
 	FailedError  = errors.New("Convoy:Failed")
 	ClosedError  = errors.New("Convoy:Closed")
 )
 
-
+// Public Configuration
 var Config = struct {
+
 	// The number of attempts to try to rejoin a cluster on failure.
 	JoinAttempts string
 
@@ -90,7 +92,9 @@ type Member interface {
 	// The id of the member
 	Id() uuid.UUID
 
-	// The current version of the member's membership.
+	// Every member is versioned in accordance with their
+	// membership.  The implication is that members of
+	// the same id, but distint versions are unique.
 	Version() int
 
 	// Connects to the member on the provided port.  Consumers
