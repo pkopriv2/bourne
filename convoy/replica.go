@@ -148,8 +148,6 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 	return r, nil
 }
 
-var failed = 0
-
 func (r *replica) ensureOpen() error {
 	select {
 	case <-r.Closed:
