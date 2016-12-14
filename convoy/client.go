@@ -65,8 +65,8 @@ func (m *client) DirApply(events []event) ([]bool, error) {
 	return readDirApplyResponse(resp)
 }
 
-func (m *client) PushPull(source uuid.UUID, events []event) ([]bool, []event, error) {
-	resp, err := m.Raw.Send(newPushPullRequest(source, events))
+func (m *client) PushPull(sourceId uuid.UUID, sourceVersion int, events []event) ([]bool, []event, error) {
+	resp, err := m.Raw.Send(newPushPullRequest(sourceId, sourceVersion, events))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -76,10 +76,10 @@ func (m *client) PushPull(source uuid.UUID, events []event) ([]bool, []event, er
 		switch err.Error() {
 		default:
 			return nil, nil, err
-		case replicaEvictedError.Error():
-			return nil, nil, replicaEvictedError
-		case replicaFailureError.Error():
-			return nil, nil, replicaFailureError
+		case EvictedError.Error():
+			return nil, nil, EvictedError
+		case FailedError.Error():
+			return nil, nil, FailedError
 		}
 	}
 

@@ -1,6 +1,7 @@
 package convoy
 
 import (
+	"errors"
 	"io"
 	"time"
 
@@ -9,19 +10,25 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+var (
+	EvictedError = errors.New("Convoy:Evicted")
+	FailedError  = errors.New("Convoy:Failed")
+	ClosedError  = errors.New("Convoy:Closed")
+)
+
 const (
 
-	// The timeout used during health checks and event propagation.
-	// See README.md  for more information on member health.
-	ConnectTimeout = "convoy.connect.timeout"
-
 	// The number of attempts to try to rejoin a cluster on failure.
-	JoinRetryAttempts = "convoy.join.retry.attempts"
+	JoinAttempts = "convoy.join.attempts.count"
 
 	// The number of probes to send out to determine if a client is
 	// truly unreachable.  In the event of that a member is no longer
 	// reachable, they are deemed unhealthy and evicted from the cluster.
-	HealthProbeCount = "convoy.health.probe.size"
+	HealthProbeCount = "convoy.health.probe.count"
+
+	// The timeout used during health checks
+	// See README.md  for more information on member health.
+	HealthProbeTimeout = "convoy.health.probe.timeout"
 
 	// The dissemination represents the number of ln(N) times a message
 	// is redistributed.
@@ -36,8 +43,25 @@ const (
 	DisseminationBatchSize = "convoy.dissemination.size"
 )
 
+var Config = struct {
+	JoinAttempts           string
+	HealthProbeCount       string
+	HealthProbeTimeout     string
+	DisseminationFactor    string
+	DisseminationPeriod    string
+	DisseminationBatchSize string
+}{
+	JoinAttempts,
+	HealthProbeCount,
+	HealthProbeTimeout,
+	DisseminationFactor,
+	DisseminationPeriod,
+	DisseminationBatchSize,
+}
+
 const (
-	defaultConnectTimeout      = 10 * time.Second
+	defaultJoinAttemptsCount   = 10
+	defaultHealthProbeTimeout  = 10 * time.Second
 	defaultHealthProbeCount    = 3
 	defaultDisseminationFactor = 3
 	defaultDisseminationPeriod = 500 * time.Millisecond
@@ -54,10 +78,16 @@ func StartHost(ctx common.Context, addr string, peer string) (Host, error) {
 	return nil, nil
 }
 
-// A host is a member participating in and disseminating a shared directory.
+// A host is the local member participating in and disseminating a shared
+// directory.
 type Host interface {
 	io.Closer
+
+	// A host is a local member.
 	Member
+
+	// Performs an immediate shutdown of the host
+	Shutdown() error
 
 	// Provides access to the distributed directory.
 	Directory() (Directory, error)
@@ -81,13 +111,17 @@ type Member interface {
 	Store(common.Context) (Store, error)
 }
 
-// The directory is the central storage unit that hostsl information
-// on all other members of the cluster.
+// The directory is the central storage unit that hosts all information
+// on all other members of the cluster.  All methods on the directory
+// can fail, if the parent has closed or failed for any reason.
 type Directory interface {
 
 	// Retrieves the replica with the given id.  Nil if the member
 	// doesn't exist.
 	Get(id uuid.UUID) (Member, error)
+
+	// Returns all of the currently active members.
+	All() ([]Member, error)
 
 	// Evicts a member from the cluster.  The member will NOT automatically
 	// rejoin on eviction.

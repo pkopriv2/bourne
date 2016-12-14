@@ -11,12 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-var (
-	replicaEvictedError = errors.New("Replica evicted from cluster")
-	replicaFailureError = errors.New("Replica failed")
-	replicaClosedError  = errors.New("Replica closed")
-)
-
 // A replica represents a live, joined instance of a convoy db. The instance itself is managed by the
 // host object.
 type replica struct {
@@ -55,11 +49,11 @@ type replica struct {
 	leaving concurrent.AtomicBool
 }
 
-func newMasterReplica(ctx common.Context, db *database, hostname string, port int) (r *replica, err error) {
+func newSeedReplica(ctx common.Context, db *database, hostname string, port int) (r *replica, err error) {
 	return initReplica(ctx, db, hostname, port)
 }
 
-func newMemberReplica(ctx common.Context, db *database, hostname string, port int, peer *client) (r *replica, err error) {
+func newReplica(ctx common.Context, db *database, hostname string, port int, peer *client) (r *replica, err error) {
 	r, err = initReplica(ctx, db, hostname, port)
 	if err != nil {
 		return
@@ -121,8 +115,13 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 		Closed:     make(chan struct{}),
 		closer:     make(chan struct{}, 1)}
 
+	r.Dir.OnJoin(func(id uuid.UUID, ver int) {
+		r.Logger.Debug("Welcome member [%v,%v]", id, ver)
+	})
+
 	r.Dir.OnEviction(func(id uuid.UUID, ver int) {
-		if id != r.Self.id {
+		r.Logger.Debug("Member evicted [%v]", id, ver)
+		if id != r.Self.id || ver != r.Self.version {
 			return
 		}
 
@@ -130,44 +129,34 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 			return
 		}
 		r.Logger.Info("Evicted")
-		r.fail(replicaEvictedError)
+		r.shutdown(EvictedError)
 	})
 
 	r.Dir.OnFailure(func(id uuid.UUID, ver int) {
-		if id != r.Self.id {
+		r.Logger.Debug("Member failed [%v]", id, ver)
+		if id != r.Self.id || ver != r.Self.version {
 			return
 		}
 
 		if r.leaving.Get() {
 			return
 		}
-		r.Logger.Info("Failed")
-		r.fail(replicaFailureError)
+		r.Logger.Info("Self failed.  Shutting down.")
+		r.shutdown(FailedError)
 	})
 
 	return r, nil
 }
 
+var failed = 0
+
 func (r *replica) ensureOpen() error {
 	select {
 	case <-r.Closed:
-		return common.Or(r.Failure, replicaClosedError)
+		return common.Or(r.Failure, ClosedError)
 	default:
 		return nil
 	}
-}
-
-func (r *replica) wait() error {
-	<-r.Closed
-	return r.Failure
-}
-
-func (r *replica) fail(err error) error {
-	if err := r.ensureOpen(); err != nil {
-		return err
-	}
-
-	return r.shutdown(err)
 }
 
 func (r *replica) Id() uuid.UUID {
@@ -179,7 +168,7 @@ func (r *replica) Close() error {
 		return err
 	}
 
-	return r.fail(nil)
+	return r.shutdown(nil)
 }
 
 func (r *replica) Leave() error {
@@ -209,9 +198,8 @@ func (r *replica) shutdown(err error) error {
 	case r.closer <- struct{}{}:
 	}
 
-	defer common.RunIf(func() { r.Logger.Error("shutdown error: %v", err) })(err)
-	defer func() { <-r.closer }()
 	defer close(r.Closed)
+	defer common.RunIf(func() { r.Logger.Error("shutdown error: %v", err) })(err)
 	defer common.RunIf(func() { r.Failure = err })(err)
 
 	var err1 error
@@ -259,14 +247,6 @@ func (r *replica) shutdown(err error) error {
 func (r *replica) leaveAndDrain() error {
 	r.Logger.Info("Leaving")
 
-	select {
-	case <-r.Closed:
-		return r.Failure
-	case r.closer <- struct{}{}:
-	}
-
-	defer func() { <-r.closer }()
-
 	if err := r.Dir.Evict(r.Self); err != nil {
 		r.Logger.Error("Error evicting self [%v]", err)
 		return errors.Wrap(err, "Error evicting self")
@@ -274,6 +254,12 @@ func (r *replica) leaveAndDrain() error {
 
 	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
 		for size := r.Dissem.events.data.Size(); size > 0; size = r.Dissem.events.data.Size() {
+			select {
+			case <-r.Closed:
+				return ClosedError
+			default:
+			}
+
 			r.Logger.Info("Remaining items: %v", size)
 			time.Sleep(1 * time.Second)
 		}
@@ -281,8 +267,12 @@ func (r *replica) leaveAndDrain() error {
 	})
 
 	select {
-	case <-done:
-		return nil
+	case e := <-done:
+		if e == nil {
+			return nil
+		}
+
+		return e.(error)
 	case <-timeout:
 		return errors.New("Timeout while emptying queue")
 	}
@@ -309,21 +299,18 @@ func replicaJoin(self *replica, peer *client) error {
 }
 
 // Returns the member representing "self"
-func replicaInitSelf(ctx common.Context, db *database, hostname string, port int) (mem member, err error) {
-	var id uuid.UUID
-	var seq int
-	id, err = db.Log().Id()
+func replicaInitSelf(ctx common.Context, db *database, hostname string, port int) (member, error) {
+	id, err := db.Log().Id()
 	if err != nil {
-		return
+		return member{}, nil
 	}
 
-	seq, err = db.Log().Inc()
+	seq, err := db.Log().Inc()
 	if err != nil {
-		return
+		return member{}, nil
 	}
 
-	mem = newMember(id, hostname, strconv.Itoa(port), seq)
-	return
+	return newMember(id, hostname, strconv.Itoa(port), seq), nil
 }
 
 // Returns a logger decorated with membership info.

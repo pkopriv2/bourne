@@ -66,31 +66,35 @@ func (i *dissemIter) Next() (m member, ok bool) {
 
 // disseminator implementation.
 type disseminator struct {
-	ctx    common.Context
-	logger common.Logger
-	self   member
-	events *viewLog
-	dir    *directory
-	iter   *dissemIter
-	lock   sync.Mutex
-	period time.Duration
-	factor int
-	closed chan struct{}
-	closer chan struct{}
-	wait   sync.WaitGroup
+	ctx     common.Context
+	logger  common.Logger
+	self    member
+	events  *viewLog
+	dir     *directory
+	iter    *dissemIter
+	timeout time.Duration
+	period  time.Duration
+	factor  int
+	probes  int
+	lock    sync.Mutex
+	closed  chan struct{}
+	closer  chan struct{}
+	wait    sync.WaitGroup
 }
 
 func newDisseminator(ctx common.Context, logger common.Logger, self member, dir *directory) (*disseminator, error) {
 	ret := &disseminator{
-		ctx:    ctx,
-		logger: logger.Fmt("Disseminator"),
-		self:   self,
-		events: newViewLog(ctx),
-		dir:    dir,
-		period: ctx.Config().OptionalDuration("convoy.dissem.period", 750*time.Millisecond),
-		factor: ctx.Config().OptionalInt("convoy.dissem.fanout.factor", 4),
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1)}
+		ctx:     ctx,
+		logger:  logger.Fmt("Disseminator"),
+		self:    self,
+		events:  newViewLog(ctx),
+		dir:     dir,
+		timeout: ctx.Config().OptionalDuration(HealthProbeTimeout, defaultHealthProbeTimeout),
+		period:  ctx.Config().OptionalDuration(DisseminationPeriod, defaultDisseminationPeriod),
+		factor:  ctx.Config().OptionalInt(DisseminationFactor, defaultDisseminationFactor),
+		probes:  ctx.Config().OptionalInt(HealthProbeCount, defaultHealthProbeCount),
+		closed:  make(chan struct{}),
+		closer:  make(chan struct{}, 1)}
 
 	if err := ret.start(); err != nil {
 		return nil, err
@@ -102,7 +106,7 @@ func newDisseminator(ctx common.Context, logger common.Logger, self member, dir 
 func (d *disseminator) Close() error {
 	select {
 	case <-d.closed:
-		return nil
+		return ClosedError
 	case d.closer <- struct{}{}:
 	}
 
@@ -114,7 +118,7 @@ func (d *disseminator) Close() error {
 func (d *disseminator) Push(e []event) error {
 	select {
 	case <-d.closed:
-		return errors.Errorf("Disseminator closed")
+		return ClosedError
 	default:
 	}
 
@@ -183,22 +187,22 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			if err == replicaFailureError {
+			if err == FailedError {
 				d.logger.Error("Received failure response from [%v].  Evicting self.", m)
 				d.dir.Fail(d.self)
 				continue
 			}
 
-			done, timeout := concurrent.NewBreaker(5*time.Second, func() interface{} {
+			done, timeout := concurrent.NewBreaker(d.timeout, func() interface{} {
 				for {
-					ch := d.probe(m, 3)
-					if <-ch {
-						return true
+					ch := d.probe(m, d.probes)
+					for i := 0; i < d.probes; i++ {
+						if <-ch {
+							return true
+						}
 					}
-					if <-ch {
-						return true
-					}
-					return <-ch
+
+					return false
 				}
 			})
 
@@ -272,7 +276,7 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 	}
 
 	defer client.Close()
-	_, events, err := client.PushPull(d.self.id, batch)
+	_, events, err := client.PushPull(d.self.id, d.self.version, batch)
 	if err != nil {
 		return err
 	}
@@ -283,7 +287,6 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 
 func (d *disseminator) newIterator() *dissemIter {
 	var ids []uuid.UUID
-	var total int
 	d.dir.Core.View(func(v *view) {
 		ids = storageHealthCollect(v.Health, func(id uuid.UUID, h health) bool {
 			if id == d.self.id {
@@ -295,21 +298,11 @@ func (d *disseminator) newIterator() *dissemIter {
 				return false
 			}
 
-			total++
 			return m.Active && h.Healthy
 		})
 	})
 
 	if len(ids) == 0 {
-
-		// if we get into a state where the rest of the cluster is failed...it's
-		// very likely we're in a network partition.  the disseminator won't be
-		// able to detect this state and will spin indefinitely, never being
-		// able to recover...we need to fail to bail out
-		if total > 0 {
-			d.dir.Fail(d.self)
-		}
-
 		return nil
 	}
 

@@ -10,10 +10,10 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-var (
-	dirClosedError = errors.New("DIR:CLOSED")
-)
-
+// var (
+	// ClosedError = errors.New("DIR:CLOSED")
+// )
+//
 // Reads from the channel of events and applies them to the directory.
 func dirIndexEvents(ch <-chan event, dir *directory) {
 	go func() {
@@ -68,7 +68,7 @@ func (d *directory) Close() (ret error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
 	return d.Core.Close()
@@ -78,7 +78,7 @@ func (d *directory) OnChange(fn func([]event)) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
 	d.Core.Listen(func(batch []item) {
@@ -92,7 +92,7 @@ func (d *directory) OnJoin(fn func(uuid.UUID, int)) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
 	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
@@ -108,7 +108,7 @@ func (d *directory) OnEviction(fn func(uuid.UUID, int)) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
 	d.Core.ListenRoster(func(id uuid.UUID, ver int, status bool) {
@@ -123,7 +123,7 @@ func (d *directory) OnFailure(fn func(uuid.UUID, int)) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
 	d.Core.ListenHealth(func(id uuid.UUID, ver int, status bool) {
@@ -138,7 +138,7 @@ func (d *directory) Apply(events []event) (ret []bool, err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return nil, dirClosedError
+		return nil, ClosedError
 	}
 
 	ret = make([]bool, 0, len(events))
@@ -164,7 +164,7 @@ func (d *directory) Add(m member) (err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
 	d.Core.Update(func(u *update) {
@@ -188,12 +188,12 @@ func (d *directory) Evict(m Member) (err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
 	d.Core.Update(func(u *update) {
 		if !u.Evict(m.Id(), m.Version()) {
-			err = errors.Errorf("Member already evicted [%v]")
+			err = errors.Errorf("Member already evicted [%v]", m)
 			return
 		}
 	})
@@ -204,9 +204,10 @@ func (d *directory) Fail(m Member) (err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 	if d.closed {
-		return dirClosedError
+		return ClosedError
 	}
 
+	d.logger.Error("Failing member [%v]", m)
 	d.Core.Update(func(u *update) {
 		if !u.Del(m.Id(), m.Version(), memberHealthAttr, m.Version()) {
 			err = errors.Errorf("Unable to fail member [%v]", m)

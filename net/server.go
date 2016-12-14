@@ -44,7 +44,7 @@ const (
 const (
 	DefaultServerSendTimeout = 30 * time.Second
 	DefaultServerRecvTimeout = 30 * time.Second
-	DefaultServerPoolSize    = 2
+	DefaultServerPoolSize    = 20
 	DefaultClientSendTimeout = 30 * time.Second
 	DefaultClientRecvTimeout = 30 * time.Second
 	DefaultClientEncoding    = "json"

@@ -138,7 +138,7 @@ func (s *server) DirApply(req net.Request) net.Response {
 
 // Handles a /evt/push request
 func (s *server) PushPull(req net.Request) net.Response {
-	source, events, err := readPushPullRequest(req)
+	source, ver, events, err := readPushPullRequest(req)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -147,14 +147,13 @@ func (s *server) PushPull(req net.Request) net.Response {
 	s.dir.Core.View(func(v *view) {
 		m, ok := v.Roster[source]
 		h, _ := v.Health[source]
-		unHealthy = ok && m.Active && !h.Healthy
+		unHealthy = ok && m.Version == ver && m.Active && !h.Healthy
 	})
 
 	if unHealthy {
 		s.logger.Error("Unhealthy member detected [%v]", source)
-		return net.NewErrorResponse(replicaFailureError)
+		return net.NewErrorResponse(FailedError)
 	}
-
 
 	ret, err := s.dir.Apply(events)
 	if err != nil {
@@ -228,9 +227,10 @@ func readPingProxyResponse(res net.Response) (success bool, err error) {
 }
 
 // /events/pull
-func newPushPullRequest(source uuid.UUID, events []event) net.Request {
+func newPushPullRequest(source uuid.UUID, version int, events []event) net.Request {
 	return net.NewRequest(metaPushPull, scribe.Build(func(w scribe.Writer) {
-		scribe.WriteUUID(w, "source", source)
+		scribe.WriteUUID(w, "id", source)
+		w.Write("ver", version)
 		w.Write("events", events)
 	}))
 }
@@ -242,8 +242,13 @@ func newPushPullResponse(success []bool, events []event) net.Response {
 	}))
 }
 
-func readPushPullRequest(req net.Request) (id uuid.UUID, events []event, err error) {
-	id, err = scribe.ReadUUID(req.Body(), "source")
+func readPushPullRequest(req net.Request) (id uuid.UUID, ver int, events []event, err error) {
+	id, err = scribe.ReadUUID(req.Body(), "id")
+	if err != nil {
+		return
+	}
+
+	ver, err = scribe.ReadInt(req.Body(), "ver")
 	if err != nil {
 		return
 	}
