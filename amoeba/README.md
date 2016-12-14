@@ -1,11 +1,8 @@
 # Amoeba
 
-Amoeba is a library of indexing primitives.  Its intended use is within 
-a distributed, eventually convergent database, but has been extracted for 
-general use.  It implements a simple in-memory indexer for use in 
-applications which require more advanced lookup methods than what a simple 
-map can provide.  It supports near-constant time (log32(n)) get/set operations
-and a very performant scanning abstraction.
+Amoeba is a library of indexing abstractions and a single implementing type.  
+Its intended use is within a distributed, eventually convergent database, but 
+has been extracted for general use.  
 
 ## Getting Started
 
@@ -21,20 +18,20 @@ Import it:
 import "github.com/pkopriv2/bourne/amoeba"
 ```
 
-### Creating a new Indexer
+### Creating a new index
 
-Amoeba consists of basically single public API.  To get an instance of an
-indexer:
+Creating an index entails deciding on the implementation to use.  At the time 
+of this writing there was only a single type: `BTreeIndex`.  
 
 ```go
-indexer := amoeba.NewIndexer(common.NewContext(common.EmptyConfig()))
+indexer := amoeba.NewBTreeIndex(32)
 ```
 
 You'll notice that virtually none of the amoeba libraries return errors. 
 This is by design, as many of the operations only require native language
 features and no external IO.  While nice, this does, however mean that
-indexers are NOT suitable for large indexes or in applications that require
-durability.
+indexers are NOT suitable for extremely large indexes or in applications 
+that require durability.
 
 ### Retrieving a value
 
@@ -53,33 +50,23 @@ closure, as synchronization is no longer guaranteed.
 
 ```go
 indexer.Update(func(u Update) {
-    u.Put(IntKey(1), "val", 0)
+    u.Put(IntKey(1), "val")
 })
 ```
 
-The main thing to notice is that every item within an amoeba index requires a 
-version argument. Amoeba indexes are specifically designed to be replicated
-amongst many hosts, which means that all the problems of distributed systems
-are now in play.  Among those are:
-
-* Failed delivery
-* Partial delivery
-* Out of order delivery
-
-Externalizing time allows us to index data on non-ambiguous elements (e.g. keys)
-while reconciling any issues of delivery by only ever accepting the latest 
-observed value for an item.  
+The only additional thing to note is that while multiple readers are 
+allowed, amoeba indices currently only allow a single update at a time
 
 ### Deleting a value
 
-Deleting keys is very similar to updating keys.  Internally, they are represented
-the same as a put, with no corresponding value.
-
 ```go
 indexer.Update(func(u Update) {
-    u.Del(IntKey(1), 0)
+    u.Del(IntKey(1))
 })
 ```
+
+NOTE: Deletions are permanent and all history of the item are lost. 
+If idempotency is required, external versioning is required.
 
 ### Creating a new key type
 
@@ -112,7 +99,9 @@ The only requirement is that keys implement the sortable interface.
 
 ## Configuration
 
-Amoeba can configured with the following keys:
+Amoeba currently requires no environmental configuration.
 
-* amoeba.index.gc.expiration - Minimum time before deleted data is considered garbage.
-* amoeba.index.gc.cycle - Minimum duration between gc cycles.
+
+## Authors
+
+* Preston Koprivica: pkoriv2@gmail.com
