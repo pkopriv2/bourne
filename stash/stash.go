@@ -34,7 +34,7 @@ type Stash interface {
 
 // Opens a stash instance at random temporary location.
 func OpenRandom(ctx common.Context) (Stash, error) {
-	return Open(ctx, path.Join(afero.GetTempDir(afero.NewOsFs(), path.Join("bourne", uuid.NewV4().String())), "stash.db"))
+	return Open(ctx, path.Join(afero.GetTempDir(afero.NewOsFs(), path.Join("bourne", uuid.NewV1().String())), "stash.db"))
 }
 
 // Opens the stash instance at the default location and binds it to the context.

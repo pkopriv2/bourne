@@ -276,7 +276,7 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 	}
 
 	defer client.Close()
-	_, events, err := client.PushPull(d.self.id, d.self.version, batch)
+	_, events, err := client.DissemPushPull(d.self.id, d.self.version, batch)
 	if err != nil {
 		return err
 	}

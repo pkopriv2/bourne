@@ -197,18 +197,15 @@ func TestStorage_Update_RosterListener(t *testing.T) {
 
 	id := uuid.NewV1()
 
-	list := core.Listen()
+	ch := streamMemberships(core.Listen())
 	core.Update(func(u *update) error {
 		u.Join(id, 1)
 		return nil
 	})
 
-	ch := streamMemberships(list)
-
 	m := <-ch
 	assert.Equal(t, m.Id, id)
 
-	list.Close()
 	core.Update(func(u *update) error {
 		u.Join(id, 2)
 		return nil
@@ -225,18 +222,15 @@ func TestStorage_Update_HealthListener(t *testing.T) {
 
 	id := uuid.NewV1()
 
-	list := core.Listen()
+	ch := streamHealth(core.Listen())
 	core.Update(func(u *update) error {
 		u.Fail(id, 1)
 		return nil
 	})
 
-	ch := streamHealth(list)
-
 	h := <-ch
 	assert.Equal(t, h.Id, id)
 
-	list.Close()
 	core.Update(func(u *update) error {
 		u.Fail(id, 2)
 		return nil

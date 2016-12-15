@@ -40,7 +40,7 @@ func changesToEvents(m member, chgs []change) []event {
 	return ret
 }
 
-// Fundamental unit of change within the published database
+// Fundamental unit of change of the changelog
 type change struct {
 	Seq int
 	Key string
@@ -49,7 +49,7 @@ type change struct {
 	Del bool
 }
 
-func ReadChange(r scribe.Reader) (change, error) {
+func readChange(r scribe.Reader) (change, error) {
 	c := &change{}
 	if err := r.Read("seq", &c.Seq); err != nil {
 		return *c, err
@@ -268,7 +268,7 @@ func changeLogParseVal(val []byte) (change, error) {
 		return chg, err
 	}
 
-	return ReadChange(msg)
+	return readChange(msg)
 }
 
 func changeLogGetSeq(tx *bolt.Tx) int {

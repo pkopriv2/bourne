@@ -9,10 +9,11 @@ import (
 )
 
 // A host manages a single replica instance.  Most importantly, if an
-// instance is deemed unhealthy and shutdown,
+// instance is deemed unhealthy and shuts down, the host will attempt
+// create a new replica instance.
 type host struct {
 
-	// the central context.  Shared amongst all objects with the host graph.
+	// the central context.  Shared amongst all objects within the host graph.
 	ctx common.Context
 
 	// the root logger.
@@ -21,7 +22,8 @@ type host struct {
 	// the host id
 	id uuid.UUID
 
-	// the published database.  Updates to this are merged and distributed within host.
+	// the published database.  Updates to this are merged into the directory
+	// and distributed throughout the cluster
 	db *database
 
 	// the local hostname of the host.  Other members use THIS address to contact the member.
@@ -102,12 +104,8 @@ func (h *host) Shutdown() error {
 	return h.shutdown(rep, nil)
 }
 
-func (h *host) Close() error {
-	h.logger.Info("Shutting down gracefully")
-	return h.Leave()
-}
-
 func (h *host) Leave() error {
+	h.logger.Info("Shutting down gracefully")
 	rep, err := h.instance()
 	if err != nil {
 		return err
@@ -115,6 +113,11 @@ func (h *host) Leave() error {
 
 	return h.shutdown(rep, rep.Leave())
 }
+
+func (h *host) Close() error {
+	return h.Leave()
+}
+
 
 func (h *host) Id() uuid.UUID {
 	return h.id

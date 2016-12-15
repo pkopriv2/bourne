@@ -17,6 +17,7 @@ const (
 	actPushPull  = "/dissem/pushPull"
 	actDirApply  = "/dir/apply"
 	actDirList   = "/dir/list"
+	actStorePut  = "/store/put"
 )
 
 // Meta messages
@@ -26,6 +27,7 @@ var (
 	metaDirApply  = serverNewMeta(actDirApply)
 	metaDirList   = serverNewMeta(actDirList)
 	metaPushPull  = serverNewMeta(actPushPull)
+	metaStorePut  = serverNewMeta(actStorePut)
 )
 
 type server struct {
@@ -314,3 +316,40 @@ func readDirApplyResponse(res net.Response) (msgs []bool, err error) {
 	err = res.Body().Read("success", &msgs)
 	return
 }
+
+// /store/put
+func newStorePutRequest(key string, val string, expected int) net.Request {
+	return net.NewRequest(metaDirApply, scribe.Build(func(w scribe.Writer) {
+		w.Write("key", key)
+		w.Write("val", val)
+		w.Write("ver", expected)
+	}))
+}
+
+func readStorePutRequest(req net.Request) (key string, val string, ver int, err error) {
+	if err = req.Body().Read("key", &key); err != nil {
+		return
+	}
+	if err = req.Body().Read("val", &val); err != nil {
+		return
+	}
+	if err = req.Body().Read("ver", &ver); err != nil {
+		return
+	}
+	return
+}
+
+func newStorePutResponse() net.Response {
+	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
+		// w.Write("", success)
+	}))
+}
+
+// func readDirApplyResponse(res net.Response) (msgs []bool, err error) {
+	// if err = res.Error(); err != nil {
+		// return nil, err
+	// }
+//
+	// err = res.Body().Read("success", &msgs)
+	// return
+// }

@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
@@ -14,10 +13,6 @@ import (
 )
 
 // System reserved keys.  Consumers should consider the: /Convoy/ namespace off limits!
-var (
-	storageClosedError = errors.New("Storage closed")
-)
-
 const (
 	memberMembershipAttr = "Convoy.Member.Joined"
 	memberHealthAttr     = "Convoy.Member.Health"
@@ -129,42 +124,10 @@ func (h health) String() string {
 	return fmt.Sprintf("%v(%v) since %v", str, h.Version, h.Since)
 }
 
-// Storage item listener
-type storageListener struct {
-	storage *storage
-	ch      chan []item
-	closed  chan struct{}
-	closer  chan struct{}
-}
-
-func newStorageListener(storage *storage) *storageListener {
-	return &storageListener{storage, make(chan []item, 1024), make(chan struct{}), make(chan struct{}, 1)}
-}
-
-func (l *storageListener) Close() error {
-	select {
-	case <-l.storage.closed:
-		return ClosedError
-	case <-l.closed:
-		return ClosedError
-	case l.closer <- struct{}{}:
-	}
-
-	l.storage.subs.Remove(l)
-
-	close(l.ch)
-	l.ch = nil
-	return nil
-}
-
-func (l *storageListener) Ch() <-chan []item {
-	return l.ch
-}
-
-func streamMemberships(l *storageListener) <-chan membership {
+func streamMemberships(ch <-chan []item) <-chan membership {
 	ret := make(chan membership)
 	go func() {
-		for batch := range l.Ch() {
+		for batch := range ch {
 			for _, i := range batch {
 				if i.Key == memberMembershipAttr {
 					ret <- membership{i.MemId, i.MemVer, !i.Del, i.Time}
@@ -177,10 +140,10 @@ func streamMemberships(l *storageListener) <-chan membership {
 	return ret
 }
 
-func streamHealth(l *storageListener) <-chan health {
+func streamHealth(ch <-chan []item) <-chan health {
 	ret := make(chan health)
 	go func() {
-		for batch := range l.Ch() {
+		for batch := range ch {
 			for _, i := range batch {
 				if i.Key == memberHealthAttr {
 					ret <- health{i.MemId, i.MemVer, !i.Del, i.Time}
@@ -200,12 +163,12 @@ type storage struct {
 
 	// All mutable fields sync'ed on datItems
 	// Data objects.
-	datItems  amoeba.Index
-	datRoster map[uuid.UUID]membership
-	datHealth map[uuid.UUID]health
+	items  amoeba.Index
+	roster map[uuid.UUID]membership
+	health map[uuid.UUID]health
 
 	// subscriptions
-	subs concurrent.Map
+	listeners concurrent.List
 
 	// Utility
 	wait   sync.WaitGroup
@@ -217,10 +180,10 @@ func newStorage(ctx common.Context, logger common.Logger) *storage {
 	s := &storage{
 		ctx:       ctx,
 		logger:    logger.Fmt("Storage"),
-		datItems:  amoeba.NewBTreeIndex(32),
-		datRoster: make(map[uuid.UUID]membership),
-		datHealth: make(map[uuid.UUID]health),
-		subs:      concurrent.NewMap(),
+		items:     amoeba.NewBTreeIndex(32),
+		roster:    make(map[uuid.UUID]membership),
+		health:    make(map[uuid.UUID]health),
+		listeners: concurrent.NewList(8),
 		closed:    make(chan struct{}),
 		closer:    make(chan struct{}, 1)}
 
@@ -236,8 +199,8 @@ func (s *storage) Close() error {
 	case s.closer <- struct{}{}:
 	}
 
-	for _, l := range s.listeners() {
-		l.Close()
+	for _, l := range s.Listeners() {
+		close(l)
 	}
 
 	close(s.closed)
@@ -246,8 +209,8 @@ func (s *storage) Close() error {
 }
 
 func (d *storage) View(fn func(*view)) {
-	d.datItems.Read(func(data amoeba.View) {
-		fn(&view{data, d.datRoster, d.datHealth, time.Now()})
+	d.items.Read(func(data amoeba.View) {
+		fn(&view{data, d.roster, d.health, time.Now()})
 	})
 }
 
@@ -259,8 +222,8 @@ func (d *storage) Update(fn func(*update) error) (err error) {
 	}
 
 	var ret []item
-	d.datItems.Update(func(data amoeba.Update) {
-		update := &update{&view{data, d.datRoster, d.datHealth, time.Now()}, data, make([]item, 0, 8)}
+	d.items.Update(func(data amoeba.Update) {
+		update := &update{&view{data, d.roster, d.health, time.Now()}, data, make([]item, 0, 8)}
 		defer func() {
 			ret = update.items
 		}()
@@ -268,13 +231,20 @@ func (d *storage) Update(fn func(*update) error) (err error) {
 		err = fn(update)
 	})
 
+	// do not allow listeners to be closed while we're brodcasting.
+	select {
+	case <-d.closed:
+		return ClosedError
+	case d.closer<-struct{}{}:
+	}
+	defer func() {<-d.closer}()
+
 	// Because this is outside of update, ordering is no longer guaranteed.
 	// Consumers must be idempotent
-	for _, l := range d.listeners() {
+	for _, ch := range d.Listeners() {
 		select {
 		case <-d.closed:
-		case <-l.closed:
-		case l.ch <- ret:
+		case ch <- ret:
 		default:
 			// drop
 		}
@@ -303,23 +273,23 @@ func (s *storage) Health() (ret map[uuid.UUID]health) {
 	return
 }
 
-func (s *storage) listeners() (ret []*storageListener) {
-	all := s.subs.All()
-	ret = make([]*storageListener, 0, len(all))
-	for k, _ := range all {
-		ret = append(ret, k.(*storageListener))
+func (s *storage) Listeners() (ret []chan []item) {
+	all := s.listeners.All()
+	ret = make([]chan []item, 0, len(all))
+	for _, l := range all {
+		ret = append(ret, l.(chan []item))
 	}
 	return
 }
 
-func (s *storage) Listen() (ret *storageListener) {
-	ret = newStorageListener(s)
-	s.subs.Put(ret, struct{}{})
-	return
+func (s *storage) Listen() chan []item {
+	ret := make(chan []item, 128)
+	s.listeners.Append(ret)
+	return ret
 }
 
 func (d *storage) All() (ret []item) {
-	ret = make([]item, 0, d.datItems.Size())
+	ret = make([]item, 0, d.items.Size())
 	d.View(func(v *view) {
 		v.ScanAll(func(s amoeba.Scan, i item) {
 			ret = append(ret, i)

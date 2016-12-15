@@ -1,10 +1,10 @@
 package convoy
 
 import (
-	"errors"
 	"io"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
@@ -63,11 +63,25 @@ const (
 
 // Publishes the db to the given port.  This is the "first" member of the
 // cluster and will not discover anyone else until it is contacted.
-func StartSeedHost(ctx common.Context, addr string) (Host, error) {
+func StartSeedHostFrom(ctx common.Context, path string, addr string) (host Host, err error) {
+	var db *database
+
+	db, err = openDatabase(ctx, path)
+	if err != nil {
+		return nil, errors.Wrap(err, "Error opening db [%v]")
+	}
+	defer common.RunIf(func() { db.Close() })(err)
+	// host, err = newSeedHost(ctx, db, addr)
 	return nil, nil
 }
 
-func StartHost(ctx common.Context, addr string, peer string) (Host, error) {
+func StartHostFrom(ctx common.Context, path string, addr string, peer string) (host Host, err error) {
+	db, err := openDatabase(ctx, path)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Error opening db [%v]", path)
+	}
+	defer common.RunIf(func() { db.Close() })(err)
+	// host, err = newHost(ctx, path, addr, peer)
 	return nil, nil
 }
 
@@ -83,7 +97,7 @@ type Host interface {
 	Shutdown() error
 
 	// Provides access to the distributed directory.
-	Directory() (Directory, error)
+	Directory() Directory
 }
 
 // A member is just that - a member of a cluster.
@@ -149,7 +163,7 @@ type Store interface {
 	// Returns the item value and version
 	Get(key string) (*Item, error)
 
-	// Returns a handle to a batch of changes to apply to the store.
+	// Returns a handle to the item
 	Put(key string, val string, expected int) (bool, Item, error)
 
 	// Deletes the value associated with the key

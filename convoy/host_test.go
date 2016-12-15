@@ -1,7 +1,11 @@
 package convoy
 
 import (
+	"fmt"
 	"math/rand"
+	"os"
+	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"testing"
 	"time"
@@ -18,14 +22,14 @@ func TestHost_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	// fmt.Println("Before: ", runtime.NumGoroutine())
+	fmt.Println("Before: ", runtime.NumGoroutine())
 	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 	host := StartTestSeedHost(ctx, 0)
 
 	assert.Nil(t, host.Close())
 	assert.NotNil(t, host.Close())
-	// fmt.Println("After: ", runtime.NumGoroutine())
-	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+	fmt.Println("After: ", runtime.NumGoroutine())
+	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 }
 
 func TestHost_Leave(t *testing.T) {

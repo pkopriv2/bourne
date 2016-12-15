@@ -6,7 +6,9 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// A thin member client.
+// A thin member client.  This class should remain 1:1 with the
+// server handler.  The convention currently is that server.go
+// host the shared request/response types.
 type client struct {
 	Raw net.Client
 }
@@ -65,7 +67,7 @@ func (m *client) DirApply(events []event) ([]bool, error) {
 	return readDirApplyResponse(resp)
 }
 
-func (m *client) PushPull(sourceId uuid.UUID, sourceVersion int, events []event) ([]bool, []event, error) {
+func (m *client) DissemPushPull(sourceId uuid.UUID, sourceVersion int, events []event) ([]bool, []event, error) {
 	resp, err := m.Raw.Send(newPushPullRequest(sourceId, sourceVersion, events))
 	if err != nil {
 		return nil, nil, err
@@ -84,4 +86,26 @@ func (m *client) PushPull(sourceId uuid.UUID, sourceVersion int, events []event)
 	}
 
 	return success, events, nil
+}
+
+func (m *client) StorePut(key string, val string, expected int) ([]bool, []event, error) {
+	return nil, nil, nil
+	// resp, err := m.Raw.Send(newPushPullRequest(sourceId, sourceVersion, events))
+	// if err != nil {
+		// return nil, nil, err
+	// }
+//
+	// success, events, err := readPushPullResponse(resp)
+	// if err != nil {
+		// switch err.Error() {
+		// default:
+			// return nil, nil, err
+		// case EvictedError.Error():
+			// return nil, nil, EvictedError
+		// case FailedError.Error():
+			// return nil, nil, FailedError
+		// }
+	// }
+//
+	// return success, events, nil
 }

@@ -52,10 +52,10 @@ func (d *directory) Close() (ret error) {
 }
 
 func (d *directory) Listen() <-chan []event {
-	lis := d.Core.Listen()
+	ch := d.Core.Listen()
 	ret := make(chan []event)
 	go func() {
-		for batch := range lis.Ch() {
+		for batch := range ch {
 			ret <- dirItemsToEvents(batch)
 		}
 		close(ret)
