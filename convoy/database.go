@@ -71,18 +71,15 @@ func (d *database) Close() error {
 	return nil
 }
 
-func (d *database) Get(key string) (item *Item, err error) {
+func (d *database) Get(key string) (found bool, item Item, err error) {
 	d.lock.RLock()
 	defer d.lock.RUnlock()
 	if d.closed {
-		return nil, databaseClosedError
+		return false, Item{}, databaseClosedError
 	}
 
 	d.data.Read(func(v amoeba.View) {
-		i, found := dbGetItem(v, key)
-		if found {
-			item = &i
-		}
+		item, found = dbGetItem(v, key)
 	})
 	return
 }

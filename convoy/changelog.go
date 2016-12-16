@@ -220,14 +220,24 @@ func (c *changeLog) Append(key string, val string, del bool) (chg change, err er
 		return
 	}
 
+
 	for _, l := range c.listeners() {
+		// do not allow listener to be closed
 		select {
 		case <-c.closed:
+			return change{}, ClosedError
 		case <-l.closed:
+			continue
+		case l.closer<-struct{}{}:
+		}
+
+		select {
 		case l.ch <- chg:
 		default:
 			// drop
 		}
+
+		<-l.closer
 	}
 	return
 }

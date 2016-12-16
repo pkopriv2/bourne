@@ -1,6 +1,6 @@
 # Overview
 
-Convoy is an information dissemination library - built on the SWIM [1] membership protocol. It extends the protocol slightly to allow each member to disseminate facts about himself - in the form a local key/value store.  Each member's store is disseminated amongs the entire group using the same dissemination component as the membership protocol.  Because the data replicated everywhere, each member's store should aim to be as small as possible. 
+Convoy is an information dissemination library - built on the SWIM [1] membership protocol. It extends the protocol slightly to allow each member to disseminate facts about himself - in the form a local key/value store.  Moreover, every member is able to update every other member's store.  Each member's store is disseminated amongs the entire group using the same dissemination component as the membership protocol.  Because the data replicated everywhere, each member's store should aim to be as small as possible. 
 
 For more overview and background on epidemic protocols and their analysis, please see [2].
 
@@ -40,7 +40,7 @@ Import it:
 import "github.com/pkopriv2/bourne/convoy"
 ```
 
-## Starting The Cluster
+## Starting a Cluster.
 
 To start a cluster, there must be a first member.  This is designated as the "seed" member.
 It's special in only that it is first.
@@ -48,15 +48,61 @@ It's special in only that it is first.
 To start a seed member, simply invoke:
 
 ```
-host := convoy.StartSeedHost(ctx, "/path/to/local/db", "seed.convoy.com:10240")
+host := convoy.StartSeedHost(ctx, "seed.convoy.com:10240")
 ```
+
+At this point, the seed host knows nothing about any other hosts and will remain alone until
+it is contacted.  However, when the first member co
+
 
 ## Adding Members
 
 To add a member:
 
 ```
-host := convoy.StartHost(ctx, "/path/to/local/db", "member1.convoy.com:10240", "seed.convoy.com:10240")
+host := convoy.StartHost(ctx, "host1.convoy.com:10240", "seed.convoy.com:10240")
+```
+
+## Using the Local Store
+
+Every host manages a local key-value store that is replicated to all other members in the cluster.
+
+
+* Retrieving the store
+```
+store := host.Store()
+```
+
+* Getting an item from the store
+
+```
+ok, item, err := store.Get("key")
+```
+
+* Updating an item from the store
+
+```
+_, item, err := store.Get("key")
+store.Put("key", "val", item.Ver)
+```
+
+## Using the Distributed Directory
+
+* Retrieving the directory
+```
+dir := host.Directory()
+```
+
+* To retrieve all the 'active' members of a cluster:
+```
+all, err := dir.All()
+```
+
+* Searching the directory:
+```
+found, err := dir.Search(func(id uuid.UUID, key string, val string) bool {
+    return key == "#tag"
+})
 ```
 
 # Architecture/Design
@@ -73,7 +119,7 @@ the replica cleans up its resources and dies - ultimately notifying the parent h
 
 * Store: A store is a single member's key/value store.
 
-* Directory: The directoy maintains an eventually consistent, merged view of all members'
+* Directory: The directory maintains an eventually consistent, merged view of all members'
 stores and their membership status.
 
 * Disseminator: The disseminator is responsible for forwarding data that is has received

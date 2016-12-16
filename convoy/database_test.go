@@ -26,14 +26,14 @@ func TestDatabase_OpenWithChanges(t *testing.T) {
 	log.Append("key2", "", true)      //3
 
 	db := OpenTestDatabase(ctx, log)
-	item1, err := db.Get("key1")
-	assert.NotNil(t, item1)
+	ok, item1, err := db.Get("key1")
+	assert.True(t, ok)
 	assert.Equal(t, "val1", item1.Val)
 	assert.Equal(t, 1, item1.Ver)
 	assert.Nil(t, err)
 
-	item2, err := db.Get("key2")
-	assert.NotNil(t, item2)
+	ok, item2, err := db.Get("key2")
+	assert.True(t, ok)
 	assert.Equal(t, 3, item2.Ver)
 	assert.Nil(t, err)
 }

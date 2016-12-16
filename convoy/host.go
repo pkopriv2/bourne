@@ -262,7 +262,7 @@ func (d *hostDb) Close() error {
 	return nil
 }
 
-func (d *hostDb) Get(key string) (*Item, error) {
+func (d *hostDb) Get(key string) (bool, Item, error) {
 	return d.h.db.Get(key)
 }
 

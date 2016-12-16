@@ -71,6 +71,7 @@ func StartSeedHost(ctx common.Context, path string, addr string) (host Host, err
 		return nil, errors.Wrap(err, "Error opening db [%v]")
 	}
 	defer common.RunIf(func() { db.Close() })(err)
+
 	// host, err = newSeedHost(ctx, db, addr)
 	return nil, nil
 }
@@ -160,13 +161,28 @@ type Directory interface {
 type Store interface {
 	io.Closer
 
-	// Returns the item value and version
-	Get(key string) (*Item, error)
+	// Returns true and the item or false an the zero value.
+	//
+	// If the return value inclues an error, the other results should
+	// not be trusted.
+	Get(key string) (found bool, item Item, err error)
 
-	// Returns a handle to the item
+	// Updates the value at the given key if the version matches.
+	// Returns a flag indicating whether or not the operation was
+	// successful (ie the version matched) and if so, the updated
+	// value.  Otherwise an error is returned.
+	//
+	// If the return value inclues an error, the other results should
+	// not be trusted.
 	Put(key string, val string, expected int) (bool, Item, error)
 
-	// Deletes the value associated with the key
+	// Deletes the value at the given key if the version matches.
+	// Returns a flag indicating whether or not the operation was
+	// successful (ie the version matched) and if so, the updated
+	// value.  Otherwise an error is returned.
+	//
+	// If the return value inclues an error, the other results should
+	// not be trusted.
 	Del(key string, expected int) (bool, Item, error)
 }
 
