@@ -204,15 +204,20 @@ func TestStorage_Update_RosterListener(t *testing.T) {
 	})
 
 	m := <-ch
-	assert.Equal(t, m.Id, id)
+	assert.Equal(t, id, m.Id)
+	assert.Equal(t, 1, m.Version)
+	assert.Equal(t, true, m.Active)
 
 	core.Update(func(u *update) error {
-		u.Join(id, 2)
+		u.Fail(id, 1)
 		return nil
 	})
 
-	m, ok := <-ch
-	assert.False(t, ok)
+	select {
+	default:
+	case <-ch:
+		assert.Fail(t, "Should not have received value")
+	}
 }
 
 func TestStorage_Update_HealthListener(t *testing.T) {
@@ -229,13 +234,18 @@ func TestStorage_Update_HealthListener(t *testing.T) {
 	})
 
 	h := <-ch
-	assert.Equal(t, h.Id, id)
+	assert.Equal(t, id, h.Id)
+	assert.Equal(t, 1, h.Version)
+	assert.Equal(t, false, h.Healthy)
 
 	core.Update(func(u *update) error {
-		u.Fail(id, 2)
+		u.Join(id, 2)
 		return nil
 	})
 
-	h, ok := <-ch
-	assert.False(t, ok)
+	select {
+	default:
+	case <-ch:
+		assert.Fail(t, "Should not have received value")
+	}
 }
