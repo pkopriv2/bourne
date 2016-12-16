@@ -16,6 +16,7 @@ basis of a general overlay network for use in a new deployment fabric.  Stay tun
 
 # Membership Overview
 
+
 The heart of convoy is really just the SWIM membership protocol.  Members join, and then
 serve as an information relay.  In more abstract terms, members form the vertices 
 of a connected graph.  For information to spread in a atomic broadcast fashion 
@@ -40,26 +41,71 @@ cluster size and fanout factor:
 
 During each dissemination period, members are also probed for health.  Due to the expense of
 being marked as failed, a member cannot be contacted, a health probe is sent to a random subset 
-of members.  In this sense, each member acts as a health proxy.  If none of the members of the
-health probe.
+of members who will attempt to contact the suspected node.  Only when none of the members of 
+the probe return success is the member deemed failed and evicted from the cluster. 
+
+# Getting Started
+
+Convoy has been designed to be embedded in other projects as a basis for group memberships
+and service discovery.  To get started, pull the dependency with go get:
+
+```sh
+go get http://github.com/pkopriv2/bourne/convoy
+```
+
+Import it:
+
+```go
+import "github.com/pkopriv2/bourne/convoy"
+```
+
+## Starting The Cluster
 
 # Architecture/Design
 
- TODO:
+## Terms and Definitions
+
+* Host: The host is the parent object of a member of a cluster.  The host is responsible
+for managing the lifecycle of the member and in the event of being marked as failed, will
+detect the failure and attempt to rejoin the cluster.
+
+* Replica: A replica represents a currently active member of the cluster.  The replica's
+lifespan extends as long as the member is not evicted or leaves the cluster.  Upon failure
+the replica cleans up its resources and dies - ultimately notifying the parent host.
+
+* Store: A store is a single member's key/value store.
+
+* Directory: The directoy maintains an eventually consistent, merged view of all members'
+stores and their membership status.
+
+* Disseminator: The disseminator is responsible for forwarding data that is has received
+to other members per the SWIM algorithm.  The disseminator is also responsible for 
+probing and disseminating health information to other healthy members of the cluster.
+
+# Security
+
+This is the earliest version of convoy and security has not been integrated.  However, 
+we plan to tackle this issue shortly.  
+
+More details to come.
 
 # Contributors
 
 * Preston Koprivica: pkopriv2@gmail.com
 * Andy Attebery: andyatterbery@gmail.com
 
-
 # References:
- [1] https://www.cs.cornell.edu/home/rvr/papers/flowgossip.pdf
- [2] http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
+
+1. https://www.cs.cornell.edu/home/rvr/papers/flowgossip.pdf
+2. http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
 
 # Other Reading:
 
  * http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.557.1902&rep=rep1&type=pdf
  * https://www.cs.cornell.edu/~asdas/research/dsn02-swim.pdf
  * http://bitsavers.informatik.uni-stuttgart.de/pdf/xerox/parc/techReports/CSL-89-1_Epidemic_Algorithms_for_Replicated_Database_Maintenance.pdf
+
+# License
+
+// TODO: 
 
