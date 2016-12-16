@@ -1,6 +1,6 @@
 # Overview
 
-Convoy is an information dissemination library - built on the SWIM [1] membership protocol. It extends the protocol slightly to allow each member to disseminate facts about himself - in the form a local key/value store.  Moreover, every member is able to update every other member's store.  Each member's store is disseminated amongs the entire group using the same dissemination component as the membership protocol.  Because the data replicated everywhere, each member's store should aim to be as small as possible. 
+Convoy is an information dissemination library built on the SWIM [1] membership protocol. 
 
 For more overview and background on epidemic protocols and their analysis, please see [2].
 
