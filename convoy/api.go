@@ -63,7 +63,7 @@ const (
 
 // Publishes the db to the given port.  This is the "first" member of the
 // cluster and will not discover anyone else until it is contacted.
-func StartSeedHostFrom(ctx common.Context, path string, addr string) (host Host, err error) {
+func StartSeedHost(ctx common.Context, path string, addr string) (host Host, err error) {
 	var db *database
 
 	db, err = openDatabase(ctx, path)
@@ -75,7 +75,7 @@ func StartSeedHostFrom(ctx common.Context, path string, addr string) (host Host,
 	return nil, nil
 }
 
-func StartHostFrom(ctx common.Context, path string, addr string, peer string) (host Host, err error) {
+func StartHost(ctx common.Context, path string, addr string, peer string) (host Host, err error) {
 	db, err := openDatabase(ctx, path)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error opening db [%v]", path)

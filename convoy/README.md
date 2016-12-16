@@ -1,39 +1,20 @@
 # Overview
 
-Convoy is an information dissemination library - built on the SWIM [1] membership protocol.
-It extends the protocol slightly to allow each member to disseminate facts about himself -
-in the form a local key/value store.  Each member's store is disseminated amongs the entire
-group using the same dissemination component as the membership protocol.  Because the data
-replicated everywhere, each member's store should aim to be as small as possible.
+Convoy is an information dissemination library - built on the SWIM [1] membership protocol. It extends the protocol slightly to allow each member to disseminate facts about himself - in the form a local key/value store.  Each member's store is disseminated amongs the entire group using the same dissemination component as the membership protocol.  Because the data replicated everywhere, each member's store should aim to be as small as possible. 
 
 For more overview and background on epidemic protocols and their analysis, please see [2].
 
 # Intended Usage
 
-Convoy is intended to serve as the foundation of distributed systems that require
-eventually consistent, membership knowledge.  Currently, its intention is to form the
-basis of a general overlay network for use in a new deployment fabric.  Stay tuned...
+Convoy is intended to serve as the foundation of distributed systems that require eventually consistent, membership knowledge.  Currently, its intention is to form the basis of a general overlay network for use in a new deployment fabric.  Stay tuned... 
 
 # Membership Overview
 
+The heart of convoy is really just the SWIM membership protocol.  Members join, and then serve as an information relay.  In more abstract terms, members form the vertices of a connected graph.  For information to spread in a atomic broadcast fashion (i.e. all members of the group eventually see all information), every member must propagate to some random subset of other members. The original mathematical analysis of randomly connected graphs was done by Paul Erdos¨ and Alfred Renyi [2].  They concluded that for a random graph to become fully connected, each vertex has to have at least *n ~ ln(N)* random edges.
 
-The heart of convoy is really just the SWIM membership protocol.  Members join, and then
-serve as an information relay.  In more abstract terms, members form the vertices 
-of a connected graph.  For information to spread in a atomic broadcast fashion 
-(i.e. all members of the group eventually see all information), every member must propagate
-to some random subset of other members. The original mathematical analysis of randomly 
-connected graphs was done by Paul Erdos¨ and Alfred Renyi [2].  They concluded that
-for a random graph to become fully connected, each vertex has to have at least *n ~ ln(N)* 
-random edges.
+To speed up the dissemination of information, convoy allows consumers to configure the number of recipients of a message based on factors of *ln(N)*.  Due to some very specialised buffer management a mathematical analysis of the speed of dissemination has not been done (Translation: Author sucks at stats)  Anyone wishing to help out with this endeavor is welcome to take a crack at it.  Preston is available anytime to answer any design questions you may require.  
 
-To speed up the dissemation of information, convoy allows consumers to configure the number
-of recipients of a message based on factors of *ln(N)*.  Due to some very specialised buffer
-management a mathematical analysis of the speed of dissemination has not been done (Translation: 
-Author sucks at stats)  Anyone wishing to help out with this endeavor is welcome to take a 
-crack at it.  Preston is available anytime to answer any design questions you may require.  
-
-In the meantime, here are the results of benchmarks performed locally as a function of 
-cluster size and fanout factor: 
+In the meantime, here are the results of benchmarks performed locally as a function of cluster size and fanout factor: 
 
 * TODO: INSERT RESULTS
 
@@ -60,6 +41,23 @@ import "github.com/pkopriv2/bourne/convoy"
 ```
 
 ## Starting The Cluster
+
+To start a cluster, there must be a first member.  This is designated as the "seed" member.
+It's special in only that it is first.
+
+To start a seed member, simply invoke:
+
+```
+host := convoy.StartSeedHost(ctx, "/path/to/local/db", "seed.convoy.com:10240")
+```
+
+## Adding Members
+
+To add a member:
+
+```
+host := convoy.StartHost(ctx, "/path/to/local/db", "member1.convoy.com:10240", "seed.convoy.com:10240")
+```
 
 # Architecture/Design
 
