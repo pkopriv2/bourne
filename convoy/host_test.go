@@ -1,16 +1,13 @@
 package convoy
 
 import (
-	"fmt"
 	"math/rand"
-	"os"
-	"runtime"
-	"runtime/pprof"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
@@ -21,15 +18,9 @@ import (
 func TestHost_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
-
-	fmt.Println("Before: ", runtime.NumGoroutine())
-	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 	host := StartTestSeedHost(ctx, 0)
-
 	assert.Nil(t, host.Close())
 	assert.NotNil(t, host.Close())
-	fmt.Println("After: ", runtime.NumGoroutine())
-	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 }
 
 func TestHost_Leave(t *testing.T) {
@@ -40,8 +31,7 @@ func TestHost_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 2)
-	assert.Equal(t, 2, len(hosts))
+	hosts := StartTestHostCluster(ctx, 32)
 
 	idx := rand.Intn(len(hosts))
 	host := hosts[idx]
@@ -58,13 +48,12 @@ func TestHost_Failed(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 100)
-	assert.Equal(t, 100, len(hosts))
+	hosts := StartTestHostCluster(ctx, 32)
 
 	idx := rand.Intn(len(hosts))
 	failed := hosts[idx]
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 3; i++ {
 		r := <-failed.inst
 		r.Server.Close()
 
@@ -72,14 +61,59 @@ func TestHost_Failed(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		r.Logger.Info("Done Sleeping")
 
-		SyncHostCluster(hosts, func(h *host) bool {
-			all, err := h.Directory().All()
-			if err != nil {
-				panic(err)
-			}
+		done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+			SyncHostCluster(hosts, func(h *host) bool {
+				all, err := h.Directory().All()
+				if err != nil {
+					panic(err)
+				}
 
-			return len(all) == len(hosts)
+				return len(all) == len(hosts)
+			})
+			return nil
 		})
+
+		select {
+		case <-done:
+		case <-timeout:
+			assert.Fail(t, "Timed out waiting for member to rejoined")
+		}
+	}
+}
+
+func TestHost_Update_All(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	hosts := StartTestHostCluster(ctx, 32)
+
+	for _, h := range hosts {
+		h.logger.Info("Writing key,val")
+		h.Store().Put("key", "val", 0)
+	}
+
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		SyncHostCluster(hosts, func(h *host) bool {
+			found, _ := h.Directory().Search(func(id uuid.UUID, key string, val string) bool {
+				if key == "key" {
+					return true
+				}
+				return false
+			})
+
+			return len(found) == len(hosts)
+		})
+		return nil
+	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		assert.Fail(t, "Timed out waiting for member to rejoined")
 	}
 }
 
