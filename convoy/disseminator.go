@@ -37,7 +37,10 @@ func dissemEvents(ch <-chan []event, dissem *disseminator) {
 	}()
 }
 
-// A simple member iterator
+// A simple member iterator.  Noticed some very non-performant scheduling on
+// high workloads when using a separate member channel.  I think we can merge
+// the iterator with the "ticker" to make sure we get a nice long execution
+// thread.
 type dissemIter struct {
 	rest []uuid.UUID
 	dir  *directory

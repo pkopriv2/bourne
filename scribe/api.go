@@ -86,6 +86,14 @@ type Writable interface {
 // the fields of a message
 type Writer interface {
 	Write(field string, val interface{})
+	// WriteInt(field string, val int)
+	// WriteInts(field string, val []int)
+	// WriteBool(field string, val bool)
+	// WriteBools(field string, val []bool)
+	// WriteString(field string, val string)
+	// WriteStrings(field string, val []string)
+	// WriteWritable(field string, val Writable)
+	// WriteWritables(field string, val []Writable)
 }
 
 // The primary decoding interface. Consumers use the reader to populate
@@ -93,6 +101,15 @@ type Writer interface {
 type Reader interface {
 	Read(field string, ptr interface{}) error
 	ReadOptional(field string, ptr interface{}) (bool, error)
+
+	// ReadInt(field string, val *int) error
+	// ReadInts(field string, val *[]int) error
+	// ReadBool(field string, val *bool) error
+	// ReadBools(field string, val *[]bool) error
+	// ReadString(field string, val *string) error
+	// ReadStrings(field string, val *[]string) error
+	// ReadWritable(field string, val *Writable) error
+	// ReadWritables(field string, val *[]Writable) error
 }
 
 // An immutable data object.  A message may be embedded in other messages
