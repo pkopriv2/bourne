@@ -32,8 +32,16 @@ func (d *eventLog) Commit(pos int) {
 	return
 }
 
+func (d *eventLog) Committed() int {
+	d.data.Read(func(u amoeba.View) {
+		// defer func() { d.read = next }()
+		// batch = tmp
+	})
+	return 0
+}
+
 func (d *eventLog) Max() (index int, term int) {
-	d.data.Update(func(u amoeba.Update) {
+	d.data.Read(func(u amoeba.View) {
 		// defer func() { d.read = next }()
 		// batch = tmp
 	})
@@ -41,7 +49,7 @@ func (d *eventLog) Max() (index int, term int) {
 }
 
 func (d *eventLog) Get(index int) (term int, e event) {
-	d.data.Update(func(u amoeba.Update) {
+	d.data.Read(func(u amoeba.View) {
 		val := u.Get(amoeba.IntKey(index))
 		if val == nil {
 			return

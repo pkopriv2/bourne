@@ -220,7 +220,13 @@ func (h *host) becomeCandidate() {
 					return
 				}
 
-				append.reply(term, false)
+				if append.term < term {
+					append.reply(term, false)
+					continue
+				}
+
+				// append.term is >= term.  use it from now own.
+				append.reply(append.term, true)
 				h.becomeFollower(&append.id, append.term, &append.id)
 				return
 
@@ -256,6 +262,104 @@ func (h *host) becomeCandidate() {
 }
 
 func (h *host) becomeLeader() {
+	logger := h.logger.Fmt("Leader[%v]", h.term)
+	logger.Info("Becoming leader")
+
+	// take local copy of peers.
+	peers := h.peers
+
+	// the number of votes for a majority.
+	needed := majority(len(peers))
+
+	// we're becoming leader for term of candidate.
+	term := h.term
+
+	// set self as leader.
+	h.setTerm(&h.id, term, nil)
+
+	heartBeat := func() <-chan response {
+		ch := make(chan response, len(h.peers))
+		for _, p := range h.peers {
+			logger.Debug("Sending heartbeats to peer [%v]", p)
+
+			maxIndex, maxTerm := h.log.Max()
+			commit := h.log.Committed()
+			go func(p peer) {
+				resp, err := p.client.AppendEvents(h.id, h.term, commit, maxIndex, maxTerm, []event{})
+				if err != nil {
+					ch <- response{h.term, false}
+					return
+				}
+
+				ch <- resp
+			}(p)
+		}
+
+		return ch
+	}
+
+	go func() {
+		defer logger.Info("No longer leader.")
+
+		// handles append requests while candidate
+		var append appendEvents
+		var appendOk bool
+		var vote requestVote
+		var voteOk bool
+
+		// start the timer
+		timer := time.NewTimer(h.timeout/3)
+
+		for {
+			select {
+			case append, appendOk = <-h.appends:
+				if !appendOk {
+					return
+				}
+
+				if append.term <= term {
+					append.reply(term, false)
+					continue
+				}
+
+				append.reply(term, false)
+				h.becomeFollower(&append.id, append.term, &append.id)
+				return
+
+			case vote, voteOk = <-h.votes:
+				if !voteOk {
+					return
+				}
+
+				if vote.term <= term {
+					vote.reply(term, false)
+					continue
+				}
+
+				// Only vote for candidates with logs at least as new as ours,
+				// but either way we're done being a leader.
+				maxLogOffset, maxLogTerm := h.log.Max()
+				if vote.lastLogOffset >= maxLogOffset && vote.lastLogTerm >= maxLogTerm {
+					vote.reply(vote.term, true)
+				} else {
+					vote.reply(vote.term, false)
+				}
+
+				h.becomeFollower(nil, vote.term, &vote.id)
+				return
+			case <-timer.C:
+				ch := heartBeat()
+				for i := 0; i<needed; i++ {
+					resp := <-ch
+					if resp.term > term {
+						h.becomeFollower(nil, resp.term, nil)
+						return
+					}
+				}
+				return
+			}
+		}
+	}()
 }
 
 func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
@@ -285,8 +389,7 @@ func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 
 				if append.term < term {
 					append.reply(term, false)
-					h.becomeFollower(&append.id, append.term, &append.id)
-					return
+					continue
 				}
 
 				if append.term > term {
@@ -314,23 +417,24 @@ func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 					continue
 				}
 
-				if vote.term > term {
-					vote.reply(term, true)
-					h.becomeFollower(&vote.id, vote.term, &vote.id)
-					return
-				}
-
 				// Only accept candidates with logs at least as new as ours.
 				maxLogOffset, maxLogTerm := h.log.Max()
-				if vote.lastLogOffset >= maxLogOffset && vote.lastLogTerm >= maxLogTerm {
-					vote.reply(term, true)
-					h.becomeFollower(&vote.id, term, &vote.id)
-					return
-				} else {
-					vote.reply(term, false)
+				if vote.lastLogOffset < maxLogOffset || vote.lastLogTerm < maxLogTerm {
+					vote.reply(vote.term, false)
+					continue
 				}
 
-				return
+				if h.votedFor != nil {
+					vote.reply(term, false)
+					continue
+				}
+
+				vote.reply(term, true)
+				if vote.term != term {
+					h.becomeFollower(&vote.id, term, &vote.id)
+					return
+				}
+
 			case <-timer.C:
 				h.becomeCandidate()
 				return
@@ -347,7 +451,7 @@ type client struct {
 	raw net.Connection
 }
 
-func (c *client) AppendEvents(id uuid.UUID, commit int, term int, logIndex int, logTerm int, batch []event) error {
+func (c *client) AppendEvents(id uuid.UUID, term int, commit int, logIndex int, logTerm int, batch []event) (response, error) {
 	panic("")
 }
 
