@@ -260,6 +260,7 @@ func (h *host) becomeLeader() {
 
 func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 	logger := h.logger.Fmt("Follower[%v, %v]", term, id)
+	logger.Info("Becoming follower")
 
 	h.setTerm(id, term, vote)
 
@@ -282,19 +283,15 @@ func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 					return
 				}
 
-
-				if append.term > term {
-					h.becomeFollower(&append.id, append.term, &append.id)
-					return
-				}
-
-				if append.term > term {
-					h.becomeFollower(&append.id, append.term, &append.id)
-					return
-				}
-
 				if append.term < term {
 					append.reply(term, false)
+					h.becomeFollower(&append.id, append.term, &append.id)
+					return
+				}
+
+				if append.term > term {
+					append.reply(term, false)
+					h.becomeFollower(&append.id, append.term, &append.id)
 					return
 				}
 
@@ -317,8 +314,23 @@ func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 					continue
 				}
 
-				return
+				if vote.term > term {
+					vote.reply(term, true)
+					h.becomeFollower(&vote.id, vote.term, &vote.id)
+					return
+				}
 
+				// Only accept candidates with logs at least as new as ours.
+				maxLogOffset, maxLogTerm := h.log.Max()
+				if vote.lastLogOffset >= maxLogOffset && vote.lastLogTerm >= maxLogTerm {
+					vote.reply(term, true)
+					h.becomeFollower(&vote.id, term, &vote.id)
+					return
+				} else {
+					vote.reply(term, false)
+				}
+
+				return
 			case <-timer.C:
 				h.becomeCandidate()
 				return
