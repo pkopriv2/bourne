@@ -83,7 +83,6 @@ func readResponse(r scribe.Reader) (response, error) {
 }
 
 type peer struct {
-	id  uuid.UUID
 	raw convoy.Member
 
 	// transient...cached for efficiency
@@ -145,7 +144,30 @@ type member struct {
 	closer chan struct{}
 }
 
+func newMember(ctx common.Context, self convoy.Host, others []convoy.Member) (*member, error) {
+	peers := make([]peer, 0, len(others))
+	for _, p := range others {
+		peers = append(peers, peer{raw: p})
+	}
+
+	m := &member{
+		id: self.Id(),
+		peers: peers,
+		raw: self,
+		log: newViewLog(ctx),
+		appends: make(chan appendEvents),
+		votes: make(chan requestVote),
+	}
+
+	if err := m.start(); err != nil {
+		return nil, err
+	}
+
+	return m, nil
+}
+
 func (h *member) start() error {
+	h.becomeFollower(nil, 0, nil)
 	return nil
 }
 
@@ -204,17 +226,6 @@ func (h *member) RequestVote(vote requestVoteRequest) (response, error) {
 	}
 }
 
-func (h *member) PushRequestVote(rv requestVote) error {
-	select {
-	case <-h.closed:
-		return ClosedError
-	case h.closer<-struct{}{}:
-	}
-	defer func() {<-h.closer}()
-	h.votes<-rv
-	return nil
-}
-
 func (h *member) becomeCandidate() {
 	_, term, _ := h.currentTerm()
 
@@ -228,7 +239,7 @@ func (h *member) becomeCandidate() {
 	logger := h.logger.Fmt("Candidate[%v]", term)
 
 	// number of votes to constitute a majority
-	needed := majority(len(h.peers))
+	needed := majority(len(h.peers)+1)
 
 	// snapshot the log
 	maxIndex, maxTerm := h.log.Max()
@@ -253,9 +264,7 @@ func (h *member) becomeCandidate() {
 
 		// handles append requests while candidate
 		var append appendEvents
-		var appendOk bool
 		var vote requestVote
-		var voteOk bool
 
 		// start the timer
 		timer := time.NewTimer(h.timeout)
@@ -269,25 +278,21 @@ func (h *member) becomeCandidate() {
 			}
 
 			select {
-			case append, appendOk = <-h.appends:
-				if !appendOk {
-					return
-				}
+			case <-h.closed:
+				return
+			case append = <-h.appends:
 
 				if append.term < term {
 					append.reply(term, false)
 					continue
 				}
 
-				// append.term is >= term.  use it from now own.
-				append.reply(append.term, true)
+				// append.term is >= term.  use it from now on.
+				append.reply(append.term, false)
 				h.becomeFollower(&append.id, append.term, &append.id)
 				return
 
-			case vote, voteOk = <-h.votes:
-				if !voteOk {
-					return
-				}
+			case vote = <-h.votes:
 
 				if vote.term <= term {
 					vote.reply(term, false)
@@ -357,19 +362,16 @@ func (h *member) becomeLeader() {
 
 		// handles append requests while candidate
 		var append appendEvents
-		var appendOk bool
 		var vote requestVote
-		var voteOk bool
 
 		// start the timer
 		timer := time.NewTimer(h.timeout / 3)
 
 		for {
 			select {
-			case append, appendOk = <-h.appends:
-				if !appendOk {
-					return
-				}
+			case <-h.closed:
+				return
+			case append = <-h.appends:
 
 				if append.term <= term {
 					append.reply(term, false)
@@ -380,18 +382,15 @@ func (h *member) becomeLeader() {
 				h.becomeFollower(&append.id, append.term, &append.id)
 				return
 
-			case vote, voteOk = <-h.votes:
-				if !voteOk {
-					return
-				}
+			case vote = <-h.votes:
 
 				if vote.term <= term {
 					vote.reply(term, false)
 					continue
 				}
 
-				// Only vote for candidates with logs at least as new as ours,
-				// but either way we're done being a leader.
+				// Only vote for candidates with logs at least as new as ours, but
+				// either way we're done being a leader.
 				maxLogOffset, maxLogTerm := h.log.Max()
 				if vote.lastLogOffset >= maxLogOffset && vote.lastLogTerm >= maxLogTerm {
 					vote.reply(vote.term, true)
@@ -427,20 +426,16 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 
 		// handles append requests while candidate
 		var append appendEvents
-		var appendOk bool
 		var vote requestVote
-		var voteOk bool
 
 		// start the timer
 		timer := time.NewTimer(h.timeout)
 
 		for {
 			select {
-			case append, appendOk = <-h.appends:
-				if !appendOk {
-					return
-				}
-
+			case <-h.closed:
+				return
+			case append = <-h.appends:
 				if append.term < term {
 					append.reply(term, false)
 					continue
@@ -461,11 +456,7 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 				h.log.Append(append.events, append.prevLogOffset+1, term)
 				return
 
-			case vote, voteOk = <-h.votes:
-				if !voteOk {
-					return
-				}
-
+			case vote = <-h.votes:
 				if vote.term < term {
 					vote.reply(term, false)
 					continue
@@ -495,7 +486,6 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 			}
 		}
 	}()
-
 }
 
 func majority(num int) int {
