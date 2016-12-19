@@ -86,6 +86,7 @@ type Writable interface {
 // the fields of a message
 type Writer interface {
 	Write(field string, val interface{})
+
 	// WriteInt(field string, val int)
 	// WriteInts(field string, val []int)
 	// WriteBool(field string, val bool)

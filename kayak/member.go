@@ -7,7 +7,7 @@ import (
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/convoy"
-	"github.com/pkopriv2/bourne/net"
+	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -23,6 +23,10 @@ import (
 //
 // * https://www.stellar.org/papers/stellar-consensus-protocol.pdf
 
+type event interface {
+	scribe.Writable
+}
+
 type requestVote struct {
 	id            uuid.UUID
 	term          int
@@ -31,7 +35,7 @@ type requestVote struct {
 	ack           chan<- response
 }
 
-func (r *requestVote) reply(term int, success bool) bool {
+func (r requestVote) reply(term int, success bool) bool {
 	select {
 	case r.ack <- response{term, success}:
 		return true
@@ -64,6 +68,20 @@ type response struct {
 	success bool
 }
 
+func (r response) Write(w scribe.Writer) {
+	w.Write("term", r.term)
+	w.Write("success", r.success)
+}
+
+func readResponse(r scribe.Reader) (response, error) {
+	ret := response{}
+
+	var err error
+	err = common.Or(err, r.Read("term", &ret.term))
+	err = common.Or(err, r.Read("success", &ret.success))
+	return ret, err
+}
+
 type peer struct {
 	id  uuid.UUID
 	raw convoy.Member
@@ -77,12 +95,12 @@ type term struct {
 	leader uuid.UUID
 }
 
-type host struct {
+type member struct {
 
-	// the unique id of this host.
+	// the unique id of this member.
 	id uuid.UUID
 
-	//
+	// the main context
 	ctx common.Context
 
 	// the root logger
@@ -100,11 +118,8 @@ type host struct {
 	// who was voted for this term
 	votedFor *uuid.UUID
 
-	// the raw membership host
+	// the raw membership member
 	raw convoy.Host
-
-	// the number of workers the host allows.
-	workers int
 
 	// the election timeout.  randomized between 500 and 1000 ms
 	timeout time.Duration
@@ -130,11 +145,11 @@ type host struct {
 	closer chan struct{}
 }
 
-func (h *host) start() error {
+func (h *member) start() error {
 	return nil
 }
 
-func (h *host) currentTerm() (leader *uuid.UUID, term int, vote *uuid.UUID) {
+func (h *member) currentTerm() (leader *uuid.UUID, term int, vote *uuid.UUID) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	leader = h.leader
@@ -143,7 +158,7 @@ func (h *host) currentTerm() (leader *uuid.UUID, term int, vote *uuid.UUID) {
 	return
 }
 
-func (h *host) setTerm(id *uuid.UUID, term int, vote *uuid.UUID) {
+func (h *member) setTerm(id *uuid.UUID, term int, vote *uuid.UUID) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.leader = id
@@ -153,15 +168,54 @@ func (h *host) setTerm(id *uuid.UUID, term int, vote *uuid.UUID) {
 	h.offsets = make(map[uuid.UUID]int)
 }
 
-func (h *host) castVote(id uuid.UUID) {
+func (h *member) castVote(id uuid.UUID) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.votedFor = &id
 }
 
+func (h *member) RequestAppendEvents(append appendEventsRequest) (response, error) {
+	ret := make(chan response, 1)
+	select {
+	case <-h.closed:
+		return response{}, ClosedError
+	case h.appends<-append.bind(ret):
+		select {
+		case <-h.closed:
+			return response{}, ClosedError
+		case r := <-ret:
+			return r, nil
+		}
+	}
+}
 
-func (h *host) becomeCandidate() {
+func (h *member) RequestVote(vote requestVoteRequest) (response, error) {
+	ret := make(chan response, 1)
+	select {
+	case <-h.closed:
+		return response{}, ClosedError
+	case h.votes<-vote.bind(ret):
+		select {
+		case <-h.closed:
+			return response{}, ClosedError
+		case r := <-ret:
+			return r, nil
+		}
+	}
+}
 
+func (h *member) PushRequestVote(rv requestVote) error {
+	select {
+	case <-h.closed:
+		return ClosedError
+	case h.closer<-struct{}{}:
+	}
+	defer func() {<-h.closer}()
+	h.votes<-rv
+	return nil
+}
+
+func (h *member) becomeCandidate() {
 	_, term, _ := h.currentTerm()
 
 	// increment term
@@ -261,7 +315,7 @@ func (h *host) becomeCandidate() {
 	}()
 }
 
-func (h *host) becomeLeader() {
+func (h *member) becomeLeader() {
 	logger := h.logger.Fmt("Leader[%v]", h.term)
 	logger.Info("Becoming leader")
 
@@ -308,7 +362,7 @@ func (h *host) becomeLeader() {
 		var voteOk bool
 
 		// start the timer
-		timer := time.NewTimer(h.timeout/3)
+		timer := time.NewTimer(h.timeout / 3)
 
 		for {
 			select {
@@ -349,7 +403,7 @@ func (h *host) becomeLeader() {
 				return
 			case <-timer.C:
 				ch := heartBeat()
-				for i := 0; i<needed; i++ {
+				for i := 0; i < needed; i++ {
 					resp := <-ch
 					if resp.term > term {
 						h.becomeFollower(nil, resp.term, nil)
@@ -362,7 +416,7 @@ func (h *host) becomeLeader() {
 	}()
 }
 
-func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
+func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 	logger := h.logger.Fmt("Follower[%v, %v]", term, id)
 	logger.Info("Becoming follower")
 
@@ -442,21 +496,6 @@ func (h *host) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 		}
 	}()
 
-}
-
-type event interface {
-}
-
-type client struct {
-	raw net.Connection
-}
-
-func (c *client) AppendEvents(id uuid.UUID, term int, commit int, logIndex int, logTerm int, batch []event) (response, error) {
-	panic("")
-}
-
-func (c *client) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
-	panic("")
 }
 
 func majority(num int) int {
