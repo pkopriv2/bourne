@@ -12,7 +12,7 @@ func TestMember_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 2), 9390)
+	StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 3), 9390)
 	time.Sleep(100 * time.Second)
 }
 
@@ -27,19 +27,24 @@ func StartKayakCluster(ctx common.Context, cluster []convoy.Host, start int) []*
 		peers = append(peers, peer{raw: m, port: start + i})
 	}
 
-	members := make([]*host, 0, len(peers))
+	ctx.Logger().Info("Starting kayak cluster [%v]", peers)
+
+	hosts := make([]*host, 0, len(peers))
 	for i, p := range peers {
-		member, err := newHost(ctx, p, append(peers[:i], peers[i+1:]...))
+		others := make([]peer, 0, len(peers)-1)
+		others = append(others, peers[:i]...)
+		others = append(others, peers[i+1:]...)
+
+		host, err := newHost(ctx, p, others)
 		if err != nil {
 			panic(err)
 		}
 
-		members = append(members, member)
-
+		hosts = append(hosts, host)
 		ctx.Env().OnClose(func() {
-			member.Close()
+			host.Close()
 		})
 	}
 
-	return members
+	return hosts
 }

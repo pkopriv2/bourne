@@ -80,10 +80,10 @@ func (d *eventLog) Append(batch []event, offset int, term int) {
 	}
 
 	d.data.Update(func(u amoeba.Update) {
-		for _, e := range batch {
-			u.Put(amoeba.IntKey(offset), e)
-			offset++
-		}
+		// for _, e := range batch {
+			// u.Put(amoeba.IntKey(offset), e)
+			// offset++
+		// }
 	})
 }
 

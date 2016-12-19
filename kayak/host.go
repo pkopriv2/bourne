@@ -16,6 +16,7 @@ type host struct {
 
 func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) {
 	root := ctx.Logger().Fmt("%v", self)
+	root.Info("Starting host with peers [%v]", others)
 
 	member, err := newMember(ctx, root, self, others)
 	if err != nil {

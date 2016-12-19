@@ -47,6 +47,10 @@ type requestVote struct {
 	ack         chan response
 }
 
+func (r requestVote) String() string {
+	return fmt.Sprintf("RequestVote(%v,%v)", r.id.String()[:8], r.term)
+}
+
 func (r requestVote) reply(term int, success bool) bool {
 	select {
 	case r.ack <- response{term, success}:
@@ -64,6 +68,10 @@ type appendEvents struct {
 	events       []event
 	commit       int
 	ack          chan response
+}
+
+func (a appendEvents) String() string {
+	return fmt.Sprintf("AppendEvents(%v,%v)", a.id.String()[:8], a.term)
 }
 
 func (a *appendEvents) reply(term int, success bool) bool {
@@ -189,7 +197,7 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 		log:     newViewLog(ctx),
 		appends: make(chan appendEvents),
 		votes:   make(chan requestVote),
-		timeout: time.Millisecond * time.Duration((rand.Intn(500) + 500)),
+		timeout: time.Millisecond * time.Duration((rand.Intn(2000) + 2000)),
 	}
 
 	if err := m.start(); err != nil {
@@ -258,6 +266,7 @@ func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTe
 	append := appendEvents{
 		id, term, logIndex, logTerm, batch, commit, make(chan response, 1)}
 
+	h.logger.Debug("Receiving append events [%v]", append)
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
@@ -273,6 +282,8 @@ func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTe
 
 func (h *member) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
 	req := requestVote{id, term, logIndex, logTerm, make(chan response, 1)}
+
+	h.logger.Debug("Receiving request vote [%v]", req)
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
@@ -287,27 +298,31 @@ func (h *member) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) 
 }
 
 func (h *member) becomeCandidate() {
+	h.logger.Info("Starting candidacy")
+
 	// increment term and vote forself.
 	h.setTerm(nil, h.term+1, &h.id)
 
 	// decorate the logger
 	logger := h.logger.Fmt("Candidate[%v]", h.term)
 
+	// send out ballots
+	ballots := h.requestVote()
+
+	// finally,
+	logger.Info("Setting timer [%v]", h.timeout)
+	timer := time.NewTimer(h.timeout)
+
 	// kick off candidate routine
 	go func() {
-		defer logger.Info("No longer candidate.")
-
-		// send out ballots
-		ballots := h.requestVote()
-
-		logger.Info("Setting timer [%v]", h.timeout)
-		timer := time.NewTimer(h.timeout)
-
 		var append appendEvents
 		var vote requestVote
 		var numVotes int = 0
+
 		for {
 			needed := majority(len(h.peers))
+
+			logger.Info("Received [%v/%v] votes", numVotes, needed)
 			if numVotes >= needed {
 				h.becomeLeader()
 				return
@@ -357,24 +372,23 @@ func (h *member) becomeCandidate() {
 }
 
 func (h *member) becomeLeader() {
-	logger := h.logger.Fmt("Leader[%v]", h.term)
-	logger.Info("Becoming leader")
-
 	// set self as leader.
 	h.setTerm(&h.id, h.term, nil)
 
+	// decorate logger.
+	logger := h.logger.Fmt("Leader[%v]", h.term)
+	logger.Info("Became leader")
+
 	// start leader routine
 	go func() {
-		defer logger.Info("No longer leader.")
-
 		// handles append requests while candidate
 		var append appendEvents
 		var vote requestVote
 
-		logger.Info("Starting timer [%v]", h.timeout/3)
-		timer := time.NewTimer(h.timeout / 3)
-
 		for {
+			logger.Info("Starting heartbeat timer [%v]", h.timeout/3)
+			timer := time.NewTimer(h.timeout / 3)
+
 			select {
 			case <-h.closed:
 				return
@@ -410,7 +424,7 @@ func (h *member) becomeLeader() {
 			case <-timer.C:
 				needed := majority(len(h.peers))
 
-				ch := h.heartBeat()
+				ch := h.heartBeat(logger)
 				for i := 0; i < needed; i++ {
 					resp := <-ch
 					if resp.term > h.term {
@@ -418,29 +432,27 @@ func (h *member) becomeLeader() {
 						return
 					}
 				}
-				return
 			}
 		}
 	}()
 }
 
 func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
-	logger := h.logger.Fmt("Follower[%v, %v]", term, id)
-	logger.Info("Becoming follower")
-
 	h.setTerm(id, term, vote)
 
-	go func() {
-		defer logger.Info("No longer follower.")
+	logger := h.logger.Fmt("Follower[%v, %v, %v]", id, term, vote)
+	logger.Info("Becoming follower")
 
+	go func() {
 		// handles append requests while candidate
 		var append appendEvents
 		var vote requestVote
 
-		// start the timer
-		timer := time.NewTimer(h.timeout)
-
 		for {
+
+			logger.Info("Resetting heartbeat timer [%v]", h.timeout)
+			timer := time.NewTimer(h.timeout)
+
 			select {
 			case <-h.closed:
 				return
@@ -450,21 +462,22 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 					continue
 				}
 
-				if append.term > term {
-					append.reply(term, false)
+				if append.term > term || h.leader == nil {
+					logger.Info("New leader detected [%v]", append.id)
+					append.reply(append.term, false)
 					h.becomeFollower(&append.id, append.term, &append.id)
 					return
 				}
 
 				logTerm, _ := h.log.Get(append.prevLogIndex)
 				if logTerm != append.prevLogTerm {
+					logger.Info("Inconsistent log detected. Rolling back")
 					append.reply(term, false)
 					continue
 				}
 
+				append.reply(term, true)
 				h.log.Append(append.events, append.prevLogIndex+1, term)
-				return
-
 			case vote = <-h.votes:
 				if vote.term < term {
 					vote.reply(term, false)
@@ -474,22 +487,25 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 				// Only accept candidates with logs at least as new as ours.
 				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 				if vote.maxLogIndex < maxLogIndex || vote.maxLogTerm < maxLogTerm {
+					logger.Info("Not voting for candidate [%v].  Log isn't newer.", append.id.String()[:8])
 					vote.reply(vote.term, false)
 					continue
 				}
 
 				if h.votedFor != nil {
+					logger.Info("Not voting for candidate [%v].  Already voted.", append.id.String()[:8])
 					vote.reply(term, false)
 					continue
 				}
 
 				vote.reply(term, true)
 				if vote.term != term {
+					logger.Info("New candidacy detected [%v]", vote.id)
 					h.becomeFollower(nil, vote.term, &vote.id)
 					return
 				}
-
 			case <-timer.C:
+				logger.Info("Waited too long for heartbeat.")
 				h.becomeCandidate()
 				return
 			}
@@ -525,12 +541,12 @@ func (h *member) requestVote() <-chan response {
 }
 
 // expects stable internal state
-func (h *member) heartBeat() <-chan response {
+func (h *member) heartBeat(logger common.Logger) <-chan response {
 	// maxLogIndex, maxLogTerm, commit := h.log.Snapshot()
 
 	ch := make(chan response, len(h.peers))
 	for _, p := range h.peers {
-		h.logger.Debug("Sending heartbeats to peer [%v]", p)
+		logger.Debug("Sending heartbeats to peer [%v]", p)
 
 		go func(p peer) {
 			client, err := p.Client(h.ctx)
