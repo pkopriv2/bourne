@@ -320,7 +320,7 @@ func (h *member) becomeCandidate() {
 		var numVotes int = 0
 
 		for {
-			needed := majority(len(h.peers))
+			needed := majority(len(h.peers)+1)
 
 			logger.Info("Received [%v/%v] votes", numVotes, needed)
 			if numVotes >= needed {
@@ -422,7 +422,7 @@ func (h *member) becomeLeader() {
 				h.becomeFollower(nil, vote.term, &vote.id)
 				return
 			case <-timer.C:
-				needed := majority(len(h.peers))
+				needed := majority(len(h.peers)+1)
 
 				ch := h.heartBeat(logger)
 				for i := 0; i < needed; i++ {
