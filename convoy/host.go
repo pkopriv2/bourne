@@ -123,13 +123,13 @@ func (h *host) Id() uuid.UUID {
 	return h.id
 }
 
-func (h *host) Version() int {
+func (h *host) Self() (Member, error) {
 	rep, err := h.instance()
 	if err != nil {
-		return 0
+		return nil, err
 	}
 
-	return rep.Self.version
+	return rep.Self, nil
 }
 
 func (h *host) Connect(port int) (net.Connection, error) {

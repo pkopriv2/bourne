@@ -94,6 +94,9 @@ type Host interface {
 	// The id of the host
 	Id() uuid.UUID
 
+	// The local member
+	Self() (Member, error)
+
 	// Performs an immediate shutdown of the host
 	Shutdown() error
 

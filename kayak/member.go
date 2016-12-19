@@ -1,6 +1,7 @@
 package kayak
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -98,19 +99,22 @@ type peer struct {
 	port int
 }
 
+func (p peer) String() string {
+	return fmt.Sprintf("Peer(%v:%v)", p.raw.Id().String()[:8], p.port)
+}
+
 func (p peer) Client(ctx common.Context) (*client, error) {
 	conn, err := p.raw.Connect(p.port)
 	if err != nil {
 		return nil, err
 	}
 
-	clnt, err := net.NewClient(ctx,
-		ctx.Logger().Fmt("Client(%v,%v):", p.raw.Id(), p.port), conn)
+	raw, err := net.NewClient(ctx, ctx.Logger().Fmt("%v", p.String()), conn)
 	if err != nil {
 		return nil, err
 	}
 
-	return &client{clnt}, nil
+	return &client{raw}, nil
 }
 
 // snapshot of all mutable state.  (deep copied)
@@ -150,7 +154,7 @@ type member struct {
 	votedFor *uuid.UUID
 
 	// the raw membership member
-	raw convoy.Host
+	self peer
 
 	// the election timeout.  randomized between 500 and 1000 ms
 	timeout time.Duration
@@ -176,16 +180,12 @@ type member struct {
 	closer chan struct{}
 }
 
-func newMember(ctx common.Context, self convoy.Host, others []convoy.Member) (*member, error) {
-	peers := make([]peer, 0, len(others))
-	for _, p := range others {
-		peers = append(peers, peer{raw: p})
-	}
-
+func newMember(ctx common.Context, logger common.Logger, self peer, others []peer) (*member, error) {
 	m := &member{
-		id:      self.Id(),
-		peers:   peers,
-		raw:     self,
+		ctx:     ctx,
+		logger:  logger,
+		id:      self.raw.Id(),
+		peers:   others,
 		log:     newViewLog(ctx),
 		appends: make(chan appendEvents),
 		votes:   make(chan requestVote),
@@ -197,6 +197,17 @@ func newMember(ctx common.Context, self convoy.Host, others []convoy.Member) (*m
 	}
 
 	return m, nil
+}
+
+func (h *member) Close() error {
+	select {
+	case <-h.closed:
+		return ClosedError
+	case h.closer <- struct{}{}:
+	}
+
+	close(h.closed)
+	return nil
 }
 
 func (h *member) start() error {
@@ -289,7 +300,7 @@ func (h *member) becomeCandidate() {
 		// send out ballots
 		ballots := h.requestVote()
 
-		// start the timer
+		logger.Info("Setting timer [%v]", h.timeout)
 		timer := time.NewTimer(h.timeout)
 
 		var append appendEvents
@@ -360,7 +371,7 @@ func (h *member) becomeLeader() {
 		var append appendEvents
 		var vote requestVote
 
-		// start the timer
+		logger.Info("Starting timer [%v]", h.timeout/3)
 		timer := time.NewTimer(h.timeout / 3)
 
 		for {
