@@ -6,11 +6,16 @@ import (
 )
 
 type client struct {
-	raw net.Connection
+	raw net.Client
 }
 
-func (c *client) AppendEvents(id uuid.UUID, term int, commit int, logIndex int, logTerm int, batch []event) (response, error) {
-	panic("")
+func (c *client) AppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
+	resp, err := c.raw.Send(newAppendEventsRequest(appendEventsRequest{id, term, batch, logIndex, logTerm, commit}))
+	if err != nil {
+		return response{}, err
+	}
+
+	return readResponseResponse(resp)
 }
 
 func (c *client) Append(batch []event) error {
@@ -18,5 +23,10 @@ func (c *client) Append(batch []event) error {
 }
 
 func (c *client) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
-	panic("")
+	resp, err := c.raw.Send(newRequestVoteRequest(requestVoteRequest{id, term, logIndex, logTerm}))
+	if err != nil {
+		return response{}, err
+	}
+
+	return readResponseResponse(resp)
 }

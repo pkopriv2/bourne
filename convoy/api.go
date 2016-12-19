@@ -2,6 +2,7 @@ package convoy
 
 import (
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/pkg/errors"
@@ -63,7 +64,7 @@ const (
 
 // Publishes the db to the given port.  This is the "first" member of the
 // cluster and will not discover anyone else until it is contacted.
-func StartSeedHost(ctx common.Context, path string, addr string) (host Host, err error) {
+func StartSeedHost(ctx common.Context, path string, port int) (host Host, err error) {
 	var db *database
 
 	db, err = openDatabase(ctx, path)
@@ -71,19 +72,18 @@ func StartSeedHost(ctx common.Context, path string, addr string) (host Host, err
 		return nil, errors.Wrap(err, "Error opening db [%v]")
 	}
 	defer common.RunIf(func() { db.Close() })(err)
-
-	// host, err = newSeedHost(ctx, db, addr)
-	return nil, nil
+	host, err = newSeedHost(ctx, db, "localhost", port)
+	return
 }
 
-func StartHost(ctx common.Context, path string, addr string, peer string) (host Host, err error) {
+func StartHost(ctx common.Context, path string, port int, peerPort int) (host Host, err error) {
 	db, err := openDatabase(ctx, path)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error opening db [%v]", path)
 	}
 	defer common.RunIf(func() { db.Close() })(err)
-	// host, err = newHost(ctx, path, addr, peer)
-	return nil, nil
+	host, err = newHost(ctx, db, "localhost", port, net.NewAddr("localhost", strconv.Itoa(peerPort)))
+	return
 }
 
 // A host is the local member participating in and disseminating a shared
@@ -91,14 +91,17 @@ func StartHost(ctx common.Context, path string, addr string, peer string) (host 
 type Host interface {
 	io.Closer
 
-	// A host is a local member.
-	Member
+	// The id of the host
+	Id() uuid.UUID
 
 	// Performs an immediate shutdown of the host
 	Shutdown() error
 
 	// Provides access to the distributed directory.
 	Directory() Directory
+
+	// The local store.
+	Store() Store
 }
 
 // A member is just that - a member of a cluster.

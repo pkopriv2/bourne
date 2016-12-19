@@ -71,7 +71,7 @@ func (s *server) AppendEvents(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	resp, err := s.self.RequestAppendEvents(append)
+	resp, err := s.self.RequestAppendEvents(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -85,7 +85,7 @@ func (s *server) RequestVote(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	resp, err := s.self.RequestVote(rv)
+	resp, err := s.self.RequestVote(rv.id, rv.term, rv.maxLogIndex, rv.maxLogTerm)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -116,6 +116,12 @@ func newRequestVoteRequest(r requestVoteRequest) net.Request {
 	}))
 }
 
+func newAppendEventsRequest(a appendEventsRequest) net.Request {
+	return net.NewRequest(metaAppendEvents, scribe.Build(func(w scribe.Writer) {
+		a.Write(w)
+	}))
+}
+
 func newResponseResponse(res response) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
 		res.Write(w)
@@ -134,14 +140,10 @@ func readResponseResponse(res net.Response) (response, error) {
 }
 
 type requestVoteRequest struct {
-	id            uuid.UUID
-	term          int
-	lastLogTerm   int
-	lastLogOffset int
-}
-
-func (r requestVoteRequest) bind(ch chan<- response) requestVote {
-	return requestVote{r.id, r.term, r.lastLogTerm, r.lastLogOffset, ch}
+	id           uuid.UUID
+	term         int
+	maxLogIndex int
+	maxLogTerm  int
 }
 
 func readRequestVoteRequest(r scribe.Reader) (requestVoteRequest, error) {
@@ -153,36 +155,32 @@ func readRequestVoteRequest(r scribe.Reader) (requestVoteRequest, error) {
 	ret := requestVoteRequest{id: id}
 
 	err = common.Or(err, r.Read("term", &ret.term))
-	err = common.Or(err, r.Read("lastLogTerm", &ret.lastLogTerm))
-	err = common.Or(err, r.Read("lastLogOffset", &ret.lastLogOffset))
+	err = common.Or(err, r.Read("maxLogIndex", &ret.maxLogIndex))
+	err = common.Or(err, r.Read("maxLogTerm", &ret.maxLogTerm))
 	return ret, err
 }
 
 func (r requestVoteRequest) Write(w scribe.Writer) {
 	scribe.WriteUUID(w, "id", r.id)
 	w.Write("term", r.term)
-	w.Write("lastLogTerm", r.lastLogTerm)
-	w.Write("lastLogOffset", r.lastLogOffset)
+	w.Write("maxLogTerm", r.maxLogTerm)
+	w.Write("maxLogIndex", r.maxLogIndex)
 }
 
 type appendEventsRequest struct {
-	id            uuid.UUID
-	term          int
-	events        []event
-	prevLogOffset int
-	prevLogTerm   int
-	commit        int
-}
-
-func (a appendEventsRequest) bind(ch chan<- response) appendEvents {
-	return appendEvents{a.id, a.term, a.events, a.prevLogOffset, a.prevLogTerm, a.commit, ch}
+	id           uuid.UUID
+	term         int
+	events       []event
+	prevLogIndex int
+	prevLogTerm  int
+	commit       int
 }
 
 func (a appendEventsRequest) Write(w scribe.Writer) {
 	scribe.WriteUUID(w, "id", a.id)
 	w.Write("term", a.term)
 	w.Write("events", a.events)
-	w.Write("prevLogOffset", a.prevLogOffset)
+	w.Write("prevLogIndex", a.prevLogIndex)
 	w.Write("prevLogTerm", a.prevLogTerm)
 	w.Write("commit", a.commit)
 }
@@ -198,7 +196,7 @@ func readAppendEventsRequest(r scribe.Reader) (appendEventsRequest, error) {
 	// var msgs []scribe.Message
 	err = common.Or(err, r.Read("term", &ret.term))
 	err = common.Or(err, r.Read("prevLogTerm", &ret.prevLogTerm))
-	err = common.Or(err, r.Read("prevLogOffset", &ret.prevLogOffset))
+	err = common.Or(err, r.Read("prevLogIndex", &ret.prevLogIndex))
 	err = common.Or(err, r.Read("commit", &ret.commit))
 	// err = common.Or(err, r.Read("events", &msgs))
 

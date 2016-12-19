@@ -40,12 +40,12 @@ func (d *eventLog) Committed() int {
 	return 0
 }
 
-func (d *eventLog) Max() (index int, term int) {
+func (d *eventLog) Snapshot() (index int, term int, commit int) {
 	d.data.Read(func(u amoeba.View) {
 		// defer func() { d.read = next }()
 		// batch = tmp
 	})
-	return 0,0
+	return 0,0,0
 }
 
 func (d *eventLog) Get(index int) (term int, e event) {
