@@ -14,7 +14,7 @@ func TestMember_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 5), 9390)
+	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 33), 9390)
 
 	time.Sleep(5 * time.Second)
 

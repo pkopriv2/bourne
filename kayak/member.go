@@ -200,7 +200,7 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 		votes:   make(chan requestVote),
 		closed:  make(chan struct{}),
 		closer:  make(chan struct{}, 1),
-		timeout: time.Millisecond * time.Duration((rand.Intn(2000) + 2000)),
+		timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
 	}
 
 	if err := m.start(); err != nil {
@@ -415,17 +415,16 @@ func (h *member) becomeLeader() {
 					continue
 				}
 
-				var votedFor *uuid.UUID
 
 				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 				if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 					vote.reply(vote.term, true)
-					votedFor = &vote.id
+					h.becomeFollower(nil, vote.term, &vote.id)
 				} else {
 					vote.reply(vote.term, false)
+					h.becomeFollower(nil, vote.term, nil)
 				}
 
-				h.becomeFollower(nil, vote.term, votedFor)
 				return
 
 			case <-timer.C:
@@ -496,9 +495,13 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 				// handle: current term vote.  (accept if no vate and if candidate log is as long as ours)
 				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 				if vote.term == term {
-					if h.votedFor == nil {
-						vote.reply(term, vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm)
+					if h.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
+						h.votedFor = &vote.id
+						vote.reply(term, true)
+					} else {
+						vote.reply(term, false)
 					}
+
 					continue
 				}
 
@@ -510,6 +513,8 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 					vote.reply(term, false)
 					h.becomeFollower(nil, vote.term, nil)
 				}
+
+				return
 			case <-timer.C:
 				logger.Info("Waited too long for heartbeat.")
 				h.becomeCandidate()
