@@ -193,10 +193,13 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 		ctx:     ctx,
 		logger:  logger,
 		id:      self.raw.Id(),
+		self:    self,
 		peers:   others,
 		log:     newViewLog(ctx),
 		appends: make(chan appendEvents),
 		votes:   make(chan requestVote),
+		closed:  make(chan struct{}),
+		closer:  make(chan struct{}, 1),
 		timeout: time.Millisecond * time.Duration((rand.Intn(2000) + 2000)),
 	}
 
@@ -213,6 +216,8 @@ func (h *member) Close() error {
 		return ClosedError
 	case h.closer <- struct{}{}:
 	}
+
+	h.logger.Info("Shutting down.")
 
 	close(h.closed)
 	return nil
@@ -317,12 +322,12 @@ func (h *member) becomeCandidate() {
 	go func() {
 		var append appendEvents
 		var vote requestVote
-		var numVotes int = 0
+		var numVotes int = 1
 
 		for {
-			needed := majority(len(h.peers)+1)
+			needed := majority(len(h.peers) + 1)
 
-			logger.Info("Received [%v/%v] votes", numVotes, needed)
+			logger.Info("Received [%v/%v] votes", numVotes, len(h.peers)+1)
 			if numVotes >= needed {
 				h.becomeLeader()
 				return
@@ -386,7 +391,7 @@ func (h *member) becomeLeader() {
 		var vote requestVote
 
 		for {
-			logger.Info("Starting heartbeat timer [%v]", h.timeout/3)
+			logger.Info("Resetting heartbeat timer [%v]", h.timeout/3)
 			timer := time.NewTimer(h.timeout / 3)
 
 			select {
@@ -410,19 +415,21 @@ func (h *member) becomeLeader() {
 					continue
 				}
 
-				// Only vote for candidates with logs at least as new as ours, but
-				// either way we're done being a leader.
+				var votedFor *uuid.UUID
+
 				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 				if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 					vote.reply(vote.term, true)
+					votedFor = &vote.id
 				} else {
 					vote.reply(vote.term, false)
 				}
 
-				h.becomeFollower(nil, vote.term, &vote.id)
+				h.becomeFollower(nil, vote.term, votedFor)
 				return
+
 			case <-timer.C:
-				needed := majority(len(h.peers)+1)
+				needed := majority(len(h.peers)+1) - 1
 
 				ch := h.heartBeat(logger)
 				for i := 0; i < needed; i++ {
@@ -479,30 +486,29 @@ func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
 				append.reply(term, true)
 				h.log.Append(append.events, append.prevLogIndex+1, term)
 			case vote = <-h.votes:
+
+				// handle: previous term vote.  (immediately decline.)
 				if vote.term < term {
 					vote.reply(term, false)
 					continue
 				}
 
-				// Only accept candidates with logs at least as new as ours.
+				// handle: current term vote.  (accept if no vate and if candidate log is as long as ours)
 				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
-				if vote.maxLogIndex < maxLogIndex || vote.maxLogTerm < maxLogTerm {
-					logger.Info("Not voting for candidate [%v].  Log isn't newer.", append.id.String()[:8])
-					vote.reply(vote.term, false)
+				if vote.term == term {
+					if h.votedFor == nil {
+						vote.reply(term, vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm)
+					}
 					continue
 				}
 
-				if h.votedFor != nil {
-					logger.Info("Not voting for candidate [%v].  Already voted.", append.id.String()[:8])
-					vote.reply(term, false)
-					continue
-				}
-
-				vote.reply(term, true)
-				if vote.term != term {
-					logger.Info("New candidacy detected [%v]", vote.id)
+				// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
+				if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
+					vote.reply(term, true)
 					h.becomeFollower(nil, vote.term, &vote.id)
-					return
+				} else {
+					vote.reply(term, false)
+					h.becomeFollower(nil, vote.term, nil)
 				}
 			case <-timer.C:
 				logger.Info("Waited too long for heartbeat.")
@@ -522,6 +528,7 @@ func (h *member) requestVote() <-chan response {
 		go func(p peer) {
 			client, err := p.Client(h.ctx)
 			if err != nil {
+				h.logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}
@@ -529,6 +536,7 @@ func (h *member) requestVote() <-chan response {
 			maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 			resp, err := client.RequestVote(h.id, h.term, maxLogIndex, maxLogTerm)
 			if err != nil {
+				h.logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}
@@ -551,19 +559,20 @@ func (h *member) heartBeat(logger common.Logger) <-chan response {
 		go func(p peer) {
 			client, err := p.Client(h.ctx)
 			if err != nil {
+				logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}
 
 			resp, err := client.AppendEvents(h.id, h.term, 0, 0, []event{}, 0)
 			if err != nil {
+				logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}
 
 			ch <- resp
 		}(p)
-
 	}
 
 	return ch

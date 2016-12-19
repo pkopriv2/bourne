@@ -137,7 +137,7 @@ func StartTestHostCluster(ctx common.Context, num int) []*host {
 		}
 
 		return len(all) == len(cluster)
-	})
+	e)
 
 	seeder.logger.Info("Successfully started cluster of [%v] hosts", len(cluster))
 
