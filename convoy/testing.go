@@ -57,6 +57,12 @@ func StartTransientCluster(ctx common.Context, start int, num int) []Host {
 		return len(all) == len(cluster)
 	})
 
+	ctx.Env().OnClose(func() {
+		for _, h := range cluster {
+			h.Shutdown()
+		}
+	})
+
 	seeder.(*host).logger.Info("Successfully started cluster of [%v] hosts", len(cluster))
 	return cluster
 }

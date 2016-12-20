@@ -8,6 +8,7 @@ import (
 type host struct {
 	member *member
 	server net.Server
+	logger common.Logger
 
 	// closing utilities.
 	closed chan struct{}
@@ -33,6 +34,7 @@ func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) 
 	h = &host{
 		member: member,
 		server: server,
+		logger: root,
 		closed: make(chan struct{}),
 		closer: make(chan struct{}, 1),
 	}
@@ -46,8 +48,12 @@ func (h *host) Close() error {
 	case h.closer <- struct{}{}:
 	}
 
+	h.logger.Info("Closing")
+
 	var err error
-	err = common.Or(err, h.server.Close())
 	err = common.Or(err, h.member.Close())
+	err = common.Or(err, h.server.Close())
+
+	close(h.closed)
 	return err
 }

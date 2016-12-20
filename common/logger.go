@@ -26,7 +26,8 @@ func print(format string, vals ...interface{}) {
 type LoggerLevel int
 
 const (
-	Error LoggerLevel = iota
+	Off   LoggerLevel = iota
+	Error
 	Info
 	Debug
 )
@@ -35,6 +36,8 @@ func (l LoggerLevel) String() string {
 	switch l {
 	default:
 		return "UNKNOWN"
+	case Off:
+		return "OFF"
 	case Error:
 		return "ERROR"
 	case Info:

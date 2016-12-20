@@ -216,9 +216,6 @@ func (h *member) Close() error {
 		return ClosedError
 	case h.closer <- struct{}{}:
 	}
-
-	h.logger.Info("Shutting down.")
-
 	close(h.closed)
 	return nil
 }
@@ -259,12 +256,6 @@ func (h *member) setTerm(id *uuid.UUID, term int, vote *uuid.UUID) {
 	h.votedFor = vote
 	h.commits = make(map[uuid.UUID]int)
 	h.offsets = make(map[uuid.UUID]int)
-}
-
-func (h *member) castVote(id uuid.UUID) {
-	h.lock.Lock()
-	defer h.lock.Unlock()
-	h.votedFor = &id
 }
 
 func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
@@ -314,7 +305,7 @@ func (h *member) becomeCandidate() {
 	// send out ballots
 	ballots := h.requestVote()
 
-	// finally,
+	// set the timer.
 	logger.Info("Setting timer [%v]", h.timeout)
 	timer := time.NewTimer(h.timeout)
 
@@ -337,7 +328,6 @@ func (h *member) becomeCandidate() {
 			case <-h.closed:
 				return
 			case append = <-h.appends:
-
 				if append.term < h.term {
 					append.reply(h.term, false)
 					continue
@@ -349,7 +339,6 @@ func (h *member) becomeCandidate() {
 				return
 
 			case vote = <-h.votes:
-
 				if vote.term <= h.term {
 					vote.reply(h.term, false)
 					continue
@@ -361,6 +350,7 @@ func (h *member) becomeCandidate() {
 			case <-timer.C:
 				h.becomeCandidate()
 				return
+
 			case vote := <-ballots:
 
 				if vote.term > h.term {
@@ -386,18 +376,16 @@ func (h *member) becomeLeader() {
 
 	// start leader routine
 	go func() {
-		// handles append requests while candidate
-		var append appendEvents
-		var vote requestVote
 
 		for {
 			logger.Info("Resetting heartbeat timer [%v]", h.timeout/3)
+
 			timer := time.NewTimer(h.timeout / 3)
 
 			select {
 			case <-h.closed:
 				return
-			case append = <-h.appends:
+			case append := <-h.appends:
 
 				if append.term <= h.term {
 					append.reply(h.term, false)
@@ -408,34 +396,45 @@ func (h *member) becomeLeader() {
 				h.becomeFollower(&append.id, append.term, &append.id)
 				return
 
-			case vote = <-h.votes:
+			case vote := <-h.votes:
 
 				if vote.term <= h.term {
 					vote.reply(h.term, false)
 					continue
 				}
 
-
 				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 				if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 					vote.reply(vote.term, true)
 					h.becomeFollower(nil, vote.term, &vote.id)
-				} else {
-					vote.reply(vote.term, false)
-					h.becomeFollower(nil, vote.term, nil)
+					return
 				}
 
+				vote.reply(vote.term, false)
+				h.becomeFollower(nil, vote.term, nil)
 				return
 
 			case <-timer.C:
-				needed := majority(len(h.peers)+1) - 1
+				timer := time.NewTimer(h.timeout)
 
 				ch := h.heartBeat(logger)
-				for i := 0; i < needed; i++ {
-					resp := <-ch
-					if resp.term > h.term {
-						h.becomeFollower(nil, resp.term, nil)
+				for i := 0; i < majority(len(h.peers)+1)-1; {
+					select {
+					case <-h.closed:
 						return
+					case <-timer.C:
+						logger.Error("Unable to acquire the necessary votes.")
+						h.becomeFollower(nil, h.term, nil)
+						return
+					case resp := <-ch:
+						if resp.term > h.term {
+							h.becomeFollower(nil, resp.term, nil)
+							return
+						}
+
+						if resp.success {
+							i++
+						}
 					}
 				}
 			}
@@ -533,7 +532,6 @@ func (h *member) requestVote() <-chan response {
 		go func(p peer) {
 			client, err := p.Client(h.ctx)
 			if err != nil {
-				h.logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}
@@ -541,7 +539,6 @@ func (h *member) requestVote() <-chan response {
 			maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 			resp, err := client.RequestVote(h.id, h.term, maxLogIndex, maxLogTerm)
 			if err != nil {
-				h.logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}
@@ -564,14 +561,12 @@ func (h *member) heartBeat(logger common.Logger) <-chan response {
 		go func(p peer) {
 			client, err := p.Client(h.ctx)
 			if err != nil {
-				logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}
 
 			resp, err := client.AppendEvents(h.id, h.term, 0, 0, []event{}, 0)
 			if err != nil {
-				logger.Error("Error: %v", err)
 				ch <- response{h.term, false}
 				return
 			}

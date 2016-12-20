@@ -89,7 +89,7 @@ func TestHost_Update_All(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 32)
+	hosts := StartTestHostCluster(ctx, 128)
 
 	for _, h := range hosts {
 		h.logger.Info("Writing key,val")
@@ -137,7 +137,7 @@ func StartTestHostCluster(ctx common.Context, num int) []*host {
 		}
 
 		return len(all) == len(cluster)
-	e)
+	})
 
 	seeder.logger.Info("Successfully started cluster of [%v] hosts", len(cluster))
 

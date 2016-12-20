@@ -1,47 +1,88 @@
 package kayak
 
 import (
+	"fmt"
+	"math/rand"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/convoy"
 	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMember_Close(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Error),
+	})
+
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 33), 9390)
+	logger := ctx.Logger().Fmt("TEST: ")
 
-	time.Sleep(5 * time.Second)
+	go func() {
+		tick := time.NewTicker(200 * time.Millisecond)
+		for range tick.C {
+			ctx.Logger().Error("#Routines: %v", runtime.NumGoroutine())
+		}
+	}()
 
-	// var leader *uuid.UUID
-	leader1 := First(cluster, func(h *host) bool {
-		l := h.member.snapshot().leader
-		return l != nil && *l == h.member.id
+	failures := make([]string, 0, 1000)
+	for i := 0; i < 100; i++ {
+		success, msg := RunClusterTest(11 + rand.Intn(23))
+		if !success {
+			failures = append(failures, msg)
+		}
+	}
+
+	for _, f := range failures {
+		logger.Error("Error: %v", f)
+	}
+
+	assert.Empty(t, failures)
+
+}
+
+func RunClusterTest(size int) (bool, string) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Error),
 	})
 
-	assert.NotNil(t, leader1)
-	assert.Nil(t, leader1.Close())
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
 
-	time.Sleep(5 * time.Second)
+	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, size), 9390)
+	indices := rand.Perm(size)
+	killed := rand.Intn((size / 2))
+	// logger := ctx.Logger().Fmt("TEST[%v,%v]", size, killed)
 
-	// var leader *uuid.UUID
-	leader2 := First(cluster, func(h *host) bool {
-		l := h.member.snapshot().leader
-		return l != nil && *l == h.member.id && *l != leader1.member.id
-	})
+	// logger.Error("Starting cluster")
+	_, _, ok1 := Converge(cluster)
+	if !ok1 {
+		return false, fmt.Sprintf("Unable to converge cluster of [%v]", size)
+	}
 
-	assert.NotNil(t, leader2)
-	assert.Nil(t, leader2.Close())
+	// logger.Error("Killing hosts: %v", indices[:killed])
+	for i := 0; i < killed; i++ {
+		cluster[indices[i]].Close()
+	}
 
-	leader2.Close()
+	// logger.Error("Converging remaining hosts: %v", indices[killed:])
+	remaining := make([]*host, 0, len(cluster))
+	for i := killed; i < size; i++ {
+		remaining = append(remaining, cluster[indices[i]])
+	}
 
+	_, _, ok2 := Converge(remaining)
+	if !ok2 {
+		return false, fmt.Sprintf("Unable to converge cluster after removing hosts: %v", indices[:killed])
+	}
 
-	time.Sleep(100 * time.Second)
+	return true, ""
 }
 
 func StartKayakCluster(ctx common.Context, cluster []convoy.Host, start int) []*host {
@@ -75,6 +116,49 @@ func StartKayakCluster(ctx common.Context, cluster []convoy.Host, start int) []*
 	}
 
 	return hosts
+}
+
+func Converge(cluster []*host) (int, *uuid.UUID, bool) {
+	var term int = 0
+	var leader *uuid.UUID
+
+	cancelled := make(chan struct{})
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		SyncCluster(cluster, func(h *host) bool {
+			select {
+			case <-cancelled:
+				return true
+			default:
+			}
+
+			copy := h.member.snapshot()
+			if copy.term > term {
+				term = copy.term
+			}
+
+			if copy.term == term && copy.leader != nil {
+				leader = copy.leader
+			}
+
+			return leader != nil && copy.leader == leader && copy.term == term
+		})
+		return nil
+	})
+
+	select {
+	case <-done:
+		return term, leader, true
+	case <-timeout:
+		close(cancelled)
+		return term, leader, false
+	}
+}
+
+func RemoveHost(cluster []*host, i int) []*host {
+	ret := make([]*host, 0, len(cluster)-1)
+	ret = append(ret, cluster[:i]...)
+	ret = append(ret, cluster[i+1:]...)
+	return ret
 }
 
 func SyncCluster(cluster []*host, fn func(h *host) bool) {
