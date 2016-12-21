@@ -8,34 +8,129 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
 
-// References:
+// The primary member machine abstraction.
 //
-// * https://raft.github.io/raft.pdf
-// * https://www.youtube.com/watch?v=LAqyTyNUYSY
-// * https://github.com/ongardie/dissertation/blob/master/book.pdf?raw=true
+// Internally, this consists of a single instance that is continuously
+// moving between various states.  Each state is modeled as its own
+// machine.  The member is guaranteed to exist in at most ONE actively
+// processing state.  Each machine defines its own concurrency semantics
+// so it is NOT generally safe to access to the internal instance state.
 //
-//
-// Considered a BFA (Byzantine-Federated-Agreement) approach, but looked too complex for our
-// initial needs. (consider for future systems)
-//
-// * https://www.stellar.org/papers/stellar-consensus-protocol.pdf
-//
-// NOTE: Currently only election is implemented.
-// TODO:
-//  * Support proper client appends + log impl
-//  * Support changing cluster membership
-//  * Support durable log!!
-//
+type member struct {
 
-type event interface {
-	scribe.Writable
+	// logger instance
+	logger common.Logger
+
+	// the internal member instance.  This is guaranteed to exist in at MOST
+	instance *instance
+
+	// the follower sub-machine
+	follower *follower
+
+	// the candidate sub-machine
+	candidate *candidate
+
+	// the leader sub-machine
+	leader *leader
+
+	// closing utilities.
+	closed chan struct{}
+
+	// closing lock.  (a buffered channel of 1 entry.)
+	closer chan struct{}
 }
 
+func newMember(ctx common.Context, logger common.Logger, self peer, others []peer) (*member, error) {
+	followerIn := make(chan *instance)
+	candidateIn := make(chan *instance)
+	leaderIn := make(chan *instance)
+	closed := make(chan struct{})
+	closer := make(chan struct{}, 1)
+
+	inst := &instance{
+		ctx:     ctx,
+		id:      self.id,
+		self:    self,
+		peers:   others,
+		log:     newViewLog(ctx),
+		appends: make(chan appendEvents),
+		votes:   make(chan requestVote),
+		timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
+	}
+
+	m := &member{
+		instance:  inst,
+		follower:  newFollower(ctx, followerIn, candidateIn, closed),
+		candidate: newCandidate(ctx, candidateIn, leaderIn, followerIn, closed),
+		leader:    newLeader(ctx, logger, leaderIn, followerIn, closed),
+		closed:    closed,
+		closer:    closer,
+	}
+
+	if err := m.start(); err != nil {
+		return nil, err
+	}
+
+	return m, nil
+}
+
+func (h *member) Close() error {
+	select {
+	case <-h.closed:
+		return ClosedError
+	case h.closer <- struct{}{}:
+	}
+	close(h.closed)
+	return nil
+}
+
+func (h *member) start() error {
+	return h.follower.send(h.instance, h.follower.in)
+}
+
+func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
+	append := appendEvents{
+		id, term, logIndex, logTerm, batch, commit, make(chan response, 1)}
+
+	h.logger.Debug("Receiving append events [%v]", append)
+	select {
+	case <-h.closed:
+		return response{}, ClosedError
+	case h.instance.appends <- append:
+		select {
+		case <-h.closed:
+			return response{}, ClosedError
+		case r := <-append.ack:
+			return r, nil
+		}
+	}
+}
+
+func (h *member) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
+	req := requestVote{id, term, logIndex, logTerm, make(chan response, 1)}
+
+	h.logger.Debug("Receiving request vote [%v]", req)
+	select {
+	case <-h.closed:
+		return response{}, ClosedError
+	case h.instance.votes <- req:
+		select {
+		case <-h.closed:
+			return response{}, ClosedError
+		case r := <-req.ack:
+			return r, nil
+		}
+	}
+}
+
+// Internal request vote.  Requests are put onto the internal member
+// channel and consumed by the currently active sub-machine.
+//
+// Request votes ONLY come from members who are candidates.
 type requestVote struct {
 	id          uuid.UUID
 	term        int
@@ -57,8 +152,10 @@ func (r requestVote) reply(term int, success bool) bool {
 	}
 }
 
-// The primary leader RPC type.  These only come from those who *think*
-// they are leaders!
+// Internal append events request.  Requests are put onto the internal member
+// channel and consumed by the currently active sub-machine.
+//
+// Append events ONLY come from members who are leaders. (Or think they are leaders)
 type appendEvents struct {
 	id           uuid.UUID
 	term         int
@@ -82,14 +179,17 @@ func (a *appendEvents) reply(term int, success bool) bool {
 	}
 }
 
-// the primary consumer request type
+// Internal client append request.  Requests are put onto the internal member
+// channel and consumed by the currently active sub-machine.
+//
+// These come from active clients.
 type clientAppend struct {
 	events []event
 	ack    chan error
 }
 
 func (a clientAppend) String() string {
-	return fmt.Sprintf("AppendLog(%v)", len(a.events))
+	return fmt.Sprintf("ClientAppend(%v)", len(a.events))
 }
 
 func (a *clientAppend) reply(err error) bool {
@@ -101,7 +201,9 @@ func (a *clientAppend) reply(err error) bool {
 	}
 }
 
-// standard response type
+// Internal response type.  These are returned through the
+// request 'ack'/'response' channels by the currently active
+// sub-machine component.
 type response struct {
 	term    int
 	success bool
@@ -121,35 +223,16 @@ func readResponse(r scribe.Reader) (response, error) {
 	return ret, err
 }
 
-// A peer contains the identifying info of a cluster member.
-type peer struct {
-	id   uuid.UUID
-	addr string
-}
-
-func (p peer) String() string {
-	return fmt.Sprintf("Peer(%v)", p.id.String()[:8], p.addr)
-}
-
-func (p peer) Client(ctx common.Context) (*client, error) {
-	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &client{raw}, nil
-}
-
-// A term represents a particular member state in the RAFT epochal time model.
+// A term represents a particular member state in the Raft epochal time model.
 type term struct {
 
-	// the current term number
+	// the current term number (increases monotonically across the cluster)
 	num int
 
-	// the current term information.
+	// the current leader (as seen by this member)
 	leader *uuid.UUID
 
-	// who was voted for this term
+	// who was voted for this term (guaranteed not nil when leader != nil)
 	votedFor *uuid.UUID
 }
 
@@ -157,13 +240,17 @@ func (t term) String() string {
 	return fmt.Sprintf("Term(%v,%v,%v)", t.num, t.leader, t.votedFor)
 }
 
-// The member is the core identity.  Within the core machine, only
-// a single instance ever exists, but its location within the machine
-// may change between terms.
-type member struct {
+// The member is the primary membership identity.  Within the core machine,
+// only a single instance ever exists, but its location within the machine
+// may change over time.  Therefore all updates/requests must be forwarded
+// to the machine currently processing the member.
+type instance struct {
 
 	// configuration used to build this instance.
 	ctx common.Context
+
+	// the core member logger
+	logger common.Logger
 
 	// the unique id of this member.
 	id uuid.UUID
@@ -171,14 +258,14 @@ type member struct {
 	// the peer representing the local instance
 	self peer
 
+	// data lock (currently using very coarse lock)
+	lock sync.RWMutex
+
 	// the current term.
 	term term
 
 	// the other peers. (currently static list)
 	peers []peer
-
-	// data lock (currently using very coarse lock)
-	lock sync.RWMutex
 
 	// the election timeout.  (heartbeat: = timeout / 5)
 	timeout time.Duration
@@ -199,30 +286,32 @@ type member struct {
 	clientAppends chan clientAppend
 }
 
-func (h *member) String() string {
+func (h *instance) String() string {
 	h.lock.RLock()
 	defer h.lock.RUnlock()
 	return fmt.Sprintf("%v, %v:", h.self, h.term)
 }
 
-func (h *member) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
+func (h *instance) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
 }
 
-func (h *member) Peers() []peer {
-	h.lock.Lock()
-	defer h.lock.Unlock()
+func (h *instance) Peers() []peer {
+	h.lock.RLock()
+	defer h.lock.RUnlock()
 	ret := make([]peer, 0, len(h.peers))
 	return append(ret, h.peers...)
 }
 
-func (h *member) Majority() int {
+func (h *instance) Majority() int {
+	h.lock.RLock()
+	defer h.lock.RUnlock()
 	return majority(len(h.peers) + 1)
 }
 
-func (h *member) Broadcast(fn func(c *client) response) <-chan response {
+func (h *instance) Broadcast(fn func(c *client) response) <-chan response {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	peers := h.Peers()
@@ -241,111 +330,6 @@ func (h *member) Broadcast(fn func(c *client) response) <-chan response {
 	return ret
 }
 
-type core struct {
-	ctx common.Context
-
-	logger common.Logger
-
-	// the internal member instance.  This is guaranteed to exist in at MOST
-	// one machine at a given time.
-	instance *member
-
-	follower *follower
-
-	candidate *candidate
-
-	leader *leader
-
-	// closing utilities.
-	closed chan struct{}
-
-	closer chan struct{}
-}
-
-func newMember(ctx common.Context, logger common.Logger, self peer, others []peer) (*core, error) {
-
-	// shared channels.
-	followerIn := make(chan *member)
-	candidateIn := make(chan *member)
-	leaderIn := make(chan *member)
-	closed := make(chan struct{})
-	closer := make(chan struct{}, 1)
-
-	m := &core{
-		ctx:    ctx,
-		logger: logger,
-		instance: &member{
-			ctx:     ctx,
-			id:      self.id,
-			self:    self,
-			peers:   others,
-			log:     newViewLog(ctx),
-			appends: make(chan appendEvents),
-			votes:   make(chan requestVote),
-			timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
-		},
-		follower:  newFollower(ctx, logger, followerIn, candidateIn, closed),
-		candidate: newCandidate(ctx, logger, candidateIn, leaderIn, followerIn, closed),
-		leader:    newLeader(ctx, logger, leaderIn, followerIn, closed),
-		closed:    closed,
-		closer:    closer,
-	}
-
-	if err := m.start(); err != nil {
-		return nil, err
-	}
-
-	return m, nil
-}
-
-func (h *core) Close() error {
-	select {
-	case <-h.closed:
-		return ClosedError
-	case h.closer <- struct{}{}:
-	}
-	close(h.closed)
-	return nil
-}
-
-func (h *core) start() error {
-	return h.follower.send(h.instance, h.follower.in)
-}
-
-func (h *core) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
-	append := appendEvents{
-		id, term, logIndex, logTerm, batch, commit, make(chan response, 1)}
-
-	h.logger.Debug("Receiving append events [%v]", append)
-	select {
-	case <-h.closed:
-		return response{}, ClosedError
-	case h.instance.appends <- append:
-		select {
-		case <-h.closed:
-			return response{}, ClosedError
-		case r := <-append.ack:
-			return r, nil
-		}
-	}
-}
-
-func (h *core) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
-	req := requestVote{id, term, logIndex, logTerm, make(chan response, 1)}
-
-	h.logger.Debug("Receiving request vote [%v]", req)
-	select {
-	case <-h.closed:
-		return response{}, ClosedError
-	case h.instance.votes <- req:
-		select {
-		case <-h.closed:
-			return response{}, ClosedError
-		case r := <-req.ack:
-			return r, nil
-		}
-	}
-}
 
 func majority(num int) int {
 	return int(math.Ceil(float64(num) / float64(2)))

@@ -8,15 +8,14 @@ import (
 
 type candidate struct {
 	ctx      common.Context
-	logger   common.Logger
-	in       chan *member
-	leader   chan<- *member
-	follower chan<- *member
+	in       chan *instance
+	leader   chan<- *instance
+	follower chan<- *instance
 	closed   chan struct{}
 }
 
-func newCandidate(ctx common.Context, logger common.Logger, in chan *member, leader chan<- *member, follower chan<- *member, closed chan struct{}) *candidate {
-	ret := &candidate{ctx, logger.Fmt("Candidate:"), in, leader, follower, closed}
+func newCandidate(ctx common.Context, in chan *instance, leader chan<- *instance, follower chan<- *instance, closed chan struct{}) *candidate {
+	ret := &candidate{ctx, in, leader, follower, closed}
 	ret.start()
 	return ret
 }
@@ -35,7 +34,7 @@ func (c *candidate) start() error {
 	return nil
 }
 
-func (c *candidate) send(h *member, ch chan<- *member) error {
+func (c *candidate) send(h *instance, ch chan<- *instance) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -44,13 +43,13 @@ func (c *candidate) send(h *member, ch chan<- *member) error {
 	}
 }
 
-func (c *candidate) run(h *member) error {
+func (c *candidate) run(h *instance) error {
 
 	// increment term and vote forself.
 	h.Term(h.term.num+1, nil, &h.id)
 
 	// decorate the logger
-	logger := c.logger.Fmt("Candidate[%v]", h.term)
+	logger := h.logger.Fmt("Candidate[%v]", h.term)
 
 	// send out ballots
 	ballots := h.Broadcast(func(cl *client) response {
@@ -70,8 +69,7 @@ func (c *candidate) run(h *member) error {
 	// kick off candidate routine
 	go func() {
 		for numVotes := 1; ; {
-
-			needed := majority(len(h.peers) + 1)
+			needed := h.Majority()
 
 			logger.Info("Received [%v/%v] votes", numVotes, len(h.peers)+1)
 			if numVotes >= needed {
@@ -102,9 +100,7 @@ func (c *candidate) run(h *member) error {
 			case <-timer.C:
 				c.send(h, c.in) // becomes a new candidate
 				return
-
 			case vote := <-ballots:
-
 				if vote.term > h.term.num {
 					h.Term(vote.term, nil, nil)
 					c.send(h, c.follower)
@@ -122,12 +118,12 @@ func (c *candidate) run(h *member) error {
 
 }
 
-func (c *candidate) handleClientAppend(h *member, a clientAppend) chan<- *member {
+func (c *candidate) handleClientAppend(h *instance, a clientAppend) chan<- *instance {
 	a.reply(NotLeaderError)
 	return nil
 }
 
-func (c *candidate) handleRequestVote(h *member, vote requestVote) chan<- *member {
+func (c *candidate) handleRequestVote(h *instance, vote requestVote) chan<- *instance {
 	if vote.term <= h.term.num {
 		vote.reply(h.term.num, false)
 		return nil
@@ -138,7 +134,7 @@ func (c *candidate) handleRequestVote(h *member, vote requestVote) chan<- *membe
 	return c.follower
 }
 
-func (c *candidate) handleAppendEvents(h *member, append appendEvents) chan<- *member {
+func (c *candidate) handleAppendEvents(h *instance, append appendEvents) chan<- *instance {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil

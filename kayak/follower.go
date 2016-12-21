@@ -8,14 +8,13 @@ import (
 
 type follower struct {
 	ctx       common.Context
-	logger    common.Logger
-	in        chan *member
-	candidate chan<- *member
+	in        chan *instance
+	candidate chan<- *instance
 	closed    chan struct{}
 }
 
-func newFollower(ctx common.Context, logger common.Logger, in chan *member, candidate chan<- *member, closed chan struct{}) *follower {
-	ret := &follower{ctx, logger.Fmt("Follower:"), in, candidate, closed}
+func newFollower(ctx common.Context, in chan *instance, candidate chan<- *instance, closed chan struct{}) *follower {
+	ret := &follower{ctx, in, candidate, closed}
 	ret.start()
 	return ret
 }
@@ -34,7 +33,7 @@ func (c *follower) start() error {
 	return nil
 }
 
-func (c *follower) send(h *member, ch chan<- *member) error {
+func (c *follower) send(h *instance, ch chan<- *instance) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -43,8 +42,8 @@ func (c *follower) send(h *member, ch chan<- *member) error {
 	}
 }
 
-func (c *follower) run(h *member) error {
-	logger := c.logger.Fmt("Follower[%v, %v, %v]", h)
+func (c *follower) run(h *instance) error {
+	logger := h.logger.Fmt("Follower[%v]", h.term)
 	logger.Info("Becoming follower")
 
 	go func() {
@@ -81,12 +80,12 @@ func (c *follower) run(h *member) error {
 	return nil
 }
 
-func (c *follower) handleClientAppend(h *member, append clientAppend) chan<- *member {
+func (c *follower) handleClientAppend(h *instance, append clientAppend) chan<- *instance {
 	append.reply(NotLeaderError)
 	return nil
 }
 
-func (c *follower) handleRequestVote(h *member, vote requestVote) chan<- *member {
+func (c *follower) handleRequestVote(h *instance, vote requestVote) chan<- *instance {
 
 	// handle: previous term vote.  (immediately decline.)
 	if vote.term < h.term.num {
@@ -119,8 +118,8 @@ func (c *follower) handleRequestVote(h *member, vote requestVote) chan<- *member
 	}
 }
 
-func (c *follower) handleAppendEvents(h *member, append appendEvents) chan<- *member {
-	logger := c.logger.Fmt("%v", h)
+func (c *follower) handleAppendEvents(h *instance, append appendEvents) chan<- *instance {
+	logger := h.logger.Fmt("Follower[%v]", h.term)
 
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)

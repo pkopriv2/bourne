@@ -10,12 +10,12 @@ import (
 type leader struct {
 	ctx      common.Context
 	logger   common.Logger
-	in       chan *member
-	follower chan<- *member
+	in       chan *instance
+	follower chan<- *instance
 	closed   chan struct{}
 }
 
-func newLeader(ctx common.Context, logger common.Logger, in chan *member, follower chan<- *member, closed chan struct{}) *leader {
+func newLeader(ctx common.Context, logger common.Logger, in chan *instance, follower chan<- *instance, closed chan struct{}) *leader {
 	ret := &leader{ctx, logger.Fmt("Leader:"), in, follower, closed}
 	ret.start()
 	return ret
@@ -35,7 +35,7 @@ func (c *leader) start() error {
 	return nil
 }
 
-func (c *leader) send(h *member, ch chan<- *member) error {
+func (c *leader) send(h *instance, ch chan<- *instance) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -44,7 +44,7 @@ func (c *leader) send(h *member, ch chan<- *member) error {
 	}
 }
 
-func (c *leader) run(h *member) error {
+func (c *leader) run(h *instance) error {
 	logger := c.logger.Fmt("%v", h)
 	logger.Info("Becoming leader")
 
@@ -83,12 +83,12 @@ func (c *leader) run(h *member) error {
 	return nil
 }
 
-func (c *leader) handleClientAppend(h *member, append clientAppend) chan<- *member {
+func (c *leader) handleClientAppend(h *instance, append clientAppend) chan<- *instance {
 	//
 	return nil
 }
 
-func (c *leader) handleRequestVote(h *member, vote requestVote) chan<- *member {
+func (c *leader) handleRequestVote(h *instance, vote requestVote) chan<- *instance {
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
 	if vote.term <= h.term.num {
@@ -111,7 +111,7 @@ func (c *leader) handleRequestVote(h *member, vote requestVote) chan<- *member {
 	return c.follower
 }
 
-func (c *leader) handleAppendEvents(h *member, append appendEvents) chan<- *member {
+func (c *leader) handleAppendEvents(h *instance, append appendEvents) chan<- *instance {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil
@@ -122,7 +122,7 @@ func (c *leader) handleAppendEvents(h *member, append appendEvents) chan<- *memb
 	return c.follower
 }
 
-func (c *leader) handleHeartbeatTimeout(h *member) chan<- *member {
+func (c *leader) handleHeartbeatTimeout(h *instance) chan<- *instance {
 	ch := h.Broadcast(func(cl *client) response {
 		maxLogIndex, maxLogTerm, commit := h.log.Snapshot()
 		resp, err := cl.AppendEvents(h.id, h.term.num, maxLogIndex, maxLogTerm, []event{}, commit)
