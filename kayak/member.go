@@ -14,11 +14,11 @@ import (
 
 // The primary member machine abstraction.
 //
-// Internally, this consists of a single instance that is continuously
-// moving between various states.  Each state is modeled as its own
-// machine.  The member is guaranteed to exist in at most ONE actively
-// processing state.  Each machine defines its own concurrency semantics
-// so it is NOT generally safe to access to the internal instance state.
+// Internally, this consists of a single instance object that hosts all the member
+// state.  The internal instance is free to move between the various sub machines.
+// Each machine is responsible for understanding the conditions that lead to
+// inter-machine movement.  Each machine defines its own concurrency semantics,
+// therefore it is NOT generally safe to access the internal instance state.
 //
 type member struct {
 
