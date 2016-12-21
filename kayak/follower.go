@@ -130,7 +130,7 @@ func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append 
 		logger.Info("New leader detected [%v]", append.id)
 		append.reply(append.term, false)
 		h.Term(append.term, &append.id, &append.id)
-		return nil
+		return c.in
 	}
 
 	logTerm, _ := h.log.Get(append.prevLogIndex)

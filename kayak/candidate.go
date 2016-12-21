@@ -74,6 +74,7 @@ func (c *candidate) run(h *instance) error {
 
 			logger.Info("Received [%v/%v] votes", numVotes, len(h.peers)+1)
 			if numVotes >= needed {
+				logger.Info("Acquired majority [%v] votes.", needed)
 				h.Term(h.term.num, &h.id, &h.id)
 				c.send(h, c.leader)
 				return

@@ -96,7 +96,7 @@ func (h *host) Close() error {
 	h.logger.Info("Closing")
 
 	var err error
-	// err = common.Or(err, h.member.Close())
+	err = common.Or(err, h.member.Close())
 	err = common.Or(err, h.server.Close())
 
 	close(h.closed)

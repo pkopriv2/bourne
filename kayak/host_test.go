@@ -3,6 +3,7 @@ package kayak
 import (
 	"fmt"
 	"math/rand"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/pkopriv2/bourne/convoy"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMember_Close(t *testing.T) {
@@ -22,29 +24,27 @@ func TestMember_Close(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 3), 9390)
-	time.Sleep(10 * time.Second)
+	go func() {
+		tick := time.NewTicker(200 * time.Millisecond)
+		for range tick.C {
+			ctx.Logger().Error("#Routines: %v", runtime.NumGoroutine())
+		}
+	}()
 
-	// go func() {
-	// tick := time.NewTicker(200 * time.Millisecond)
-	// for range tick.C {
-	// ctx.Logger().Error("#Routines: %v", runtime.NumGoroutine())
-	// }
-	// }()
+	failures := make([]string, 0, 1000)
+	for i := 0; i < 10; i++ {
+		success, msg := RunClusterTest(23)
+		if !success {
+			failures = append(failures, msg)
+		}
+	}
 
-	// failures := make([]string, 0, 1000)
-	// for i := 0; i < 100; i++ {
-	// success, msg := RunClusterTest(11 + rand.Intn(23))
-	// if !success {
-	// failures = append(failures, msg)
-	// }
-	// }
-	//
-	// for _, f := range failures {
-	// logger.Error("Error: %v", f)
-	// }
-	//
-	// assert.Empty(t, failures)
+	logger := ctx.Logger().Fmt("TEST: ")
+	for _, f := range failures {
+		logger.Error("Error: %v", f)
+	}
+
+	assert.Empty(t, failures)
 }
 
 func RunClusterTest(size int) (bool, string) {
@@ -58,9 +58,10 @@ func RunClusterTest(size int) (bool, string) {
 	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, size), 9390)
 	indices := rand.Perm(size)
 	killed := rand.Intn((size / 2))
-	// logger := ctx.Logger().Fmt("TEST[%v,%v]", size, killed)
 
-	// logger.Error("Starting cluster")
+	logger := ctx.Logger().Fmt("TEST[%v,%v]", size, killed)
+	logger.Error("Starting cluster")
+
 	_, _, ok1 := Converge(cluster)
 	if !ok1 {
 		return false, fmt.Sprintf("Unable to converge cluster of [%v]", size)
@@ -70,6 +71,8 @@ func RunClusterTest(size int) (bool, string) {
 	for i := 0; i < killed; i++ {
 		cluster[indices[i]].Close()
 	}
+
+	time.Sleep(2*time.Second)
 
 	// logger.Error("Converging remaining hosts: %v", indices[killed:])
 	remaining := make([]*host, 0, len(cluster))

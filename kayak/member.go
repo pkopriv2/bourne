@@ -83,6 +83,7 @@ func (h *member) Close() error {
 		return ClosedError
 	case h.closer <- struct{}{}:
 	}
+
 	close(h.closed)
 	return nil
 }
@@ -238,7 +239,21 @@ type term struct {
 }
 
 func (t term) String() string {
-	return fmt.Sprintf("(%v,%v,%v)", t.num, t.leader, t.votedFor)
+	var leaderStr string
+	if t.leader == nil {
+		leaderStr = "nil"
+	} else {
+		leaderStr = t.leader.String()[:8]
+	}
+
+	var votedForStr string
+	if t.votedFor == nil {
+		votedForStr = "nil"
+	} else {
+		votedForStr = t.votedFor.String()[:8]
+	}
+
+	return fmt.Sprintf("(%v,%v,%v)", t.num, leaderStr, votedForStr)
 }
 
 // The instance is the primary membership identity.  Within the core machine,
@@ -325,8 +340,9 @@ func (h *instance) Broadcast(fn func(c *client) response) <-chan response {
 	for _, p := range peers {
 		go func(p peer) {
 			cl, err := p.Client(h.ctx)
-			if err != nil {
+			if cl == nil || err != nil {
 				ret <- response{h.term.num, false}
+				return
 			}
 
 			ret <- fn(cl)
