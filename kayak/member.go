@@ -22,9 +22,6 @@ import (
 //
 type member struct {
 
-	// logger instance
-	logger common.Logger
-
 	// the internal member instance.  This is guaranteed to exist in at MOST
 	instance *instance
 
@@ -45,9 +42,10 @@ type member struct {
 }
 
 func newMember(ctx common.Context, logger common.Logger, self peer, others []peer) (*member, error) {
-	followerIn := make(chan *instance)
-	candidateIn := make(chan *instance)
-	leaderIn := make(chan *instance)
+	follower := make(chan *instance)
+	candidate := make(chan *instance)
+	leader := make(chan *instance)
+
 	closed := make(chan struct{})
 	closer := make(chan struct{}, 1)
 
@@ -56,6 +54,7 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 		id:      self.id,
 		self:    self,
 		peers:   others,
+		logger:  logger,
 		log:     newViewLog(ctx),
 		appends: make(chan appendEvents),
 		votes:   make(chan requestVote),
@@ -64,9 +63,9 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 
 	m := &member{
 		instance:  inst,
-		follower:  newFollower(ctx, followerIn, candidateIn, closed),
-		candidate: newCandidate(ctx, candidateIn, leaderIn, followerIn, closed),
-		leader:    newLeader(ctx, logger, leaderIn, followerIn, closed),
+		follower:  newFollower(ctx, follower, candidate, closed),
+		candidate: newCandidate(ctx, candidate, leader, follower, closed),
+		leader:    newLeader(ctx, leader, follower, closed),
 		closed:    closed,
 		closer:    closer,
 	}
@@ -92,11 +91,14 @@ func (h *member) start() error {
 	return h.follower.send(h.instance, h.follower.in)
 }
 
+func (h *member) CurrentTerm() term {
+	return h.instance.CurrentTerm()
+}
+
 func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
 	append := appendEvents{
 		id, term, logIndex, logTerm, batch, commit, make(chan response, 1)}
 
-	h.logger.Debug("Receiving append events [%v]", append)
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
@@ -113,7 +115,6 @@ func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTe
 func (h *member) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
 	req := requestVote{id, term, logIndex, logTerm, make(chan response, 1)}
 
-	h.logger.Debug("Receiving request vote [%v]", req)
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
@@ -237,10 +238,10 @@ type term struct {
 }
 
 func (t term) String() string {
-	return fmt.Sprintf("Term(%v,%v,%v)", t.num, t.leader, t.votedFor)
+	return fmt.Sprintf("(%v,%v,%v)", t.num, t.leader, t.votedFor)
 }
 
-// The member is the primary membership identity.  Within the core machine,
+// The instance is the primary membership identity.  Within the core machine,
 // only a single instance ever exists, but its location within the machine
 // may change over time.  Therefore all updates/requests must be forwarded
 // to the machine currently processing the member.
@@ -298,6 +299,12 @@ func (h *instance) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
 	h.term = term{num, leader, vote}
 }
 
+func (h *instance) CurrentTerm() term {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	return h.term // i assume return is bound prior to the deferred function....
+}
+
 func (h *instance) Peers() []peer {
 	h.lock.RLock()
 	defer h.lock.RUnlock()
@@ -312,8 +319,6 @@ func (h *instance) Majority() int {
 }
 
 func (h *instance) Broadcast(fn func(c *client) response) <-chan response {
-	h.lock.Lock()
-	defer h.lock.Unlock()
 	peers := h.Peers()
 
 	ret := make(chan response, len(peers))
@@ -324,12 +329,11 @@ func (h *instance) Broadcast(fn func(c *client) response) <-chan response {
 				ret <- response{h.term.num, false}
 			}
 
-			fn(cl)
+			ret <- fn(cl)
 		}(p)
 	}
 	return ret
 }
-
 
 func majority(num int) int {
 	return int(math.Ceil(float64(num) / float64(2)))

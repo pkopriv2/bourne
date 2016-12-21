@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	gonet "net"
 
 	"github.com/pkopriv2/bourne/scribe"
 )
+
+// TODO: Determine how much of this API is necessary!
 
 var ConnectionClosedError = errors.New("CONN:CLOSED")
 var ListenerClosedError = errors.New("CONN:LISTENER:CLOSED")
@@ -59,5 +62,9 @@ func ReadConnectionFactory(m scribe.Reader) (ConnectionFactory, error) {
 }
 
 func NewAddr(host string, port string) string {
-	return fmt.Sprintf("%v:%v", host, port)
+	return gonet.JoinHostPort(host, port)
+}
+
+func SplitAddr(addr string) (string, string, error) {
+	return gonet.SplitHostPort(addr)
 }

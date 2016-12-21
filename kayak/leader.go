@@ -9,14 +9,13 @@ import (
 
 type leader struct {
 	ctx      common.Context
-	logger   common.Logger
 	in       chan *instance
 	follower chan<- *instance
 	closed   chan struct{}
 }
 
-func newLeader(ctx common.Context, logger common.Logger, in chan *instance, follower chan<- *instance, closed chan struct{}) *leader {
-	ret := &leader{ctx, logger.Fmt("Leader:"), in, follower, closed}
+func newLeader(ctx common.Context, in chan *instance, follower chan<- *instance, closed chan struct{}) *leader {
+	ret := &leader{ctx, in, follower, closed}
 	ret.start()
 	return ret
 }
@@ -45,7 +44,7 @@ func (c *leader) send(h *instance, ch chan<- *instance) error {
 }
 
 func (c *leader) run(h *instance) error {
-	logger := c.logger.Fmt("%v", h)
+	logger := h.logger.Fmt("Leader(%v)", h.term)
 	logger.Info("Becoming leader")
 
 	// become leader for current term.
@@ -53,9 +52,8 @@ func (c *leader) run(h *instance) error {
 
 	go func() {
 		for {
-
-			logger.Debug("Resetting heartbeat timer [%v]", h.timeout)
-			timer := time.NewTimer(h.timeout)
+			logger.Debug("Resetting heartbeat timer [%v]", h.timeout/5)
+			timer := time.NewTimer(h.timeout/3)
 
 			select {
 			case <-c.closed:
@@ -76,7 +74,10 @@ func (c *leader) run(h *instance) error {
 					return
 				}
 			case <-timer.C:
-				return
+				if next := c.handleHeartbeatTimeout(h); next != nil {
+					c.send(h, next)
+					return
+				}
 			}
 		}
 	}()
@@ -96,10 +97,8 @@ func (c *leader) handleRequestVote(h *instance, vote requestVote) chan<- *instan
 		return nil
 	}
 
-	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
-	maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
-
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
+	maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 		defer h.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)

@@ -34,7 +34,7 @@ type peer struct {
 }
 
 func (p peer) String() string {
-	return fmt.Sprintf("Peer(%v)", p.id.String()[:8], p.addr)
+	return fmt.Sprintf("Peer(%v, %v)", p.id.String()[:8], p.addr)
 }
 
 func (p peer) Client(ctx common.Context) (*client, error) {
@@ -47,47 +47,42 @@ func (p peer) Client(ctx common.Context) (*client, error) {
 }
 
 type host struct {
-	ctx     common.Context
-	logger  common.Logger
+	ctx    common.Context
+	logger common.Logger
 	member *member
-	server  net.Server
-	closed  chan struct{}
-	closer  chan struct{}
+	server net.Server
+	closed chan struct{}
+	closer chan struct{}
 }
 
 func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) {
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	// member := &member{
-	// ctx:     ctx,
-	// id:      self.id,
-	// self:    self,
-	// peers:   others,
-	// log:     newViewLog(ctx),
-	// appends: make(chan appendEvents),
-	// votes:   make(chan requestVote),
-	// timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
-	// }
-	// member, err := newMember(ctx, root, self, others)
-	// if err != nil {
-	// return nil, err
-	// }
-	// defer common.RunIf(func() { member.Close() })(err)
+	member, err := newMember(ctx, root, self, others)
+	if err != nil {
+		return nil, err
+	}
+	defer common.RunIf(func() { member.Close() })(err)
 
-	// server, err := newServer(ctx, root, self.port, member)
-	// if err != nil {
-	// return nil, err
-	// }
-	// defer common.RunIf(func() { server.Close() })(err)
-	//
-	// h = &host{
-	// member: member,
-	// server: server,
-	// logger: root,
-	// closed: make(chan struct{}),
-	// closer: make(chan struct{}, 1),
-	// }
+	_, port, err := net.SplitAddr(self.addr)
+	if err != nil {
+		return nil, err
+	}
+
+	server, err := newServer(ctx, root, port, member)
+	if err != nil {
+		return nil, err
+	}
+	defer common.RunIf(func() { server.Close() })(err)
+
+	h = &host{
+		member: member,
+		server: server,
+		logger: root,
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1),
+	}
 	return
 }
 

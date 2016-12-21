@@ -37,6 +37,10 @@ func (m member) Id() uuid.UUID {
 	return m.id
 }
 
+func (m member) Hostname() string {
+	return m.Host
+}
+
 func (m member) Version() int {
 	return m.version
 }

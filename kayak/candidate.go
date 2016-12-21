@@ -49,7 +49,8 @@ func (c *candidate) run(h *instance) error {
 	h.Term(h.term.num+1, nil, &h.id)
 
 	// decorate the logger
-	logger := h.logger.Fmt("Candidate[%v]", h.term)
+	logger := h.logger.Fmt("Candidate(%v)", h.term)
+	logger.Info("Becoming candidate")
 
 	// send out ballots
 	ballots := h.Broadcast(func(cl *client) response {
@@ -98,6 +99,7 @@ func (c *candidate) run(h *instance) error {
 					return
 				}
 			case <-timer.C:
+				logger.Info("Unable to acquire necessary votes [%v/%v]", numVotes, needed)
 				c.send(h, c.in) // becomes a new candidate
 				return
 			case vote := <-ballots:

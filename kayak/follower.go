@@ -56,17 +56,17 @@ func (c *follower) run(h *instance) error {
 			case <-c.closed:
 				return
 			case append := <-h.clientAppends:
-				if next := c.handleClientAppend(h, append); next != nil {
+				if next := c.handleClientAppend(h, logger, append); next != nil {
 					c.send(h, next)
 					return
 				}
 			case append := <-h.appends:
-				if next := c.handleAppendEvents(h, append); next != nil {
+				if next := c.handleAppendEvents(h, logger, append); next != nil {
 					c.send(h, next)
 					return
 				}
 			case ballot := <-h.votes:
-				if next := c.handleRequestVote(h, ballot); next != nil {
+				if next := c.handleRequestVote(h, logger, ballot); next != nil {
 					c.send(h, next)
 					return
 				}
@@ -80,12 +80,14 @@ func (c *follower) run(h *instance) error {
 	return nil
 }
 
-func (c *follower) handleClientAppend(h *instance, append clientAppend) chan<- *instance {
+func (c *follower) handleClientAppend(h *instance, logger common.Logger, append clientAppend) chan<- *instance {
 	append.reply(NotLeaderError)
 	return nil
 }
 
-func (c *follower) handleRequestVote(h *instance, vote requestVote) chan<- *instance {
+func (c *follower) handleRequestVote(h *instance, logger common.Logger, vote requestVote) chan<- *instance {
+
+	logger.Debug("Handling request vote [%v]", vote)
 
 	// handle: previous term vote.  (immediately decline.)
 	if vote.term < h.term.num {
@@ -99,10 +101,10 @@ func (c *follower) handleRequestVote(h *instance, vote requestVote) chan<- *inst
 		if h.term.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 			h.Term(h.term.num, nil, &vote.id) // correct?
 			vote.reply(h.term.num, true)
-		} else {
-			vote.reply(h.term.num, false)
+			return c.in
 		}
 
+		vote.reply(h.term.num, false)
 		return nil
 	}
 
@@ -110,17 +112,15 @@ func (c *follower) handleRequestVote(h *instance, vote requestVote) chan<- *inst
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 		vote.reply(vote.term, true)
 		h.Term(vote.term, nil, &vote.id)
-		return nil
 	} else {
 		vote.reply(vote.term, false)
 		h.Term(vote.term, nil, nil)
-		return nil
 	}
+
+	return c.in
 }
 
-func (c *follower) handleAppendEvents(h *instance, append appendEvents) chan<- *instance {
-	logger := h.logger.Fmt("Follower[%v]", h.term)
-
+func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append appendEvents) chan<- *instance {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil

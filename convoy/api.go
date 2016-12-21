@@ -113,6 +113,9 @@ type Member interface {
 	// The id of the member
 	Id() uuid.UUID
 
+	// The registered hostname of the member (expected to be routable within the cluster.)
+	Hostname() string
+
 	// Every member is versioned in accordance with their
 	// membership.  The implication is that members of
 	// the same id, but distint versions are unique.
