@@ -29,6 +29,16 @@ func (i IntKey) Compare(s Key) int {
 	return int(i - s.(IntKey))
 }
 
+type IntDescKey int
+
+func (i IntDescKey) Inc() IntDescKey {
+	return IntDescKey(i + 1)
+}
+
+func (i IntDescKey) Compare(s Key) int {
+	return int(s.(IntDescKey)-i)
+}
+
 // A string key type
 type StringKey string
 

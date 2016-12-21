@@ -1,8 +1,6 @@
 package kayak
 
 import (
-	"strconv"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
@@ -30,20 +28,20 @@ type server struct {
 	// the root server logger.
 	logger common.Logger
 
-	// the member
-	self *member
+	// // the member
+	// self *member
 }
 
-// Returns a new service handler for the ractlica
-func newServer(ctx common.Context, logger common.Logger, port int, self *member) (net.Server, error) {
-	server := &server{
-		ctx:    ctx,
-		logger: logger.Fmt("Server"),
-		self:   self,
-	}
-
-	return net.NewTcpServer(ctx, server.logger, strconv.Itoa(port), serverInitHandler(server))
-}
+// // Returns a new service handler for the ractlica
+// func newServer(ctx common.Context, logger common.Logger, port int, self *member) (net.Server, error) {
+// server := &server{
+// ctx:    ctx,
+// logger: logger.Fmt("Server"),
+// self:   self,
+// }
+//
+// return net.NewTcpServer(ctx, server.logger, strconv.Itoa(port), serverInitHandler(server))
+// }
 
 func serverInitHandler(s *server) func(net.Request) net.Response {
 	return func(req net.Request) net.Response {
@@ -66,31 +64,33 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) AppendEvents(req net.Request) net.Response {
-	append, err := readAppendEventsRequest(req.Body())
-	if err != nil {
-		return net.NewErrorResponse(err)
-	}
-
-	resp, err := s.self.RequestAppendEvents(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
-	if err != nil {
-		return net.NewErrorResponse(err)
-	}
-
-	return newResponseResponse(resp)
+	return nil
+	// append, err := readAppendEventsRequest(req.Body())
+	// if err != nil {
+		// return net.NewErrorResponse(err)
+	// }
+//
+	// resp, err := s.self.RequestAppendEvents(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
+	// if err != nil {
+		// return net.NewErrorResponse(err)
+	// }
+//
+	// return newResponseResponse(resp)
 }
 
 func (s *server) RequestVote(req net.Request) net.Response {
-	rv, err := readRequestVoteRequest(req.Body())
-	if err != nil {
-		return net.NewErrorResponse(err)
-	}
-
-	resp, err := s.self.RequestVote(rv.id, rv.term, rv.maxLogIndex, rv.maxLogTerm)
-	if err != nil {
-		return net.NewErrorResponse(err)
-	}
-
-	return newResponseResponse(resp)
+	return nil
+	// rv, err := readRequestVoteRequest(req.Body())
+	// if err != nil {
+		// return net.NewErrorResponse(err)
+	// }
+//
+	// resp, err := s.self.RequestVote(rv.id, rv.term, rv.maxLogIndex, rv.maxLogTerm)
+	// if err != nil {
+		// return net.NewErrorResponse(err)
+	// }
+//
+	// return newResponseResponse(resp)
 }
 
 func (s *server) ClientAppend(req net.Request) net.Response {
@@ -140,8 +140,8 @@ func readResponseResponse(res net.Response) (response, error) {
 }
 
 type requestVoteRequest struct {
-	id           uuid.UUID
-	term         int
+	id          uuid.UUID
+	term        int
 	maxLogIndex int
 	maxLogTerm  int
 }

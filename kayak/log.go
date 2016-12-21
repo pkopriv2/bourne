@@ -9,8 +9,9 @@ import (
 // number of remainaing attempts to be shared.
 
 type eventLogItem struct {
-	event event
+	index int
 	term  int
+	event event
 }
 
 // The event log implementation.  The event log
@@ -32,25 +33,25 @@ func (d *eventLog) Commit(pos int) {
 	return
 }
 
-func (d *eventLog) Committed() int {
-	d.data.Read(func(u amoeba.View) {
-		// defer func() { d.read = next }()
-		// batch = tmp
-	})
-	return 0
+func (d *eventLog) snapshot(u amoeba.View) (int, int, int) {
+		items := eventLogPeek(u, 1)
+		if len(items) == 0 {
+			return 0,0,0
+		}
+
+		return items[0].index, items[0].term, d.commit
 }
 
 func (d *eventLog) Snapshot() (index int, term int, commit int) {
 	d.data.Read(func(u amoeba.View) {
-		// defer func() { d.read = next }()
-		// batch = tmp
+		index, term, commit = d.snapshot(u)
 	})
-	return 0,0,0
+	return
 }
 
 func (d *eventLog) Get(index int) (term int, e event) {
 	d.data.Read(func(u amoeba.View) {
-		val := u.Get(amoeba.IntKey(index))
+		val := u.Get(amoeba.IntDescKey(index))
 		if val == nil {
 			return
 		}
@@ -62,8 +63,6 @@ func (d *eventLog) Get(index int) (term int, e event) {
 	return
 }
 
-
-
 func (d *eventLog) Read(size int) (batch []event) {
 	batch = []event{}
 	d.data.Update(func(u amoeba.Update) {
@@ -74,16 +73,30 @@ func (d *eventLog) Read(size int) (batch []event) {
 	return
 }
 
-func (d *eventLog) Append(batch []event, offset int, term int) {
+func (d *eventLog) Append(batch []event, term int) {
+	if len(batch) == 0 {
+		return
+	}
+
+	d.data.Update(func(u amoeba.Update) {
+		index, _, _ := d.snapshot(u)
+		for i, e := range batch {
+			u.Put(amoeba.IntDescKey(index), eventLogItem{index + i, term, e})
+			index++
+		}
+	})
+}
+
+func (d *eventLog) Insert(batch []event, offset int, term int) {
 	if len(batch) == 0 || offset < 1 {
 		return
 	}
 
 	d.data.Update(func(u amoeba.Update) {
-		// for _, e := range batch {
-			// u.Put(amoeba.IntKey(offset), e)
-			// offset++
-		// }
+		for i, e := range batch {
+			u.Put(amoeba.IntDescKey(offset), eventLogItem{offset + i, term, e})
+			offset++
+		}
 	})
 }
 
@@ -92,13 +105,13 @@ func (d *eventLog) Append(batch []event, offset int, term int) {
 func eventLogScan(data amoeba.View, fn func(amoeba.Scan, int, int, event)) {
 	data.Scan(func(s amoeba.Scan, k amoeba.Key, i interface{}) {
 		item := i.(eventLogItem)
-		key := k.(amoeba.IntKey)
+		key := k.(amoeba.IntDescKey)
 		fn(s, int(key), item.term, item.event)
 	})
 }
 
-func eventLogPeek(data amoeba.View, num int) (batch []event) {
-	batch = make([]event, 0, 128)
+func eventLogPeek(data amoeba.View, num int) []eventLogItem {
+	batch := make([]eventLogItem, 0, 128)
 	eventLogScan(data, func(s amoeba.Scan, index int, term int, e event) {
 		defer func() { num-- }()
 		if num == 0 {
@@ -106,9 +119,9 @@ func eventLogPeek(data amoeba.View, num int) (batch []event) {
 			return
 		}
 
-		batch = append(batch, e)
+		batch = append(batch, eventLogItem{index, term, e})
 	})
-	return
+	return batch
 }
 
 func eventLogPop(data amoeba.Update, start int, horizon int, num int) ([]event, int) {
@@ -144,7 +157,7 @@ func eventLogPop(data amoeba.Update, start int, horizon int, num int) ([]event, 
 	})
 
 	for _, k := range dead {
-		data.Del(amoeba.IntKey(k))
+		data.Del(amoeba.IntDescKey(k))
 	}
 
 	return read, next

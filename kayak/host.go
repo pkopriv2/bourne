@@ -6,7 +6,7 @@ import (
 )
 
 type host struct {
-	member *member
+	// member *member
 	server net.Server
 	logger common.Logger
 
@@ -19,25 +19,25 @@ func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) 
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	member, err := newMember(ctx, root, self, others)
-	if err != nil {
-		return nil, err
-	}
-	defer common.RunIf(func() { member.Close() })(err)
+	// member, err := newMember(ctx, root, self, others)
+	// if err != nil {
+		// return nil, err
+	// }
+	// defer common.RunIf(func() { member.Close() })(err)
 
-	server, err := newServer(ctx, root, self.port, member)
-	if err != nil {
-		return nil, err
-	}
-	defer common.RunIf(func() { server.Close() })(err)
-
-	h = &host{
-		member: member,
-		server: server,
-		logger: root,
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1),
-	}
+	// server, err := newServer(ctx, root, self.port, member)
+	// if err != nil {
+		// return nil, err
+	// }
+	// defer common.RunIf(func() { server.Close() })(err)
+//
+	// h = &host{
+		// member: member,
+		// server: server,
+		// logger: root,
+		// closed: make(chan struct{}),
+		// closer: make(chan struct{}, 1),
+	// }
 	return
 }
 
@@ -51,7 +51,7 @@ func (h *host) Close() error {
 	h.logger.Info("Closing")
 
 	var err error
-	err = common.Or(err, h.member.Close())
+	// err = common.Or(err, h.member.Close())
 	err = common.Or(err, h.server.Close())
 
 	close(h.closed)

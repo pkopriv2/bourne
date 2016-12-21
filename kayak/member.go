@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/convoy"
 	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
@@ -28,8 +27,6 @@ import (
 //
 // NOTE: Currently only election is implemented.
 // TODO:
-//	* better lifecycle semantics.  currently very difficult to reason about state expectations.
-//    this may mean documentation.
 //  * Support proper client appends + log impl
 //  * Support changing cluster membership
 //  * Support durable log!!
@@ -60,6 +57,8 @@ func (r requestVote) reply(term int, success bool) bool {
 	}
 }
 
+// The primary leader RPC type.  These only come from those who *think*
+// they are leaders!
 type appendEvents struct {
 	id           uuid.UUID
 	term         int
@@ -83,6 +82,26 @@ func (a *appendEvents) reply(term int, success bool) bool {
 	}
 }
 
+// the primary consumer request type
+type clientAppend struct {
+	events []event
+	ack    chan error
+}
+
+func (a clientAppend) String() string {
+	return fmt.Sprintf("AppendLog(%v)", len(a.events))
+}
+
+func (a *clientAppend) reply(err error) bool {
+	select {
+	case a.ack <- err:
+		return true
+	default:
+		return false // shouldn't be possible
+	}
+}
+
+// standard response type
 type response struct {
 	term    int
 	success bool
@@ -102,22 +121,18 @@ func readResponse(r scribe.Reader) (response, error) {
 	return ret, err
 }
 
+// A peer contains the identifying info of a cluster member.
 type peer struct {
-	raw  convoy.Member
-	port int
+	id   uuid.UUID
+	addr string
 }
 
 func (p peer) String() string {
-	return fmt.Sprintf("Peer(%v:%v)", p.raw.Id().String()[:8], p.port)
+	return fmt.Sprintf("Peer(%v)", p.id.String()[:8], p.addr)
 }
 
 func (p peer) Client(ctx common.Context) (*client, error) {
-	conn, err := p.raw.Connect(p.port)
-	if err != nil {
-		return nil, err
-	}
-
-	raw, err := net.NewClient(ctx, ctx.Logger().Fmt("%v", p.String()), conn)
+	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.addr)
 	if err != nil {
 		return nil, err
 	}
@@ -125,82 +140,155 @@ func (p peer) Client(ctx common.Context) (*client, error) {
 	return &client{raw}, nil
 }
 
-// snapshot of all mutable state.  (deep copied)
-type snapshot struct {
-	term        int
-	leader      *uuid.UUID
-	votedFor    *uuid.UUID
-	peers       []peer
-	offsets     map[uuid.UUID]int
-	commits     map[uuid.UUID]int
-	maxLogIndex int
-	maxLogTerm  int
-	commit      int
-}
+// A term represents a particular member state in the RAFT epochal time model.
+type term struct {
 
-type member struct {
+	// the current term number
+	num int
 
-	// the unique id of this member.
-	id uuid.UUID
-
-	// the main context
-	ctx common.Context
-
-	// the root logger
-	logger common.Logger
-
-	// data lock (currently using very coarse lock)
-	lock sync.Mutex
-
-	// the current term information. (as seen by this member)
-	term int
-
-	// the current term information. (as seen by this member)
+	// the current term information.
 	leader *uuid.UUID
 
 	// who was voted for this term
 	votedFor *uuid.UUID
+}
 
-	// the raw membership member
+func (t term) String() string {
+	return fmt.Sprintf("Term(%v,%v,%v)", t.num, t.leader, t.votedFor)
+}
+
+// The member is the core identity.  Within the core machine, only
+// a single instance ever exists, but its location within the machine
+// may change between terms.
+type member struct {
+
+	// configuration used to build this instance.
+	ctx common.Context
+
+	// the unique id of this member.
+	id uuid.UUID
+
+	// the peer representing the local instance
 	self peer
 
-	// the election timeout.  randomized between 500 and 1000 ms
-	timeout time.Duration
-
-	// request vote events.
-	votes chan requestVote
-
-	// append requests
-	appends chan appendEvents
-
-	// tracks follower states when leader
-	offsets map[uuid.UUID]int
-	commits map[uuid.UUID]int
+	// the current term.
+	term term
 
 	// the other peers. (currently static list)
 	peers []peer
 
+	// data lock (currently using very coarse lock)
+	lock sync.RWMutex
+
+	// the election timeout.  (heartbeat: = timeout / 5)
+	timeout time.Duration
+
 	// the distributed event log.
 	log *eventLog
 
+	// A channel whose elements are the ordered events as they committed.
+	committed chan event
+
+	// request vote events.
+	votes chan requestVote
+
+	// append requests (from peers)
+	appends chan appendEvents
+
+	// append requests (from clients)
+	clientAppends chan clientAppend
+}
+
+func (h *member) String() string {
+	h.lock.RLock()
+	defer h.lock.RUnlock()
+	return fmt.Sprintf("%v, %v:", h.self, h.term)
+}
+
+func (h *member) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	h.term = term{num, leader, vote}
+}
+
+func (h *member) Peers() []peer {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	ret := make([]peer, 0, len(h.peers))
+	return append(ret, h.peers...)
+}
+
+func (h *member) Majority() int {
+	return majority(len(h.peers) + 1)
+}
+
+func (h *member) Broadcast(fn func(c *client) response) <-chan response {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	peers := h.Peers()
+
+	ret := make(chan response, len(peers))
+	for _, p := range peers {
+		go func(p peer) {
+			cl, err := p.Client(h.ctx)
+			if err != nil {
+				ret <- response{h.term.num, false}
+			}
+
+			fn(cl)
+		}(p)
+	}
+	return ret
+}
+
+type core struct {
+	ctx common.Context
+
+	logger common.Logger
+
+	// the internal member instance.  This is guaranteed to exist in at MOST
+	// one machine at a given time.
+	instance *member
+
+	follower *follower
+
+	candidate *candidate
+
+	leader *leader
+
 	// closing utilities.
 	closed chan struct{}
+
 	closer chan struct{}
 }
 
-func newMember(ctx common.Context, logger common.Logger, self peer, others []peer) (*member, error) {
-	m := &member{
-		ctx:     ctx,
-		logger:  logger,
-		id:      self.raw.Id(),
-		self:    self,
-		peers:   others,
-		log:     newViewLog(ctx),
-		appends: make(chan appendEvents),
-		votes:   make(chan requestVote),
-		closed:  make(chan struct{}),
-		closer:  make(chan struct{}, 1),
-		timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
+func newMember(ctx common.Context, logger common.Logger, self peer, others []peer) (*core, error) {
+
+	// shared channels.
+	followerIn := make(chan *member)
+	candidateIn := make(chan *member)
+	leaderIn := make(chan *member)
+	closed := make(chan struct{})
+	closer := make(chan struct{}, 1)
+
+	m := &core{
+		ctx:    ctx,
+		logger: logger,
+		instance: &member{
+			ctx:     ctx,
+			id:      self.id,
+			self:    self,
+			peers:   others,
+			log:     newViewLog(ctx),
+			appends: make(chan appendEvents),
+			votes:   make(chan requestVote),
+			timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
+		},
+		follower:  newFollower(ctx, logger, followerIn, candidateIn, closed),
+		candidate: newCandidate(ctx, logger, candidateIn, leaderIn, followerIn, closed),
+		leader:    newLeader(ctx, logger, leaderIn, followerIn, closed),
+		closed:    closed,
+		closer:    closer,
 	}
 
 	if err := m.start(); err != nil {
@@ -210,7 +298,7 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 	return m, nil
 }
 
-func (h *member) Close() error {
+func (h *core) Close() error {
 	select {
 	case <-h.closed:
 		return ClosedError
@@ -220,45 +308,11 @@ func (h *member) Close() error {
 	return nil
 }
 
-func (h *member) start() error {
-	h.becomeFollower(nil, 0, nil)
-	return nil
+func (h *core) start() error {
+	return h.follower.send(h.instance, h.follower.in)
 }
 
-// in the spirit of raft, I think this adds to understandability through safety.
-// NOTE: used only on external reads.
-func (h *member) snapshot() snapshot {
-	h.lock.Lock()
-	defer h.lock.Unlock()
-
-	peers := make([]peer, 0, len(h.peers))
-	for _, p := range h.peers {
-		peers = append(peers, p)
-	}
-
-	maxLogIndex, maxLogTerm, commit := h.log.Snapshot()
-	return snapshot{
-		votedFor:    h.votedFor,
-		leader:      h.leader,
-		maxLogIndex: maxLogIndex,
-		maxLogTerm:  maxLogTerm,
-		peers:       peers,
-		term:        h.term,
-		commit:      commit,
-	}
-}
-
-func (h *member) setTerm(id *uuid.UUID, term int, vote *uuid.UUID) {
-	h.lock.Lock()
-	defer h.lock.Unlock()
-	h.leader = id
-	h.term = term
-	h.votedFor = vote
-	h.commits = make(map[uuid.UUID]int)
-	h.offsets = make(map[uuid.UUID]int)
-}
-
-func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
+func (h *core) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
 	append := appendEvents{
 		id, term, logIndex, logTerm, batch, commit, make(chan response, 1)}
 
@@ -266,7 +320,7 @@ func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTe
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
-	case h.appends <- append:
+	case h.instance.appends <- append:
 		select {
 		case <-h.closed:
 			return response{}, ClosedError
@@ -276,14 +330,14 @@ func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTe
 	}
 }
 
-func (h *member) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
+func (h *core) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
 	req := requestVote{id, term, logIndex, logTerm, make(chan response, 1)}
 
 	h.logger.Debug("Receiving request vote [%v]", req)
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
-	case h.votes <- req:
+	case h.instance.votes <- req:
 		select {
 		case <-h.closed:
 			return response{}, ClosedError
@@ -291,291 +345,6 @@ func (h *member) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) 
 			return r, nil
 		}
 	}
-}
-
-func (h *member) becomeCandidate() {
-	h.logger.Info("Starting candidacy")
-
-	// increment term and vote forself.
-	h.setTerm(nil, h.term+1, &h.id)
-
-	// decorate the logger
-	logger := h.logger.Fmt("Candidate[%v]", h.term)
-
-	// send out ballots
-	ballots := h.requestVote()
-
-	// set the timer.
-	logger.Info("Setting timer [%v]", h.timeout)
-	timer := time.NewTimer(h.timeout)
-
-	// kick off candidate routine
-	go func() {
-		var append appendEvents
-		var vote requestVote
-		var numVotes int = 1
-
-		for {
-			needed := majority(len(h.peers) + 1)
-
-			logger.Info("Received [%v/%v] votes", numVotes, len(h.peers)+1)
-			if numVotes >= needed {
-				h.becomeLeader()
-				return
-			}
-
-			select {
-			case <-h.closed:
-				return
-			case append = <-h.appends:
-				if append.term < h.term {
-					append.reply(h.term, false)
-					continue
-				}
-
-				// append.term is >= term.  use it from now on.
-				append.reply(append.term, false)
-				h.becomeFollower(&append.id, append.term, &append.id)
-				return
-
-			case vote = <-h.votes:
-				if vote.term <= h.term {
-					vote.reply(h.term, false)
-					continue
-				}
-
-				h.becomeFollower(nil, vote.term, &vote.id)
-				return
-
-			case <-timer.C:
-				h.becomeCandidate()
-				return
-
-			case vote := <-ballots:
-
-				if vote.term > h.term {
-					h.becomeFollower(nil, vote.term, nil)
-					return
-				}
-
-				if vote.success {
-					numVotes++
-				}
-			}
-		}
-	}()
-}
-
-func (h *member) becomeLeader() {
-	// set self as leader.
-	h.setTerm(&h.id, h.term, nil)
-
-	// decorate logger.
-	logger := h.logger.Fmt("Leader[%v]", h.term)
-	logger.Info("Became leader")
-
-	// start leader routine
-	go func() {
-
-		for {
-			logger.Info("Resetting heartbeat timer [%v]", h.timeout/3)
-
-			timer := time.NewTimer(h.timeout / 3)
-
-			select {
-			case <-h.closed:
-				return
-			case append := <-h.appends:
-
-				if append.term <= h.term {
-					append.reply(h.term, false)
-					continue
-				}
-
-				append.reply(h.term, false)
-				h.becomeFollower(&append.id, append.term, &append.id)
-				return
-
-			case vote := <-h.votes:
-
-				if vote.term <= h.term {
-					vote.reply(h.term, false)
-					continue
-				}
-
-				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
-				if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
-					vote.reply(vote.term, true)
-					h.becomeFollower(nil, vote.term, &vote.id)
-					return
-				}
-
-				vote.reply(vote.term, false)
-				h.becomeFollower(nil, vote.term, nil)
-				return
-
-			case <-timer.C:
-				timer := time.NewTimer(h.timeout)
-
-				ch := h.heartBeat(logger)
-				for i := 0; i < majority(len(h.peers)+1)-1; {
-					select {
-					case <-h.closed:
-						return
-					case <-timer.C:
-						logger.Error("Unable to acquire the necessary votes.")
-						h.becomeFollower(nil, h.term, nil)
-						return
-					case resp := <-ch:
-						if resp.term > h.term {
-							h.becomeFollower(nil, resp.term, nil)
-							return
-						}
-
-						if resp.success {
-							i++
-						}
-					}
-				}
-			}
-		}
-	}()
-}
-
-func (h *member) becomeFollower(id *uuid.UUID, term int, vote *uuid.UUID) {
-	h.setTerm(id, term, vote)
-
-	logger := h.logger.Fmt("Follower[%v, %v, %v]", id, term, vote)
-	logger.Info("Becoming follower")
-
-	go func() {
-		// handles append requests while candidate
-		var append appendEvents
-		var vote requestVote
-
-		for {
-
-			logger.Info("Resetting heartbeat timer [%v]", h.timeout)
-			timer := time.NewTimer(h.timeout)
-
-			select {
-			case <-h.closed:
-				return
-			case append = <-h.appends:
-				if append.term < term {
-					append.reply(term, false)
-					continue
-				}
-
-				if append.term > term || h.leader == nil {
-					logger.Info("New leader detected [%v]", append.id)
-					append.reply(append.term, false)
-					h.becomeFollower(&append.id, append.term, &append.id)
-					return
-				}
-
-				logTerm, _ := h.log.Get(append.prevLogIndex)
-				if logTerm != append.prevLogTerm {
-					logger.Info("Inconsistent log detected. Rolling back")
-					append.reply(term, false)
-					continue
-				}
-
-				append.reply(term, true)
-				h.log.Append(append.events, append.prevLogIndex+1, term)
-			case vote = <-h.votes:
-
-				// handle: previous term vote.  (immediately decline.)
-				if vote.term < term {
-					vote.reply(term, false)
-					continue
-				}
-
-				// handle: current term vote.  (accept if no vate and if candidate log is as long as ours)
-				maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
-				if vote.term == term {
-					if h.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
-						h.votedFor = &vote.id
-						vote.reply(term, true)
-					} else {
-						vote.reply(term, false)
-					}
-
-					continue
-				}
-
-				// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-				if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
-					vote.reply(term, true)
-					h.becomeFollower(nil, vote.term, &vote.id)
-				} else {
-					vote.reply(term, false)
-					h.becomeFollower(nil, vote.term, nil)
-				}
-
-				return
-			case <-timer.C:
-				logger.Info("Waited too long for heartbeat.")
-				h.becomeCandidate()
-				return
-			}
-		}
-	}()
-}
-
-// expects stable internal state
-func (h *member) requestVote() <-chan response {
-	ch := make(chan response, len(h.peers))
-
-	for _, p := range h.peers {
-		h.logger.Info("Sending ballots to peer [%v]", p)
-		go func(p peer) {
-			client, err := p.Client(h.ctx)
-			if err != nil {
-				ch <- response{h.term, false}
-				return
-			}
-
-			maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
-			resp, err := client.RequestVote(h.id, h.term, maxLogIndex, maxLogTerm)
-			if err != nil {
-				ch <- response{h.term, false}
-				return
-			}
-
-			ch <- resp
-		}(p)
-	}
-
-	return ch
-}
-
-// expects stable internal state
-func (h *member) heartBeat(logger common.Logger) <-chan response {
-	// maxLogIndex, maxLogTerm, commit := h.log.Snapshot()
-
-	ch := make(chan response, len(h.peers))
-	for _, p := range h.peers {
-		logger.Debug("Sending heartbeats to peer [%v]", p)
-
-		go func(p peer) {
-			client, err := p.Client(h.ctx)
-			if err != nil {
-				ch <- response{h.term, false}
-				return
-			}
-
-			resp, err := client.AppendEvents(h.id, h.term, 0, 0, []event{}, 0)
-			if err != nil {
-				ch <- response{h.term, false}
-				return
-			}
-
-			ch <- resp
-		}(p)
-	}
-
-	return ch
 }
 
 func majority(num int) int {
