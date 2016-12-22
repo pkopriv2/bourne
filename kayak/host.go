@@ -27,6 +27,25 @@ import (
 //  * Support durable log!!
 //
 
+func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {
+	ret := make([]*host, 0, len(hosts))
+	for _, h := range hosts {
+		if fn(h) {
+			ret = append(ret, h)
+		}
+	}
+	return ret
+}
+
+func hostsFirst(hosts []*host, fn func(h *host) bool) *host {
+	for _, h := range hosts {
+		if fn(h) {
+			return h
+		}
+	}
+	return nil
+}
+
 // A peer contains the identifying info of a cluster member.
 type peer struct {
 	id   uuid.UUID
@@ -84,6 +103,10 @@ func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) 
 		closer: make(chan struct{}, 1),
 	}
 	return
+}
+
+func (h *host) Id() uuid.UUID {
+	return h.member.instance.id
 }
 
 func (h *host) Close() error {

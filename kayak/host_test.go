@@ -16,6 +16,35 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestLeader_Change(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 3), 9390)
+
+	logger := ctx.Logger().Fmt("TEST: ")
+	logger.Error("Starting cluster")
+
+	_, leaderId, ok := Converge(cluster)
+	assert.True(t, ok)
+
+	logger.Error("Killing leader!")
+	leader := hostsFirst(cluster, func(h *host) bool {
+		return h.Id() == *leaderId
+	})
+
+	leader.Close()
+	time.Sleep(3 * time.Second)
+
+	_, leaderId2, ok := Converge(cluster)
+	assert.True(t, ok)
+	assert.NotEqual(t, *leaderId, *leaderId2)
+}
+
 func TestMember_Close(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),
@@ -32,7 +61,7 @@ func TestMember_Close(t *testing.T) {
 	}()
 
 	failures := make([]string, 0, 1000)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		success, msg := RunClusterTest(23)
 		if !success {
 			failures = append(failures, msg)
@@ -62,17 +91,24 @@ func RunClusterTest(size int) (bool, string) {
 	logger := ctx.Logger().Fmt("TEST[%v,%v]", size, killed)
 	logger.Error("Starting cluster")
 
-	_, _, ok1 := Converge(cluster)
+	_, leaderId, ok1 := Converge(cluster)
 	if !ok1 {
 		return false, fmt.Sprintf("Unable to converge cluster of [%v]", size)
 	}
+
+	leader := hostsFirst(cluster, func(h *host) bool {
+		return h.Id() == *leaderId
+	})
+
+	logger.Error("", indices[:killed])
+	leader.Close()
 
 	// logger.Error("Killing hosts: %v", indices[:killed])
 	for i := 0; i < killed; i++ {
 		cluster[indices[i]].Close()
 	}
 
-	time.Sleep(2*time.Second)
+	time.Sleep(2 * time.Second)
 
 	// logger.Error("Converging remaining hosts: %v", indices[killed:])
 	remaining := make([]*host, 0, len(cluster))

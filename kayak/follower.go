@@ -86,7 +86,6 @@ func (c *follower) handleClientAppend(h *instance, logger common.Logger, append 
 }
 
 func (c *follower) handleRequestVote(h *instance, logger common.Logger, vote requestVote) chan<- *instance {
-
 	logger.Debug("Handling request vote [%v]", vote)
 
 	// handle: previous term vote.  (immediately decline.)
