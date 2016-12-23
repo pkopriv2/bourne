@@ -93,8 +93,7 @@ func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) 
 	if err != nil {
 		return nil, err
 	}
-	defer common.RunIf(func() { server.Close() })(err)
-
+	defer common.RunIf(func() { server.Close() })(err) // paranoia of future me
 	h = &host{
 		member: member,
 		server: server,

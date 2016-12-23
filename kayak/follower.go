@@ -132,8 +132,8 @@ func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append 
 		return c.in
 	}
 
-	logTerm, _ := h.log.Get(append.prevLogIndex)
-	if logTerm != append.prevLogTerm {
+	logItem := h.log.Get(append.prevLogIndex)
+	if logItem.term != append.prevLogTerm {
 		logger.Info("Inconsistent log detected. Rolling back")
 		append.reply(append.term, false)
 		return nil

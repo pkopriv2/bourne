@@ -3,7 +3,6 @@ package kayak
 import (
 	"fmt"
 	"math/rand"
-	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -45,36 +44,36 @@ func TestLeader_Change(t *testing.T) {
 	assert.NotEqual(t, *leaderId, *leaderId2)
 }
 
-func TestMember_Close(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	go func() {
-		tick := time.NewTicker(200 * time.Millisecond)
-		for range tick.C {
-			ctx.Logger().Error("#Routines: %v", runtime.NumGoroutine())
-		}
-	}()
-
-	failures := make([]string, 0, 1000)
-	for i := 0; i < 100; i++ {
-		success, msg := RunClusterTest(23)
-		if !success {
-			failures = append(failures, msg)
-		}
-	}
-
-	logger := ctx.Logger().Fmt("TEST: ")
-	for _, f := range failures {
-		logger.Error("Error: %v", f)
-	}
-
-	assert.Empty(t, failures)
-}
+// func TestMember_Close(t *testing.T) {
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Debug),
+// })
+//
+// ctx := common.NewContext(conf)
+// defer ctx.Close()
+//
+// go func() {
+// tick := time.NewTicker(200 * time.Millisecond)
+// for range tick.C {
+// ctx.Logger().Error("#Routines: %v", runtime.NumGoroutine())
+// }
+// }()
+//
+// failures := make([]string, 0, 1000)
+// for i := 0; i < 100; i++ {
+// success, msg := RunClusterTest(23)
+// if !success {
+// failures = append(failures, msg)
+// }
+// }
+//
+// logger := ctx.Logger().Fmt("TEST: ")
+// for _, f := range failures {
+// logger.Error("Error: %v", f)
+// }
+//
+// assert.Empty(t, failures)
+// }
 
 func RunClusterTest(size int) (bool, string) {
 	conf := common.NewConfig(map[string]interface{}{

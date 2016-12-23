@@ -12,6 +12,7 @@ var (
 	FailedError    = errors.New("Kayak:Failed")
 	ClosedError    = errors.New("Kayak:Closed")
 	NotLeaderError = errors.New("Kayak:NotLeader")
+	TimeoutError   = errors.New("Kayak:TimeoutError")
 )
 
 type event interface {

@@ -9,6 +9,10 @@ type client struct {
 	raw net.Client
 }
 
+func (c *client) Close() error {
+	return c.raw.Close()
+}
+
 func (c *client) AppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
 	resp, err := c.raw.Send(newAppendEventsRequest(appendEventsRequest{id, term, batch, logIndex, logTerm, commit}))
 	if err != nil {

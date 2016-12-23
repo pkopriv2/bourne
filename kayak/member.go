@@ -55,7 +55,7 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 		self:    self,
 		peers:   others,
 		logger:  logger,
-		log:     newViewLog(ctx),
+		log:     newEventLog(ctx),
 		appends: make(chan appendEvents),
 		votes:   make(chan requestVote),
 		timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
