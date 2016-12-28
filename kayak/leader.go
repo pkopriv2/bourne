@@ -61,6 +61,7 @@ func (c *leader) run(h *instance) error {
 	sync := newLogSyncer(h, logger)
 
 	go func() {
+		defer sync.Close()
 		for {
 			logger.Info("Resetting heartbeat timer [%v]", h.timeout/5)
 			timer := time.NewTimer(h.timeout / 5)
@@ -215,6 +216,10 @@ func newLogSyncer(inst *instance, logger common.Logger) *logSyncer {
 	return s
 }
 
+func (l *logSyncer) Close() error {
+	return l.shutdown(nil)
+}
+
 func (l *logSyncer) shutdown(err error) error {
 	select {
 	case <-l.closed:
@@ -239,6 +244,8 @@ func (s *logSyncer) moveHead(offset int) {
 
 func (s *logSyncer) getHeadWhenGreater(cur int) (head int, err error) {
 	s.headLock.L.Lock()
+	defer s.headLock.L.Unlock()
+
 	for head = s.head; head <= cur; head = s.head {
 		s.headLock.Wait()
 		select {
@@ -248,7 +255,6 @@ func (s *logSyncer) getHeadWhenGreater(cur int) (head int, err error) {
 			return -1, ClosedError
 		}
 	}
-	s.headLock.L.Unlock()
 	return
 }
 
@@ -304,12 +310,17 @@ func (s *logSyncer) Append(batch []event) (err error) {
 }
 
 func (s *logSyncer) sync(p peer) {
-	logger := s.logger.Fmt("%v", p)
+	logger := s.logger.Fmt("Sync(%v)", p)
 	logger.Info("Starting peer synchronizer")
 	go func() {
+		defer logger.Info("Shutting down")
 		var cl *client
 		var err error
-		defer common.RunIf(func() { cl.Close() })(cl)
+		defer func() {
+			if cl != nil {
+				cl.Close()
+			}
+		}()
 
 		// snapshot the local log
 		_, term, head := s.root.log.Snapshot()
@@ -372,6 +383,11 @@ func (s *logSyncer) sync(p peer) {
 				// consistency check failed, start moving backwards one index at a time.
 				// TODO: Implement optimization to come to faster agreement.
 				prevIndex -= 1
+				if prevIndex == -1 {
+					s.logger.Error("Unable to sync peer logs [%v]", p)
+					return
+				}
+
 				if prevItem, ok := s.root.log.Get(prevIndex); ok {
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevItem.term)
 				} else {

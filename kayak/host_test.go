@@ -1,7 +1,9 @@
 package kayak
 
 import (
+	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"testing"
 	"time"
@@ -63,6 +65,7 @@ func TestHost_Cluster_Close(t *testing.T) {
 
 	after := runtime.NumGoroutine()
 	assert.Equal(t, before, after)
+	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 }
 
 func TestHost_Cluster_LeaderFailure(t *testing.T) {
@@ -74,7 +77,7 @@ func TestHost_Cluster_LeaderFailure(t *testing.T) {
 	assert.NotNil(t, leader1)
 	leader1.Close()
 
-	time.Sleep(2*time.Second)
+	time.Sleep(2 * time.Second)
 
 	leader2 := Converge(RemoveHost(cluster, Index(cluster, func(h *host) bool {
 		return h.Id() == leader1.Id()
@@ -110,7 +113,7 @@ func StartTestSeedHost(ctx common.Context, port int) *host {
 
 func StartTestCluster(ctx common.Context, size int) []*host {
 	peers := make([]peer, 0, size)
-	for i := 0; i< size; i++ {
+	for i := 0; i < size; i++ {
 		peers = append(peers, newPeer(net.NewAddr("localhost", strconv.Itoa(9300+i))))
 	}
 
@@ -164,7 +167,6 @@ func Converge(cluster []*host) *host {
 
 	// data race...
 
-
 	select {
 	case <-done:
 		return First(cluster, func(h *host) bool {
@@ -187,10 +189,7 @@ func SyncCluster(cluster []*host, fn func(h *host) bool) {
 	done := make(map[uuid.UUID]struct{})
 	start := time.Now()
 
-	// cluster[0].member.logger.Info("Syncing cluster [%v]", len(cluster))
-
 	for len(done) < len(cluster) {
-		// cluster[0].member.logger.Info("Number of sync'ed: %v", len(done))
 		for _, r := range cluster {
 			id := r.member.instance.id
 			if _, ok := done[id]; ok {
@@ -208,7 +207,6 @@ func SyncCluster(cluster []*host, fn func(h *host) bool) {
 		}
 		<-time.After(250 * time.Millisecond)
 	}
-	// cluster[0].member.logger.Info("Number of sync'ed: %v", len(done))
 }
 
 func First(cluster []*host, fn func(h *host) bool) *host {
