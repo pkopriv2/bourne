@@ -1,8 +1,11 @@
 package common
 
+import "reflect"
+
 func RunIf(fn func()) func(v interface{}) {
 	return func(v interface{}) {
-		if v != nil {
+		val := reflect.ValueOf(v)
+		if val.Kind() == reflect.Ptr && !val.IsNil() {
 			fn()
 		}
 	}

@@ -68,7 +68,7 @@ func TestHost_Cluster_Close(t *testing.T) {
 	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 }
 
-func TestHost_Cluster_LeaderFailure(t *testing.T) {
+func TestHost_Cluster_Leader_Failure(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 	cluster := StartTestCluster(ctx, 5)
@@ -87,7 +87,7 @@ func TestHost_Cluster_LeaderFailure(t *testing.T) {
 	assert.NotEqual(t, leader1, leader2)
 }
 
-func TestHost_Cluster_LeaderClientAppend_Single(t *testing.T) {
+func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
@@ -99,8 +99,81 @@ func TestHost_Cluster_LeaderClientAppend_Single(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, cl.Append([]event{&testEvent{}}))
 
-	assert.Equal(t, 0, leader.member.instance.log.Head())
-	assert.Equal(t, 0, leader.member.instance.log.Committed())
+	done, timeout := concurrent.NewBreaker(2*time.Second, func() interface{} {
+		SyncMajority(cluster, func(h *host) bool {
+			return h.Log().Head() == 0 && h.Log().Committed() == 0
+		})
+
+		return nil
+	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		assert.Fail(t, "Timed out waiting for majority to sync")
+	}
+}
+
+func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	cluster := StartTestCluster(ctx, 3)
+	leader := Converge(cluster)
+	assert.NotNil(t, leader)
+
+	cl, err := leader.Client()
+	assert.Nil(t, err)
+	assert.Nil(t, cl.Append([]event{&testEvent{}, &testEvent{}}))
+
+	done, timeout := concurrent.NewBreaker(2*time.Second, func() interface{} {
+		SyncMajority(cluster, func(h *host) bool {
+			return h.Log().Head() == 1 && h.Log().Committed() == 1
+		})
+
+		return nil
+	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		assert.Fail(t, "Timed out waiting for majority to sync")
+	}
+}
+
+func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	cluster := StartTestCluster(ctx, 3)
+	leader := Converge(cluster)
+	assert.NotNil(t, leader)
+
+
+	for i := 0; i < 10; i++ {
+		go func() {
+			cl, _ := leader.Client()
+			defer cl.Close()
+
+			for i := 0; i < 10; i++ {
+				cl.Append([]event{&testEvent{}})
+			}
+		}()
+	}
+
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		SyncMajority(cluster, func(h *host) bool {
+			return h.Log().Head() == 99 && h.Log().Committed() == 99
+		})
+
+		return nil
+	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		assert.Fail(t, "Timed out waiting for majority to sync")
+	}
 }
 
 func StartTestSeedHost(ctx common.Context, port int) *host {
@@ -144,7 +217,7 @@ func Converge(cluster []*host) *host {
 
 	cancelled := make(chan struct{})
 	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
-		SyncCluster(cluster, func(h *host) bool {
+		SyncAll(cluster, func(h *host) bool {
 			select {
 			case <-cancelled:
 				return true
@@ -185,7 +258,32 @@ func RemoveHost(cluster []*host, i int) []*host {
 	return ret
 }
 
-func SyncCluster(cluster []*host, fn func(h *host) bool) {
+func SyncMajority(cluster []*host, fn func(h *host) bool) {
+	done := make(map[uuid.UUID]struct{})
+	start := time.Now()
+
+	majority := majority(len(cluster))
+	for len(done) < majority {
+		for _, r := range cluster {
+			id := r.member.instance.id
+			if _, ok := done[id]; ok {
+				continue
+			}
+
+			if fn(r) {
+				done[id] = struct{}{}
+				continue
+			}
+
+			if time.Now().Sub(start) > 10*time.Second {
+				r.member.instance.logger.Info("Still not sync'ed")
+			}
+		}
+		<-time.After(250 * time.Millisecond)
+	}
+}
+
+func SyncAll(cluster []*host, fn func(h *host) bool) {
 	done := make(map[uuid.UUID]struct{})
 	start := time.Now()
 

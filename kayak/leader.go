@@ -96,7 +96,9 @@ func (c *leader) run(h *instance) error {
 }
 
 func (c *leader) handleClientAppend(s *logSyncer, a clientAppend) chan<- *instance {
-	a.reply(s.Append(a.events))
+	go func() {
+		a.reply(s.Append(a.events))
+	}()
 	return nil
 }
 
@@ -315,21 +317,21 @@ func (s *logSyncer) sync(p peer) {
 	go func() {
 		defer logger.Info("Shutting down")
 		var cl *client
-		var err error
-		defer func() {
-			if cl != nil {
-				cl.Close()
-			}
-		}()
+		defer common.RunIf(func() { cl.Close() })(cl)
+		// defer func() {
+			// if cl != nil {
+				// cl.Close()
+			// }
+		// }()
 
 		// snapshot the local log
-		_, term, head := s.root.log.Snapshot()
+		_, term, commit := s.root.log.Snapshot()
 
 		// we will start syncing at current commit offset
-		prevIndex := head
+		prevIndex := commit
 		prevTerm := term
 		for {
-			head, err = s.getHeadWhenGreater(prevIndex)
+			head, err := s.getHeadWhenGreater(prevIndex)
 			if err != nil {
 				return
 			}
@@ -372,11 +374,14 @@ func (s *logSyncer) sync(p peer) {
 					return
 				}
 
-				// if it was successful, progress the peers index and term
+				// if it was successful, progress the peer's index and term
 				if resp.success {
 					prevIndex += len(batch)
 					prevTerm = s.root.term.num
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevTerm)
+
+					// accumulates some updates
+					time.Sleep(20*time.Millisecond)
 					continue
 				}
 

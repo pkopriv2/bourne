@@ -111,6 +111,26 @@ func (h *host) Id() uuid.UUID {
 	return h.member.instance.id
 }
 
+func (h *host) Context() common.Context {
+	return h.member.instance.ctx
+}
+
+func (h *host) Self() peer {
+	return h.member.instance.self
+}
+
+func (h *host) Peers() []peer {
+	return h.member.instance.peers
+}
+
+func (h *host) Parser() Parser {
+	return h.member.instance.parser
+}
+
+func (h *host) Log() *eventLog {
+	return h.member.instance.log
+}
+
 func (h *host) Client() (*client, error) {
 	return h.member.Self().Client(h.member.Context(), h.member.Parser())
 }

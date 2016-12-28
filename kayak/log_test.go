@@ -36,6 +36,50 @@ func TestEventLog_Snapshot_Empty(t *testing.T) {
 	assert.Equal(t, -1, commit)
 }
 
+func TestEventLog_Append_SingleBatch_SingleItem(t *testing.T) {
+	log := NewTestEventLog()
+	idx := log.Append([]event{&testEvent{}}, 1)
+	assert.Equal(t, 0, idx)
+
+	head, term, commit := log.Snapshot()
+	assert.Equal(t, 0, head)
+	assert.Equal(t, 1, term)
+	assert.Equal(t, -1, commit)
+}
+
+func TestEventLog_Append_SingleBatch_MultiItem(t *testing.T) {
+	log := NewTestEventLog()
+	idx := log.Append([]event{&testEvent{}, &testEvent{}}, 1)
+	assert.Equal(t, 1, idx)
+
+	head, term, commit := log.Snapshot()
+	assert.Equal(t, 1, head)
+	assert.Equal(t, 1, term)
+	assert.Equal(t, -1, commit)
+}
+
+func TestEventLog_Append_MultiBatch_MultiItem(t *testing.T) {
+	log := NewTestEventLog()
+	log.Append([]event{&testEvent{}, &testEvent{}}, 1)
+	idx := log.Append([]event{&testEvent{}, &testEvent{}}, 1)
+	assert.Equal(t, 3, idx)
+
+	head, term, commit := log.Snapshot()
+	assert.Equal(t, 3, head)
+	assert.Equal(t, 1, term)
+	assert.Equal(t, -1, commit)
+}
+
+func TestEventLog_Insert_SingleBatch_SingleItem(t *testing.T) {
+	log := NewTestEventLog()
+	log.Insert([]event{&testEvent{}}, 1, 1)
+
+	head, term, commit := log.Snapshot()
+	assert.Equal(t, 1, head)
+	assert.Equal(t, 1, term)
+	assert.Equal(t, -1, commit)
+}
+
 func TestEventLog_Get_Empty(t *testing.T) {
 	log := NewTestEventLog()
 	_, found := log.Get(1)

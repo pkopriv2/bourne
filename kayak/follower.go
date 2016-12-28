@@ -121,7 +121,6 @@ func (c *follower) handleRequestVote(h *instance, logger common.Logger, vote req
 
 func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append appendEvents) chan<- *instance {
 	if append.term < h.term.num {
-	logger.Info("HERE", append.prevLogIndex+1)
 		append.reply(h.term.num, false)
 		return nil
 	}
@@ -139,8 +138,8 @@ func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append 
 		return nil
 	}
 
-	logger.Info("Applying append events %v", append.prevLogIndex+1)
-	append.reply(append.term, true)
 	h.log.Insert(append.events, append.prevLogIndex+1, append.term)
+	h.log.Commit(append.commit)
+	append.reply(append.term, true)
 	return nil
 }

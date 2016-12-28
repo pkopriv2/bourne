@@ -110,6 +110,10 @@ func (h *member) Parser() Parser {
 	return h.instance.parser
 }
 
+func (h *member) Log() *eventLog {
+	return h.instance.log
+}
+
 func (h *member) CurrentTerm() term {
 	return h.instance.CurrentTerm()
 }

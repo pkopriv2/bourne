@@ -34,7 +34,7 @@ func newEventLog(ctx common.Context) *eventLog {
 // returns and removes a batch of entries from the log.  nil if none.
 func (d *eventLog) Commit(pos int) {
 	if pos < 0  {
-		panic("negative commit")
+		return // -1 is normal
 	}
 
 	if pos > d.head {
@@ -42,7 +42,7 @@ func (d *eventLog) Commit(pos int) {
 	}
 
 	if pos < d.commit {
-		panic(fmt.Sprintf("Invalid commit [%v/%v].  Commit must move forward", pos, d.commit))
+		return // idempotency
 	}
 
 	d.data.Update(func(u amoeba.Update) {
@@ -135,7 +135,7 @@ func (d *eventLog) Append(batch []event, term int) (index int) {
 }
 
 func (d *eventLog) Insert(batch []event, index int, term int) {
-	if len(batch) == 0 || index < 1 {
+	if len(batch) == 0 {
 		return
 	}
 
