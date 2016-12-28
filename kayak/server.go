@@ -10,9 +10,9 @@ import (
 
 // server endpoints
 const (
-	actAppendEvents = "/appendEvents"
-	actRequestVote  = "/requestVote"
-	actClientAppend = "/client/append"
+	actAppendEvents = "kayak.appendEvents"
+	actRequestVote  = "kayak.requestVote"
+	actClientAppend = "kayak.client.append"
 )
 
 // Meta messages
@@ -64,7 +64,7 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) AppendEvents(req net.Request) net.Response {
-	append, err := readAppendEventsRequest(req.Body())
+	append, err := readAppendEventsRequest(req.Body(), s.self.Parser())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -92,7 +92,17 @@ func (s *server) RequestVote(req net.Request) net.Response {
 }
 
 func (s *server) ClientAppend(req net.Request) net.Response {
-	return nil
+	append, err := readClientAppendRequest(req.Body(), s.self.Parser())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	err = s.self.RequestClientAppend(append.events)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return net.NewEmptyResponse()
 }
 
 // Helper functions
@@ -120,6 +130,12 @@ func newAppendEventsRequest(a appendEventsRequest) net.Request {
 	}))
 }
 
+func newClientAppendRequest(a clientAppendRequest) net.Request {
+	return net.NewRequest(metaClientAppend, scribe.Build(func(w scribe.Writer) {
+		a.Write(w)
+	}))
+}
+
 func newResponseResponse(res response) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
 		res.Write(w)
@@ -127,11 +143,9 @@ func newResponseResponse(res response) net.Response {
 }
 
 func readResponseResponse(res net.Response) (response, error) {
-	var err error
-
-	err = res.Error()
+	err := res.Error()
 	if err != nil {
-
+		return response{}, err
 	}
 
 	return readResponse(res.Body())
@@ -183,24 +197,59 @@ func (a appendEventsRequest) Write(w scribe.Writer) {
 	w.Write("commit", a.commit)
 }
 
-func readAppendEventsRequest(r scribe.Reader) (appendEventsRequest, error) {
+func readAppendEventsRequest(r scribe.Reader, parse Parser) (appendEventsRequest, error) {
 	id, err := scribe.ReadUUID(r, "id")
 	if err != nil {
 		return appendEventsRequest{}, err
 	}
 
-	ret := appendEventsRequest{id: id, events: make([]event, 0)}
+	ret := &appendEventsRequest{id: id}
 
-	// var msgs []scribe.Message
+	var msgs []scribe.Message
 	err = common.Or(err, r.Read("term", &ret.term))
+	err = common.Or(err, r.Read("events", &msgs))
 	err = common.Or(err, r.Read("prevLogTerm", &ret.prevLogTerm))
 	err = common.Or(err, r.Read("prevLogIndex", &ret.prevLogIndex))
 	err = common.Or(err, r.Read("commit", &ret.commit))
-	// err = common.Or(err, r.Read("events", &msgs))
+	if err != nil {
+		return appendEventsRequest{}, err
+	}
 
-	// events := make([]event, 0, len(msgs))
-	// for _, m := range msgs {
-	// events = append(events, )
-	// }
-	return ret, err
+	events := make([]event, 0, len(msgs))
+	for _, m := range msgs {
+		event, err := parse(m)
+		if err != nil {
+			return appendEventsRequest{}, err
+		}
+		events = append(events, event)
+	}
+
+	ret.events = events
+	return *ret, err
+}
+
+type clientAppendRequest struct {
+	events []event
+}
+
+func (a clientAppendRequest) Write(w scribe.Writer) {
+	w.Write("events", a.events)
+}
+
+func readClientAppendRequest(r scribe.Reader, parse Parser) (clientAppendRequest, error) {
+	var msgs []scribe.Message
+	if err := r.Read("events", &msgs); err != nil {
+		return clientAppendRequest{}, err
+	}
+
+	events := make([]event, 0, len(msgs))
+	for _, m := range msgs {
+		event, err := parse(m)
+		if err != nil {
+			return clientAppendRequest{}, err
+		}
+		events = append(events, event)
+	}
+
+	return clientAppendRequest{events: events}, nil
 }

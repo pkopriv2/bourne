@@ -1,148 +1,127 @@
 package kayak
 
 import (
-	"fmt"
-	"math/rand"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
-	"github.com/pkopriv2/bourne/convoy"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestLeader_Change(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
-	})
-
-	ctx := common.NewContext(conf)
+func TestHost_Close(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, 3), 9390)
-
-	logger := ctx.Logger().Fmt("TEST: ")
-	logger.Error("Starting cluster")
-
-	_, leaderId, ok := Converge(cluster)
-	assert.True(t, ok)
-
-	logger.Error("Killing leader!")
-	leader := hostsFirst(cluster, func(h *host) bool {
-		return h.Id() == *leaderId
-	})
-
-	leader.Close()
-	time.Sleep(3 * time.Second)
-
-	_, leaderId2, ok := Converge(cluster)
-	assert.True(t, ok)
-	assert.NotEqual(t, *leaderId, *leaderId2)
+	before := runtime.NumGoroutine()
+	host := StartTestSeedHost(ctx, 9390)
+	assert.Nil(t, host.Close())
+	after := runtime.NumGoroutine()
+	assert.Equal(t, before, after)
 }
 
-// func TestMember_Close(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Debug),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// go func() {
-// tick := time.NewTicker(200 * time.Millisecond)
-// for range tick.C {
-// ctx.Logger().Error("#Routines: %v", runtime.NumGoroutine())
-// }
-// }()
-//
-// failures := make([]string, 0, 1000)
-// for i := 0; i < 100; i++ {
-// success, msg := RunClusterTest(23)
-// if !success {
-// failures = append(failures, msg)
-// }
-// }
-//
-// logger := ctx.Logger().Fmt("TEST: ")
-// for _, f := range failures {
-// logger.Error("Error: %v", f)
-// }
-//
-// assert.Empty(t, failures)
-// }
+func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+	cluster := StartTestCluster(ctx, 2)
+	assert.NotNil(t, Converge(cluster))
+}
 
-func RunClusterTest(size int) (bool, string) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
-	})
+func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+	cluster := StartTestCluster(ctx, 3)
+	assert.NotNil(t, Converge(cluster))
+}
 
-	ctx := common.NewContext(conf)
+func TestHost_Cluster_ConvergeFivePeers(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+	cluster := StartTestCluster(ctx, 5)
+	assert.NotNil(t, Converge(cluster))
+}
+
+func TestHost_Cluster_ConvergeSevenPeers(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+	cluster := StartTestCluster(ctx, 7)
+	assert.NotNil(t, Converge(cluster))
+}
+
+func TestHost_Cluster_Close(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	before := runtime.NumGoroutine()
+
+	cluster := StartTestCluster(ctx, 2)
+	assert.NotNil(t, Converge(cluster))
+
+	ctx.Close()
+
+	after := runtime.NumGoroutine()
+	assert.Equal(t, before, after)
+}
+
+func TestHost_Cluster_LeaderFailure(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+	cluster := StartTestCluster(ctx, 5)
+
+	leader1 := Converge(cluster)
+	assert.NotNil(t, leader1)
+	leader1.Close()
+
+	time.Sleep(2*time.Second)
+
+	leader2 := Converge(RemoveHost(cluster, Index(cluster, func(h *host) bool {
+		return h.Id() == leader1.Id()
+	})))
+
+	assert.NotNil(t, leader2)
+	assert.NotEqual(t, leader1, leader2)
+}
+
+func TestHost_Cluster_LeaderClientAppend_Single(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	cluster := StartKayakCluster(ctx, convoy.StartTransientCluster(ctx, 9290, size), 9390)
-	indices := rand.Perm(size)
-	killed := rand.Intn((size / 2))
+	cluster := StartTestCluster(ctx, 3)
+	leader := Converge(cluster)
+	assert.NotNil(t, leader)
 
-	logger := ctx.Logger().Fmt("TEST[%v,%v]", size, killed)
-	logger.Error("Starting cluster")
+	cl, err := leader.Client()
+	assert.Nil(t, err)
+	assert.Nil(t, cl.Append([]event{&testEvent{}}))
 
-	_, leaderId, ok1 := Converge(cluster)
-	if !ok1 {
-		return false, fmt.Sprintf("Unable to converge cluster of [%v]", size)
-	}
-
-	leader := hostsFirst(cluster, func(h *host) bool {
-		return h.Id() == *leaderId
-	})
-
-	logger.Error("", indices[:killed])
-	leader.Close()
-
-	// logger.Error("Killing hosts: %v", indices[:killed])
-	for i := 0; i < killed; i++ {
-		cluster[indices[i]].Close()
-	}
-
-	time.Sleep(2 * time.Second)
-
-	// logger.Error("Converging remaining hosts: %v", indices[killed:])
-	remaining := make([]*host, 0, len(cluster))
-	for i := killed; i < size; i++ {
-		remaining = append(remaining, cluster[indices[i]])
-	}
-
-	_, _, ok2 := Converge(remaining)
-	if !ok2 {
-		return false, fmt.Sprintf("Unable to converge cluster after removing hosts: %v", indices[:killed])
-	}
-
-	return true, ""
+	assert.Equal(t, 0, leader.member.instance.log.Head())
+	assert.Equal(t, 0, leader.member.instance.log.Committed())
 }
 
-func StartKayakCluster(ctx common.Context, cluster []convoy.Host, start int) []*host {
-	peers := make([]peer, 0, len(cluster))
-	for i, h := range cluster {
-		m, err := h.Self()
-		if err != nil {
-			panic(err)
-		}
+func StartTestSeedHost(ctx common.Context, port int) *host {
+	host, err := newHost(ctx, newPeer(net.NewAddr("localhost", strconv.Itoa(port))), []peer{}, testEventParser)
+	if err != nil {
+		panic(err)
+	}
+	return host
+}
 
-		peers = append(peers, peer{id: m.Id(), addr: net.NewAddr(m.Hostname(), strconv.Itoa(start+i))})
+func StartTestCluster(ctx common.Context, size int) []*host {
+	peers := make([]peer, 0, size)
+	for i := 0; i< size; i++ {
+		peers = append(peers, newPeer(net.NewAddr("localhost", strconv.Itoa(9300+i))))
 	}
 
 	ctx.Logger().Info("Starting kayak cluster [%v]", peers)
-
 	hosts := make([]*host, 0, len(peers))
 	for i, p := range peers {
 		others := make([]peer, 0, len(peers)-1)
 		others = append(others, peers[:i]...)
 		others = append(others, peers[i+1:]...)
 
-		host, err := newHost(ctx, p, others)
+		host, err := newHost(ctx, p, others, testEventParser)
 		if err != nil {
 			panic(err)
 		}
@@ -156,7 +135,7 @@ func StartKayakCluster(ctx common.Context, cluster []convoy.Host, start int) []*
 	return hosts
 }
 
-func Converge(cluster []*host) (int, *uuid.UUID, bool) {
+func Converge(cluster []*host) *host {
 	var term int = 0
 	var leader *uuid.UUID
 
@@ -183,12 +162,17 @@ func Converge(cluster []*host) (int, *uuid.UUID, bool) {
 		return nil
 	})
 
+	// data race...
+
+
 	select {
 	case <-done:
-		return term, leader, true
+		return First(cluster, func(h *host) bool {
+			return h.Id() == *leader
+		})
 	case <-timeout:
 		close(cancelled)
-		return term, leader, false
+		return nil
 	}
 }
 
@@ -235,4 +219,14 @@ func First(cluster []*host, fn func(h *host) bool) *host {
 	}
 
 	return nil
+}
+
+func Index(cluster []*host, fn func(h *host) bool) int {
+	for i, h := range cluster {
+		if fn(h) {
+			return i
+		}
+	}
+
+	return -1
 }

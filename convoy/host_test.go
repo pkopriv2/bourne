@@ -31,7 +31,7 @@ func TestHost_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 32)
+	hosts := StartTestHostCluster(ctx, 128)
 
 	idx := rand.Intn(len(hosts))
 	host := hosts[idx]
@@ -48,7 +48,7 @@ func TestHost_Failed(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 32)
+	hosts := StartTestHostCluster(ctx, 128)
 
 	idx := rand.Intn(len(hosts))
 	failed := hosts[idx]

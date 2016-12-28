@@ -41,7 +41,7 @@ type member struct {
 	closer chan struct{}
 }
 
-func newMember(ctx common.Context, logger common.Logger, self peer, others []peer) (*member, error) {
+func newMember(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser) (*member, error) {
 	follower := make(chan *instance)
 	candidate := make(chan *instance)
 	leader := make(chan *instance)
@@ -50,15 +50,17 @@ func newMember(ctx common.Context, logger common.Logger, self peer, others []pee
 	closer := make(chan struct{}, 1)
 
 	inst := &instance{
-		ctx:     ctx,
-		id:      self.id,
-		self:    self,
-		peers:   others,
-		logger:  logger,
-		log:     newEventLog(ctx),
-		appends: make(chan appendEvents),
-		votes:   make(chan requestVote),
-		timeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
+		ctx:           ctx,
+		id:            self.id,
+		self:          self,
+		peers:         others,
+		logger:        logger,
+		parser:        parser,
+		log:           newEventLog(ctx),
+		appends:       make(chan appendEvents),
+		votes:         make(chan requestVote),
+		clientAppends: make(chan clientAppend),
+		timeout:       time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
 	}
 
 	m := &member{
@@ -92,13 +94,29 @@ func (h *member) start() error {
 	return h.follower.send(h.instance, h.follower.in)
 }
 
+func (h *member) Context() common.Context {
+	return h.instance.ctx
+}
+
+func (h *member) Self() peer {
+	return h.instance.self
+}
+
+func (h *member) Peers() []peer {
+	return h.instance.peers
+}
+
+func (h *member) Parser() Parser {
+	return h.instance.parser
+}
+
 func (h *member) CurrentTerm() term {
 	return h.instance.CurrentTerm()
 }
 
-func (h *member) RequestAppendEvents(id uuid.UUID, term int, logIndex int, logTerm int, batch []event, commit int) (response, error) {
+func (h *member) RequestAppendEvents(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []event, commit int) (response, error) {
 	append := appendEvents{
-		id, term, logIndex, logTerm, batch, commit, make(chan response, 1)}
+		id, term, prevLogIndex, prevLogTerm, batch, commit, make(chan response, 1)}
 
 	select {
 	case <-h.closed:
@@ -125,6 +143,22 @@ func (h *member) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) 
 			return response{}, ClosedError
 		case r := <-req.ack:
 			return r, nil
+		}
+	}
+}
+
+func (h *member) RequestClientAppend(events []event) error {
+	append := clientAppend{events, make(chan error, 1)}
+
+	select {
+	case <-h.closed:
+		return ClosedError
+	case h.instance.clientAppends <- append:
+		select {
+		case <-h.closed:
+			return ClosedError
+		case r := <-append.ack:
+			return r
 		}
 	}
 }
@@ -169,7 +203,7 @@ type appendEvents struct {
 }
 
 func (a appendEvents) String() string {
-	return fmt.Sprintf("AppendEvents(%v,%v)", a.id.String()[:8], a.term)
+	return fmt.Sprintf("AppendEvents(id=%v,prevIndex=%v,prevTerm%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, len(a.events))
 }
 
 func (a *appendEvents) reply(term int, success bool) bool {
@@ -274,6 +308,9 @@ type instance struct {
 	// the peer representing the local instance
 	self peer
 
+	// the event parser. (used to spawn clients.)
+	parser Parser
+
 	// data lock (currently using very coarse lock)
 	lock sync.RWMutex
 
@@ -339,12 +376,13 @@ func (h *instance) Broadcast(fn func(c *client) response) <-chan response {
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
-			cl, err := p.Client(h.ctx)
+			cl, err := p.Client(h.ctx, h.parser)
 			if cl == nil || err != nil {
 				ret <- response{h.term.num, false}
 				return
 			}
 
+			defer cl.Close()
 			ret <- fn(cl)
 		}(p)
 	}

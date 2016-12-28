@@ -121,6 +121,7 @@ func (c *follower) handleRequestVote(h *instance, logger common.Logger, vote req
 
 func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append appendEvents) chan<- *instance {
 	if append.term < h.term.num {
+	logger.Info("HERE", append.prevLogIndex+1)
 		append.reply(h.term.num, false)
 		return nil
 	}
@@ -132,13 +133,13 @@ func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append 
 		return c.in
 	}
 
-	logItem := h.log.Get(append.prevLogIndex)
-	if logItem.term != append.prevLogTerm {
-		logger.Info("Inconsistent log detected. Rolling back")
+	if logItem, ok := h.log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
+		logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
 		append.reply(append.term, false)
 		return nil
 	}
 
+	logger.Info("Applying append events %v", append.prevLogIndex+1)
 	append.reply(append.term, true)
 	h.log.Insert(append.events, append.prevLogIndex+1, append.term)
 	return nil

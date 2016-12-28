@@ -6,7 +6,8 @@ import (
 )
 
 type client struct {
-	raw net.Client
+	raw    net.Client
+	parser Parser
 }
 
 func (c *client) Close() error {
@@ -23,7 +24,12 @@ func (c *client) AppendEvents(id uuid.UUID, term int, logIndex int, logTerm int,
 }
 
 func (c *client) Append(batch []event) error {
-	panic("")
+	resp, err := c.raw.Send(newClientAppendRequest(clientAppendRequest{batch}))
+	if err != nil {
+		return err
+	}
+
+	return resp.Error()
 }
 
 func (c *client) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {

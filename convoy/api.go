@@ -97,7 +97,9 @@ type Host interface {
 	// The local member
 	Self() (Member, error)
 
-	// Performs an immediate shutdown of the host
+	// Performs an immediate shutdown of the host.
+	//
+	// !! Exposed mainly for quick shutdown during testing. You've been warned. !!
 	Shutdown() error
 
 	// Provides access to the distributed directory.

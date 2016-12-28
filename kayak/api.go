@@ -18,3 +18,5 @@ var (
 type event interface {
 	scribe.Writable
 }
+
+type Parser func(scribe.Reader) (event, error)

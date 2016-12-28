@@ -22,7 +22,6 @@ import (
 //
 // NOTE: Currently only election is implemented.
 // TODO:
-//  * Support proper client appends + log impl
 //  * Support changing cluster membership
 //  * Support durable log!!
 //
@@ -52,21 +51,24 @@ type peer struct {
 	addr string
 }
 
+func newPeer(addr string) peer {
+	return peer{id: uuid.NewV1(), addr: addr}
+}
+
 func (p peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.id.String()[:8], p.addr)
 }
 
-func (p peer) Client(ctx common.Context) (*client, error) {
+func (p peer) Client(ctx common.Context, parser Parser) (*client, error) {
 	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.addr)
 	if err != nil {
 		return nil, err
 	}
 
-	return &client{raw}, nil
+	return &client{raw, parser}, nil
 }
 
 type host struct {
-	ctx    common.Context
 	logger common.Logger
 	member *member
 	server net.Server
@@ -74,11 +76,11 @@ type host struct {
 	closer chan struct{}
 }
 
-func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) {
+func newHost(ctx common.Context, self peer, others []peer, parser Parser) (h *host, err error) {
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	member, err := newMember(ctx, root, self, others)
+	member, err := newMember(ctx, root, self, others, parser)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +96,7 @@ func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) 
 		return nil, err
 	}
 	defer common.RunIf(func() { server.Close() })(err) // paranoia of future me
+
 	h = &host{
 		member: member,
 		server: server,
@@ -106,6 +109,10 @@ func newHost(ctx common.Context, self peer, others []peer) (h *host, err error) 
 
 func (h *host) Id() uuid.UUID {
 	return h.member.instance.id
+}
+
+func (h *host) Client() (*client, error) {
+	return h.member.Self().Client(h.member.Context(), h.member.Parser())
 }
 
 func (h *host) Close() error {

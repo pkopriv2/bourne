@@ -51,13 +51,19 @@ func (c *leader) run(h *instance) error {
 	// become leader for current term.
 	h.Term(h.term.num, &h.id, &h.id)
 
+	// establish leadership
+	if next := c.handleHeartbeatTimeout(logger, h); next != nil {
+		c.send(h, next)
+		return nil
+	}
+
 	// start the log syncer.
 	sync := newLogSyncer(h, logger)
 
 	go func() {
 		for {
-			logger.Debug("Resetting heartbeat timer [%v]", h.timeout/5)
-			timer := time.NewTimer(h.timeout / 3)
+			logger.Info("Resetting heartbeat timer [%v]", h.timeout/5)
+			timer := time.NewTimer(h.timeout / 5)
 
 			select {
 			case <-c.closed:
@@ -78,7 +84,7 @@ func (c *leader) run(h *instance) error {
 					return
 				}
 			case <-timer.C:
-				if next := c.handleHeartbeatTimeout(h); next != nil {
+				if next := c.handleHeartbeatTimeout(logger, h); next != nil {
 					c.send(h, next)
 					return
 				}
@@ -125,9 +131,10 @@ func (c *leader) handleAppendEvents(h *instance, append appendEvents) chan<- *in
 	return c.follower
 }
 
-func (c *leader) handleHeartbeatTimeout(h *instance) chan<- *instance {
+func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *instance) chan<- *instance {
 	ch := h.Broadcast(func(cl *client) response {
 		maxLogIndex, maxLogTerm, commit := h.log.Snapshot()
+		logger.Info("Sending heart beat (%v,%v,%v)", maxLogIndex, maxLogTerm, commit)
 		resp, err := cl.AppendEvents(h.id, h.term.num, maxLogIndex, maxLogTerm, []event{}, commit)
 		if err != nil {
 			return response{h.term.num, false}
@@ -175,8 +182,10 @@ type logSyncer struct {
 	// Used to access/update peer states.
 	prevLock sync.Mutex
 
-	// sets the highwater mark.  (used to wake sleeping sync threads)
-	head     int
+	// sets the highwater mark.
+	head int
+
+	// conditional lock on head (used to wake synchronizers waiting for work.)
 	headLock *sync.Cond
 
 	// used to indicate whether a catastrophic failure has occurred
@@ -193,6 +202,7 @@ func newLogSyncer(inst *instance, logger common.Logger) *logSyncer {
 		logger:      logger.Fmt("Syncer"),
 		prevIndices: make(map[uuid.UUID]int),
 		prevTerms:   make(map[uuid.UUID]int),
+		head:        -1,
 		headLock:    &sync.Cond{L: &sync.Mutex{}},
 		closed:      make(chan struct{}),
 		closer:      make(chan struct{}, 1),
@@ -212,8 +222,9 @@ func (l *logSyncer) shutdown(err error) error {
 	case l.closer <- struct{}{}:
 	}
 
-	defer close(l.closed)
-	defer common.RunIf(func() { l.failure = err })(err)
+	l.failure = err
+	close(l.closed)
+	l.headLock.Broadcast()
 	return err
 }
 
@@ -223,12 +234,19 @@ func (s *logSyncer) moveHead(offset int) {
 		s.head = offset
 	}
 	s.headLock.L.Unlock()
+	s.headLock.Broadcast()
 }
 
-func (s *logSyncer) getHeadWhenGreater(cur int) (head int) {
+func (s *logSyncer) getHeadWhenGreater(cur int) (head int, err error) {
 	s.headLock.L.Lock()
-	for head = s.head; cur >= head; {
+	for head = s.head; head <= cur; head = s.head {
 		s.headLock.Wait()
+		select {
+		default:
+			continue
+		case <-s.closed:
+			return -1, ClosedError
+		}
 	}
 	s.headLock.L.Unlock()
 	return
@@ -262,15 +280,14 @@ func (s *logSyncer) Append(batch []event) (err error) {
 
 			select {
 			default:
-				time.Sleep(20 * time.Millisecond) // should sleep for expected delivery of one batch.
+				time.Sleep(5 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
 			case <-s.closed:
 				return
 			}
 		}
 
-		// data race if multiple threads are allowed to append - whcih they currently are
+		// data race if multiple threads are allowed to append - which they currently are
 		// not allowed to do.
-		s.root.log.Commit(head)
 		committed <- struct{}{}
 	}()
 
@@ -281,12 +298,14 @@ func (s *logSyncer) Append(batch []event) (err error) {
 	case <-timer.C:
 		return TimeoutError
 	case <-committed:
+		s.root.log.Commit(head)
 		return nil
 	}
 }
 
 func (s *logSyncer) sync(p peer) {
-	s.logger.Info("Starting log synchronizer for [%v]", p)
+	logger := s.logger.Fmt("%v", p)
+	logger.Info("Starting peer synchronizer")
 	go func() {
 		var cl *client
 		var err error
@@ -299,11 +318,14 @@ func (s *logSyncer) sync(p peer) {
 		prevIndex := head
 		prevTerm := term
 		for {
-			head := s.getHeadWhenGreater(prevIndex)
+			head, err = s.getHeadWhenGreater(prevIndex)
+			if err != nil {
+				return
+			}
 
 			// loop until this peer is completely caught up to head!
 			for prevIndex < head {
-				s.logger.Debug("Currently [%v] behind head [%v]", head-prevIndex, head)
+				logger.Info("Currently [%v] behind head [%v]", head-prevIndex, head)
 
 				// check for close each time around.
 				select {
@@ -327,7 +349,7 @@ func (s *logSyncer) sync(p peer) {
 				}
 
 				// send the append request.
-				resp, err := cl.AppendEvents(s.root.id, term, prevIndex, prevTerm, batch, s.root.log.Committed())
+				resp, err := cl.AppendEvents(s.root.id, s.root.term.num, prevIndex, prevTerm, batch, s.root.log.Committed())
 				if err != nil {
 					cl = nil
 					continue
@@ -342,8 +364,7 @@ func (s *logSyncer) sync(p peer) {
 				// if it was successful, progress the peers index and term
 				if resp.success {
 					prevIndex += len(batch)
-					prevTerm = term
-
+					prevTerm = s.root.term.num
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevTerm)
 					continue
 				}
@@ -351,8 +372,11 @@ func (s *logSyncer) sync(p peer) {
 				// consistency check failed, start moving backwards one index at a time.
 				// TODO: Implement optimization to come to faster agreement.
 				prevIndex -= 1
-				prevItem := s.root.log.Get(prevIndex)
-				s.SetPrevIndexAndTerm(p.id, prevIndex, prevItem.term)
+				if prevItem, ok := s.root.log.Get(prevIndex); ok {
+					s.SetPrevIndexAndTerm(p.id, prevIndex, prevItem.term)
+				} else {
+					s.SetPrevIndexAndTerm(p.id, -1, -1)
+				}
 			}
 		}
 	}()
@@ -364,7 +388,7 @@ func (s *logSyncer) client(p peer) (*client, error) {
 	for timeout := 1 * time.Second; ; {
 		ch := make(chan *client)
 		go func() {
-			cl, err := p.Client(s.root.ctx)
+			cl, err := p.Client(s.root.ctx, s.root.parser)
 			if err == nil && cl != nil {
 				ch <- cl
 			}
