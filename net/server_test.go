@@ -73,8 +73,8 @@ func TestClient_ServerCloseAfter(t *testing.T) {
 
 func TestClientServer_SingleRequest(t *testing.T) {
 	msg := scribe.Build(func(w scribe.Writer) {
-		w.Write("field1", 1)
-		w.Write("field2", true)
+		w.WriteInt("field1", 1)
+		w.WriteBool("field2", true)
 	})
 
 	called := concurrent.NewAtomicBool()
@@ -83,8 +83,8 @@ func TestClientServer_SingleRequest(t *testing.T) {
 
 		var field1 int
 		var field2 bool
-		assert.Nil(t, r.Body().Read("field1", &field1))
-		assert.Nil(t, r.Body().Read("field2", &field2))
+		assert.Nil(t, r.Body().ReadInt("field1", &field1))
+		assert.Nil(t, r.Body().ReadBool("field2", &field2))
 		assert.Equal(t, 1, field1)
 		assert.Equal(t, true, field2)
 
@@ -102,8 +102,8 @@ func TestClientServer_SingleRequest(t *testing.T) {
 
 	var field1 int
 	var field2 bool
-	assert.Nil(t, resp.Body().Read("field1", &field1))
-	assert.Nil(t, resp.Body().Read("field2", &field2))
+	assert.Nil(t, resp.Body().ReadInt("field1", &field1))
+	assert.Nil(t, resp.Body().ReadBool("field2", &field2))
 	assert.Equal(t, 1, field1)
 	assert.Equal(t, true, field2)
 }

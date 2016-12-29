@@ -94,6 +94,30 @@ func (a Array) Dump() interface{} {
 	return arr
 }
 
+func newBoolArray(arr []bool) Array {
+	ret := make([]Value, 0, len(arr))
+	for _, b := range arr {
+		ret = append(ret, Bool(b))
+	}
+	return ret
+}
+
+func newStringArray(arr []string) Array {
+	ret := make([]Value, 0, len(arr))
+	for _, b := range arr {
+		ret = append(ret, String(b))
+	}
+	return ret
+}
+
+func newObjectArray(arr []Object) Array {
+	ret := make([]Value, 0, len(arr))
+	for _, b := range arr {
+		ret = append(ret, b)
+	}
+	return ret
+}
+
 func parseArray(arr []interface{}) (Array, error) {
 	ret := make([]Value, 0, len(arr))
 	for _, cur := range arr {
@@ -135,24 +159,18 @@ func (o Object) Read(field string, ptr interface{}) error {
 	return nil
 }
 
-func (o Object) ReadOptional(field string, ptr interface{}) (bool, error) {
-	value, ok := o[field]
-	if !ok {
-		return false, nil
-	}
-
-	if err := value.AssignTo(ptr); err != nil {
-		return false, errors.Wrapf(err, "Error while reading field [%v]", field)
-	}
-
-	return true, nil
-}
-
-func (o Object) Write(w Writer) {
-	for k, v := range o {
-		w.Write(k, v)
-	}
-}
+// func (o Object) ReadOptional(field string, ptr interface{}) (bool, error) {
+	// value, ok := o[field]
+	// if !ok {
+		// return false, nil
+	// }
+//
+	// if err := value.AssignTo(ptr); err != nil {
+		// return false, errors.Wrapf(err, "Error while reading field [%v]", field)
+	// }
+//
+	// return true, nil
+// }
 
 func (o Object) Copy() Object {
 	ret := make(map[string]Value)

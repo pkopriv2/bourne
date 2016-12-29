@@ -8,12 +8,12 @@ import (
 
 type follower struct {
 	ctx       common.Context
-	in        chan *instance
-	candidate chan<- *instance
+	in        chan *member
+	candidate chan<- *member
 	closed    chan struct{}
 }
 
-func newFollower(ctx common.Context, in chan *instance, candidate chan<- *instance, closed chan struct{}) *follower {
+func newFollower(ctx common.Context, in chan *member, candidate chan<- *member, closed chan struct{}) *follower {
 	ret := &follower{ctx, in, candidate, closed}
 	ret.start()
 	return ret
@@ -33,7 +33,7 @@ func (c *follower) start() error {
 	return nil
 }
 
-func (c *follower) send(h *instance, ch chan<- *instance) error {
+func (c *follower) transition(h *member, ch chan<- *member) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -42,7 +42,7 @@ func (c *follower) send(h *instance, ch chan<- *instance) error {
 	}
 }
 
-func (c *follower) run(h *instance) error {
+func (c *follower) run(h *member) error {
 	logger := h.logger.Fmt("Follower[%v]", h.term)
 	logger.Info("Becoming follower")
 
@@ -57,22 +57,22 @@ func (c *follower) run(h *instance) error {
 				return
 			case append := <-h.clientAppends:
 				if next := c.handleClientAppend(h, logger, append); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case append := <-h.appends:
 				if next := c.handleAppendEvents(h, logger, append); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case ballot := <-h.votes:
 				if next := c.handleRequestVote(h, logger, ballot); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case <-timer.C:
 				logger.Info("Waited too long for heartbeat.")
-				c.send(h, c.candidate) // becomes a new candidate
+				c.transition(h, c.candidate) // becomes a new candidate
 				return
 			}
 		}
@@ -80,12 +80,12 @@ func (c *follower) run(h *instance) error {
 	return nil
 }
 
-func (c *follower) handleClientAppend(h *instance, logger common.Logger, append clientAppend) chan<- *instance {
+func (c *follower) handleClientAppend(h *member, logger common.Logger, append clientAppend) chan<- *member {
 	append.reply(NotLeaderError)
 	return nil
 }
 
-func (c *follower) handleRequestVote(h *instance, logger common.Logger, vote requestVote) chan<- *instance {
+func (c *follower) handleRequestVote(h *member, logger common.Logger, vote requestVote) chan<- *member {
 	logger.Debug("Handling request vote [%v]", vote)
 
 	// handle: previous term vote.  (immediately decline.)
@@ -119,7 +119,7 @@ func (c *follower) handleRequestVote(h *instance, logger common.Logger, vote req
 	return c.in
 }
 
-func (c *follower) handleAppendEvents(h *instance, logger common.Logger, append appendEvents) chan<- *instance {
+func (c *follower) handleAppendEvents(h *member, logger common.Logger, append appendEvents) chan<- *member {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil

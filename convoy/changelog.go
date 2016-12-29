@@ -51,30 +51,30 @@ type change struct {
 
 func readChange(r scribe.Reader) (change, error) {
 	c := &change{}
-	if err := r.Read("seq", &c.Seq); err != nil {
+	if err := r.ReadInt("seq", &c.Seq); err != nil {
 		return *c, err
 	}
-	if err := r.Read("key", &c.Key); err != nil {
+	if err := r.ReadString("key", &c.Key); err != nil {
 		return *c, err
 	}
-	if err := r.Read("val", &c.Val); err != nil {
+	if err := r.ReadString("val", &c.Val); err != nil {
 		return *c, err
 	}
-	if err := r.Read("ver", &c.Ver); err != nil {
+	if err := r.ReadInt("ver", &c.Ver); err != nil {
 		return *c, err
 	}
-	if err := r.Read("del", &c.Del); err != nil {
+	if err := r.ReadBool("del", &c.Del); err != nil {
 		return *c, err
 	}
 	return *c, nil
 }
 
 func (c change) Write(w scribe.Writer) {
-	w.Write("seq", c.Seq)
-	w.Write("key", c.Key)
-	w.Write("val", c.Val)
-	w.Write("ver", c.Ver)
-	w.Write("del", c.Del)
+	w.WriteInt("seq", c.Seq)
+	w.WriteString("key", c.Key)
+	w.WriteString("val", c.Val)
+	w.WriteInt("ver", c.Ver)
+	w.WriteBool("del", c.Del)
 }
 
 type changeLogListener struct {

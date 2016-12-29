@@ -5,7 +5,6 @@ import (
 	"net"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/scribe"
 )
 
 func ListenTcp(port string) (*TcpListener, error) {
@@ -28,32 +27,6 @@ func ConnectTcp(addr string) (*TcpConnection, error) {
 	}
 
 	return &TcpConnection{conn}, nil
-}
-
-func ReadTcpConnectionFactory(r scribe.Reader) (ConnectionFactory, error) {
-	var addr string
-	if err := r.Read("addr", &addr); err != nil {
-		return nil, err
-	}
-
-	return NewTcpConnectionFactory(addr), nil
-}
-
-func NewTcpConnectionFactory(addr string) ConnectionFactory {
-	return &TcpConnectionFactory{addr}
-}
-
-type TcpConnectionFactory struct {
-	addr string
-}
-
-func (t *TcpConnectionFactory) Write(w scribe.Writer) {
-	w.Write("type", "tcp")
-	w.Write("addr", t.addr)
-}
-
-func (u *TcpConnectionFactory) Conn() (Connection, error) {
-	return ConnectTcp(u.addr)
 }
 
 type TcpListener struct {
@@ -93,6 +66,10 @@ func (t *TcpConnection) Write(p []byte) (n int, err error) {
 	return t.conn.Write(p)
 }
 
-func (t *TcpConnection) Factory() ConnectionFactory {
-	return NewTcpConnectionFactory(t.conn.RemoteAddr().String())
+func (t *TcpConnection) LocalAddr() net.Addr {
+	return t.conn.LocalAddr()
+}
+
+func (t *TcpConnection) RemoteAddr() net.Addr {
+	return t.conn.RemoteAddr()
 }

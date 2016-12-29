@@ -18,11 +18,6 @@ func TestEventLog_Head_Empty(t *testing.T) {
 	assert.Equal(t, -1, log.Head())
 }
 
-func TestEventLog_Commit_Negative(t *testing.T) {
-	log := NewTestEventLog()
-	assert.Panics(t, func() {log.Commit(-1)})
-}
-
 func TestEventLog_Commit_Greater_Than_Head(t *testing.T) {
 	log := NewTestEventLog()
 	assert.Panics(t, func() {log.Commit(1)})
@@ -132,7 +127,7 @@ func NewTestEventLog() *eventLog {
 type testEvent struct{}
 
 func (e *testEvent) Write(w scribe.Writer) {
-	w.Write("type", "testevent")
+	w.WriteString("type", "testevent")
 }
 
 func (e *testEvent) String() string {

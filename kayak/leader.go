@@ -10,12 +10,12 @@ import (
 
 type leader struct {
 	ctx      common.Context
-	in       chan *instance
-	follower chan<- *instance
+	in       chan *member
+	follower chan<- *member
 	closed   chan struct{}
 }
 
-func newLeader(ctx common.Context, in chan *instance, follower chan<- *instance, closed chan struct{}) *leader {
+func newLeader(ctx common.Context, in chan *member, follower chan<- *member, closed chan struct{}) *leader {
 	ret := &leader{ctx, in, follower, closed}
 	ret.start()
 	return ret
@@ -35,7 +35,7 @@ func (c *leader) start() error {
 	return nil
 }
 
-func (c *leader) send(h *instance, ch chan<- *instance) error {
+func (c *leader) transition(h *member, ch chan<- *member) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -44,7 +44,7 @@ func (c *leader) send(h *instance, ch chan<- *instance) error {
 	}
 }
 
-func (c *leader) run(h *instance) error {
+func (c *leader) run(h *member) error {
 	logger := h.logger.Fmt("Leader(%v)", h.term)
 	logger.Info("Becoming leader")
 
@@ -53,13 +53,12 @@ func (c *leader) run(h *instance) error {
 
 	// establish leadership
 	if next := c.handleHeartbeatTimeout(logger, h); next != nil {
-		c.send(h, next)
+		c.transition(h, next)
 		return nil
 	}
 
 	// start the log syncer.
 	sync := newLogSyncer(h, logger)
-
 	go func() {
 		defer sync.Close()
 		for {
@@ -69,24 +68,31 @@ func (c *leader) run(h *instance) error {
 			select {
 			case <-c.closed:
 				return
+			case <-sync.closed:
+				if sync.failure == NotLeaderError {
+					c.transition(h, c.follower)
+					return
+				}
+
+				return
 			case append := <-h.clientAppends:
 				if next := c.handleClientAppend(sync, append); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case append := <-h.appends:
 				if next := c.handleAppendEvents(h, append); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case ballot := <-h.votes:
 				if next := c.handleRequestVote(h, ballot); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case <-timer.C:
 				if next := c.handleHeartbeatTimeout(logger, h); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			}
@@ -95,14 +101,14 @@ func (c *leader) run(h *instance) error {
 	return nil
 }
 
-func (c *leader) handleClientAppend(s *logSyncer, a clientAppend) chan<- *instance {
+func (c *leader) handleClientAppend(s *logSyncer, a clientAppend) chan<- *member {
 	go func() {
 		a.reply(s.Append(a.events))
 	}()
 	return nil
 }
 
-func (c *leader) handleRequestVote(h *instance, vote requestVote) chan<- *instance {
+func (c *leader) handleRequestVote(h *member, vote requestVote) chan<- *member {
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
 	if vote.term <= h.term.num {
@@ -123,7 +129,7 @@ func (c *leader) handleRequestVote(h *instance, vote requestVote) chan<- *instan
 	return c.follower
 }
 
-func (c *leader) handleAppendEvents(h *instance, append appendEvents) chan<- *instance {
+func (c *leader) handleAppendEvents(h *member, append appendEvents) chan<- *member {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil
@@ -134,7 +140,7 @@ func (c *leader) handleAppendEvents(h *instance, append appendEvents) chan<- *in
 	return c.follower
 }
 
-func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *instance) chan<- *instance {
+func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *member) chan<- *member {
 	ch := h.Broadcast(func(cl *client) response {
 		maxLogIndex, maxLogTerm, commit := h.log.Snapshot()
 		logger.Info("Sending heart beat (%v,%v,%v)", maxLogIndex, maxLogTerm, commit)
@@ -171,7 +177,7 @@ func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *instance) chan<
 type logSyncer struct {
 
 	// the primary member instance. (guaranteed to be immutable)
-	root *instance
+	root *member
 
 	// the logger (injected by parent.  do not use root's logger)
 	logger common.Logger
@@ -199,7 +205,7 @@ type logSyncer struct {
 	closer chan struct{}
 }
 
-func newLogSyncer(inst *instance, logger common.Logger) *logSyncer {
+func newLogSyncer(inst *member, logger common.Logger) *logSyncer {
 	s := &logSyncer{
 		root:        inst,
 		logger:      logger.Fmt("Syncer"),
@@ -237,7 +243,7 @@ func (l *logSyncer) shutdown(err error) error {
 
 func (s *logSyncer) moveHead(offset int) {
 	s.headLock.L.Lock()
-	if s.head < offset {
+	if offset > s.head {
 		s.head = offset
 	}
 	s.headLock.L.Unlock()
@@ -294,8 +300,6 @@ func (s *logSyncer) Append(batch []event) (err error) {
 			}
 		}
 
-		// data race if multiple threads are allowed to append - which they currently are
-		// not allowed to do.
 		committed <- struct{}{}
 	}()
 
@@ -306,23 +310,18 @@ func (s *logSyncer) Append(batch []event) (err error) {
 	case <-timer.C:
 		return TimeoutError
 	case <-committed:
-		s.root.log.Commit(head)
+		s.root.log.Commit(head) // commutative, so safe in the event of out of order appends.
 		return nil
 	}
 }
 
 func (s *logSyncer) sync(p peer) {
-	logger := s.logger.Fmt("Sync(%v)", p)
+	logger := s.logger.Fmt("Routine(%v)", p)
 	logger.Info("Starting peer synchronizer")
 	go func() {
 		defer logger.Info("Shutting down")
 		var cl *client
 		defer common.RunIf(func() { cl.Close() })(cl)
-		// defer func() {
-			// if cl != nil {
-				// cl.Close()
-			// }
-		// }()
 
 		// snapshot the local log
 		_, term, commit := s.root.log.Snapshot()
@@ -381,7 +380,7 @@ func (s *logSyncer) sync(p peer) {
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevTerm)
 
 					// accumulates some updates
-					time.Sleep(20*time.Millisecond)
+					time.Sleep(20 * time.Millisecond)
 					continue
 				}
 

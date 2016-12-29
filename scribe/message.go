@@ -1,25 +1,27 @@
 package scribe
 
 import (
+	"encoding/base64"
 	"reflect"
 	"strconv"
 
 	"github.com/pkg/errors"
+	uuid "github.com/satori/go.uuid"
 )
 
-// Builds a message from the given builder func
-var EmptyMessage = newMessageWriter().Build()
+// Version tagged with each message.
+var Version = "0.1"
 
 // Builds a message from the given builder func
-func Build(fn func(w Writer)) Message {
-	// initialize a new builder
-	msg := newMessageWriter()
+var EmptyMessage = newWriter().Build()
 
-	// invoke the builder function
-	fn(msg)
+// Builds a message from the given builder func
+func Build(fn func(w Writer)) (msg Message) {
+	writer := newWriter()
+	defer func() { msg = writer.Build() }()
 
-	// return the results
-	return msg.Build()
+	fn(writer)
+	return
 }
 
 // Encodes the writable onto a message and returns it.
@@ -35,222 +37,234 @@ func Encode(enc Encoder, w Writable) error {
 // Decodes a message from the stream.
 func Decode(e Decoder) (Message, error) {
 	var raw map[string]interface{}
-	if err := e.Decode(&raw); err != nil {
+	err := e.Decode(&raw)
+	if err != nil {
 		return nil, err
 	}
 
 	obj, err := parseObject(raw)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Error parsing object from stream")
+		return nil, err
 	}
 
-	return &message{obj}, nil
+	return message(obj), nil
 }
 
-type messageWriter struct {
-	val Object
+type writer Object
+
+func newWriter() writer {
+	return writer(newEmptyObject())
 }
 
-func newMessageWriter() *messageWriter {
-	return &messageWriter{newEmptyObject()}
+func (w writer) WriteBool(field string, val bool) {
+	w[field] = Bool(val)
 }
 
-func (m *messageWriter) Write(field string, raw interface{}) {
-	if isNil(raw) {
-		return
-	}
+func (w writer) WriteString(field string, val string) {
+	w[field] = String(val)
+}
 
-	// Derivative types
-	switch typed := raw.(type) {
-	case int:
-		m.Write(field, writeInt(typed))
-		return
-	case []int:
-		m.Write(field, writeInts(typed))
-		return
-	}
+func (w writer) WriteMessage(field string, val Writable) {
+	w[field] = Object(Write(val).(message))
+}
 
-	// Primitive types
-	switch typed := raw.(type) {
-	case string:
-		m.val[field] = String(typed)
-		return
-	case bool:
-		m.val[field] = Bool(typed)
-		return
-	case Value:
-		m.val[field] = typed
-		return
-	case Writable:
-		m.val[field] = Write(typed).(*message).val
-		return
-	}
+// internal helper
+func (w writer) WriteArray(field string, val Array) {
+	w[field] = val
+}
 
+// internal helper
+func (w writer) WriteObject(field string, val Object) {
+	w[field] = val
+}
+
+func (w writer) WriteBools(field string, val []bool) {
+	w[field] = newBoolArray(val)
+}
+
+func (w writer) WriteStrings(field string, val []string) {
+	w[field] = newStringArray(val)
+}
+
+func (w writer) WriteMessages(field string, raw interface{}) {
 	if !isArrayValue(raw) {
 		panic(errors.Wrapf(NewUnsupportedTypeError(raw), "Error writing field [%v]", field))
 	}
 
-	// Array types
 	arr := reflect.ValueOf(raw)
 	num := arr.Len()
-	val := make([]Value, num)
+	val := make([]Object, num)
 	for i := 0; i < num; i++ {
 		item := arr.Index(i).Interface()
+
 		switch typed := item.(type) {
-		case string:
-			val[i] = String(typed)
-		case bool:
-			val[i] = Bool(typed)
-		case Value:
-			val[i] = typed
+		default:
+			panic(errors.Wrapf(NewUnsupportedTypeError(item), "Error writing field [%v]", field))
 		case Writable:
-			val[i] = Write(typed).(*message).val
+			val[i] = Write(typed).(message).Raw()
 		}
 	}
 
-	m.val[field] = Array(val)
+	w[field] = newObjectArray(val)
 }
 
-func (m *messageWriter) Build() Message {
-	return &message{m.val.Copy()}
+func (w writer) WriteInt(field string, val int) {
+	w.WriteString(field, strconv.Itoa(val))
 }
 
-type message struct {
-	val Object
-}
-
-func (m *message) Read(field string, raw interface{}) error {
-	value, ok := m.val[field]
-	if !ok {
-		return errors.Wrap(&MissingFieldError{field}, "Error reading field")
+func (w writer) WriteInts(field string, val []int) {
+	strs := make([]string, 0, len(val))
+	for _, s := range val {
+		strs = append(strs, strconv.Itoa(s))
 	}
-
-	// Derivative types
-	switch ptr := raw.(type) {
-	case *int:
-		var str string
-		if err := m.Read(field, &str); err != nil {
-			return err
-		}
-
-		return assignInt(str, ptr)
-	case *[]int:
-		var str []string
-		if err := m.Read(field, &str); err != nil {
-			return err
-		}
-
-		return assignInts(str, ptr)
-	case *Reader:
-		var msg Message
-		if err := m.Read(field, &msg); err != nil {
-			return err
-		}
-
-		*ptr = msg
-		return nil
-	case *[]Reader:
-		var msgs []Message
-		if err := m.Read(field, &msgs); err != nil {
-			return errors.Wrapf(err, "Error while reading field [%v]", field)
-		}
-
-		ret := make([]Reader, len(msgs))
-		for i := 0; i < len(msgs); i++ {
-			ret[i] = msgs[i]
-		}
-
-		*ptr = ret
-		return nil
-	}
-
-	// Primitive types
-	switch ptr := raw.(type) {
-	default:
-		if err := value.AssignTo(ptr); err != nil {
-			return errors.Wrapf(err, "Error while reading field [%v]", field)
-		}
-	case *Message:
-		var obj Object
-		if err := value.AssignTo(&obj); err != nil {
-			return errors.Wrapf(err, "Error while reading field [%v]", field)
-		}
-
-		*ptr = &message{obj}
-	case *[]Message:
-		var obj []Object
-		if err := value.AssignTo(&obj); err != nil {
-			return errors.Wrapf(err, "Error while reading field [%v]", field)
-		}
-
-		val := make([]Message, len(obj))
-		for i := 0; i < len(obj); i++ {
-			val[i] = &message{obj[i]}
-		}
-
-		*ptr = val
-	}
-
-	return nil
+	w.WriteStrings(field, strs)
 }
 
-func (m *message) ReadOptional(field string, ptr interface{}) (bool, error) {
-	err := m.Read(field, ptr)
-	if err == nil {
-		return true, nil
-	}
-
-
-	if _, ok := errors.Cause(err).(*MissingFieldError); ok {
-		return false, nil
-	}
-
-	return false, err
+func (w writer) WriteBytes(field string, val []byte) {
+	w.WriteString(field, base64.StdEncoding.EncodeToString(val))
 }
 
-func (m *message) Stream(e Encoder) error {
-	return e.Encode(m.val.Dump())
+func (w writer) WriteUUID(field string, val uuid.UUID) {
+	w.WriteString(field, val.String())
 }
 
-func (m *message) Write(w Writer) {
-	m.val.Write(w)
+func (w writer) Raw() Object {
+	return Object(w).Copy()
 }
 
-// helper functions
+func (w writer) Build() Message {
+	return message(w.Raw())
+}
 
-func assignInt(val string, ptr *int) error {
-	i, err := strconv.Atoi(val)
-	if err != nil {
+type message Object
+
+func (m message) ReadBool(field string, val *bool) error {
+	return Object(m).Read(field, val)
+}
+
+func (m message) ReadBools(field string, val *[]bool) error {
+	return Object(m).Read(field, val)
+}
+
+func (m message) ReadString(field string, val *string) error {
+	return Object(m).Read(field, val)
+}
+
+func (m message) ReadStrings(field string, val *[]string) error {
+	return Object(m).Read(field, val)
+}
+
+func (m message) ReadMessage(field string, val *Message) error {
+	var raw Object
+	if err := Object(m).Read(field, &raw); err != nil {
 		return err
 	}
 
-	*ptr = i
+	*val = message(raw)
 	return nil
 }
 
-func assignInts(vals []string, ptr *[]int) error {
-	ret := make([]int, len(vals))
-	for i := 0; i < len(vals); i++ {
-		if err := assignInt(vals[i], &ret[i]); err != nil {
-			return err
+func (m message) ReadMessages(field string, val *[]Message) error {
+	var raw []Object
+	if err := Object(m).Read(field, &raw); err != nil {
+		return err
+	}
+
+	ret := make([]Message, 0, len(raw))
+	for _, v := range raw {
+		ret = append(ret, message(v))
+	}
+
+	*val = ret
+	return nil
+}
+
+func (m message) ReadInt(field string, val *int) error {
+	var str string
+	if err := m.ReadString(field, &str); err != nil {
+		return err
+	}
+
+	i, err := strconv.Atoi(str)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to convert [%v] to int", str)
+	}
+
+	*val = i
+	return nil
+}
+
+func (m message) ReadInts(field string, val *[]int) error {
+	var strs []string
+	if err := m.ReadStrings(field, &strs); err != nil {
+		return err
+	}
+
+	ret := make([]int, 0, len(strs))
+	for _, s := range strs {
+		i, err := strconv.Atoi(s)
+		if err != nil {
+			return errors.Wrapf(err, "Unable to convert [%v] to int", s)
+		}
+
+		ret = append(ret, i)
+	}
+
+	*val = ret
+	return nil
+}
+
+func (m message) ReadBytes(field string, val *[]byte) error {
+	var str string
+	if err := m.ReadString(field, &str); err != nil {
+		return err
+	}
+
+	bytes, err := base64.StdEncoding.DecodeString(str)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to decode [%v] to bytes", str)
+	}
+
+	*val = bytes
+	return nil
+}
+
+func (m message) ReadUUID(field string, val *uuid.UUID) error {
+	var str string
+	if err := m.ReadString(field, &str); err != nil {
+		return err
+	}
+
+	id, err := uuid.FromString(str)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to convert [%v] to uuid", str)
+	}
+
+	*val = id
+	return nil
+}
+
+func (m message) Stream(e Encoder) error {
+	return e.Encode(Object(m).Dump())
+}
+
+func (m message) Write(w Writer) {
+	for k, v := range m {
+		switch t := v.(type) {
+		case Bool:
+			w.WriteBool(k, bool(t))
+		case String:
+			w.WriteString(k, string(t))
+		case Object:
+			w.(writer).WriteObject(k, t)
+		case Array:
+			w.(writer).WriteArray(k, t)
 		}
 	}
-
-	*ptr = ret
-	return nil
 }
 
-func writeInt(val int) Value {
-	return String(strconv.Itoa(val))
-}
-
-func writeInts(val []int) Value {
-	ret := make([]Value, len(val))
-	for i := 0; i < len(val); i++ {
-		ret[i] = writeInt(val[i])
-	}
-
-	return Array(ret)
+func (m message) Raw() Object {
+	return Object(m).Copy()
 }
 
 func isArrayValue(value interface{}) bool {

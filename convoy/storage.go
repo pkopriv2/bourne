@@ -37,25 +37,22 @@ type item struct {
 func readItem(r scribe.Reader) (item, error) {
 	item := &item{}
 
-	id, err := scribe.ReadUUID(r, "memId")
-	if err != nil {
+	if err := r.ReadUUID("memId", &item.MemId); err != nil {
 		return *item, err
 	}
-
-	item.MemId = id
-	if err := r.Read("memVer", &item.MemVer); err != nil {
+	if err := r.ReadInt("memVer", &item.MemVer); err != nil {
 		return *item, err
 	}
-	if err := r.Read("key", &item.Key); err != nil {
+	if err := r.ReadString("key", &item.Key); err != nil {
 		return *item, err
 	}
-	if err := r.Read("val", &item.Val); err != nil {
+	if err := r.ReadString("val", &item.Val); err != nil {
 		return *item, err
 	}
-	if err := r.Read("ver", &item.Ver); err != nil {
+	if err := r.ReadInt("ver", &item.Ver); err != nil {
 		return *item, err
 	}
-	if err := r.Read("del", &item.Del); err != nil {
+	if err := r.ReadBool("del", &item.Del); err != nil {
 		return *item, err
 	}
 
@@ -63,12 +60,12 @@ func readItem(r scribe.Reader) (item, error) {
 }
 
 func (i item) Write(w scribe.Writer) {
-	w.Write("memId", i.MemId.String())
-	w.Write("memVer", i.MemVer)
-	w.Write("key", i.Key)
-	w.Write("val", i.Val)
-	w.Write("ver", i.Ver)
-	w.Write("del", i.Del)
+	w.WriteUUID("memId", i.MemId)
+	w.WriteInt("memVer", i.MemVer)
+	w.WriteString("key", i.Key)
+	w.WriteString("val", i.Val)
+	w.WriteInt("ver", i.Ver)
+	w.WriteBool("del", i.Del)
 }
 
 func (i item) Apply(u *update) bool {

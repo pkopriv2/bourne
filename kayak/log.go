@@ -31,22 +31,9 @@ func newEventLog(ctx common.Context) *eventLog {
 	return &eventLog{amoeba.NewBTreeIndex(32), -1, -1}
 }
 
-// returns and removes a batch of entries from the log.  nil if none.
-func (d *eventLog) Commit(pos int) {
-	if pos < 0  {
-		return // -1 is normal
-	}
-
-	if pos > d.head {
-		panic(fmt.Sprintf("Invalid commit [%v/%v]", pos, d.head))
-	}
-
-	if pos < d.commit {
-		return // idempotency
-	}
-
+func (d *eventLog) Head() (pos int) {
 	d.data.Update(func(u amoeba.Update) {
-		d.commit = pos
+		pos = d.head
 	})
 	return
 }
@@ -54,13 +41,6 @@ func (d *eventLog) Commit(pos int) {
 func (d *eventLog) Committed() (pos int) {
 	d.data.Update(func(u amoeba.Update) {
 		pos = d.commit
-	})
-	return
-}
-
-func (d *eventLog) Head() (pos int) {
-	d.data.Update(func(u amoeba.Update) {
-		pos = d.head
 	})
 	return
 }
@@ -89,6 +69,26 @@ func (d *eventLog) get(u amoeba.View, index int) (item eventLogItem, ok bool) {
 
 	return val.(eventLogItem), true
 }
+
+func (d *eventLog) Commit(pos int) {
+	if pos < 0  {
+		return // -1 is normal
+	}
+
+	if pos > d.head {
+		panic(fmt.Sprintf("Invalid commit [%v/%v]", pos, d.head))
+	}
+
+	if pos < d.commit {
+		return // supports out of order commits.
+	}
+
+	d.data.Update(func(u amoeba.Update) {
+		d.commit = pos
+	})
+	return
+}
+
 
 func (d *eventLog) Get(index int) (item eventLogItem, ok bool) {
 	d.data.Read(func(u amoeba.View) {

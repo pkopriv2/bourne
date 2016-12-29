@@ -8,13 +8,13 @@ import (
 
 type candidate struct {
 	ctx      common.Context
-	in       chan *instance
-	leader   chan<- *instance
-	follower chan<- *instance
+	in       chan *member
+	leader   chan<- *member
+	follower chan<- *member
 	closed   chan struct{}
 }
 
-func newCandidate(ctx common.Context, in chan *instance, leader chan<- *instance, follower chan<- *instance, closed chan struct{}) *candidate {
+func newCandidate(ctx common.Context, in chan *member, leader chan<- *member, follower chan<- *member, closed chan struct{}) *candidate {
 	ret := &candidate{ctx, in, leader, follower, closed}
 	ret.start()
 	return ret
@@ -34,7 +34,7 @@ func (c *candidate) start() error {
 	return nil
 }
 
-func (c *candidate) send(h *instance, ch chan<- *instance) error {
+func (c *candidate) transition(h *member, ch chan<- *member) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -43,7 +43,7 @@ func (c *candidate) send(h *instance, ch chan<- *instance) error {
 	}
 }
 
-func (c *candidate) run(h *instance) error {
+func (c *candidate) run(h *member) error {
 
 	// increment term and vote forself.
 	h.Term(h.term.num+1, nil, &h.id)
@@ -76,7 +76,7 @@ func (c *candidate) run(h *instance) error {
 			if numVotes >= needed {
 				logger.Info("Acquired majority [%v] votes.", needed)
 				h.Term(h.term.num, &h.id, &h.id)
-				c.send(h, c.leader)
+				c.transition(h, c.leader)
 				return
 
 			}
@@ -86,27 +86,27 @@ func (c *candidate) run(h *instance) error {
 				return
 			case append := <-h.clientAppends:
 				if next := c.handleClientAppend(h, append); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case append := <-h.appends:
 				if next := c.handleAppendEvents(h, append); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case ballot := <-h.votes:
 				if next := c.handleRequestVote(h, ballot); next != nil {
-					c.send(h, next)
+					c.transition(h, next)
 					return
 				}
 			case <-timer.C:
 				logger.Info("Unable to acquire necessary votes [%v/%v]", numVotes, needed)
-				c.send(h, c.in) // becomes a new candidate
+				c.transition(h, c.in) // becomes a new candidate
 				return
 			case vote := <-ballots:
 				if vote.term > h.term.num {
 					h.Term(vote.term, nil, nil)
-					c.send(h, c.follower)
+					c.transition(h, c.follower)
 					return
 				}
 
@@ -121,12 +121,12 @@ func (c *candidate) run(h *instance) error {
 
 }
 
-func (c *candidate) handleClientAppend(h *instance, a clientAppend) chan<- *instance {
+func (c *candidate) handleClientAppend(h *member, a clientAppend) chan<- *member {
 	a.reply(NotLeaderError)
 	return nil
 }
 
-func (c *candidate) handleRequestVote(h *instance, vote requestVote) chan<- *instance {
+func (c *candidate) handleRequestVote(h *member, vote requestVote) chan<- *member {
 	if vote.term <= h.term.num {
 		vote.reply(h.term.num, false)
 		return nil
@@ -137,7 +137,7 @@ func (c *candidate) handleRequestVote(h *instance, vote requestVote) chan<- *ins
 	return c.follower
 }
 
-func (c *candidate) handleAppendEvents(h *instance, append appendEvents) chan<- *instance {
+func (c *candidate) handleAppendEvents(h *member, append appendEvents) chan<- *member {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil

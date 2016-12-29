@@ -1,6 +1,7 @@
 package convoy
 
 import (
+	"fmt"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -31,7 +32,7 @@ func TestHost_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 128)
+	hosts := StartTestHostCluster(ctx, 16)
 
 	idx := rand.Intn(len(hosts))
 	host := hosts[idx]
@@ -48,7 +49,7 @@ func TestHost_Failed(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 128)
+	hosts := StartTestHostCluster(ctx, 16)
 
 	idx := rand.Intn(len(hosts))
 	failed := hosts[idx]
@@ -89,7 +90,7 @@ func TestHost_Update_All(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts := StartTestHostCluster(ctx, 128)
+	hosts := StartTestHostCluster(ctx, 16)
 
 	for _, h := range hosts {
 		h.logger.Info("Writing key,val")
@@ -182,7 +183,7 @@ func StartTestMemberHost(ctx common.Context, selfPort int, peerPort int) *host {
 func StartTestHostFromDb(ctx common.Context, db *database, port int, peer string) *host {
 	host, err := newHost(ctx, db, "localhost", port, peer)
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("%+v", err))
 	}
 
 	ctx.Env().OnClose(func() {

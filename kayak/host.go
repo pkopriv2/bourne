@@ -70,7 +70,7 @@ func (p peer) Client(ctx common.Context, parser Parser) (*client, error) {
 
 type host struct {
 	logger common.Logger
-	member *member
+	member *engine
 	server net.Server
 	closed chan struct{}
 	closer chan struct{}
@@ -80,7 +80,7 @@ func newHost(ctx common.Context, self peer, others []peer, parser Parser) (h *ho
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	member, err := newMember(ctx, root, self, others, parser)
+	member, err := newHostEngine(ctx, root, self, others, parser)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func (h *host) Log() *eventLog {
 }
 
 func (h *host) Client() (*client, error) {
-	return h.member.Self().Client(h.member.Context(), h.member.Parser())
+	return h.member.Self().Client(h.Context(), h.Parser())
 }
 
 func (h *host) Close() error {

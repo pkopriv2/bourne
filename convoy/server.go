@@ -169,18 +169,18 @@ func (s *server) PushPull(req net.Request) net.Response {
 
 func serverNewMeta(action string) scribe.Message {
 	return scribe.Build(func(w scribe.Writer) {
-		w.Write("action", action)
+		w.WriteString("action", action)
 	})
 }
 
 func serverReadMeta(meta scribe.Reader) (ret string, err error) {
-	err = meta.Read("action", &ret)
+	err = meta.ReadString("action", &ret)
 	return
 }
 
 func serverReadEvents(msg scribe.Reader, field string) ([]event, error) {
-	msgs, err := scribe.ReadMessages(msg, field)
-	if err != nil {
+	var msgs []scribe.Message
+	if err := msg.ReadMessages(field, &msgs); err != nil {
 		return nil, errors.Wrap(err, "Error parsing events")
 	}
 
@@ -205,18 +205,19 @@ func newPingRequest() net.Request {
 // /health/pingProxy
 func newPingProxyRequest(target uuid.UUID) net.Request {
 	return net.NewRequest(metaPingProxy, scribe.Build(func(w scribe.Writer) {
-		scribe.WriteUUID(w, "target", target)
+		w.WriteUUID("target", target)
 	}))
 }
 
 func newPingProxyResponse(success bool) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		w.Write("success", success)
+		w.WriteBool("success", success)
 	}))
 }
 
 func readPingProxyRequest(req net.Request) (id uuid.UUID, err error) {
-	return scribe.ReadUUID(req.Body(), "target")
+	err = req.Body().ReadUUID("target", &id)
+	return
 }
 
 func readPingProxyResponse(res net.Response) (success bool, err error) {
@@ -224,33 +225,33 @@ func readPingProxyResponse(res net.Response) (success bool, err error) {
 		return
 	}
 
-	err = res.Body().Read("success", &success)
+	err = res.Body().ReadBool("success", &success)
 	return
 }
 
 // /events/pull
 func newPushPullRequest(source uuid.UUID, version int, events []event) net.Request {
 	return net.NewRequest(metaPushPull, scribe.Build(func(w scribe.Writer) {
-		scribe.WriteUUID(w, "id", source)
-		w.Write("ver", version)
-		w.Write("events", events)
+		w.WriteUUID("id", source)
+		w.WriteInt("ver", version)
+		w.WriteMessages("events", events)
 	}))
 }
 
 func newPushPullResponse(success []bool, events []event) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		w.Write("success", success)
-		w.Write("events", events)
+		w.WriteBools("success", success)
+		w.WriteMessages("events", events)
 	}))
 }
 
 func readPushPullRequest(req net.Request) (id uuid.UUID, ver int, events []event, err error) {
-	id, err = scribe.ReadUUID(req.Body(), "id")
+	err = req.Body().ReadUUID("id", &id)
 	if err != nil {
 		return
 	}
 
-	ver, err = scribe.ReadInt(req.Body(), "ver")
+	err = req.Body().ReadInt("ver", &ver)
 	if err != nil {
 		return
 	}
@@ -260,11 +261,13 @@ func readPushPullRequest(req net.Request) (id uuid.UUID, ver int, events []event
 }
 
 func readPushPullResponse(res net.Response) (success []bool, events []event, err error) {
-	if err = res.Error(); err != nil {
+	err = res.Error()
+	if err != nil {
 		return
 	}
 
-	if err = res.Body().Read("success", &success); err != nil {
+	err = res.Body().ReadBools("success", &success)
+	if err != nil {
 		return
 	}
 
@@ -279,7 +282,7 @@ func newDirListRequest() net.Request {
 
 func newDirListResponse(events []event) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		w.Write("events", events)
+		w.WriteMessages("events", events)
 	}))
 }
 
@@ -294,7 +297,7 @@ func readDirListResponse(res net.Response) ([]event, error) {
 // /dir/apply
 func newDirApplyRequest(events []event) net.Request {
 	return net.NewRequest(metaDirApply, scribe.Build(func(w scribe.Writer) {
-		w.Write("events", events)
+		w.WriteMessages("events", events)
 	}))
 }
 
@@ -304,7 +307,7 @@ func readDirApplyRequest(req net.Request) ([]event, error) {
 
 func newDirApplyResponse(success []bool) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		w.Write("success", success)
+		w.WriteBools("success", success)
 	}))
 }
 
@@ -313,27 +316,27 @@ func readDirApplyResponse(res net.Response) (msgs []bool, err error) {
 		return nil, err
 	}
 
-	err = res.Body().Read("success", &msgs)
+	err = res.Body().ReadBools("success", &msgs)
 	return
 }
 
 // /store/put
 func newStorePutRequest(key string, val string, expected int) net.Request {
 	return net.NewRequest(metaDirApply, scribe.Build(func(w scribe.Writer) {
-		w.Write("key", key)
-		w.Write("val", val)
-		w.Write("ver", expected)
+		w.WriteString("key", key)
+		w.WriteString("val", val)
+		w.WriteInt("ver", expected)
 	}))
 }
 
 func readStorePutRequest(req net.Request) (key string, val string, ver int, err error) {
-	if err = req.Body().Read("key", &key); err != nil {
+	if err = req.Body().ReadString("key", &key); err != nil {
 		return
 	}
-	if err = req.Body().Read("val", &val); err != nil {
+	if err = req.Body().ReadString("val", &val); err != nil {
 		return
 	}
-	if err = req.Body().Read("ver", &ver); err != nil {
+	if err = req.Body().ReadInt("ver", &ver); err != nil {
 		return
 	}
 	return

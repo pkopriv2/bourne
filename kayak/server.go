@@ -29,11 +29,11 @@ type server struct {
 	logger common.Logger
 
 	// the member
-	self *member
+	self *engine
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, logger common.Logger, port string, self *member) (net.Server, error) {
+func newServer(ctx common.Context, logger common.Logger, port string, self *engine) (net.Server, error) {
 	server := &server{
 		ctx:    ctx,
 		logger: logger.Fmt("Server"),
@@ -109,12 +109,12 @@ func (s *server) ClientAppend(req net.Request) net.Response {
 
 func serverNewMeta(action string) scribe.Message {
 	return scribe.Build(func(w scribe.Writer) {
-		w.Write("action", action)
+		w.WriteString("action", action)
 	})
 }
 
 func serverReadMeta(meta scribe.Reader) (ret string, err error) {
-	err = meta.Read("action", &ret)
+	err = meta.ReadString("action", &ret)
 	return
 }
 
@@ -138,17 +138,16 @@ func newClientAppendRequest(a clientAppendRequest) net.Request {
 
 func newResponseResponse(res response) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		res.Write(w)
+		w.WriteInt("term", res.term)
+		w.WriteBool("success", res.success)
 	}))
 }
 
-func readResponseResponse(res net.Response) (response, error) {
-	err := res.Error()
-	if err != nil {
-		return response{}, err
-	}
-
-	return readResponse(res.Body())
+func readResponseResponse(res net.Response) (ret response, err error) {
+	err = common.Or(err, res.Error())
+	err = common.Or(err, res.Body().ReadInt("term", &ret.term))
+	err = common.Or(err, res.Body().ReadBool("success", &ret.success))
+	return ret, err
 }
 
 type requestVoteRequest struct {
@@ -158,25 +157,19 @@ type requestVoteRequest struct {
 	maxLogTerm  int
 }
 
-func readRequestVoteRequest(r scribe.Reader) (requestVoteRequest, error) {
-	id, err := scribe.ReadUUID(r, "id")
-	if err != nil {
-		return requestVoteRequest{}, err
-	}
-
-	ret := requestVoteRequest{id: id}
-
-	err = common.Or(err, r.Read("term", &ret.term))
-	err = common.Or(err, r.Read("maxLogIndex", &ret.maxLogIndex))
-	err = common.Or(err, r.Read("maxLogTerm", &ret.maxLogTerm))
+func readRequestVoteRequest(r scribe.Reader) (ret requestVoteRequest, err error) {
+	err = common.Or(err, r.ReadUUID("id", &ret.id))
+	err = common.Or(err, r.ReadInt("term", &ret.term))
+	err = common.Or(err, r.ReadInt("maxLogIndex", &ret.maxLogIndex))
+	err = common.Or(err, r.ReadInt("maxLogTerm", &ret.maxLogTerm))
 	return ret, err
 }
 
 func (r requestVoteRequest) Write(w scribe.Writer) {
-	scribe.WriteUUID(w, "id", r.id)
-	w.Write("term", r.term)
-	w.Write("maxLogTerm", r.maxLogTerm)
-	w.Write("maxLogIndex", r.maxLogIndex)
+	w.WriteUUID("id", r.id)
+	w.WriteInt("term", r.term)
+	w.WriteInt("maxLogTerm", r.maxLogTerm)
+	w.WriteInt("maxLogIndex", r.maxLogIndex)
 }
 
 type appendEventsRequest struct {
@@ -189,30 +182,24 @@ type appendEventsRequest struct {
 }
 
 func (a appendEventsRequest) Write(w scribe.Writer) {
-	scribe.WriteUUID(w, "id", a.id)
-	w.Write("term", a.term)
-	w.Write("events", a.events)
-	w.Write("prevLogIndex", a.prevLogIndex)
-	w.Write("prevLogTerm", a.prevLogTerm)
-	w.Write("commit", a.commit)
+	w.WriteUUID("id", a.id)
+	w.WriteInt("term", a.term)
+	w.WriteMessages("events", a.events)
+	w.WriteInt("prevLogIndex", a.prevLogIndex)
+	w.WriteInt("prevLogTerm", a.prevLogTerm)
+	w.WriteInt("commit", a.commit)
 }
 
-func readAppendEventsRequest(r scribe.Reader, parse Parser) (appendEventsRequest, error) {
-	id, err := scribe.ReadUUID(r, "id")
-	if err != nil {
-		return appendEventsRequest{}, err
-	}
-
-	ret := &appendEventsRequest{id: id}
-
+func readAppendEventsRequest(r scribe.Reader, parse Parser) (ret appendEventsRequest, err error) {
 	var msgs []scribe.Message
-	err = common.Or(err, r.Read("term", &ret.term))
-	err = common.Or(err, r.Read("events", &msgs))
-	err = common.Or(err, r.Read("prevLogTerm", &ret.prevLogTerm))
-	err = common.Or(err, r.Read("prevLogIndex", &ret.prevLogIndex))
-	err = common.Or(err, r.Read("commit", &ret.commit))
+	err = common.Or(err, r.ReadUUID("id", &ret.id))
+	err = common.Or(err, r.ReadInt("term", &ret.term))
+	err = common.Or(err, r.ReadMessages("events", &msgs))
+	err = common.Or(err, r.ReadInt("prevLogTerm", &ret.prevLogTerm))
+	err = common.Or(err, r.ReadInt("prevLogIndex", &ret.prevLogIndex))
+	err = common.Or(err, r.ReadInt("commit", &ret.commit))
 	if err != nil {
-		return appendEventsRequest{}, err
+		return
 	}
 
 	events := make([]event, 0, len(msgs))
@@ -225,7 +212,7 @@ func readAppendEventsRequest(r scribe.Reader, parse Parser) (appendEventsRequest
 	}
 
 	ret.events = events
-	return *ret, err
+	return ret, err
 }
 
 type clientAppendRequest struct {
@@ -233,13 +220,13 @@ type clientAppendRequest struct {
 }
 
 func (a clientAppendRequest) Write(w scribe.Writer) {
-	w.Write("events", a.events)
+	w.WriteMessages("events", a.events)
 }
 
-func readClientAppendRequest(r scribe.Reader, parse Parser) (clientAppendRequest, error) {
+func readClientAppendRequest(r scribe.Reader, parse Parser) (ret clientAppendRequest, err error) {
 	var msgs []scribe.Message
-	if err := r.Read("events", &msgs); err != nil {
-		return clientAppendRequest{}, err
+	if err = r.ReadMessages("events", &msgs); err != nil {
+		return
 	}
 
 	events := make([]event, 0, len(msgs))

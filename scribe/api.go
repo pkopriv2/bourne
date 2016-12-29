@@ -3,6 +3,8 @@ package scribe
 import (
 	"fmt"
 	"reflect"
+
+	uuid "github.com/satori/go.uuid"
 )
 
 // This package implements a very simple message formating/encoding scheme
@@ -62,6 +64,7 @@ func (m *IncompatibleTypeError) Error() string {
 	return fmt.Sprintf("Incompatible types. Expected [%v]; Actual [%v]", m.expected, m.actual)
 }
 
+// Returned when an unknown type is encountered.
 type UnsupportedTypeError struct {
 	actual string
 }
@@ -85,32 +88,35 @@ type Writable interface {
 // The primary encoding interface. Consumers use the writer to populate
 // the fields of a message
 type Writer interface {
-	Write(field string, val interface{})
+	WriteBool(field string, val bool)
+	WriteBools(field string, val []bool)
+	WriteString(field string, val string)
+	WriteStrings(field string, val []string)
+	WriteMessage(field string, val Writable)
+	WriteMessages(field string, val interface{}) // must be a pointer to an array of writables.
 
-	// WriteInt(field string, val int)
-	// WriteInts(field string, val []int)
-	// WriteBool(field string, val bool)
-	// WriteBools(field string, val []bool)
-	// WriteString(field string, val string)
-	// WriteStrings(field string, val []string)
-	// WriteWritable(field string, val Writable)
-	// WriteWritables(field string, val []Writable)
+	// Supported Extensions
+	WriteInt(field string, val int)
+	WriteInts(field string, val []int)
+	WriteBytes(field string, val []byte)
+	WriteUUID(field string, val uuid.UUID)
 }
 
 // The primary decoding interface. Consumers use the reader to populate
 // the fields of an object.
 type Reader interface {
-	Read(field string, ptr interface{}) error
-	ReadOptional(field string, ptr interface{}) (bool, error)
+	ReadBool(field string, val *bool) error
+	ReadBools(field string, val *[]bool) error
+	ReadString(field string, val *string) error
+	ReadStrings(field string, val *[]string) error
+	ReadMessage(field string, val *Message) error
+	ReadMessages(field string, val *[]Message) error
 
-	// ReadInt(field string, val *int) error
-	// ReadInts(field string, val *[]int) error
-	// ReadBool(field string, val *bool) error
-	// ReadBools(field string, val *[]bool) error
-	// ReadString(field string, val *string) error
-	// ReadStrings(field string, val *[]string) error
-	// ReadWritable(field string, val *Writable) error
-	// ReadWritables(field string, val *[]Writable) error
+	// Supported extensions
+	ReadInt(field string, val *int) error
+	ReadInts(field string, val *[]int) error
+	ReadBytes(field string, val *[]byte) error
+	ReadUUID(field string, val *uuid.UUID) error
 }
 
 // An immutable data object.  A message may be embedded in other messages
@@ -138,4 +144,3 @@ type Decoder interface {
 type Streamer interface {
 	Stream(Encoder) error
 }
-

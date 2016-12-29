@@ -140,12 +140,12 @@ func readRequest(dec scribe.Decoder) (Request, error) {
 	}
 
 	var meta scribe.Message
-	if err := msg.Read("meta", &meta); err != nil {
+	if err := msg.ReadMessage("meta", &meta); err != nil {
 		return nil, err
 	}
 
 	var body scribe.Message
-	if err := msg.Read("body", &body); err != nil {
+	if err := msg.ReadMessage("body", &body); err != nil {
 		return nil, err
 	}
 
@@ -159,12 +159,16 @@ func readResponse(dec scribe.Decoder) (Response, error) {
 	}
 
 	var erro string
-	if _, err := msg.ReadOptional("error", &erro); err != nil {
-		return nil, err
+	if err := msg.ReadString("error", &erro); err != nil {
+		switch err.(type) {
+		default:
+			return nil, err
+		case *scribe.MissingFieldError:
+		}
 	}
 
 	var body scribe.Message
-	if err := msg.Read("body", &body); err != nil {
+	if err := msg.ReadMessage("body", &body); err != nil {
 		return nil, err
 	}
 
@@ -186,8 +190,8 @@ func (r *request) Body() scribe.Reader {
 }
 
 func (r *request) Write(w scribe.Writer) {
-	w.Write("meta", r.meta)
-	w.Write("body", r.body)
+	w.WriteMessage("meta", r.meta)
+	w.WriteMessage("body", r.body)
 }
 
 func (r *request) String() string {
@@ -208,9 +212,9 @@ func (r *response) Body() scribe.Reader {
 }
 
 func (r *response) Write(w scribe.Writer) {
-	w.Write("body", r.body)
+	w.WriteMessage("body", r.body)
 	if r.err != nil {
-		w.Write("error", r.err.Error())
+		w.WriteString("error", r.err.Error())
 	}
 }
 

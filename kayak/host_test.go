@@ -1,9 +1,7 @@
 package kayak
 
 import (
-	"os"
 	"runtime"
-	"runtime/pprof"
 	"strconv"
 	"testing"
 	"time"
@@ -65,7 +63,6 @@ func TestHost_Cluster_Close(t *testing.T) {
 
 	after := runtime.NumGoroutine()
 	assert.Equal(t, before, after)
-	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 }
 
 func TestHost_Cluster_Leader_Failure(t *testing.T) {
@@ -148,7 +145,6 @@ func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
 	cluster := StartTestCluster(ctx, 3)
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
-
 
 	for i := 0; i < 10; i++ {
 		go func() {
