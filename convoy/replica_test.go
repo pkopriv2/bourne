@@ -60,7 +60,7 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 	defer replica.Close()
 
 	replica.Db.Put("key2", "val", 0)
-	done, timeout := concurrent.NewBreaker(5*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(5*time.Second, func() {
 		for {
 			members := replica.Dir.Search(func(id uuid.UUID, key string, val string) bool {
 				return key == "key2"
@@ -71,19 +71,19 @@ func TestReplica_Dir_Indexing(t *testing.T) {
 			}
 
 			if len(members) > 1 {
-				t.FailNow()
-				return nil
+				assert.Fail(t, "Too many members found.")
+				return
 			}
 
 			assert.Equal(t, []member{replica.Self}, members)
-			return nil
+			return
 		}
 	})
 
 	select {
 	case <-done:
 	case <-timeout:
-		t.FailNow()
+		assert.Fail(t, "Timeout while waiting for indexing")
 	}
 }
 
@@ -103,11 +103,10 @@ func TestReplica_Join(t *testing.T) {
 	replicaJoin(r1, masterClient)
 	replicaJoin(r2, masterClient)
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncReplicaCluster([]*replica{master, r1, r2}, func(r *replica) bool {
 			return len(r.Dir.AllActive()) == 3
 		})
-		return nil
 	})
 
 	select {
@@ -125,7 +124,7 @@ func TestReplica_Leave(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 128
+	size := 32
 	cluster := StartTestReplicaCluster(ctx, size)
 
 	assert.True(t, true)
@@ -135,12 +134,10 @@ func TestReplica_Leave(t *testing.T) {
 	rep := cluster[idx]
 	rep.Leave()
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncReplicaCluster(removeReplica(cluster, idx), func(r *replica) bool {
 			return !r.Dir.IsHealthy(rep.Id()) || !r.Dir.IsActive(rep.Id())
 		})
-
-		return nil
 	})
 
 	select {
@@ -160,7 +157,7 @@ func TestReplica_Evict(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 128
+	size := 32
 	cluster := StartTestReplicaCluster(ctx, size)
 
 	indices := rand.Perm(size)
@@ -170,7 +167,7 @@ func TestReplica_Evict(t *testing.T) {
 	r1.Logger.Info("Evicting member [%v]", r2.Self)
 	r1.Dir.Evict(r2.Self)
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncReplicaCluster(removeReplica(cluster, indices[1]), func(r *replica) bool {
 			return !r.Dir.IsActive(r2.Id())
 		})
@@ -179,7 +176,6 @@ func TestReplica_Evict(t *testing.T) {
 			err := r.ensureOpen()
 			return err != nil
 		})
-		return nil
 	})
 
 	select {
@@ -199,14 +195,14 @@ func TestReplica_Fail_Manual(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 128
+	size := 32
 	cluster := StartTestReplicaCluster(ctx, size)
 
 	r1 := cluster[rand.Intn(size)]
 	r2 := cluster[rand.Intn(size)] // they don't have to be unique
 	r1.Dir.Fail(r2.Self)
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncReplicaCluster(cluster, func(r *replica) bool {
 			h, _ := r.Dir.Health(r2.Self.id)
 			return !h.Healthy
@@ -216,7 +212,6 @@ func TestReplica_Fail_Manual(t *testing.T) {
 			err := r.ensureOpen()
 			return err != nil
 		})
-		return nil
 	})
 
 	select {
@@ -230,13 +225,13 @@ func TestReplica_Fail_Manual(t *testing.T) {
 
 func TestReplica_Fail_Automatic(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
+		"bourne.log.level": int(common.Debug),
 	})
 
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 128
+	size := 32
 	cluster := StartTestReplicaCluster(ctx, size)
 
 	i := rand.Intn(size)
@@ -245,7 +240,7 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 	m.Logger.Info("Triggering failure.")
 	m.Server.Close()
 
-	done, timeout := concurrent.NewBreaker(30*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(30*time.Second, func() {
 		remaining := removeReplica(cluster, i)
 		SyncReplicaCluster(remaining, func(r *replica) bool {
 			h, _ := r.Dir.Health(m.Self.id)
@@ -256,7 +251,6 @@ func TestReplica_Fail_Automatic(t *testing.T) {
 			err := r.ensureOpen()
 			return err != nil
 		})
-		return nil
 	})
 
 	select {
@@ -274,7 +268,7 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	size := 128
+	size := 32
 	cluster := StartTestReplicaCluster(ctx, size)
 
 	i := rand.Intn(size)
@@ -283,7 +277,7 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 	m.Logger.Info("Writing key=>val")
 	m.Db.Put("key", "val", 0)
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		remaining := removeReplica(cluster, i)
 		SyncReplicaCluster(remaining, func(r *replica) bool {
 			found := r.Dir.Search(func(id uuid.UUID, key string, val string) bool {
@@ -292,7 +286,6 @@ func TestReplica_SingleDb_SingleUpdate(t *testing.T) {
 
 			return len(found) == 1
 		})
-		return nil
 	})
 
 	select {

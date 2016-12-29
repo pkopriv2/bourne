@@ -1,11 +1,15 @@
 package concurrent
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 var PoolClosedError = errors.New("Pool closed")
 
 type WorkPool interface {
 	Submit(func()) error
+	SubmitTimeout(time.Duration, func()) error
 	Close() error
 }
 
@@ -53,6 +57,27 @@ func (p *pool) Submit(fn func()) error {
 	return nil
 }
 
+func (p *pool) SubmitTimeout(dur time.Duration, fn func()) (err error) {
+	done, timeout := NewBreaker(dur, func() {
+		err = p.push()
+	})
+
+	select {
+	case <-done:
+		if err != nil {
+			return err
+		}
+	case e := <-timeout:
+		return e
+	}
+
+	go func() {
+		defer p.pop()
+		fn()
+	}()
+	return nil
+}
+
 func (p *pool) Close() error {
 	select {
 	case <-p.closed:
@@ -60,10 +85,10 @@ func (p *pool) Close() error {
 	case p.closer <- struct{}{}:
 	}
 
-	// wait on the active routines
-	for i := 0; i < p.size; i++ {
-		p.push()
-	}
+	// // wait on the active routines
+	// for i := 0; i < p.size; i++ {
+	// p.push()
+	// }
 
 	close(p.closed)
 	return nil

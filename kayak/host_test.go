@@ -96,12 +96,10 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, cl.Append([]event{&testEvent{}}))
 
-	done, timeout := concurrent.NewBreaker(2*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
 			return h.Log().Head() == 0 && h.Log().Committed() == 0
 		})
-
-		return nil
 	})
 
 	select {
@@ -123,12 +121,10 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, cl.Append([]event{&testEvent{}, &testEvent{}}))
 
-	done, timeout := concurrent.NewBreaker(2*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
 			return h.Log().Head() == 1 && h.Log().Committed() == 1
 		})
-
-		return nil
 	})
 
 	select {
@@ -157,12 +153,39 @@ func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
 		}()
 	}
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
 			return h.Log().Head() == 99 && h.Log().Committed() == 99
 		})
+	})
 
-		return nil
+	select {
+	case <-done:
+	case <-timeout:
+		assert.Fail(t, "Timed out waiting for majority to sync")
+	}
+}
+
+func TestHost_Cluster_Follower_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	cluster := StartTestCluster(ctx, 3)
+	leader := Converge(cluster)
+	assert.NotNil(t, leader)
+
+	member := First(cluster, func(h *host) bool {
+		return h.Id() != leader.Id()
+	})
+
+	cl, err := member.Client()
+	assert.Nil(t, err)
+	assert.Nil(t, cl.Append([]event{&testEvent{}}))
+
+	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
+		SyncMajority(cluster, func(h *host) bool {
+			return h.Log().Head() == 0 && h.Log().Committed() == 0
+		})
 	})
 
 	select {
@@ -212,7 +235,7 @@ func Converge(cluster []*host) *host {
 	var leader *uuid.UUID
 
 	cancelled := make(chan struct{})
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncAll(cluster, func(h *host) bool {
 			select {
 			case <-cancelled:
@@ -231,7 +254,6 @@ func Converge(cluster []*host) *host {
 
 			return leader != nil && copy.leader == leader && copy.num == term
 		})
-		return nil
 	})
 
 	// data race...

@@ -64,8 +64,8 @@ func (c *candidate) run(h *member) error {
 	})
 
 	// set the election timer.
-	logger.Info("Setting timer [%v]", h.timeout)
-	timer := time.NewTimer(h.timeout)
+	logger.Info("Setting timer [%v]", h.ElectionTimeout)
+	timer := time.NewTimer(h.ElectionTimeout)
 
 	// kick off candidate routine
 	go func() {
@@ -84,11 +84,6 @@ func (c *candidate) run(h *member) error {
 			select {
 			case <-c.closed:
 				return
-			case append := <-h.clientAppends:
-				if next := c.handleClientAppend(h, append); next != nil {
-					c.transition(h, next)
-					return
-				}
 			case append := <-h.appends:
 				if next := c.handleAppendEvents(h, append); next != nil {
 					c.transition(h, next)
@@ -117,12 +112,6 @@ func (c *candidate) run(h *member) error {
 		}
 	}()
 
-	return nil
-
-}
-
-func (c *candidate) handleClientAppend(h *member, a clientAppend) chan<- *member {
-	a.reply(NotLeaderError)
 	return nil
 }
 

@@ -125,10 +125,10 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 	evictions := r.Dir.Evictions()
 	go func() {
 		for e := range evictions {
-			r.Logger.Debug("Member evicted [%v]", e.Id, e.Version)
+			r.Logger.Debug("Member evicted [%v,%v]", e.Id, e.Version)
 			if e.Id == r.Self.id && e.Version == r.Self.version && !r.leaving.Get() {
 				r.Logger.Info("Self evicted. Shutting down.")
-				// r.Leave()
+				// r.Leave() // We received this message...therefore it was already disseminated.
 				r.shutdown(EvictedError)
 			}
 		}
@@ -137,7 +137,7 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 	failures := r.Dir.Failures()
 	go func() {
 		for f := range failures {
-			r.Logger.Debug("Member failed [%v]", f.Id, f.Version)
+			r.Logger.Debug("Member failed [%v,%v]", f.Id, f.Version)
 			if f.Id == r.Self.id && f.Version == r.Self.version {
 				r.Logger.Error("Self Failed. Shutting down.")
 				r.shutdown(FailedError)
@@ -201,40 +201,37 @@ func (r *replica) shutdown(err error) error {
 	defer common.RunIf(func() { r.Failure = err })(err)
 
 	var err1 error
-	done1, timeout1 := concurrent.NewBreaker(5*time.Second, func() interface{} {
-		err1 = r.Server.Close()
-		return nil
-	})
 	var err2 error
-	done2, timeout2 := concurrent.NewBreaker(5*time.Second, func() interface{} {
-		err2 = r.Dissem.Close()
-		return nil
-	})
 	var err3 error
-	done3, timeout3 := concurrent.NewBreaker(5*time.Second, func() interface{} {
+	done1, timeout1 := concurrent.NewBreaker(5*time.Second, func(){
+		err1 = r.Server.Close()
+	})
+	done2, timeout2 := concurrent.NewBreaker(5*time.Second, func() {
+		err2 = r.Dissem.Close()
+	})
+	done3, timeout3 := concurrent.NewBreaker(5*time.Second, func() {
 		err3 = r.Dir.Close()
-		return nil
 	})
 
 	select {
 	case <-done1:
 		err = common.Or(err, err1)
-	case <-timeout1:
-		err = common.Or(err, errors.New("Timeout Closing Server"))
+	case e := <-timeout1:
+		err = common.Or(err, errors.Wrapf(e, "Timeout Closing Server"))
 	}
 
 	select {
 	case <-done2:
 		err = common.Or(err, err2)
-	case <-timeout2:
-		err = common.Or(err, errors.New("Timeout Closing Disseminator"))
+	case e := <-timeout2:
+		err = common.Or(err, errors.Wrapf(e, "Timeout Closing Disseminator"))
 	}
 
 	select {
 	case <-done3:
 		err = common.Or(err, err3)
-	case <-timeout3:
-		err = common.Or(err, errors.New("Timeout Closing Directory"))
+	case e := <-timeout3:
+		err = common.Or(err, errors.Wrapf(e, "Timeout Closing Directory"))
 	}
 
 	return common.Or(err, r.Changes.Close())
@@ -249,29 +246,24 @@ func (r *replica) leaveAndDrain() error {
 		return errors.Wrap(err, "Error evicting self")
 	}
 
-	done, timeout := concurrent.NewBreaker(10*time.Minute, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Minute, func() {
 		for size := r.Dissem.events.data.Size(); size > 0; size = r.Dissem.events.data.Size() {
 			select {
 			case <-r.Closed:
-				return ClosedError
+				return
 			default:
 			}
 
 			r.Logger.Info("Remaining items: %v", size)
 			time.Sleep(1 * time.Second)
 		}
-		return nil
 	})
 
 	select {
-	case e := <-done:
-		if e == nil {
-			return nil
-		}
-
-		return e.(error)
-	case <-timeout:
-		return errors.New("Timeout while emptying queue")
+	case <-done:
+		return nil
+	case e := <-timeout:
+		return errors.Wrapf(e, "Timeout while emptying queue.")
 	}
 }
 

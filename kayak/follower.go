@@ -1,9 +1,12 @@
 package kayak
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/net"
 )
 
 type follower struct {
@@ -42,21 +45,49 @@ func (c *follower) transition(h *member, ch chan<- *member) error {
 	}
 }
 
+func newLeaderPool(h *member) net.ConnectionPool {
+	if h.term.leader == nil {
+		return nil
+	}
+
+	leader, found := h.Peer(*h.term.leader)
+	if !found {
+		panic(fmt.Sprintf("Unknown member [%v]", h.term.leader))
+	}
+
+	return net.NewConnectionPool("tcp", leader.addr, 30, h.ElectionTimeout)
+}
+
 func (c *follower) run(h *member) error {
 	logger := h.logger.Fmt("Follower[%v]", h.term)
 	logger.Info("Becoming follower")
 
-	go func() {
-		for {
+	// the current term (should be constant throughout the instance of the follower)
+	term := h.CurrentTerm()
 
-			logger.Debug("Resetting heartbeat timer [%v]", h.timeout)
-			timer := time.NewTimer(h.timeout)
+	// start the work pool
+	work := concurrent.NewWorkPool(10)
+
+	// start the connection pool (might be nil, if the member has no leader)
+	conns := newLeaderPool(h)
+
+	go func() {
+		defer common.RunIf(func() { conns.Close() })(conns)
+		defer work.Close()
+		for {
+			timer := time.NewTimer(h.ElectionTimeout)
+
+			// Only allow client appends if we have a leader.
+			var clientAppends <-chan clientAppend
+			if term.leader != nil {
+				clientAppends = h.clientAppends
+			}
 
 			select {
 			case <-c.closed:
 				return
-			case append := <-h.clientAppends:
-				if next := c.handleClientAppend(h, logger, append); next != nil {
+			case append := <-clientAppends:
+				if next := c.handleClientAppend(h, work, conns, logger, append); next != nil {
 					c.transition(h, next)
 					return
 				}
@@ -80,8 +111,25 @@ func (c *follower) run(h *member) error {
 	return nil
 }
 
-func (c *follower) handleClientAppend(h *member, logger common.Logger, append clientAppend) chan<- *member {
-	append.reply(NotLeaderError)
+func (c *follower) handleClientAppend(h *member, pool concurrent.WorkPool, conns net.ConnectionPool, logger common.Logger, append clientAppend) chan<- *member {
+	if err := pool.SubmitTimeout(h.RequestTimeout, func() {
+		conn := conns.TakeTimeout(h.RequestTimeout/2)
+		if conn == nil {
+			return
+		}
+		defer conn.Close()
+
+		raw, err := net.NewClient(h.ctx, logger, conn)
+		if err != nil {
+			append.reply(err)
+			return
+		}
+
+		cl := newClient(raw, h.parser)
+		append.reply(cl.Append(append.events))
+	}); err != nil {
+		append.reply(err)
+	}
 	return nil
 }
 

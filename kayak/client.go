@@ -10,6 +10,10 @@ type client struct {
 	parser Parser
 }
 
+func newClient(raw net.Client, p Parser) *client {
+	return &client{raw, p}
+}
+
 func (c *client) Close() error {
 	return c.raw.Close()
 }

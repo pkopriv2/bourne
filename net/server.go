@@ -3,12 +3,12 @@ package net
 import (
 	"encoding/gob"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
@@ -323,11 +323,7 @@ func (s *client) Close() error {
 	return s.conn.Close()
 }
 
-func (s *client) Send(req Request) (Response, error) {
-
-	var res Response
-	var err error
-
+func (s *client) Send(req Request) (res Response, err error) {
 	if err = s.send(req); err != nil {
 		s.logger.Error("Error sending request: %v", err)
 		return res, err
@@ -341,34 +337,29 @@ func (s *client) Send(req Request) (Response, error) {
 	return res, err
 }
 
-func (s *client) send(req Request) error {
-	var err error
-	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
+func (s *client) send(req Request) (err error) {
+	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() {
 		err = scribe.Encode(s.enc, req)
-		return nil
 	})
 
 	select {
 	case <-done:
-		return err
-	case <-timeout:
-		return concurrent.NewTimeoutError(s.sendTimeout, "client:send")
+		return
+	case e := <-timeout:
+		return errors.Wrapf(e, "client:send")
 	}
 }
 
-func (s *client) recv() (Response, error) {
-	var resp Response
-	var err error
-	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
+func (s *client) recv() (resp Response, err error) {
+	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() {
 		resp, err = readResponse(s.dec)
-		return nil
 	})
 
 	select {
 	case <-done:
-		return resp, err
-	case <-timeout:
-		return resp, concurrent.NewTimeoutError(s.sendTimeout, "client:recv")
+		return
+	case e := <-timeout:
+		return resp, errors.Wrapf(e, "client:recv")
 	}
 }
 
@@ -428,6 +419,7 @@ func (s *server) Close() error {
 	case s.closer <- struct{}{}:
 	}
 
+	s.logger.Info("Closing server.")
 	close(s.closed)
 
 	var err error
@@ -524,32 +516,30 @@ func (s *server) handle(req Request) (Response, error) {
 }
 
 func (s *server) recv(dec scribe.Decoder) (req Request, err error) {
-	done, timer := concurrent.NewBreaker(s.recvTimeout, func() interface{} {
+	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() {
 		req, err = readRequest(dec)
-		return nil
 	})
 
 	select {
 	case <-s.closed:
 		return req, ServerClosedError
-	case <-timer:
-		return req, concurrent.NewTimeoutError(s.sendTimeout, "server:recv")
+	case e := <-timeout:
+		return req, errors.Wrapf(e, "server:recv")
 	case <-done:
 		return req, err
 	}
 }
 
 func (s *server) send(encoder scribe.Encoder, res Response) (err error) {
-	done, timer := concurrent.NewBreaker(s.sendTimeout, func() interface{} {
+	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() {
 		err = scribe.Encode(encoder, res)
-		return nil
 	})
 
 	select {
 	case <-s.closed:
 		return ServerClosedError
-	case <-timer:
-		return concurrent.NewTimeoutError(s.sendTimeout, "server:send")
+	case e := <-timeout:
+		return errors.Wrapf(e, "server:send")
 	case <-done:
 		return err
 	}

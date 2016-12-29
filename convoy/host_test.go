@@ -62,7 +62,7 @@ func TestHost_Failed(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		r.Logger.Info("Done Sleeping")
 
-		done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+		done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 			SyncHostCluster(hosts, func(h *host) bool {
 				all, err := h.Directory().All()
 				if err != nil {
@@ -71,7 +71,6 @@ func TestHost_Failed(t *testing.T) {
 
 				return len(all) == len(hosts)
 			})
-			return nil
 		})
 
 		select {
@@ -97,7 +96,7 @@ func TestHost_Update_All(t *testing.T) {
 		h.Store().Put("key", "val", 0)
 	}
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() interface{} {
+	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncHostCluster(hosts, func(h *host) bool {
 			found, _ := h.Directory().Search(func(id uuid.UUID, key string, val string) bool {
 				if key == "key" {
@@ -108,7 +107,6 @@ func TestHost_Update_All(t *testing.T) {
 
 			return len(found) == len(hosts)
 		})
-		return nil
 	})
 
 	select {

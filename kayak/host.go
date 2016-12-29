@@ -147,7 +147,6 @@ func (h *host) Close() error {
 	var err error
 	err = common.Or(err, h.member.Close())
 	err = common.Or(err, h.server.Close())
-
 	close(h.closed)
 	return err
 }

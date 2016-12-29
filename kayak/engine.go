@@ -2,7 +2,6 @@ package kayak
 
 import (
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
@@ -14,8 +13,8 @@ import (
 // Internally, this consists of a single member object that hosts all the member
 // state.  The internal instance is free to move between the various engine
 // components. Each sub machine is responsible for understanding the conditions that
-// lead to inter-machine movement.  Each machine defines its own concurrency semantics,
-// therefore it is NOT generally safe to access the internal member state.
+// lead to inter-machine movement.  Requests should be forwarded to the member
+// instance, except where the instance has exposed public methods.
 //
 type engine struct {
 
@@ -46,22 +45,8 @@ func newHostEngine(ctx common.Context, logger common.Logger, self peer, others [
 	closed := make(chan struct{})
 	closer := make(chan struct{}, 1)
 
-	inst := &member{
-		ctx:           ctx,
-		id:            self.id,
-		self:          self,
-		peers:         others,
-		logger:        logger,
-		parser:        parser,
-		log:           newEventLog(ctx),
-		appends:       make(chan appendEvents),
-		votes:         make(chan requestVote),
-		clientAppends: make(chan clientAppend),
-		timeout:       time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
-	}
-
 	m := &engine{
-		instance:  inst,
+		instance:  newMember(ctx, logger, self, others, parser),
 		follower:  newFollower(ctx, follower, candidate, closed),
 		candidate: newCandidate(ctx, candidate, leader, follower, closed),
 		leader:    newLeader(ctx, leader, follower, closed),
@@ -151,9 +136,12 @@ func (h *engine) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) 
 func (h *engine) RequestClientAppend(events []event) error {
 	append := clientAppend{events, make(chan error, 1)}
 
+	timer := time.NewTimer(h.instance.RequestTimeout)
 	select {
 	case <-h.closed:
 		return ClosedError
+	case <-timer.C:
+		return NewTimeoutError(h.instance.RequestTimeout, "ClientAppend")
 	case h.instance.clientAppends <- append:
 		select {
 		case <-h.closed:

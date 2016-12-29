@@ -196,27 +196,23 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			done, timeout := concurrent.NewBreaker(d.probeTimeout, func() interface{} {
-				for {
-					ch := d.probe(m, d.probeCount)
-					for i := 0; i < d.probeCount; i++ {
-						if <-ch {
-							return true
-						}
+			var success bool
+			done, timeout := concurrent.NewBreaker(d.probeTimeout, func() {
+				ch := d.probe(m, d.probeCount)
+				for i := 0; i < d.probeCount; i++ {
+					if <-ch {
+						success = true
+						return
 					}
-
-					return false
 				}
 			})
 
-			var success bool
 			select {
 			case <-d.closed:
 				return
 			case <-timeout:
 				continue
-			case e := <-done:
-				success = e.(bool)
+			case <-done:
 			}
 
 			if success {

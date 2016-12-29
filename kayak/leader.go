@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -59,11 +60,14 @@ func (c *leader) run(h *member) error {
 
 	// start the log syncer.
 	sync := newLogSyncer(h, logger)
+
+	// we'll want to bound the number of concurrent requests.
+	pool := concurrent.NewWorkPool(20)
 	go func() {
 		defer sync.Close()
 		for {
-			logger.Info("Resetting heartbeat timer [%v]", h.timeout/5)
-			timer := time.NewTimer(h.timeout / 5)
+			logger.Info("Resetting heartbeat timer [%v]", h.ElectionTimeout/5)
+			timer := time.NewTimer(h.ElectionTimeout / 5)
 
 			select {
 			case <-c.closed:
@@ -76,7 +80,7 @@ func (c *leader) run(h *member) error {
 
 				return
 			case append := <-h.clientAppends:
-				if next := c.handleClientAppend(sync, append); next != nil {
+				if next := c.handleClientAppend(pool, sync, append); next != nil {
 					c.transition(h, next)
 					return
 				}
@@ -101,10 +105,10 @@ func (c *leader) run(h *member) error {
 	return nil
 }
 
-func (c *leader) handleClientAppend(s *logSyncer, a clientAppend) chan<- *member {
-	go func() {
+func (c *leader) handleClientAppend(pool concurrent.WorkPool, s *logSyncer, a clientAppend) chan<- *member {
+	pool.Submit(func() {
 		a.reply(s.Append(a.events))
-	}()
+	})
 	return nil
 }
 
@@ -152,7 +156,7 @@ func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *member) chan<- 
 		}
 	})
 
-	timer := time.NewTimer(h.timeout)
+	timer := time.NewTimer(h.ElectionTimeout)
 	for i := 0; i < h.Majority()-1; {
 		select {
 		case <-c.closed:
@@ -303,13 +307,14 @@ func (s *logSyncer) Append(batch []event) (err error) {
 		committed <- struct{}{}
 	}()
 
-	timer := time.NewTimer(30 * time.Second)
+	timer := time.NewTimer(s.root.RequestTimeout)
 	select {
 	case <-s.closed:
-		return ClosedError
+		return common.Or(s.failure, ClosedError)
 	case <-timer.C:
-		return TimeoutError
+		return NewTimeoutError(s.root.RequestTimeout, "AppendLog")
 	case <-committed:
+		timer.Stop()
 		s.root.log.Commit(head) // commutative, so safe in the event of out of order appends.
 		return nil
 	}

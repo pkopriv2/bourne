@@ -1,11 +1,15 @@
 package net
 
 import (
+	"errors"
 	"io"
 	"net"
 )
 
-//
+var (
+	ClosedError = errors.New("Net:Closed")
+)
+
 // A connection is a full-duplex streaming abstraction.
 //
 // Implementations are expected to be thread-safe, with
@@ -23,6 +27,7 @@ type Connection interface {
 // establishing network services
 type Listener interface {
 	io.Closer
+	Addr() net.Addr
 	Conn() (Connection, error)
 	Accept() (Connection, error)
 }

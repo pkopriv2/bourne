@@ -3,6 +3,7 @@ package kayak
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -72,7 +73,10 @@ type member struct {
 	peers []peer
 
 	// the election timeout.  (heartbeat: = timeout / 5)
-	timeout time.Duration
+	ElectionTimeout time.Duration
+
+	// the client timeout
+	RequestTimeout time.Duration
 
 	// the distributed event log.
 	log *eventLog
@@ -88,6 +92,26 @@ type member struct {
 
 	// append requests (from clients)
 	clientAppends chan clientAppend
+
+	// consumers
+	terms chan term
+}
+
+func newMember(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser) *member {
+	return &member{
+		ctx:             ctx,
+		id:              self.id,
+		self:            self,
+		peers:           others,
+		logger:          logger,
+		parser:          parser,
+		log:             newEventLog(ctx),
+		appends:         make(chan appendEvents),
+		votes:           make(chan requestVote),
+		clientAppends:   make(chan clientAppend),
+		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
+		RequestTimeout:  10 * time.Second,
+	}
 }
 
 func (h *member) String() string {
@@ -100,12 +124,26 @@ func (h *member) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
+
+	select {
+	default:
+	case h.terms <- h.term:
+	}
 }
 
 func (h *member) CurrentTerm() term {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	return h.term // i assume return is bound prior to the deferred function....
+}
+
+func (h *member) Peer(id uuid.UUID) (peer, bool) {
+	for _, p := range h.Peers() {
+		if p.id == id {
+			return p, true
+		}
+	}
+	return peer{}, false
 }
 
 func (h *member) Peers() []peer {
