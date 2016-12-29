@@ -9,6 +9,19 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
+func newLeaderPool(h *member) net.ConnectionPool {
+	if h.term.leader == nil {
+		return nil
+	}
+
+	leader, found := h.Peer(*h.term.leader)
+	if !found {
+		panic(fmt.Sprintf("Unknown member [%v]: %v", h.term.leader, h.Peers()))
+	}
+
+	return net.NewConnectionPool("tcp", leader.addr, 30, h.ElectionTimeout)
+}
+
 type follower struct {
 	ctx       common.Context
 	in        chan *member
@@ -45,19 +58,6 @@ func (c *follower) transition(h *member, ch chan<- *member) error {
 	}
 }
 
-func newLeaderPool(h *member) net.ConnectionPool {
-	if h.term.leader == nil {
-		return nil
-	}
-
-	leader, found := h.Peer(*h.term.leader)
-	if !found {
-		panic(fmt.Sprintf("Unknown member [%v]", h.term.leader))
-	}
-
-	return net.NewConnectionPool("tcp", leader.addr, 30, h.ElectionTimeout)
-}
-
 func (c *follower) run(h *member) error {
 	logger := h.logger.Fmt("Follower[%v]", h.term)
 	logger.Info("Becoming follower")
@@ -70,7 +70,6 @@ func (c *follower) run(h *member) error {
 
 	// start the connection pool (might be nil, if the member has no leader)
 	conns := newLeaderPool(h)
-
 	go func() {
 		defer common.RunIf(func() { conns.Close() })(conns)
 		defer work.Close()
@@ -87,10 +86,7 @@ func (c *follower) run(h *member) error {
 			case <-c.closed:
 				return
 			case append := <-clientAppends:
-				if next := c.handleClientAppend(h, work, conns, logger, append); next != nil {
-					c.transition(h, next)
-					return
-				}
+				c.handleClientAppend(h, work, conns, logger, append)
 			case append := <-h.appends:
 				if next := c.handleAppendEvents(h, logger, append); next != nil {
 					c.transition(h, next)
@@ -111,26 +107,21 @@ func (c *follower) run(h *member) error {
 	return nil
 }
 
-func (c *follower) handleClientAppend(h *member, pool concurrent.WorkPool, conns net.ConnectionPool, logger common.Logger, append clientAppend) chan<- *member {
-	if err := pool.SubmitTimeout(h.RequestTimeout, func() {
-		conn := conns.TakeTimeout(h.RequestTimeout/2)
-		if conn == nil {
-			return
-		}
-		defer conn.Close()
-
-		raw, err := net.NewClient(h.ctx, logger, conn)
-		if err != nil {
-			append.reply(err)
-			return
-		}
-
-		cl := newClient(raw, h.parser)
-		append.reply(cl.Append(append.events))
-	}); err != nil {
-		append.reply(err)
+func (c *follower) handleClientAppend(h *member, pool concurrent.WorkPool, conns net.ConnectionPool, logger common.Logger, append clientAppend) {
+	conn := conns.TakeTimeout(h.RequestTimeout/2)
+	if conn == nil {
+		return
 	}
-	return nil
+	defer conn.Close()
+
+	raw, err := net.NewClient(h.ctx, logger, conn)
+	if err != nil {
+		append.reply(err)
+		return
+	}
+
+	cl := newClient(raw, h.parser)
+	append.reply(cl.Append(append.events))
 }
 
 func (c *follower) handleRequestVote(h *member, logger common.Logger, vote requestVote) chan<- *member {

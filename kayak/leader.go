@@ -123,10 +123,10 @@ func (c *leader) handleRequestVote(h *member, vote requestVote) chan<- *member {
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
 	maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
-		defer h.Term(vote.term, nil, &vote.id)
+		h.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
 	} else {
-		defer h.Term(vote.term, nil, nil)
+		h.Term(vote.term, nil, nil)
 		vote.reply(vote.term, false)
 	}
 
@@ -139,7 +139,7 @@ func (c *leader) handleAppendEvents(h *member, append appendEvents) chan<- *memb
 		return nil
 	}
 
-	defer h.Term(append.term, &append.id, &append.id)
+	h.Term(append.term, &append.id, &append.id)
 	append.reply(append.term, false)
 	return c.follower
 }

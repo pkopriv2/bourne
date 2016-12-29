@@ -11,37 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// A term represents a particular member state in the Raft epochal time model.
-type term struct {
-
-	// the current term number (increases monotonically across the cluster)
-	num int
-
-	// the current leader (as seen by this member)
-	leader *uuid.UUID
-
-	// who was voted for this term (guaranteed not nil when leader != nil)
-	votedFor *uuid.UUID
-}
-
-func (t term) String() string {
-	var leaderStr string
-	if t.leader == nil {
-		leaderStr = "nil"
-	} else {
-		leaderStr = t.leader.String()[:8]
-	}
-
-	var votedForStr string
-	if t.votedFor == nil {
-		votedForStr = "nil"
-	} else {
-		votedForStr = t.votedFor.String()[:8]
-	}
-
-	return fmt.Sprintf("(%v,%v,%v)", t.num, leaderStr, votedForStr)
-}
-
 // The member is the primary identity within a cluster.  Within the core machine,
 // only a single instance ever exists, but its location within the machine
 // may change over time.  Therefore all updates/requests must be forwarded
@@ -81,20 +50,20 @@ type member struct {
 	// the distributed event log.
 	log *eventLog
 
-	// A channel whose elements are the ordered events as they committed.
+	// the durable term store.
+	terms *termStash
+
+	// A channel whose elements are the ordered events as they are committed.
 	committed chan event
 
 	// request vote events.
 	votes chan requestVote
 
-	// append requests (from peers)
+	// append requests (presumably from leader)
 	appends chan appendEvents
 
 	// append requests (from clients)
 	clientAppends chan clientAppend
-
-	// consumers
-	terms chan term
 }
 
 func newMember(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser) *member {
@@ -124,11 +93,7 @@ func (h *member) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
-
-	select {
-	default:
-	case h.terms <- h.term:
-	}
+	// h.terms.Put(h.id, h.term)
 }
 
 func (h *member) CurrentTerm() term {
@@ -138,6 +103,10 @@ func (h *member) CurrentTerm() term {
 }
 
 func (h *member) Peer(id uuid.UUID) (peer, bool) {
+	if h.id == id {
+		return h.self, true
+	}
+
 	for _, p := range h.Peers() {
 		if p.id == id {
 			return p, true
