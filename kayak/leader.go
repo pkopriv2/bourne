@@ -11,12 +11,12 @@ import (
 
 type leader struct {
 	ctx      common.Context
-	in       chan *member
-	follower chan<- *member
+	in       chan *replica
+	follower chan<- *replica
 	closed   chan struct{}
 }
 
-func newLeader(ctx common.Context, in chan *member, follower chan<- *member, closed chan struct{}) *leader {
+func newLeader(ctx common.Context, in chan *replica, follower chan<- *replica, closed chan struct{}) *leader {
 	ret := &leader{ctx, in, follower, closed}
 	ret.start()
 	return ret
@@ -36,7 +36,7 @@ func (c *leader) start() error {
 	return nil
 }
 
-func (c *leader) transition(h *member, ch chan<- *member) error {
+func (c *leader) transition(h *replica, ch chan<- *replica) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -45,12 +45,12 @@ func (c *leader) transition(h *member, ch chan<- *member) error {
 	}
 }
 
-func (c *leader) run(h *member) error {
-	logger := h.logger.Fmt("Leader(%v)", h.term)
+func (c *leader) run(h *replica) error {
+	logger := h.Logger.Fmt("Leader(%v)", h.term)
 	logger.Info("Becoming leader")
 
 	// become leader for current term.
-	h.Term(h.term.num, &h.id, &h.id)
+	h.Term(h.term.num, &h.Id, &h.Id)
 
 	// establish leadership
 	if next := c.handleHeartbeatTimeout(logger, h); next != nil {
@@ -79,17 +79,17 @@ func (c *leader) run(h *member) error {
 				}
 
 				return
-			case append := <-h.clientAppends:
+			case append := <-h.ClientAppends:
 				if next := c.handleClientAppend(pool, sync, append); next != nil {
 					c.transition(h, next)
 					return
 				}
-			case append := <-h.appends:
+			case append := <-h.Appends:
 				if next := c.handleAppendEvents(h, append); next != nil {
 					c.transition(h, next)
 					return
 				}
-			case ballot := <-h.votes:
+			case ballot := <-h.Votes:
 				if next := c.handleRequestVote(h, ballot); next != nil {
 					c.transition(h, next)
 					return
@@ -105,14 +105,14 @@ func (c *leader) run(h *member) error {
 	return nil
 }
 
-func (c *leader) handleClientAppend(pool concurrent.WorkPool, s *logSyncer, a clientAppend) chan<- *member {
+func (c *leader) handleClientAppend(pool concurrent.WorkPool, s *logSyncer, a clientAppend) chan<- *replica {
 	pool.Submit(func() {
 		a.reply(s.Append(a.events))
 	})
 	return nil
 }
 
-func (c *leader) handleRequestVote(h *member, vote requestVote) chan<- *member {
+func (c *leader) handleRequestVote(h *replica, vote requestVote) chan<- *replica {
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
 	if vote.term <= h.term.num {
@@ -121,7 +121,7 @@ func (c *leader) handleRequestVote(h *member, vote requestVote) chan<- *member {
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
+	maxLogIndex, maxLogTerm, _ := h.Log.Snapshot()
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 		h.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
@@ -133,7 +133,7 @@ func (c *leader) handleRequestVote(h *member, vote requestVote) chan<- *member {
 	return c.follower
 }
 
-func (c *leader) handleAppendEvents(h *member, append appendEvents) chan<- *member {
+func (c *leader) handleAppendEvents(h *replica, append appendEvents) chan<- *replica {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil
@@ -144,11 +144,11 @@ func (c *leader) handleAppendEvents(h *member, append appendEvents) chan<- *memb
 	return c.follower
 }
 
-func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *member) chan<- *member {
+func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *replica) chan<- *replica {
 	ch := h.Broadcast(func(cl *client) response {
-		maxLogIndex, maxLogTerm, commit := h.log.Snapshot()
+		maxLogIndex, maxLogTerm, commit := h.Log.Snapshot()
 		logger.Info("Sending heart beat (%v,%v,%v)", maxLogIndex, maxLogTerm, commit)
-		resp, err := cl.AppendEvents(h.id, h.term.num, maxLogIndex, maxLogTerm, []event{}, commit)
+		resp, err := cl.AppendEvents(h.Id, h.term.num, maxLogIndex, maxLogTerm, []event{}, commit)
 		if err != nil {
 			return response{h.term.num, false}
 		} else {
@@ -181,7 +181,7 @@ func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *member) chan<- 
 type logSyncer struct {
 
 	// the primary member instance. (guaranteed to be immutable)
-	root *member
+	root *replica
 
 	// the logger (injected by parent.  do not use root's logger)
 	logger common.Logger
@@ -209,7 +209,7 @@ type logSyncer struct {
 	closer chan struct{}
 }
 
-func newLogSyncer(inst *member, logger common.Logger) *logSyncer {
+func newLogSyncer(inst *replica, logger common.Logger) *logSyncer {
 	s := &logSyncer{
 		root:        inst,
 		logger:      logger.Fmt("Syncer"),
@@ -283,7 +283,7 @@ func (s *logSyncer) Append(batch []event) (err error) {
 	}
 
 	// append to local log
-	head := s.root.log.Append(batch, s.root.term.num)
+	head := s.root.Log.Append(batch, s.root.term.num)
 	s.moveHead(head)
 
 	committed := make(chan struct{}, 1)
@@ -315,7 +315,7 @@ func (s *logSyncer) Append(batch []event) (err error) {
 		return NewTimeoutError(s.root.RequestTimeout, "AppendLog")
 	case <-committed:
 		timer.Stop()
-		s.root.log.Commit(head) // commutative, so safe in the event of out of order appends.
+		s.root.Log.Commit(head) // commutative, so safe in the event of out of order appends.
 		return nil
 	}
 }
@@ -323,13 +323,14 @@ func (s *logSyncer) Append(batch []event) (err error) {
 func (s *logSyncer) sync(p peer) {
 	logger := s.logger.Fmt("Routine(%v)", p)
 	logger.Info("Starting peer synchronizer")
+
+	var cl *client
 	go func() {
 		defer logger.Info("Shutting down")
-		var cl *client
 		defer common.RunIf(func() { cl.Close() })(cl)
 
 		// snapshot the local log
-		_, term, commit := s.root.log.Snapshot()
+		_, term, commit := s.root.Log.Snapshot()
 
 		// we will start syncing at current commit offset
 		prevIndex := commit
@@ -360,13 +361,13 @@ func (s *logSyncer) sync(p peer) {
 				}
 
 				// scan a full batch of events.
-				batch := s.root.log.Scan(prevIndex+1, 256)
+				batch := s.root.Log.Scan(prevIndex+1, 256)
 				if len(batch) == 0 {
 					panic("Inconsistent state!")
 				}
 
 				// send the append request.
-				resp, err := cl.AppendEvents(s.root.id, s.root.term.num, prevIndex, prevTerm, batch, s.root.log.Committed())
+				resp, err := cl.AppendEvents(s.root.Id, s.root.term.num, prevIndex, prevTerm, batch, s.root.Log.Committed())
 				if err != nil {
 					cl = nil
 					continue
@@ -392,12 +393,12 @@ func (s *logSyncer) sync(p peer) {
 				// consistency check failed, start moving backwards one index at a time.
 				// TODO: Implement optimization to come to faster agreement.
 				prevIndex -= 1
-				if prevIndex == -1 {
+				if prevIndex < -1 {
 					s.logger.Error("Unable to sync peer logs [%v]", p)
 					return
 				}
 
-				if prevItem, ok := s.root.log.Get(prevIndex); ok {
+				if prevItem, ok := s.root.Log.Get(prevIndex); ok {
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevItem.term)
 				} else {
 					s.SetPrevIndexAndTerm(p.id, -1, -1)
@@ -413,7 +414,7 @@ func (s *logSyncer) client(p peer) (*client, error) {
 	for timeout := 1 * time.Second; ; {
 		ch := make(chan *client)
 		go func() {
-			cl, err := p.Client(s.root.ctx, s.root.parser)
+			cl, err := p.Client(s.root.ctx, s.root.Parser)
 			if err == nil && cl != nil {
 				ch <- cl
 			}

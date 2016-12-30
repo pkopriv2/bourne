@@ -15,22 +15,22 @@ import (
 // only a single instance ever exists, but its location within the machine
 // may change over time.  Therefore all updates/requests must be forwarded
 // to the machine currently processing the member.
-type member struct {
+type replica struct {
 
 	// configuration used to build this instance.
 	ctx common.Context
 
 	// the core member logger
-	logger common.Logger
+	Logger common.Logger
 
-	// the unique id of this member.
-	id uuid.UUID
+	// // the unique id of this member. (copied for brevity from self)
+	Id uuid.UUID
 
 	// the peer representing the local instance
-	self peer
+	Self peer
 
 	// the event parser. (used to spawn clients.)
-	parser Parser
+	Parser Parser
 
 	// data lock (currently using very coarse lock)
 	lock sync.RWMutex
@@ -48,66 +48,70 @@ type member struct {
 	RequestTimeout time.Duration
 
 	// the distributed event log.
-	log *eventLog
+	Log *eventLog
 
 	// the durable term store.
-	terms *termStash
+	Terms *storage
 
 	// A channel whose elements are the ordered events as they are committed.
-	committed chan event
+	Committed chan event
 
 	// request vote events.
-	votes chan requestVote
+	Votes chan requestVote
 
 	// append requests (presumably from leader)
-	appends chan appendEvents
+	Appends chan appendEvents
 
 	// append requests (from clients)
-	clientAppends chan clientAppend
+	ClientAppends chan clientAppend
 }
 
-func newMember(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser) *member {
-	return &member{
+func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, terms *storage) (*replica, error) {
+	term, err := terms.GetTerm(self.id)
+	if err != nil {
+		return nil, err
+	}
+
+	return &replica{
 		ctx:             ctx,
-		id:              self.id,
-		self:            self,
+		Id:              self.id,
+		Self:            self,
 		peers:           others,
-		logger:          logger,
-		parser:          parser,
-		log:             newEventLog(ctx),
-		appends:         make(chan appendEvents),
-		votes:           make(chan requestVote),
-		clientAppends:   make(chan clientAppend),
+		Logger:          logger,
+		Parser:          parser,
+		term:            term,
+		Terms:           terms,
+		Log:             newEventLog(ctx),
+		Appends:         make(chan appendEvents),
+		Votes:           make(chan requestVote),
+		ClientAppends:   make(chan clientAppend),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
 		RequestTimeout:  10 * time.Second,
-	}
+	}, nil
 }
 
-func (h *member) String() string {
+func (h *replica) String() string {
 	h.lock.RLock()
 	defer h.lock.RUnlock()
-	return fmt.Sprintf("%v, %v:", h.self, h.term)
+	return fmt.Sprintf("%v, %v:", h.Self, h.term)
 }
 
-func (h *member) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
+func (h *replica) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
-	// h.terms.Put(h.id, h.term)
+	h.Logger.Info("Durably storing updated term [%v]", h.term)
+	h.Terms.PutTerm(h.Id, h.term)
 }
 
-func (h *member) CurrentTerm() term {
+func (h *replica) CurrentTerm() term {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	return h.term // i assume return is bound prior to the deferred function....
 }
 
-func (h *member) Peer(id uuid.UUID) (peer, bool) {
-	if h.id == id {
-		return h.self, true
-	}
-
-	for _, p := range h.Peers() {
+func (h *replica) Peer(id uuid.UUID) (peer, bool) {
+	for _, p := range h.Cluster() {
 		if p.id == id {
 			return p, true
 		}
@@ -115,26 +119,33 @@ func (h *member) Peer(id uuid.UUID) (peer, bool) {
 	return peer{}, false
 }
 
-func (h *member) Peers() []peer {
+func (h *replica) Cluster() []peer {
+	ret := make([]peer, 0, len(h.peers)+1)
+	ret = append(ret, h.Peers()...)
+	ret = append(ret, h.Self)
+	return ret
+}
+
+func (h *replica) Peers() []peer {
 	h.lock.RLock()
 	defer h.lock.RUnlock()
 	ret := make([]peer, 0, len(h.peers))
 	return append(ret, h.peers...)
 }
 
-func (h *member) Majority() int {
+func (h *replica) Majority() int {
 	h.lock.RLock()
 	defer h.lock.RUnlock()
 	return majority(len(h.peers) + 1)
 }
 
-func (h *member) Broadcast(fn func(c *client) response) <-chan response {
+func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 	peers := h.Peers()
 
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
-			cl, err := p.Client(h.ctx, h.parser)
+			cl, err := p.Client(h.ctx, h.Parser)
 			if cl == nil || err != nil {
 				ret <- response{h.term.num, false}
 				return

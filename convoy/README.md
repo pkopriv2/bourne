@@ -10,7 +10,7 @@ Convoy is intended to serve as the foundation of distributed systems that requir
 
 # Membership Overview
 
-The heart of convoy is really just the SWIM membership protocol.  Members join, and then serve as an information relay.  In more abstract terms, members form the vertices of a connected graph.  For information to spread in a atomic broadcast fashion (i.e. all members of the group eventually see all information), every member must propagate to some random subset of other members. The original mathematical analysis of randomly connected graphs was done by Paul Erdos¨ and Alfred Renyi [2].  They concluded that for a random graph to become fully connected, each vertex has to have at least *n ~ ln(N)* random edges.
+The heart of convoy is really just the SWIM membership protocol.  Members join, and then serve as an information relay.  In more abstract terms, members form the vertices of a connected graph.  Each disseminated event is guaranteed to visit every member at least once.  For information to spread in a atomic broadcast fashion (i.e. all members of the group eventually see all information), every member must propagate to some random subset of other members. The original mathematical analysis of randomly connected graphs was done by Paul Erdos¨ and Alfred Renyi [2].  They concluded that for a random graph to become fully connected, each vertex has to have at least *n ~ ln(N)* random edges.
 
 To speed up the dissemination of information, convoy allows consumers to configure the number of recipients of a message based on factors of *ln(N)*.  Due to some very specialised buffer management a mathematical analysis of the speed of dissemination has not been done (Translation: Author sucks at stats)  Anyone wishing to help out with this endeavor is welcome to take a crack at it.  Preston is available anytime to answer any design questions you may require.  
 
@@ -20,15 +20,11 @@ In the meantime, here are the results of benchmarks performed locally as a funct
 
 ## Member Health 
 
-During each dissemination period, members are also probed for health.  Due to the expense of
-being marked as failed, a member cannot be contacted, a health probe is sent to a random subset 
-of members who will attempt to contact the suspected node.  Only when none of the members of 
-the probe return success is the member deemed failed and evicted from the cluster. 
+During each dissemination period, members are also probed for health.  Due to the expense of being marked as failed, a member cannot be contacted, a health probe is sent to a random subset of members who will attempt to contact the suspected node.  Only when none of the members of the probe return success is the member deemed failed and evicted from the cluster. 
 
 # Getting Started
 
-Convoy has been designed to be embedded in other projects as a basis for group memberships
-and service discovery.  To get started, pull the dependency with go get:
+Convoy has been designed to be embedded in other projects as a basis for group memberships and service discovery.  To get started, pull the dependency with go get:
 
 ```sh
 go get http://github.com/pkopriv2/bourne/convoy

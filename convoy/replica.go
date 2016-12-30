@@ -128,8 +128,8 @@ func initReplica(ctx common.Context, db *database, host string, port int) (r *re
 			r.Logger.Debug("Member evicted [%v,%v]", e.Id, e.Version)
 			if e.Id == r.Self.id && e.Version == r.Self.version && !r.leaving.Get() {
 				r.Logger.Info("Self evicted. Shutting down.")
-				// r.Leave() // We received this message...therefore it was already disseminated.
-				r.shutdown(EvictedError)
+				r.Leave() // We received this message...therefore it was already disseminated.
+				// r.shutdown(EvictedError)
 			}
 		}
 	}()

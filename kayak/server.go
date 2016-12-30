@@ -10,8 +10,8 @@ import (
 
 // server endpoints
 const (
-	actAppendEvents = "kayak.appendEvents"
-	actRequestVote  = "kayak.requestVote"
+	actAppendEvents = "kayak.replica.appendEvents"
+	actRequestVote  = "kayak.replica.requestVote"
 	actClientAppend = "kayak.client.append"
 )
 

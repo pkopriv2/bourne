@@ -7,8 +7,8 @@ import (
 	"github.com/pkopriv2/bourne/common"
 )
 
-// The event log maintains a set of events sorted (descending) by the
-// number of remainaing attempts to be shared.
+// The event log maintains a set of events sorted (ascending) by
+// insertion time.
 
 type eventLogItem struct {
 	index int

@@ -9,14 +9,14 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-func newLeaderPool(h *member) net.ConnectionPool {
+func newLeaderPool(h *replica) net.ConnectionPool {
 	if h.term.leader == nil {
 		return nil
 	}
 
 	leader, found := h.Peer(*h.term.leader)
 	if !found {
-		panic(fmt.Sprintf("Unknown member [%v]: %v", h.term.leader, h.Peers()))
+		panic(fmt.Sprintf("Unknown member [%v]: %v", h.term.leader, h.Cluster()))
 	}
 
 	return net.NewConnectionPool("tcp", leader.addr, 30, h.ElectionTimeout)
@@ -24,12 +24,12 @@ func newLeaderPool(h *member) net.ConnectionPool {
 
 type follower struct {
 	ctx       common.Context
-	in        chan *member
-	candidate chan<- *member
+	in        chan *replica
+	candidate chan<- *replica
 	closed    chan struct{}
 }
 
-func newFollower(ctx common.Context, in chan *member, candidate chan<- *member, closed chan struct{}) *follower {
+func newFollower(ctx common.Context, in chan *replica, candidate chan<- *replica, closed chan struct{}) *follower {
 	ret := &follower{ctx, in, candidate, closed}
 	ret.start()
 	return ret
@@ -49,7 +49,7 @@ func (c *follower) start() error {
 	return nil
 }
 
-func (c *follower) transition(h *member, ch chan<- *member) error {
+func (c *follower) transition(h *replica, ch chan<- *replica) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -58,8 +58,8 @@ func (c *follower) transition(h *member, ch chan<- *member) error {
 	}
 }
 
-func (c *follower) run(h *member) error {
-	logger := h.logger.Fmt("Follower[%v]", h.term)
+func (c *follower) run(h *replica) error {
+	logger := h.Logger.Fmt("Follower[%v]", h.term)
 	logger.Info("Becoming follower")
 
 	// the current term (should be constant throughout the instance of the follower)
@@ -79,7 +79,7 @@ func (c *follower) run(h *member) error {
 			// Only allow client appends if we have a leader.
 			var clientAppends <-chan clientAppend
 			if term.leader != nil {
-				clientAppends = h.clientAppends
+				clientAppends = h.ClientAppends
 			}
 
 			select {
@@ -87,12 +87,12 @@ func (c *follower) run(h *member) error {
 				return
 			case append := <-clientAppends:
 				c.handleClientAppend(h, work, conns, logger, append)
-			case append := <-h.appends:
+			case append := <-h.Appends:
 				if next := c.handleAppendEvents(h, logger, append); next != nil {
 					c.transition(h, next)
 					return
 				}
-			case ballot := <-h.votes:
+			case ballot := <-h.Votes:
 				if next := c.handleRequestVote(h, logger, ballot); next != nil {
 					c.transition(h, next)
 					return
@@ -107,8 +107,8 @@ func (c *follower) run(h *member) error {
 	return nil
 }
 
-func (c *follower) handleClientAppend(h *member, pool concurrent.WorkPool, conns net.ConnectionPool, logger common.Logger, append clientAppend) {
-	conn := conns.TakeTimeout(h.RequestTimeout/2)
+func (c *follower) handleClientAppend(h *replica, pool concurrent.WorkPool, conns net.ConnectionPool, logger common.Logger, append clientAppend) {
+	conn := conns.TakeTimeout(h.RequestTimeout / 2)
 	if conn == nil {
 		return
 	}
@@ -120,11 +120,11 @@ func (c *follower) handleClientAppend(h *member, pool concurrent.WorkPool, conns
 		return
 	}
 
-	cl := newClient(raw, h.parser)
+	cl := newClient(raw, h.Parser)
 	append.reply(cl.Append(append.events))
 }
 
-func (c *follower) handleRequestVote(h *member, logger common.Logger, vote requestVote) chan<- *member {
+func (c *follower) handleRequestVote(h *replica, logger common.Logger, vote requestVote) chan<- *replica {
 	logger.Debug("Handling request vote [%v]", vote)
 
 	// handle: previous term vote.  (immediately decline.)
@@ -134,7 +134,7 @@ func (c *follower) handleRequestVote(h *member, logger common.Logger, vote reque
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
-	maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
+	maxLogIndex, maxLogTerm, _ := h.Log.Snapshot()
 	if vote.term == h.term.num {
 		if h.term.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 			h.Term(h.term.num, nil, &vote.id) // correct?
@@ -158,7 +158,7 @@ func (c *follower) handleRequestVote(h *member, logger common.Logger, vote reque
 	return c.in
 }
 
-func (c *follower) handleAppendEvents(h *member, logger common.Logger, append appendEvents) chan<- *member {
+func (c *follower) handleAppendEvents(h *replica, logger common.Logger, append appendEvents) chan<- *replica {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil
@@ -171,14 +171,14 @@ func (c *follower) handleAppendEvents(h *member, logger common.Logger, append ap
 		return c.in
 	}
 
-	if logItem, ok := h.log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
+	if logItem, ok := h.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
 		logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
 		append.reply(append.term, false)
 		return nil
 	}
 
-	h.log.Insert(append.events, append.prevLogIndex+1, append.term)
-	h.log.Commit(append.commit)
+	h.Log.Insert(append.events, append.prevLogIndex+1, append.term)
+	h.Log.Commit(append.commit)
 	append.reply(append.term, true)
 	return nil
 }

@@ -84,17 +84,17 @@ func (t term) String() string {
 	return fmt.Sprintf("(%v,%v,%v)", t.num, leaderStr, votedForStr)
 }
 
-type termStash struct {
+type storage struct {
 	stash stash.Stash
 }
 
-func openTermStash(s stash.Stash) *termStash {
-	return &termStash{s}
+func openTermStorage(s stash.Stash) *storage {
+	return &storage{s}
 }
 
-func (t *termStash) Get(id uuid.UUID) (term term, err error) {
+func (t *storage) GetTerm(id uuid.UUID) (term term, err error) {
 	err = t.stash.View(func(tx *bolt.Tx) error {
-		tmp, e := termStashGet(tx, id)
+		tmp, e := termStorageGet(tx, id)
 		if e != nil {
 			err = e
 			return e
@@ -106,23 +106,23 @@ func (t *termStash) Get(id uuid.UUID) (term term, err error) {
 	return
 }
 
-func (t *termStash) Put(id uuid.UUID, tm term) error {
+func (t *storage) PutTerm(id uuid.UUID, tm term) error {
 	return t.stash.Update(func(tx *bolt.Tx) error {
-		return termStashPut(tx, id, tm)
+		return termStoragePut(tx, id, tm)
 	})
 }
 
-func termStashKeyBytes(id uuid.UUID) []byte {
+func termStorageKeyBytes(id uuid.UUID) []byte {
 	return []byte(fmt.Sprintf("%v.kayak.term", id.String()))
 }
 
-func termStashValBytes(t term) []byte {
+func termStorageValBytes(t term) []byte {
 	buf := new(bytes.Buffer)
 	scribe.Encode(gob.NewEncoder(buf), t)
 	return buf.Bytes()
 }
 
-func termStashParseVal(val []byte) (term, error) {
+func termStorageParseVal(val []byte) (term, error) {
 	msg, err := scribe.Decode(gob.NewDecoder(bytes.NewBuffer(val)))
 	if err != nil {
 		return term{}, err
@@ -131,24 +131,24 @@ func termStashParseVal(val []byte) (term, error) {
 	return readTerm(msg)
 }
 
-func termStashGet(tx *bolt.Tx, id uuid.UUID) (term, error) {
+func termStorageGet(tx *bolt.Tx, id uuid.UUID) (term, error) {
 	bucket := tx.Bucket(kayakBucket)
 	if bucket == nil {
 		return term{}, nil
 	}
 
-	val := bucket.Get(termStashKeyBytes(id))
+	val := bucket.Get(termStorageKeyBytes(id))
 	if val == nil {
 		return term{}, nil
 	}
 
-	return termStashParseVal(val)
+	return termStorageParseVal(val)
 }
 
-func termStashPut(tx *bolt.Tx, id uuid.UUID, t term) error {
+func termStoragePut(tx *bolt.Tx, id uuid.UUID, t term) error {
 	bucket, err := tx.CreateBucketIfNotExists(kayakBucket)
 	if err != nil {
 		return err
 	}
-	return bucket.Put(termStashKeyBytes(id), termStashValBytes(t))
+	return bucket.Put(termStorageKeyBytes(id), termStorageValBytes(t))
 }

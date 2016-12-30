@@ -5,6 +5,7 @@ import (
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -70,17 +71,17 @@ func (p peer) Client(ctx common.Context, parser Parser) (*client, error) {
 
 type host struct {
 	logger common.Logger
-	member *engine
+	core   *engine
 	server net.Server
 	closed chan struct{}
 	closer chan struct{}
 }
 
-func newHost(ctx common.Context, self peer, others []peer, parser Parser) (h *host, err error) {
+func newHost(ctx common.Context, self peer, others []peer, parser Parser, stash stash.Stash) (h *host, err error) {
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	member, err := newHostEngine(ctx, root, self, others, parser)
+	member, err := newHostEngine(ctx, root, self, others, parser, stash)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +99,7 @@ func newHost(ctx common.Context, self peer, others []peer, parser Parser) (h *ho
 	defer common.RunIf(func() { server.Close() })(err) // paranoia of future me
 
 	h = &host{
-		member: member,
+		core:   member,
 		server: server,
 		logger: root,
 		closed: make(chan struct{}),
@@ -108,31 +109,31 @@ func newHost(ctx common.Context, self peer, others []peer, parser Parser) (h *ho
 }
 
 func (h *host) Id() uuid.UUID {
-	return h.member.instance.id
+	return h.core.instance.Id
 }
 
 func (h *host) Context() common.Context {
-	return h.member.instance.ctx
+	return h.core.instance.ctx
 }
 
 func (h *host) Self() peer {
-	return h.member.instance.self
+	return h.core.instance.Self
 }
 
 func (h *host) Peers() []peer {
-	return h.member.instance.peers
+	return h.core.instance.peers
 }
 
 func (h *host) Parser() Parser {
-	return h.member.instance.parser
+	return h.core.instance.Parser
 }
 
 func (h *host) Log() *eventLog {
-	return h.member.instance.log
+	return h.core.instance.Log
 }
 
 func (h *host) Client() (*client, error) {
-	return h.member.Self().Client(h.Context(), h.Parser())
+	return h.core.Self().Client(h.Context(), h.Parser())
 }
 
 func (h *host) Close() error {
@@ -145,7 +146,7 @@ func (h *host) Close() error {
 	h.logger.Info("Closing")
 
 	var err error
-	err = common.Or(err, h.member.Close())
+	err = common.Or(err, h.core.Close())
 	err = common.Or(err, h.server.Close())
 	close(h.closed)
 	return err

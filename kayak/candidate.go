@@ -8,13 +8,13 @@ import (
 
 type candidate struct {
 	ctx      common.Context
-	in       chan *member
-	leader   chan<- *member
-	follower chan<- *member
+	in       chan *replica
+	leader   chan<- *replica
+	follower chan<- *replica
 	closed   chan struct{}
 }
 
-func newCandidate(ctx common.Context, in chan *member, leader chan<- *member, follower chan<- *member, closed chan struct{}) *candidate {
+func newCandidate(ctx common.Context, in chan *replica, leader chan<- *replica, follower chan<- *replica, closed chan struct{}) *candidate {
 	ret := &candidate{ctx, in, leader, follower, closed}
 	ret.start()
 	return ret
@@ -34,7 +34,7 @@ func (c *candidate) start() error {
 	return nil
 }
 
-func (c *candidate) transition(h *member, ch chan<- *member) error {
+func (c *candidate) transition(h *replica, ch chan<- *replica) error {
 	select {
 	case <-c.closed:
 		return ClosedError
@@ -43,19 +43,19 @@ func (c *candidate) transition(h *member, ch chan<- *member) error {
 	}
 }
 
-func (c *candidate) run(h *member) error {
+func (c *candidate) run(h *replica) error {
 
 	// increment term and vote forself.
-	h.Term(h.term.num+1, nil, &h.id)
+	h.Term(h.term.num+1, nil, &h.Id)
 
 	// decorate the logger
-	logger := h.logger.Fmt("Candidate(%v)", h.term)
+	logger := h.Logger.Fmt("Candidate(%v)", h.term)
 	logger.Info("Becoming candidate")
 
 	// send out ballots
 	ballots := h.Broadcast(func(cl *client) response {
-		maxLogIndex, maxLogTerm, _ := h.log.Snapshot()
-		resp, err := cl.RequestVote(h.id, h.term.num, maxLogIndex, maxLogTerm)
+		maxLogIndex, maxLogTerm, _ := h.Log.Snapshot()
+		resp, err := cl.RequestVote(h.Id, h.term.num, maxLogIndex, maxLogTerm)
 		if err != nil {
 			return response{h.term.num, false}
 		} else {
@@ -75,7 +75,7 @@ func (c *candidate) run(h *member) error {
 			logger.Info("Received [%v/%v] votes", numVotes, len(h.peers)+1)
 			if numVotes >= needed {
 				logger.Info("Acquired majority [%v] votes.", needed)
-				h.Term(h.term.num, &h.id, &h.id)
+				h.Term(h.term.num, &h.Id, &h.Id)
 				c.transition(h, c.leader)
 				return
 
@@ -84,12 +84,12 @@ func (c *candidate) run(h *member) error {
 			select {
 			case <-c.closed:
 				return
-			case append := <-h.appends:
+			case append := <-h.Appends:
 				if next := c.handleAppendEvents(h, append); next != nil {
 					c.transition(h, next)
 					return
 				}
-			case ballot := <-h.votes:
+			case ballot := <-h.Votes:
 				if next := c.handleRequestVote(h, ballot); next != nil {
 					c.transition(h, next)
 					return
@@ -115,7 +115,7 @@ func (c *candidate) run(h *member) error {
 	return nil
 }
 
-func (c *candidate) handleRequestVote(h *member, vote requestVote) chan<- *member {
+func (c *candidate) handleRequestVote(h *replica, vote requestVote) chan<- *replica {
 	if vote.term <= h.term.num {
 		vote.reply(h.term.num, false)
 		return nil
@@ -126,7 +126,7 @@ func (c *candidate) handleRequestVote(h *member, vote requestVote) chan<- *membe
 	return c.follower
 }
 
-func (c *candidate) handleAppendEvents(h *member, append appendEvents) chan<- *member {
+func (c *candidate) handleAppendEvents(h *replica, append appendEvents) chan<- *replica {
 	if append.term < h.term.num {
 		append.reply(h.term.num, false)
 		return nil
