@@ -25,10 +25,35 @@ type eventLog struct {
 
 	// index of last item committed.(initialized to -1)
 	commit int
+
+	// A channel of committed events.
+	ch chan event
+
+	// closing utilities.
+	closed chan struct{}
+
+	// closing lock.  (a buffered channel of 1 entry.)
+	closer chan struct{}
 }
 
 func newEventLog(ctx common.Context) *eventLog {
-	return &eventLog{amoeba.NewBTreeIndex(32), -1, -1}
+	return &eventLog{amoeba.NewBTreeIndex(32), -1, -1, make(chan event), make(chan struct{}), make(chan struct{}, 1)}
+}
+
+func (d *eventLog) Close() error {
+	select {
+	case <-d.closed:
+		return ClosedError
+	case d.closer <- struct{}{}:
+	}
+
+	close(d.ch)
+	close(d.closed)
+	return nil
+}
+
+func (d *eventLog) Commits() <-chan event {
+	return d.ch
 }
 
 func (d *eventLog) Head() (pos int) {
@@ -71,24 +96,36 @@ func (d *eventLog) get(u amoeba.View, index int) (item eventLogItem, ok bool) {
 }
 
 func (d *eventLog) Commit(pos int) {
-	if pos < 0  {
+	if pos < 0 {
 		return // -1 is normal
 	}
 
-	if pos > d.head {
-		panic(fmt.Sprintf("Invalid commit [%v/%v]", pos, d.head))
-	}
-
-	if pos < d.commit {
-		return // supports out of order commits.
-	}
 
 	d.data.Update(func(u amoeba.Update) {
+		if pos > d.head {
+			panic(fmt.Sprintf("Invalid commit [%v/%v]", pos, d.head))
+		}
+
+		if pos <= d.commit {
+			return // supports out of order commits.
+		}
+
+		committed := []event{}
+		if pos-d.commit > 0 {
+			committed = eventLogScan(u, d.commit+1, pos-d.commit)
+		}
+
 		d.commit = pos
+		for _, e := range committed {
+			select {
+			case <-d.closed:
+				return
+			case d.ch<-e:
+			}
+		}
 	})
 	return
 }
-
 
 func (d *eventLog) Get(index int) (item eventLogItem, ok bool) {
 	d.data.Read(func(u amoeba.View) {
@@ -102,17 +139,9 @@ func (d *eventLog) Scan(start int, num int) (batch []event) {
 		panic("Invalid number of items to scan")
 	}
 
-	d.data.Read(func(u amoeba.View) {
-		batch = make([]event, 0, num)
-		u.ScanFrom(amoeba.IntKey(start), func(s amoeba.Scan, k amoeba.Key, i interface{}) {
-			if num == 0 {
-				s.Stop()
-				return
-			}
 
-			batch = append(batch, i.(eventLogItem).event)
-			num--
-		})
+	d.data.Read(func(u amoeba.View) {
+		batch = eventLogScan(u, start, num)
 	})
 	return
 }
@@ -149,4 +178,19 @@ func (d *eventLog) Insert(batch []event, index int, term int) {
 			index++
 		}
 	})
+}
+
+func eventLogScan(u amoeba.View, start int, num int) []event {
+	batch := make([]event, 0, num)
+	u.ScanFrom(amoeba.IntKey(start), func(s amoeba.Scan, k amoeba.Key, i interface{}) {
+		if num == 0 {
+			s.Stop()
+			return
+		}
+
+		batch = append(batch, i.(eventLogItem).event)
+		num--
+	})
+
+	return batch
 }

@@ -51,7 +51,7 @@ type replica struct {
 	Log *eventLog
 
 	// the durable term store.
-	Terms *storage
+	terms *storage
 
 	// A channel whose elements are the ordered events as they are committed.
 	Committed chan event
@@ -80,13 +80,13 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		Logger:          logger,
 		Parser:          parser,
 		term:            term,
-		Terms:           terms,
+		terms:           terms,
 		Log:             newEventLog(ctx),
 		Appends:         make(chan appendEvents),
 		Votes:           make(chan requestVote),
 		ClientAppends:   make(chan clientAppend),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
-		RequestTimeout:  10 * time.Second,
+		RequestTimeout:  2 * time.Second,
 	}, nil
 }
 
@@ -101,7 +101,12 @@ func (h *replica) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
 	h.Logger.Info("Durably storing updated term [%v]", h.term)
-	h.Terms.PutTerm(h.Id, h.term)
+
+	h.terms.PutTerm(h.Id, h.term)
+	// select {
+	// default:
+	// // case h.Terms<-h.term:
+	// }
 }
 
 func (h *replica) CurrentTerm() term {

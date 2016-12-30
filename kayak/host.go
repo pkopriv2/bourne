@@ -81,25 +81,25 @@ func newHost(ctx common.Context, self peer, others []peer, parser Parser, stash 
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	member, err := newHostEngine(ctx, root, self, others, parser, stash)
+	core, err := newHostEngine(ctx, root, self, others, parser, stash)
 	if err != nil {
 		return nil, err
 	}
-	defer common.RunIf(func() { member.Close() })(err)
+	defer common.RunIf(func() { core.Close() })(err)
 
 	_, port, err := net.SplitAddr(self.addr)
 	if err != nil {
 		return nil, err
 	}
 
-	server, err := newServer(ctx, root, port, member)
+	server, err := newServer(ctx, root, port, core)
 	if err != nil {
 		return nil, err
 	}
 	defer common.RunIf(func() { server.Close() })(err) // paranoia of future me
 
 	h = &host{
-		core:   member,
+		core:   core,
 		server: server,
 		logger: root,
 		closed: make(chan struct{}),
@@ -109,27 +109,27 @@ func newHost(ctx common.Context, self peer, others []peer, parser Parser, stash 
 }
 
 func (h *host) Id() uuid.UUID {
-	return h.core.instance.Id
+	return h.core.replica.Id
 }
 
 func (h *host) Context() common.Context {
-	return h.core.instance.ctx
+	return h.core.replica.ctx
 }
 
 func (h *host) Self() peer {
-	return h.core.instance.Self
+	return h.core.replica.Self
 }
 
 func (h *host) Peers() []peer {
-	return h.core.instance.peers
+	return h.core.replica.peers
 }
 
 func (h *host) Parser() Parser {
-	return h.core.instance.Parser
+	return h.core.replica.Parser
 }
 
 func (h *host) Log() *eventLog {
-	return h.core.instance.Log
+	return h.core.replica.Log
 }
 
 func (h *host) Client() (*client, error) {
@@ -146,8 +146,8 @@ func (h *host) Close() error {
 	h.logger.Info("Closing")
 
 	var err error
-	err = common.Or(err, h.core.Close())
 	err = common.Or(err, h.server.Close())
+	err = common.Or(err, h.core.Close())
 	close(h.closed)
 	return err
 }

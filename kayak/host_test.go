@@ -1,6 +1,7 @@
 package kayak
 
 import (
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -134,7 +135,11 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
 }
 
 func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
 	cluster := StartTestCluster(ctx, 3)
@@ -146,15 +151,19 @@ func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
 			cl, _ := leader.Client()
 			defer cl.Close()
 
-			for i := 0; i < 10; i++ {
-				cl.Append([]event{&testEvent{}})
+			for i := 0; i < 100; i++ {
+				cl.Append([]event{newTestEvent()})
 			}
 		}()
 	}
 
 	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 99 && h.Log().Committed() == 99
+			return h.Log().Head() == 999 && h.Log().Committed() == 999
+		})
+
+		SyncMajority(cluster, func(h *host) bool {
+			return fmt.Sprintf("%v", h.Log().Scan(0, 1000)) == fmt.Sprintf("%v", leader.Log().Scan(0, 1000))
 		})
 	})
 
@@ -284,7 +293,7 @@ func SyncMajority(cluster []*host, fn func(h *host) bool) {
 	majority := majority(len(cluster))
 	for len(done) < majority {
 		for _, r := range cluster {
-			id := r.core.instance.Id
+			id := r.core.replica.Id
 			if _, ok := done[id]; ok {
 				continue
 			}
@@ -295,7 +304,7 @@ func SyncMajority(cluster []*host, fn func(h *host) bool) {
 			}
 
 			if time.Now().Sub(start) > 10*time.Second {
-				r.core.instance.Logger.Info("Still not sync'ed")
+				r.core.replica.Logger.Info("Still not sync'ed")
 			}
 		}
 		<-time.After(250 * time.Millisecond)
@@ -308,7 +317,7 @@ func SyncAll(cluster []*host, fn func(h *host) bool) {
 
 	for len(done) < len(cluster) {
 		for _, r := range cluster {
-			id := r.core.instance.Id
+			id := r.core.replica.Id
 			if _, ok := done[id]; ok {
 				continue
 			}
@@ -319,7 +328,7 @@ func SyncAll(cluster []*host, fn func(h *host) bool) {
 			}
 
 			if time.Now().Sub(start) > 10*time.Second {
-				r.core.instance.Logger.Info("Still not sync'ed")
+				r.core.replica.Logger.Info("Still not sync'ed")
 			}
 		}
 		<-time.After(250 * time.Millisecond)

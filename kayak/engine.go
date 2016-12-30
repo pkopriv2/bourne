@@ -20,7 +20,7 @@ import (
 type engine struct {
 
 	// the internal member instance.  This is guaranteed to exist in at MOST
-	instance *replica
+	replica *replica
 
 	// the follower sub-machine
 	follower *follower
@@ -39,7 +39,7 @@ type engine struct {
 }
 
 func newHostEngine(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, stash stash.Stash) (*engine, error) {
-	mem, err := newReplica(ctx, logger, self, others, parser, openTermStorage(stash))
+	rep, err := newReplica(ctx, logger, self, others, parser, openTermStorage(stash))
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func newHostEngine(ctx common.Context, logger common.Logger, self peer, others [
 	closer := make(chan struct{}, 1)
 
 	m := &engine{
-		instance:  mem,
+		replica:   rep,
 		follower:  newFollower(ctx, follower, candidate, closed),
 		candidate: newCandidate(ctx, candidate, leader, follower, closed),
 		leader:    newLeader(ctx, leader, follower, closed),
@@ -78,31 +78,41 @@ func (h *engine) Close() error {
 }
 
 func (h *engine) start() error {
-	return h.follower.transition(h.instance, h.follower.in)
+	go func() {
+		for {
+			select {
+				case <-h.closed:
+					return
+				case e := <-h.replica.Log.Commits():
+					h.replica.Logger.Info("Commit: %v", e)
+			}
+		}
+	}()
+	return h.follower.transition(h.replica, h.follower.in)
 }
 
 func (h *engine) Context() common.Context {
-	return h.instance.ctx
+	return h.replica.ctx
 }
 
 func (h *engine) Self() peer {
-	return h.instance.Self
+	return h.replica.Self
 }
 
 func (h *engine) Peers() []peer {
-	return h.instance.peers
+	return h.replica.peers
 }
 
 func (h *engine) Parser() Parser {
-	return h.instance.Parser
+	return h.replica.Parser
 }
 
 func (h *engine) Log() *eventLog {
-	return h.instance.Log
+	return h.replica.Log
 }
 
 func (h *engine) CurrentTerm() term {
-	return h.instance.CurrentTerm()
+	return h.replica.CurrentTerm()
 }
 
 func (h *engine) RequestAppendEvents(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []event, commit int) (response, error) {
@@ -112,7 +122,7 @@ func (h *engine) RequestAppendEvents(id uuid.UUID, term int, prevLogIndex int, p
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
-	case h.instance.Appends <- append:
+	case h.replica.Appends <- append:
 		select {
 		case <-h.closed:
 			return response{}, ClosedError
@@ -128,7 +138,7 @@ func (h *engine) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) 
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
-	case h.instance.Votes <- req:
+	case h.replica.Votes <- req:
 		select {
 		case <-h.closed:
 			return response{}, ClosedError
@@ -141,13 +151,13 @@ func (h *engine) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) 
 func (h *engine) RequestClientAppend(events []event) error {
 	append := clientAppend{events, make(chan error, 1)}
 
-	timer := time.NewTimer(h.instance.RequestTimeout)
+	timer := time.NewTimer(h.replica.RequestTimeout)
 	select {
 	case <-h.closed:
 		return ClosedError
 	case <-timer.C:
-		return NewTimeoutError(h.instance.RequestTimeout, "ClientAppend")
-	case h.instance.ClientAppends <- append:
+		return NewTimeoutError(h.replica.RequestTimeout, "ClientAppend")
+	case h.replica.ClientAppends <- append:
 		select {
 		case <-h.closed:
 			return ClosedError

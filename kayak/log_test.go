@@ -1,6 +1,8 @@
 package kayak
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/pkopriv2/bourne/common"
@@ -20,7 +22,7 @@ func TestEventLog_Head_Empty(t *testing.T) {
 
 func TestEventLog_Commit_Greater_Than_Head(t *testing.T) {
 	log := NewTestEventLog()
-	assert.Panics(t, func() {log.Commit(1)})
+	assert.Panics(t, func() { log.Commit(1) })
 }
 
 func TestEventLog_Snapshot_Empty(t *testing.T) {
@@ -119,21 +121,36 @@ func TestEventLog_Scan_Middle(t *testing.T) {
 	assert.Equal(t, 1, len(evts))
 }
 
-
 func NewTestEventLog() *eventLog {
 	return newEventLog(common.NewContext(common.NewEmptyConfig()))
 }
 
-type testEvent struct{}
+var i int = 0
+var lock sync.Mutex
+
+type testEvent struct {
+	i int
+}
+
+func newTestEvent() *testEvent {
+	lock.Lock()
+	defer lock.Unlock()
+	i++
+
+	return &testEvent{i}
+}
 
 func (e *testEvent) Write(w scribe.Writer) {
 	w.WriteString("type", "testevent")
+	w.WriteInt("i", e.i)
 }
 
 func (e *testEvent) String() string {
-	return "Test event"
+	return fmt.Sprintf("Event(%v)", e.i)
 }
 
 func testEventParser(r scribe.Reader) (event, error) {
-	return &testEvent{}, nil
+	evt := &testEvent{}
+	err := r.ReadInt("i", &evt.i)
+	return evt, err
 }

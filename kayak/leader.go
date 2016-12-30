@@ -282,17 +282,22 @@ func (s *logSyncer) Append(batch []event) (err error) {
 		return nil
 	}
 
-	// append to local log
-	head := s.root.Log.Append(batch, s.root.term.num)
-	s.moveHead(head)
-
 	committed := make(chan struct{}, 1)
 	go func() {
+		// append
+		head := s.root.Log.Append(batch, s.root.term.num)
+
+		// notify
+		s.moveHead(head)
+
+		// wait for majority.
 		for needed := majority(len(s.root.peers)+1) - 1; needed > 0; {
 			for _, p := range s.root.peers {
 				index, term := s.GetPrevIndexAndTerm(p.id)
 				if index >= head && term == s.root.term.num {
 					needed--
+				} else {
+					s.logger.Info("Still behind: %v, %v", p, index)
 				}
 			}
 
@@ -304,6 +309,7 @@ func (s *logSyncer) Append(batch []event) (err error) {
 			}
 		}
 
+		s.root.Log.Commit(head) // commutative, so safe in the event of out of order appends.
 		committed <- struct{}{}
 	}()
 
@@ -315,7 +321,6 @@ func (s *logSyncer) Append(batch []event) (err error) {
 		return NewTimeoutError(s.root.RequestTimeout, "AppendLog")
 	case <-committed:
 		timer.Stop()
-		s.root.Log.Commit(head) // commutative, so safe in the event of out of order appends.
 		return nil
 	}
 }
@@ -394,7 +399,7 @@ func (s *logSyncer) sync(p peer) {
 				// TODO: Implement optimization to come to faster agreement.
 				prevIndex -= 1
 				if prevIndex < -1 {
-					s.logger.Error("Unable to sync peer logs [%v]", p)
+					logger.Error("Unable to sync peer log")
 					return
 				}
 
@@ -404,6 +409,8 @@ func (s *logSyncer) sync(p peer) {
 					s.SetPrevIndexAndTerm(p.id, -1, -1)
 				}
 			}
+
+			logger.Info("Caught up [%v]", head)
 		}
 	}()
 }
