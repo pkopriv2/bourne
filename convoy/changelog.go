@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 	"github.com/pkopriv2/bourne/stash"
@@ -49,24 +50,13 @@ type change struct {
 	Del bool
 }
 
-func readChange(r scribe.Reader) (change, error) {
-	c := &change{}
-	if err := r.ReadInt("seq", &c.Seq); err != nil {
-		return *c, err
-	}
-	if err := r.ReadString("key", &c.Key); err != nil {
-		return *c, err
-	}
-	if err := r.ReadString("val", &c.Val); err != nil {
-		return *c, err
-	}
-	if err := r.ReadInt("ver", &c.Ver); err != nil {
-		return *c, err
-	}
-	if err := r.ReadBool("del", &c.Del); err != nil {
-		return *c, err
-	}
-	return *c, nil
+func readChange(r scribe.Reader) (c change, err error) {
+	err = r.ReadInt("seq", &c.Seq)
+	err = common.Or(err, r.ReadString("key", &c.Key))
+	err = common.Or(err, r.ReadString("val", &c.Val))
+	err = common.Or(err, r.ReadInt("ver", &c.Ver))
+	err = common.Or(err, r.ReadBool("del", &c.Del))
+	return
 }
 
 func (c change) Write(w scribe.Writer) {
@@ -220,7 +210,6 @@ func (c *changeLog) Append(key string, val string, del bool) (chg change, err er
 		return
 	}
 
-
 	for _, l := range c.listeners() {
 		// do not allow listener to be closed
 		select {
@@ -228,7 +217,7 @@ func (c *changeLog) Append(key string, val string, del bool) (chg change, err er
 			return change{}, ClosedError
 		case <-l.closed:
 			continue
-		case l.closer<-struct{}{}:
+		case l.closer <- struct{}{}:
 		}
 
 		select {

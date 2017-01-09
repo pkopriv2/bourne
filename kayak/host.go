@@ -27,25 +27,6 @@ import (
 //  * Support durable log!!
 //
 
-func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {
-	ret := make([]*host, 0, len(hosts))
-	for _, h := range hosts {
-		if fn(h) {
-			ret = append(ret, h)
-		}
-	}
-	return ret
-}
-
-func hostsFirst(hosts []*host, fn func(h *host) bool) *host {
-	for _, h := range hosts {
-		if fn(h) {
-			return h
-		}
-	}
-	return nil
-}
-
 // A peer contains the identifying info of a cluster member.
 type peer struct {
 	id   uuid.UUID
@@ -71,7 +52,7 @@ func (p peer) Client(ctx common.Context, parser Parser) (*client, error) {
 
 type host struct {
 	logger common.Logger
-	core   *engine
+	core   *replicatedLog
 	server net.Server
 	closed chan struct{}
 	closer chan struct{}
@@ -81,7 +62,7 @@ func newHost(ctx common.Context, self peer, others []peer, parser Parser, stash 
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	core, err := newHostEngine(ctx, root, self, others, parser, stash)
+	core, err := newReplicatedLog(ctx, root, self, others, parser, stash)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +94,7 @@ func (h *host) Id() uuid.UUID {
 }
 
 func (h *host) Context() common.Context {
-	return h.core.replica.ctx
+	return h.core.replica.Ctx
 }
 
 func (h *host) Self() peer {
@@ -128,7 +109,7 @@ func (h *host) Parser() Parser {
 	return h.core.replica.Parser
 }
 
-func (h *host) Log() *eventLog {
+func (h *host) LocalLog() *eventLog {
 	return h.core.replica.Log
 }
 
@@ -150,4 +131,23 @@ func (h *host) Close() error {
 	err = common.Or(err, h.core.Close())
 	close(h.closed)
 	return err
+}
+
+func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {
+	ret := make([]*host, 0, len(hosts))
+	for _, h := range hosts {
+		if fn(h) {
+			ret = append(ret, h)
+		}
+	}
+	return ret
+}
+
+func hostsFirst(hosts []*host, fn func(h *host) bool) *host {
+	for _, h := range hosts {
+		if fn(h) {
+			return h
+		}
+	}
+	return nil
 }

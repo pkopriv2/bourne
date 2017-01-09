@@ -1,5 +1,7 @@
 package amoeba
 
+import "time"
+
 // The core indexing abstraction and implementation.
 //
 // This indexer is designed for an eventually convergent,
@@ -13,9 +15,10 @@ package amoeba
 // is expressive enough to support such a change without major changes
 // to the interfaces.
 
-// A generic key type.  The only requirement of keys is they sortable
+// A generic key type.  Keys must be comparable and hashable.
 type Key interface {
 	Compare(Key) int
+	Hash() string
 }
 
 // Generic scanning abstraction.   Allows for halting and skipping
@@ -51,6 +54,8 @@ type Index interface {
 
 // Access methods for an index.
 type View interface {
+	// the start time of the transaction. (consistent throughout the transaction)
+	Time() time.Time
 
 	// Retrieves the item for the given key.  Nil if it doesn't exist.
 	Get(key Key) interface{}

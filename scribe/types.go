@@ -1,6 +1,7 @@
 package scribe
 
 import (
+	"bytes"
 	"encoding/gob"
 
 	"github.com/pkg/errors"
@@ -15,7 +16,7 @@ type Value interface {
 	// to make decisions as to what ptr values it supports.
 	AssignTo(ptr interface{}) error
 
-	// Dumps the value to a raw go type
+	// Dumps the value to a raw go type (used to encode using raw go encoders)
 	Dump() interface{}
 }
 
@@ -159,18 +160,18 @@ func (o Object) Read(field string, ptr interface{}) error {
 	return nil
 }
 
-// func (o Object) ReadOptional(field string, ptr interface{}) (bool, error) {
-	// value, ok := o[field]
-	// if !ok {
-		// return false, nil
-	// }
-//
-	// if err := value.AssignTo(ptr); err != nil {
-		// return false, errors.Wrapf(err, "Error while reading field [%v]", field)
-	// }
-//
-	// return true, nil
-// }
+func (o Object) ReadOptional(field string, ptr interface{}) (bool, error) {
+	value, ok := o[field]
+	if !ok {
+		return false, nil
+	}
+
+	if err := value.AssignTo(ptr); err != nil {
+		return false, errors.Wrapf(err, "Error while reading field [%v]", field)
+	}
+
+	return true, nil
+}
 
 func (o Object) Copy() Object {
 	ret := make(map[string]Value)
@@ -191,8 +192,27 @@ func (o Object) Dump() interface{} {
 	return ret
 }
 
+func (o Object) Bytes() []byte {
+	buf := new(bytes.Buffer)
+	enc := gob.NewEncoder(buf)
+	enc.Encode(o.Dump())
+	return buf.Bytes()
+}
+
 func newEmptyObject() Object {
 	return Object(make(map[string]Value))
+}
+
+func parseObjectFromBytes(val []byte) (Object, error) {
+	dec := gob.NewDecoder(bytes.NewBuffer(val))
+
+	var raw map[string]interface{}
+	err := dec.Decode(&raw)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseObject(raw)
 }
 
 func parseObject(data map[string]interface{}) (Object, error) {

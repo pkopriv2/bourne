@@ -10,10 +10,22 @@ import (
 )
 
 // Version tagged with each message.
+// TODO: Start using this!
 var Version = "0.1"
 
 // Builds a message from the given builder func
 var EmptyMessage = newWriter().Build()
+
+// Parses a message from the given bytes.  This assumes
+// the message was encoding with: Message#Bytes()
+func Parse(val []byte) (Message, error) {
+	obj, err := parseObjectFromBytes(val)
+	if err != nil {
+		return nil, err
+	}
+
+	return message(obj), nil
+}
 
 // Builds a message from the given builder func
 func Build(fn func(w Writer)) (msg Message) {
@@ -164,6 +176,16 @@ func (m message) ReadMessage(field string, val *Message) error {
 	return nil
 }
 
+func (m message) ReadOptionalMessage(field string, val *Message) error {
+	var raw Object
+	if ok, err := Object(m).ReadOptional(field, &raw); ! ok || err != nil {
+		return err
+	}
+
+	*val = message(raw)
+	return nil
+}
+
 func (m message) ReadMessages(field string, val *[]Message) error {
 	var raw []Object
 	if err := Object(m).Read(field, &raw); err != nil {
@@ -244,8 +266,13 @@ func (m message) ReadUUID(field string, val *uuid.UUID) error {
 	return nil
 }
 
+
 func (m message) Stream(e Encoder) error {
 	return e.Encode(Object(m).Dump())
+}
+
+func (m message) Bytes() []byte {
+	return Object(m).Bytes()
 }
 
 func (m message) Write(w Writer) {

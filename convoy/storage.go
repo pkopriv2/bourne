@@ -34,29 +34,14 @@ type item struct {
 	Time time.Time
 }
 
-func readItem(r scribe.Reader) (item, error) {
-	item := &item{}
-
-	if err := r.ReadUUID("memId", &item.MemId); err != nil {
-		return *item, err
-	}
-	if err := r.ReadInt("memVer", &item.MemVer); err != nil {
-		return *item, err
-	}
-	if err := r.ReadString("key", &item.Key); err != nil {
-		return *item, err
-	}
-	if err := r.ReadString("val", &item.Val); err != nil {
-		return *item, err
-	}
-	if err := r.ReadInt("ver", &item.Ver); err != nil {
-		return *item, err
-	}
-	if err := r.ReadBool("del", &item.Del); err != nil {
-		return *item, err
-	}
-
-	return *item, nil
+func readItem(r scribe.Reader) (item item, err error) {
+	err = r.ReadUUID("memId", &item.MemId)
+	err = common.Or(err, r.ReadInt("memVer", &item.MemVer))
+	err = common.Or(err, r.ReadString("key", &item.Key))
+	err = common.Or(err, r.ReadString("val", &item.Val))
+	err = common.Or(err, r.ReadInt("ver", &item.Ver))
+	err = common.Or(err, r.ReadBool("del", &item.Del))
+	return
 }
 
 func (i item) Write(w scribe.Writer) {
@@ -242,7 +227,7 @@ func (d *storage) Update(fn func(*update) error) (err error) {
 		select {
 		case <-d.closed:
 		case ch <- ret:
-		default:
+		// default:
 			// drop
 		}
 	}
@@ -455,6 +440,10 @@ type storageKey struct {
 	Attr   string
 	MemId  uuid.UUID
 	MemVer int
+}
+
+func (k storageKey) Hash() string {
+	return k.String()
 }
 
 func (k storageKey) String() string {

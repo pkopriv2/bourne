@@ -9,172 +9,226 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-type leader struct {
+type leaderSpawner struct {
 	ctx      common.Context
 	in       chan *replica
 	follower chan<- *replica
 	closed   chan struct{}
 }
 
-func newLeader(ctx common.Context, in chan *replica, follower chan<- *replica, closed chan struct{}) *leader {
-	ret := &leader{ctx, in, follower, closed}
+func newLeaderSpawner(ctx common.Context, in chan *replica, follower chan<- *replica, closed chan struct{}) *leaderSpawner {
+	ret := &leaderSpawner{ctx, in, follower, closed}
 	ret.start()
 	return ret
 }
 
-func (c *leader) start() error {
+func (c *leaderSpawner) start() {
 	go func() {
 		for {
 			select {
 			case <-c.closed:
 				return
 			case i := <-c.in:
-				c.run(i)
+				c.spawnLeader(i)
 			}
 		}
 	}()
-	return nil
 }
 
-func (c *leader) transition(h *replica, ch chan<- *replica) error {
-	select {
-	case <-c.closed:
-		return ClosedError
-	case ch <- h:
-		return nil
-	}
+func (c *leaderSpawner) spawnLeader(h *replica) {
+	h.Term(h.term.num, &h.Id, &h.Id)
+	spawnLeader(c.follower, h)
 }
 
-func (c *leader) run(h *replica) error {
-	logger := h.Logger.Fmt("Leader(%v)", h.term)
+type leader struct {
+	logger common.Logger
+
+	follower chan<- *replica
+
+	syncer     *logSyncer
+	proxyPool  concurrent.WorkPool
+	appendPool concurrent.WorkPool
+
+	term    term
+	replica *replica
+
+	closed chan struct{}
+	closer chan struct{}
+}
+
+func spawnLeader(follower chan<- *replica, replica *replica) {
+	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
 	logger.Info("Becoming leader")
 
-	// become leader for current term.
-	h.Term(h.term.num, &h.Id, &h.Id)
-
-	// establish leadership
-	if next := c.handleHeartbeatTimeout(logger, h); next != nil {
-		c.transition(h, next)
-		return nil
+	l := &leader{
+		logger:     logger,
+		follower:   follower,
+		syncer:     newLogSyncer(replica, logger),
+		proxyPool:  concurrent.NewWorkPool(16),
+		appendPool: concurrent.NewWorkPool(16),
+		term:       replica.CurrentTerm(),
+		replica:    replica,
+		closed:     make(chan struct{}),
+		closer:     make(chan struct{}, 1),
 	}
 
-	// start the log syncer.
-	sync := newLogSyncer(h, logger)
+	l.start()
+}
 
-	// we'll want to bound the number of concurrent requests.
-	pool := concurrent.NewWorkPool(20)
+func (l *leader) transition(ch chan<- *replica) {
+	select {
+	case <-l.closed:
+	case ch <- l.replica:
+	}
+
+	l.Close()
+}
+
+func (l *leader) Close() error {
+	select {
+	case <-l.closed:
+		return ClosedError
+	case l.closer <- struct{}{}:
+	}
+
+	l.proxyPool.Close()
+	l.appendPool.Close()
+	l.syncer.Close()
+	close(l.closed)
+	return nil
+}
+
+func (l *leader) start() {
+	// Establish leadership
+	l.broadcastHeartbeat()
+
+	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
 	go func() {
-		defer sync.Close()
 		for {
-			logger.Info("Resetting heartbeat timer [%v]", h.ElectionTimeout/5)
-			timer := time.NewTimer(h.ElectionTimeout / 5)
-
 			select {
-			case <-c.closed:
+			case <-l.replica.closed:
 				return
-			case <-sync.closed:
-				if sync.failure == NotLeaderError {
-					c.transition(h, c.follower)
-					return
-				}
-
+			case <-l.closed:
 				return
-			case append := <-h.ClientAppends:
-				if next := c.handleClientAppend(pool, sync, append); next != nil {
-					c.transition(h, next)
-					return
-				}
-			case append := <-h.Appends:
-				if next := c.handleAppendEvents(h, append); next != nil {
-					c.transition(h, next)
-					return
-				}
-			case ballot := <-h.Votes:
-				if next := c.handleRequestVote(h, ballot); next != nil {
-					c.transition(h, next)
-					return
-				}
-			case <-timer.C:
-				if next := c.handleHeartbeatTimeout(logger, h); next != nil {
-					c.transition(h, next)
-					return
-				}
+			case append := <-l.replica.ProxyMachineAppends:
+				l.handleProxyMachineAppend(append)
 			}
 		}
 	}()
-	return nil
+
+	// Main routine
+	go func() {
+		for {
+			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
+
+			select {
+			case <-l.replica.closed:
+				return
+			case <-l.closed:
+				return
+			case append := <-l.replica.MachineAppends:
+				l.handleMachineAppend(append)
+			case <-l.syncer.closed:
+				if l.syncer.failure == NotLeaderError {
+					l.transition(l.follower)
+					return
+				}
+				return
+			case appendEvents := <-l.replica.LogAppends:
+				l.handleAppendEvents(appendEvents)
+			case ballot := <-l.replica.Votes:
+				l.handleRequestVote(ballot)
+			case <-timer.C:
+				l.broadcastHeartbeat()
+			}
+		}
+	}()
 }
 
-func (c *leader) handleClientAppend(pool concurrent.WorkPool, s *logSyncer, a clientAppend) chan<- *replica {
-	pool.Submit(func() {
-		a.reply(s.Append(a.events))
+func (c *leader) handleProxyMachineAppend(append machineAppend) {
+	err := c.proxyPool.Submit(func() {
+		append.reply(c.replica.Machine.Handle(append.event), nil)
 	})
-	return nil
+
+	if err != nil {
+		append.reply(true, ClosedError)
+	}
 }
 
-func (c *leader) handleRequestVote(h *replica, vote requestVote) chan<- *replica {
+func (c *leader) handleMachineAppend(append machineAppend) {
+	err := c.appendPool.Submit(func() {
+		append.reply(true, c.syncer.Append([]Event{append.event}))
+	})
+
+	if err != nil {
+		append.reply(true, ClosedError)
+	}
+}
+
+func (c *leader) handleRequestVote(vote requestVote) {
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
-	if vote.term <= h.term.num {
-		vote.reply(h.term.num, false)
-		return nil
+	if vote.term <= c.replica.term.num {
+		vote.reply(c.replica.term.num, false)
+		return
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	maxLogIndex, maxLogTerm, _ := h.Log.Snapshot()
+	maxLogIndex, maxLogTerm, _ := c.replica.Log.Snapshot()
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
-		h.Term(vote.term, nil, &vote.id)
+		c.replica.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
 	} else {
-		h.Term(vote.term, nil, nil)
+		c.replica.Term(vote.term, nil, nil)
 		vote.reply(vote.term, false)
 	}
 
-	return c.follower
+	c.transition(c.follower)
 }
 
-func (c *leader) handleAppendEvents(h *replica, append appendEvents) chan<- *replica {
-	if append.term < h.term.num {
-		append.reply(h.term.num, false)
-		return nil
+func (c *leader) handleAppendEvents(append appendEvents) {
+	if append.term < c.replica.term.num {
+		append.reply(c.replica.term.num, false)
+		return
 	}
 
-	h.Term(append.term, &append.id, &append.id)
+	c.replica.Term(append.term, &append.id, &append.id)
 	append.reply(append.term, false)
-	return c.follower
+	c.transition(c.follower)
 }
 
-func (c *leader) handleHeartbeatTimeout(logger common.Logger, h *replica) chan<- *replica {
-	ch := h.Broadcast(func(cl *client) response {
-		maxLogIndex, maxLogTerm, commit := h.Log.Snapshot()
-		logger.Info("Sending heart beat (%v,%v,%v)", maxLogIndex, maxLogTerm, commit)
-		resp, err := cl.AppendEvents(h.Id, h.term.num, maxLogIndex, maxLogTerm, []event{}, commit)
+func (c *leader) broadcastHeartbeat() {
+	ch := c.replica.Broadcast(func(cl *client) response {
+		maxLogIndex, maxLogTerm, commit := c.replica.Log.Snapshot()
+		c.logger.Info("Sending heart beat (%v,%v,%v)", maxLogIndex, maxLogTerm, commit)
+
+		resp, err := cl.AppendEvents(c.replica.Id, c.replica.term.num, maxLogIndex, maxLogTerm, []Event{}, commit)
 		if err != nil {
-			return response{h.term.num, false}
+			return response{c.replica.term.num, false}
 		} else {
 			return resp
 		}
 	})
 
-	timer := time.NewTimer(h.ElectionTimeout)
-	for i := 0; i < h.Majority()-1; {
+	timer := time.NewTimer(c.replica.ElectionTimeout)
+	for i := 0; i < c.replica.Majority()-1; {
 		select {
 		case <-c.closed:
-			return nil
+			return
 		case resp := <-ch:
-			if resp.term > h.term.num {
-				h.Term(resp.term, nil, nil)
-				return c.follower
+			if resp.term > c.replica.term.num {
+				c.replica.Term(resp.term, nil, c.replica.term.votedFor)
+				c.transition(c.follower)
+				return
 			}
 
 			i++
 		case <-timer.C:
-			h.Term(h.term.num, nil, nil)
-			return c.follower
+			c.replica.Term(c.replica.term.num, nil, c.replica.term.votedFor)
+			c.transition(c.follower)
+			return
 		}
 	}
-
-	return nil
 }
 
 // the log syncer should be rebuilt every time a leader comes to power.
@@ -270,7 +324,7 @@ func (s *logSyncer) getHeadWhenGreater(cur int) (head int, err error) {
 	return
 }
 
-func (s *logSyncer) Append(batch []event) (err error) {
+func (s *logSyncer) Append(batch []Event) (err error) {
 	select {
 	case <-s.closed:
 		return ClosedError
@@ -287,7 +341,7 @@ func (s *logSyncer) Append(batch []event) (err error) {
 		// append
 		head := s.root.Log.Append(batch, s.root.term.num)
 
-		// notify
+		// notify sync'ers
 		s.moveHead(head)
 
 		// wait for majority.
@@ -296,8 +350,6 @@ func (s *logSyncer) Append(batch []event) (err error) {
 				index, term := s.GetPrevIndexAndTerm(p.id)
 				if index >= head && term == s.root.term.num {
 					needed--
-				} else {
-					s.logger.Info("Still behind: %v, %v", p, index)
 				}
 			}
 
@@ -309,18 +361,14 @@ func (s *logSyncer) Append(batch []event) (err error) {
 			}
 		}
 
-		s.root.Log.Commit(head) // commutative, so safe in the event of out of order appends.
+		s.root.Log.Commit(head) // commutative, so safe in the event of out of order commits.
 		committed <- struct{}{}
 	}()
 
-	timer := time.NewTimer(s.root.RequestTimeout)
 	select {
 	case <-s.closed:
 		return common.Or(s.failure, ClosedError)
-	case <-timer.C:
-		return NewTimeoutError(s.root.RequestTimeout, "AppendLog")
 	case <-committed:
-		timer.Stop()
 		return nil
 	}
 }
@@ -380,6 +428,7 @@ func (s *logSyncer) sync(p peer) {
 
 				// make sure we're still a leader.
 				if resp.term > s.root.term.num {
+					logger.Error("No longer leader.")
 					s.shutdown(NotLeaderError)
 					return
 				}
@@ -410,7 +459,7 @@ func (s *logSyncer) sync(p peer) {
 				}
 			}
 
-			logger.Info("Caught up [%v]", head)
+			logger.Debug("Sync'ed to [%v]", head)
 		}
 	}()
 }
@@ -421,7 +470,7 @@ func (s *logSyncer) client(p peer) (*client, error) {
 	for timeout := 1 * time.Second; ; {
 		ch := make(chan *client)
 		go func() {
-			cl, err := p.Client(s.root.ctx, s.root.Parser)
+			cl, err := p.Client(s.root.Ctx, s.root.Parser)
 			if err == nil && cl != nil {
 				ch <- cl
 			}

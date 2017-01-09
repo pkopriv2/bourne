@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"log"
+	"os"
 )
 
 // TODO: REPLACE ALL OF THIS WITH AN OPEN SOURCE VERSION!
@@ -21,12 +22,13 @@ func formatLogger(logger Logger, format string, args ...interface{}) Logger {
 
 func print(format string, vals ...interface{}) {
 	log.Println(fmt.Sprintf(format, vals...))
+	os.Stdout.Sync()
 }
 
 type LoggerLevel int
 
 const (
-	Off   LoggerLevel = iota
+	Off LoggerLevel = iota
 	Error
 	Info
 	Debug
@@ -94,7 +96,7 @@ type formattedLogger struct {
 	fmt string
 }
 
-func NewFormattedLogger(base Logger, format string, vals ... interface{}) Logger {
+func NewFormattedLogger(base Logger, format string, vals ...interface{}) Logger {
 	return &formattedLogger{base, fmt.Sprintf(format, vals...)}
 }
 

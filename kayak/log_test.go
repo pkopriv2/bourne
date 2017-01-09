@@ -35,7 +35,7 @@ func TestEventLog_Snapshot_Empty(t *testing.T) {
 
 func TestEventLog_Append_SingleBatch_SingleItem(t *testing.T) {
 	log := NewTestEventLog()
-	idx := log.Append([]event{&testEvent{}}, 1)
+	idx := log.Append([]Event{&testEvent{}}, 1)
 	assert.Equal(t, 0, idx)
 
 	head, term, commit := log.Snapshot()
@@ -46,7 +46,7 @@ func TestEventLog_Append_SingleBatch_SingleItem(t *testing.T) {
 
 func TestEventLog_Append_SingleBatch_MultiItem(t *testing.T) {
 	log := NewTestEventLog()
-	idx := log.Append([]event{&testEvent{}, &testEvent{}}, 1)
+	idx := log.Append([]Event{&testEvent{}, &testEvent{}}, 1)
 	assert.Equal(t, 1, idx)
 
 	head, term, commit := log.Snapshot()
@@ -57,8 +57,8 @@ func TestEventLog_Append_SingleBatch_MultiItem(t *testing.T) {
 
 func TestEventLog_Append_MultiBatch_MultiItem(t *testing.T) {
 	log := NewTestEventLog()
-	log.Append([]event{&testEvent{}, &testEvent{}}, 1)
-	idx := log.Append([]event{&testEvent{}, &testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}, &testEvent{}}, 1)
+	idx := log.Append([]Event{&testEvent{}, &testEvent{}}, 1)
 	assert.Equal(t, 3, idx)
 
 	head, term, commit := log.Snapshot()
@@ -69,7 +69,7 @@ func TestEventLog_Append_MultiBatch_MultiItem(t *testing.T) {
 
 func TestEventLog_Insert_SingleBatch_SingleItem(t *testing.T) {
 	log := NewTestEventLog()
-	log.Insert([]event{&testEvent{}}, 1, 1)
+	log.Insert([]Event{&testEvent{}}, 1, 1)
 
 	head, term, commit := log.Snapshot()
 	assert.Equal(t, 1, head)
@@ -85,14 +85,14 @@ func TestEventLog_Get_Empty(t *testing.T) {
 
 func TestEventLog_Get_NotFound(t *testing.T) {
 	log := NewTestEventLog()
-	log.Append([]event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
 	_, found := log.Get(1)
 	assert.False(t, found)
 }
 
 func TestEventLog_Get_Single(t *testing.T) {
 	log := NewTestEventLog()
-	log.Append([]event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
 	item, found := log.Get(0)
 	assert.True(t, found)
 	assert.Equal(t, 0, item.index)
@@ -107,16 +107,16 @@ func TestEventLog_Scan_Empty(t *testing.T) {
 
 func TestEventLog_Scan_Single(t *testing.T) {
 	log := NewTestEventLog()
-	log.Append([]event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
 	evts := log.Scan(0, 1)
 	assert.Equal(t, 1, len(evts))
 }
 
 func TestEventLog_Scan_Middle(t *testing.T) {
 	log := NewTestEventLog()
-	log.Append([]event{&testEvent{}}, 1)
-	log.Append([]event{&testEvent{}}, 1)
-	log.Append([]event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
 	evts := log.Scan(1, 1)
 	assert.Equal(t, 1, len(evts))
 }
@@ -149,7 +149,7 @@ func (e *testEvent) String() string {
 	return fmt.Sprintf("Event(%v)", e.i)
 }
 
-func testEventParser(r scribe.Reader) (event, error) {
+func testEventParser(r scribe.Reader) (Event, error) {
 	evt := &testEvent{}
 	err := r.ReadInt("i", &evt.i)
 	return evt, err

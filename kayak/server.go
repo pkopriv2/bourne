@@ -12,28 +12,29 @@ import (
 const (
 	actAppendEvents = "kayak.replica.appendEvents"
 	actRequestVote  = "kayak.replica.requestVote"
-	actClientAppend = "kayak.client.append"
+	actProxyAppend  = "kayak.client.append"
 )
 
 // Meta messages
 var (
 	metaAppendEvents = serverNewMeta(actAppendEvents)
 	metaRequestVote  = serverNewMeta(actRequestVote)
-	metaClientAppend = serverNewMeta(actClientAppend)
+	metaProxyAppend  = serverNewMeta(actProxyAppend)
 )
 
 type server struct {
+	//
 	ctx common.Context
 
 	// the root server logger.
 	logger common.Logger
 
 	// the member
-	self *engine
+	self *replicatedLog
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, logger common.Logger, port string, self *engine) (net.Server, error) {
+func newServer(ctx common.Context, logger common.Logger, port string, self *replicatedLog) (net.Server, error) {
 	server := &server{
 		ctx:    ctx,
 		logger: logger.Fmt("Server"),
@@ -57,8 +58,8 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 			return s.AppendEvents(req)
 		case actRequestVote:
 			return s.RequestVote(req)
-		case actClientAppend:
-			return s.ClientAppend(req)
+		case actProxyAppend:
+			return s.ProxyAppend(req)
 		}
 	}
 }
@@ -91,18 +92,18 @@ func (s *server) RequestVote(req net.Request) net.Response {
 	return newResponseResponse(resp)
 }
 
-func (s *server) ClientAppend(req net.Request) net.Response {
-	append, err := readClientAppendRequest(req.Body(), s.self.Parser())
+func (s *server) ProxyAppend(req net.Request) net.Response {
+	event, err := readProxyAppendRequest(req.Body(), s.self.Parser())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	err = s.self.RequestClientAppend(append.events)
+	success, err := s.self.MachineProxyAppend(event)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return net.NewEmptyResponse()
+	return newProxyAppendResponse(success)
 }
 
 // Helper functions
@@ -130,10 +131,32 @@ func newAppendEventsRequest(a appendEventsRequest) net.Request {
 	}))
 }
 
-func newClientAppendRequest(a clientAppendRequest) net.Request {
-	return net.NewRequest(metaClientAppend, scribe.Build(func(w scribe.Writer) {
-		a.Write(w)
+func newProxyAppendRequest(e Event) net.Request {
+	return net.NewRequest(metaProxyAppend, scribe.Build(func(w scribe.Writer) {
+		w.WriteMessage("event", e)
 	}))
+}
+
+func newProxyAppendResponse(success bool) net.Response {
+	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
+		w.WriteBool("success", success)
+	}))
+}
+
+func readProxyAppendRequest(r scribe.Reader, fn Parser) (e Event, err error) {
+	var msg scribe.Message
+	err = common.Or(err, r.ReadMessage("event", &msg))
+	if err != nil {
+		return
+	}
+
+	return fn(msg)
+}
+
+func readProxyAppendResponse(res net.Response) (success bool, err error) {
+	err = res.Error()
+	err = common.Or(err, res.Body().ReadBool("success", &success))
+	return
 }
 
 func newResponseResponse(res response) net.Response {
@@ -144,10 +167,10 @@ func newResponseResponse(res response) net.Response {
 }
 
 func readResponseResponse(res net.Response) (ret response, err error) {
-	err = common.Or(err, res.Error())
+	err = res.Error()
 	err = common.Or(err, res.Body().ReadInt("term", &ret.term))
 	err = common.Or(err, res.Body().ReadBool("success", &ret.success))
-	return ret, err
+	return
 }
 
 type requestVoteRequest struct {
@@ -175,7 +198,7 @@ func (r requestVoteRequest) Write(w scribe.Writer) {
 type appendEventsRequest struct {
 	id           uuid.UUID
 	term         int
-	events       []event
+	events       []Event
 	prevLogIndex int
 	prevLogTerm  int
 	commit       int
@@ -202,7 +225,7 @@ func readAppendEventsRequest(r scribe.Reader, parse Parser) (ret appendEventsReq
 		return
 	}
 
-	events := make([]event, 0, len(msgs))
+	events := make([]Event, 0, len(msgs))
 	for _, m := range msgs {
 		event, err := parse(m)
 		if err != nil {
@@ -213,30 +236,4 @@ func readAppendEventsRequest(r scribe.Reader, parse Parser) (ret appendEventsReq
 
 	ret.events = events
 	return ret, err
-}
-
-type clientAppendRequest struct {
-	events []event
-}
-
-func (a clientAppendRequest) Write(w scribe.Writer) {
-	w.WriteMessages("events", a.events)
-}
-
-func readClientAppendRequest(r scribe.Reader, parse Parser) (ret clientAppendRequest, err error) {
-	var msgs []scribe.Message
-	if err = r.ReadMessages("events", &msgs); err != nil {
-		return
-	}
-
-	events := make([]event, 0, len(msgs))
-	for _, m := range msgs {
-		event, err := parse(m)
-		if err != nil {
-			return clientAppendRequest{}, err
-		}
-		events = append(events, event)
-	}
-
-	return clientAppendRequest{events: events}, nil
 }

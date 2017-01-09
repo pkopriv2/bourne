@@ -9,176 +9,228 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-func newLeaderPool(h *replica) net.ConnectionPool {
-	if h.term.leader == nil {
-		return nil
-	}
-
-	leader, found := h.Peer(*h.term.leader)
-	if !found {
-		panic(fmt.Sprintf("Unknown member [%v]: %v", h.term.leader, h.Cluster()))
-	}
-
-	return net.NewConnectionPool("tcp", leader.addr, 30, h.ElectionTimeout)
-}
-
-type follower struct {
-	ctx       common.Context
+type followerSpawner struct {
 	in        chan *replica
 	candidate chan<- *replica
 	closed    chan struct{}
 }
 
-func newFollower(ctx common.Context, in chan *replica, candidate chan<- *replica, closed chan struct{}) *follower {
-	ret := &follower{ctx, in, candidate, closed}
+func newFollowerSpawner(in chan *replica, candidate chan<- *replica, closed chan struct{}) *followerSpawner {
+	ret := &followerSpawner{in, candidate, closed}
 	ret.start()
 	return ret
 }
 
-func (c *follower) start() error {
+func (c *followerSpawner) start() {
 	go func() {
 		for {
 			select {
 			case <-c.closed:
 				return
-			case i := <-c.in:
-				c.run(i)
+			case replica := <-c.in:
+				spawnFollower(c.in, c.candidate, replica)
 			}
 		}
 	}()
-	return nil
 }
 
-func (c *follower) transition(h *replica, ch chan<- *replica) error {
-	select {
-	case <-c.closed:
-		return ClosedError
-	case ch <- h:
+func newLeaderConnectionPool(r *replica) net.ConnectionPool {
+	if r.term.leader == nil {
 		return nil
 	}
+
+	leader, found := r.Peer(*r.term.leader)
+	if !found {
+		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.leader, r.Cluster()))
+	}
+
+	return net.NewConnectionPool("tcp", leader.addr, 30, r.ElectionTimeout)
 }
 
-func (c *follower) run(h *replica) error {
-	logger := h.Logger.Fmt("Follower[%v]", h.term)
+type follower struct {
+	logger     common.Logger
+	in         chan<- *replica
+	candidate  chan<- *replica
+	proxyPool  concurrent.WorkPool
+	appendPool concurrent.WorkPool
+	conns      net.ConnectionPool
+	term       term
+	replica    *replica
+	closed     chan struct{}
+	closer     chan struct{}
+}
+
+func spawnFollower(in chan<- *replica, candidate chan<- *replica, replica *replica) {
+	logger := replica.Logger.Fmt("Follower(%v)", replica.CurrentTerm())
 	logger.Info("Becoming follower")
 
-	// the current term (should be constant throughout the instance of the follower)
-	term := h.CurrentTerm()
+	l := &follower{
+		logger:     logger,
+		in:         in,
+		candidate:  candidate,
+		proxyPool:  concurrent.NewWorkPool(16),
+		appendPool: concurrent.NewWorkPool(16),
+		conns:      newLeaderConnectionPool(replica),
+		term:       replica.CurrentTerm(),
+		replica:    replica,
+		closed:     make(chan struct{}),
+		closer:     make(chan struct{}, 1),
+	}
 
-	// start the work pool
-	work := concurrent.NewWorkPool(10)
+	l.start()
+}
 
-	// start the connection pool (might be nil, if the member has no leader)
-	conns := newLeaderPool(h)
-	go func() {
-		defer common.RunIf(func() { conns.Close() })(conns)
-		defer work.Close()
-		for {
-			timer := time.NewTimer(h.ElectionTimeout)
+func (l *follower) transition(ch chan<- *replica) {
+	select {
+	case <-l.closed:
+	case ch <- l.replica:
+	}
 
-			// Only allow client appends if we have a leader.
-			var clientAppends <-chan clientAppend
-			if term.leader != nil {
-				clientAppends = h.ClientAppends
+	l.Close()
+}
+
+func (l *follower) Close() error {
+	select {
+	case <-l.closed:
+		return ClosedError
+	case l.closer <- struct{}{}:
+	}
+
+	close(l.closed)
+	l.proxyPool.Close()
+	l.appendPool.Close()
+	if l.conns != nil {
+		l.conns.Close()
+	}
+	return nil
+}
+
+func (c *follower) start() {
+	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
+	if c.term.leader != nil {
+		go func() {
+			for {
+				select {
+				case <-c.closed:
+					return
+				case append := <-c.replica.ProxyMachineAppends:
+					c.handleProxyMachineAppend(append)
+				}
 			}
+		}()
+	}
 
+	go func() {
+		for {
+			timer := time.NewTimer(c.replica.ElectionTimeout)
 			select {
 			case <-c.closed:
 				return
-			case append := <-clientAppends:
-				c.handleClientAppend(h, work, conns, logger, append)
-			case append := <-h.Appends:
-				if next := c.handleAppendEvents(h, logger, append); next != nil {
-					c.transition(h, next)
-					return
-				}
-			case ballot := <-h.Votes:
-				if next := c.handleRequestVote(h, logger, ballot); next != nil {
-					c.transition(h, next)
-					return
-				}
+			case append := <-c.replica.MachineAppends:
+				c.handleMachineAppend(append)
+			case append := <-c.replica.LogAppends:
+				c.handleAppendEvents(append)
+			case ballot := <-c.replica.Votes:
+				c.handleRequestVote(ballot)
 			case <-timer.C:
-				logger.Info("Waited too long for heartbeat.")
-				c.transition(h, c.candidate) // becomes a new candidate
+				c.logger.Info("Waited too long for heartbeat.")
+				c.transition(c.candidate)
 				return
 			}
 		}
 	}()
-	return nil
 }
 
-func (c *follower) handleClientAppend(h *replica, pool concurrent.WorkPool, conns net.ConnectionPool, logger common.Logger, append clientAppend) {
-	conn := conns.TakeTimeout(h.RequestTimeout / 2)
-	if conn == nil {
-		return
-	}
-	defer conn.Close()
-
-	raw, err := net.NewClient(h.ctx, logger, conn)
+func (c *follower) handleMachineAppend(append machineAppend) {
+	// must be processed out of band so as to avoid potential deadlocks
+	err := c.appendPool.SubmitTimeout(c.replica.RequestTimeout, func() {
+		append.reply(c.replica.MachineProxyAppend(append.event))
+	})
 	if err != nil {
-		append.reply(err)
-		return
+		append.reply(false, err)
 	}
-
-	cl := newClient(raw, h.Parser)
-	append.reply(cl.Append(append.events))
 }
 
-func (c *follower) handleRequestVote(h *replica, logger common.Logger, vote requestVote) chan<- *replica {
-	logger.Debug("Handling request vote [%v]", vote)
+func (c *follower) handleProxyMachineAppend(append machineAppend) {
+	timeout := c.replica.RequestTimeout / 2
+
+	err := c.proxyPool.SubmitTimeout(timeout, func() {
+		conn := c.conns.TakeTimeout(timeout)
+		if conn == nil {
+			append.reply(false, NewTimeoutError(timeout, "Error retrieving connection from pool."))
+			return
+		}
+		defer conn.Close()
+
+		raw, err := net.NewClient(c.replica.Ctx, c.replica.Logger, conn)
+		if err != nil {
+			append.reply(false, err)
+			return
+		}
+
+		append.reply(newClient(raw, c.replica.Parser).ProxyAppend(append.event))
+	})
+	if err != nil {
+		append.reply(false, err)
+	}
+}
+
+func (c *follower) handleRequestVote(vote requestVote) {
+	c.logger.Debug("Handling request vote [%v]", vote)
 
 	// handle: previous term vote.  (immediately decline.)
-	if vote.term < h.term.num {
-		vote.reply(h.term.num, false)
-		return nil
+	if vote.term < c.replica.term.num {
+		vote.reply(c.replica.term.num, false)
+		return
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
-	maxLogIndex, maxLogTerm, _ := h.Log.Snapshot()
-	if vote.term == h.term.num {
-		if h.term.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
-			h.Term(h.term.num, nil, &vote.id) // correct?
-			vote.reply(h.term.num, true)
-			return c.in
+	maxLogIndex, maxLogTerm, _ := c.replica.Log.Snapshot()
+	if vote.term == c.replica.term.num {
+		if c.replica.term.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
+			c.replica.Term(c.replica.term.num, nil, &vote.id) // correct?
+			vote.reply(c.replica.term.num, true)
+			c.transition(c.in)
+			return
 		}
 
-		vote.reply(h.term.num, false)
-		return nil
+		vote.reply(c.replica.term.num, false)
+		return
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 		vote.reply(vote.term, true)
-		h.Term(vote.term, nil, &vote.id)
+		c.replica.Term(vote.term, nil, &vote.id)
 	} else {
 		vote.reply(vote.term, false)
-		h.Term(vote.term, nil, nil)
+		c.replica.Term(vote.term, nil, nil)
 	}
 
-	return c.in
+	c.transition(c.in)
 }
 
-func (c *follower) handleAppendEvents(h *replica, logger common.Logger, append appendEvents) chan<- *replica {
-	if append.term < h.term.num {
-		append.reply(h.term.num, false)
-		return nil
+func (c *follower) handleAppendEvents(append appendEvents) {
+	if append.term < c.replica.term.num {
+		append.reply(c.replica.term.num, false)
+		return
 	}
 
-	if append.term > h.term.num || h.term.leader == nil {
-		logger.Info("New leader detected [%v]", append.id)
+	if append.term > c.replica.term.num || c.replica.term.leader == nil {
+		c.logger.Info("New leader detected [%v]", append.id)
 		append.reply(append.term, false)
-		h.Term(append.term, &append.id, &append.id)
-		return c.in
+		c.replica.Term(append.term, &append.id, &append.id)
+		c.transition(c.in)
+		return
 	}
 
-	if logItem, ok := h.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
-		logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
+	if logItem, ok := c.replica.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
+		c.logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
 		append.reply(append.term, false)
-		return nil
+		return
 	}
 
-	h.Log.Insert(append.events, append.prevLogIndex+1, append.term)
-	h.Log.Commit(append.commit)
+	c.replica.Log.Insert(append.events, append.prevLogIndex+1, append.term)
+	c.replica.Log.Commit(append.commit)
 	append.reply(append.term, true)
-	return nil
 }

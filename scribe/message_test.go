@@ -37,11 +37,14 @@ func TestReadStrings_Empty(t *testing.T) {
 	assert.Error(t, msg.ReadStrings("field", &field))
 }
 
-func TestReadMessage_Empty(t *testing.T) {
+func TestReadOptionalMessage_Empty(t *testing.T) {
 	msg := Build(func(w Writer) {})
 
 	var field Message
-	assert.Error(t, msg.ReadMessage("field", &field))
+	err := msg.ReadOptionalMessage("field", &field)
+
+	assert.Nil(t, field)
+	assert.Nil(t, err)
 }
 
 func TestReadMessages_Empty(t *testing.T) {

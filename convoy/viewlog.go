@@ -1,6 +1,8 @@
 package convoy
 
 import (
+	"fmt"
+
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
@@ -58,6 +60,14 @@ type viewLogKey struct {
 
 func (e viewLogKey) Update(weight int) viewLogKey {
 	return viewLogKey{e.Id, weight}
+}
+
+func (e viewLogKey) String() string {
+	return fmt.Sprintf("/%v/%v", e.Id, e.Remaining)
+}
+
+func (e viewLogKey) Hash() string {
+	return e.String()
 }
 
 func (e viewLogKey) Compare(other amoeba.Key) int {
@@ -126,4 +136,3 @@ func viewLogPop(data amoeba.Update, num int) (batch []event) {
 
 	return
 }
-

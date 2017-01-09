@@ -3,6 +3,7 @@ package amoeba
 import (
 	"bytes"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,10 @@ func (i IntKey) Inc() IntKey {
 	return IntKey(i + 1)
 }
 
+func (i IntKey) Hash() string {
+	return strconv.Itoa(int(i))
+}
+
 func (i IntKey) Compare(s Key) int {
 	return int(i - s.(IntKey))
 }
@@ -35,8 +40,12 @@ func (i IntDescKey) Inc() IntDescKey {
 	return IntDescKey(i + 1)
 }
 
+func (i IntDescKey) Hash() string {
+	return strconv.Itoa(int(i))
+}
+
 func (i IntDescKey) Compare(s Key) int {
-	return int(s.(IntDescKey)-i)
+	return int(s.(IntDescKey) - i)
 }
 
 // A string key type
@@ -44,6 +53,10 @@ type StringKey string
 
 func (i StringKey) Inc() StringKey {
 	return StringKey(IncrementString(string(i)))
+}
+
+func (i StringKey) Hash() string {
+	return string(i)
 }
 
 func (i StringKey) Compare(s Key) int {
@@ -59,6 +72,10 @@ func (i BytesKey) Inc() BytesKey {
 	return BytesKey(IncrementBytes(i))
 }
 
+func (i BytesKey) Hash() string {
+	return string([]byte(i))
+}
+
 func (i BytesKey) Compare(s Key) int {
 	return bytes.Compare([]byte(i), []byte(s.(BytesKey)))
 }
@@ -70,6 +87,10 @@ type UUIDKey uuid.UUID
 // encoding.
 func (k UUIDKey) Inc() UUIDKey {
 	return UUIDKey(IncrementUUID(uuid.UUID(k)))
+}
+
+func (i UUIDKey) Hash() string {
+	return uuid.UUID(i).String()
 }
 
 func (k UUIDKey) Compare(s Key) int {

@@ -92,7 +92,7 @@ func openTermStorage(s stash.Stash) *storage {
 	return &storage{s}
 }
 
-func (t *storage) GetTerm(id uuid.UUID) (term term, err error) {
+func (t *storage) Get(id uuid.UUID) (term term, err error) {
 	err = t.stash.View(func(tx *bolt.Tx) error {
 		tmp, e := termStorageGet(tx, id)
 		if e != nil {
@@ -106,7 +106,7 @@ func (t *storage) GetTerm(id uuid.UUID) (term term, err error) {
 	return
 }
 
-func (t *storage) PutTerm(id uuid.UUID, tm term) error {
+func (t *storage) Save(id uuid.UUID, tm term) error {
 	return t.stash.Update(func(tx *bolt.Tx) error {
 		return termStoragePut(tx, id, tm)
 	})

@@ -88,6 +88,8 @@ type Writable interface {
 // The primary encoding interface. Consumers use the writer to populate
 // the fields of a message
 type Writer interface {
+
+	// Core types.
 	WriteBool(field string, val bool)
 	WriteBools(field string, val []bool)
 	WriteString(field string, val string)
@@ -112,11 +114,15 @@ type Reader interface {
 	ReadMessage(field string, val *Message) error
 	ReadMessages(field string, val *[]Message) error
 
+
 	// Supported extensions
 	ReadInt(field string, val *int) error
 	ReadInts(field string, val *[]int) error
 	ReadBytes(field string, val *[]byte) error
 	ReadUUID(field string, val *uuid.UUID) error
+
+	// Optional methods. (implemented as required)
+	ReadOptionalMessage(field string, val *Message) error
 }
 
 // An immutable data object.  A message may be embedded in other messages
@@ -127,6 +133,8 @@ type Message interface {
 	Reader
 	Streamer
 	Writable
+
+	Bytes() []byte
 }
 
 // A universal wrapper over the gob/json encoders.  Messages can be encoded

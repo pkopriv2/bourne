@@ -18,7 +18,7 @@ import (
 type replica struct {
 
 	// configuration used to build this instance.
-	ctx common.Context
+	Ctx common.Context
 
 	// the core member logger
 	Logger common.Logger
@@ -47,46 +47,55 @@ type replica struct {
 	// the client timeout
 	RequestTimeout time.Duration
 
-	// the distributed event log.
+	// the replicated state machine.
+	Machine StateMachine
+
+	// the event log.
 	Log *eventLog
 
 	// the durable term store.
 	terms *storage
 
-	// A channel whose elements are the ordered events as they are committed.
-	Committed chan event
-
 	// request vote events.
 	Votes chan requestVote
 
 	// append requests (presumably from leader)
-	Appends chan appendEvents
+	LogAppends chan appendEvents
 
 	// append requests (from clients)
-	ClientAppends chan clientAppend
+	ProxyMachineAppends chan machineAppend
+
+	// append requests (from local state machine)
+	MachineAppends chan machineAppend
+
+	// closing utilities
+	closed chan struct{}
+	closer chan struct{}
 }
 
 func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, terms *storage) (*replica, error) {
-	term, err := terms.GetTerm(self.id)
+	term, err := terms.Get(self.id)
 	if err != nil {
 		return nil, err
 	}
 
 	return &replica{
-		ctx:             ctx,
-		Id:              self.id,
-		Self:            self,
-		peers:           others,
-		Logger:          logger,
-		Parser:          parser,
-		term:            term,
-		terms:           terms,
-		Log:             newEventLog(ctx),
-		Appends:         make(chan appendEvents),
-		Votes:           make(chan requestVote),
-		ClientAppends:   make(chan clientAppend),
-		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
-		RequestTimeout:  2 * time.Second,
+		Ctx:                 ctx,
+		Id:                  self.id,
+		Self:                self,
+		peers:               others,
+		Logger:              logger,
+		Parser:              parser,
+		term:                term,
+		terms:               terms,
+		Log:                 newEventLog(ctx),
+		LogAppends:          make(chan appendEvents),
+		Votes:               make(chan requestVote),
+		ProxyMachineAppends: make(chan machineAppend),
+		ElectionTimeout:     time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
+		RequestTimeout:      10 * time.Second,
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -101,12 +110,7 @@ func (h *replica) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
 	h.Logger.Info("Durably storing updated term [%v]", h.term)
-
-	h.terms.PutTerm(h.Id, h.term)
-	// select {
-	// default:
-	// // case h.Terms<-h.term:
-	// }
+	h.terms.Save(h.Id, h.term)
 }
 
 func (h *replica) CurrentTerm() term {
@@ -125,8 +129,9 @@ func (h *replica) Peer(id uuid.UUID) (peer, bool) {
 }
 
 func (h *replica) Cluster() []peer {
-	ret := make([]peer, 0, len(h.peers)+1)
-	ret = append(ret, h.Peers()...)
+	peers := h.Peers()
+	ret := make([]peer, 0, len(peers)+1)
+	ret = append(ret, peers...)
 	ret = append(ret, h.Self)
 	return ret
 }
@@ -150,7 +155,7 @@ func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
-			cl, err := p.Client(h.ctx, h.Parser)
+			cl, err := p.Client(h.Ctx, h.Parser)
 			if cl == nil || err != nil {
 				ret <- response{h.term.num, false}
 				return
@@ -161,6 +166,92 @@ func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 		}(p)
 	}
 	return ret
+}
+
+func (r *replica) Close() error {
+	select {
+	case <-r.closed:
+		return ClosedError
+	case r.closer <- struct{}{}:
+	}
+
+	close(r.closed)
+	return nil
+}
+
+func (h *replica) RequestAppendEvents(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
+	append := appendEvents{
+		id, term, prevLogIndex, prevLogTerm, batch, commit, make(chan response, 1)}
+
+	select {
+	case <-h.closed:
+		return response{}, ClosedError
+	case h.LogAppends <- append:
+		select {
+		case <-h.closed:
+			return response{}, ClosedError
+		case r := <-append.ack:
+			return r, nil
+		}
+	}
+}
+
+func (h *replica) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
+	req := requestVote{id, term, logIndex, logTerm, make(chan response, 1)}
+
+	select {
+	case <-h.closed:
+		return response{}, ClosedError
+	case h.Votes <- req:
+		select {
+		case <-h.closed:
+			return response{}, ClosedError
+		case r := <-req.ack:
+			return r, nil
+		}
+	}
+}
+
+func (h *replica) MachineProxyAppend(events Event) (bool, error) {
+	append := machineAppend{events, make(chan proxyAppendResponse, 1)}
+
+	timer := time.NewTimer(h.RequestTimeout)
+	select {
+	case <-h.closed:
+		return false, ClosedError
+	case <-timer.C:
+		return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+	case h.ProxyMachineAppends <- append:
+		select {
+		case <-h.closed:
+			return false, ClosedError
+		case r := <-append.ack:
+			return r.success, r.err
+		case <-timer.C:
+			return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		}
+	}
+}
+
+func (h *replica) MachineAppend(event Event) (bool, error) {
+	append := machineAppend{event, make(chan proxyAppendResponse, 1)}
+
+	timer := time.NewTimer(h.RequestTimeout)
+	select {
+	case <-h.closed:
+		return false, ClosedError
+	case <-timer.C:
+		return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+	case h.ProxyMachineAppends <- append:
+		select {
+		case <-h.closed:
+			return false, ClosedError
+		case r := <-append.ack:
+			return r.success, r.err
+		case <-timer.C:
+			return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		}
+	}
 }
 
 func majority(num int) int {

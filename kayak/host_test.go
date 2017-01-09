@@ -94,11 +94,13 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
 
 	cl, err := leader.Client()
 	assert.Nil(t, err)
-	assert.Nil(t, cl.Append([]event{&testEvent{}}))
+
+	_, err = cl.ProxyAppend(&testEvent{})
+	assert.Nil(t, err)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 0 && h.Log().Committed() == 0
+			return h.LocalLog().Head() == 0 && h.LocalLog().Committed() == 0
 		})
 	})
 
@@ -119,11 +121,13 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
 
 	cl, err := leader.Client()
 	assert.Nil(t, err)
-	assert.Nil(t, cl.Append([]event{&testEvent{}, &testEvent{}}))
+
+	_, err = cl.ProxyAppend(&testEvent{})
+	assert.Nil(t, err)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 1 && h.Log().Committed() == 1
+			return h.LocalLog().Head() == 1 && h.LocalLog().Committed() == 1
 		})
 	})
 
@@ -151,19 +155,19 @@ func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
 			cl, _ := leader.Client()
 			defer cl.Close()
 
-			for i := 0; i < 100; i++ {
-				cl.Append([]event{newTestEvent()})
+			for i := 0; i < 10; i++ {
+				cl.ProxyAppend(&testEvent{})
 			}
 		}()
 	}
 
 	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 999 && h.Log().Committed() == 999
+			return h.LocalLog().Head() == 999 && h.LocalLog().Committed() == 999
 		})
 
 		SyncMajority(cluster, func(h *host) bool {
-			return fmt.Sprintf("%v", h.Log().Scan(0, 1000)) == fmt.Sprintf("%v", leader.Log().Scan(0, 1000))
+			return fmt.Sprintf("%v", h.LocalLog().Scan(0, 1000)) == fmt.Sprintf("%v", leader.LocalLog().Scan(0, 1000))
 		})
 	})
 
@@ -188,11 +192,13 @@ func TestHost_Cluster_Follower_ClientAppend_SingleBatch_SingleItem(t *testing.T)
 
 	cl, err := member.Client()
 	assert.Nil(t, err)
-	assert.Nil(t, cl.Append([]event{&testEvent{}}))
+
+	_, err = cl.ProxyAppend(&testEvent{})
+	assert.Nil(t, err)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 0 && h.Log().Committed() == 0
+			return h.LocalLog().Head() == 0 && h.LocalLog().Committed() == 0
 		})
 	})
 
