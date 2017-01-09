@@ -29,34 +29,27 @@ func (c *leaderSpawner) start() {
 			case <-c.closed:
 				return
 			case i := <-c.in:
-				c.spawnLeader(i)
+				spawnLeader(c.follower, i)
 			}
 		}
 	}()
 }
 
-func (c *leaderSpawner) spawnLeader(h *replica) {
-	h.Term(h.term.num, &h.Id, &h.Id)
-	spawnLeader(c.follower, h)
-}
-
 type leader struct {
-	logger common.Logger
-
-	follower chan<- *replica
-
+	logger     common.Logger
+	follower   chan<- *replica
 	syncer     *logSyncer
 	proxyPool  concurrent.WorkPool
 	appendPool concurrent.WorkPool
-
-	term    term
-	replica *replica
-
-	closed chan struct{}
-	closer chan struct{}
+	term       term
+	replica    *replica
+	closed     chan struct{}
+	closer     chan struct{}
 }
 
 func spawnLeader(follower chan<- *replica, replica *replica) {
+	replica.Term(replica.CurrentTerm().num, &replica.Id, &replica.Id)
+
 	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
 	logger.Info("Becoming leader")
 
@@ -102,7 +95,7 @@ func (l *leader) start() {
 	// Establish leadership
 	l.broadcastHeartbeat()
 
-	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
+	// Proxy routine.
 	go func() {
 		for {
 			select {
@@ -128,18 +121,18 @@ func (l *leader) start() {
 				return
 			case append := <-l.replica.MachineAppends:
 				l.handleMachineAppend(append)
+			case append := <-l.replica.LogAppends:
+				l.handleAppendEvents(append)
+			case ballot := <-l.replica.Votes:
+				l.handleRequestVote(ballot)
+			case <-timer.C:
+				l.broadcastHeartbeat()
 			case <-l.syncer.closed:
 				if l.syncer.failure == NotLeaderError {
 					l.transition(l.follower)
 					return
 				}
 				return
-			case appendEvents := <-l.replica.LogAppends:
-				l.handleAppendEvents(appendEvents)
-			case ballot := <-l.replica.Votes:
-				l.handleRequestVote(ballot)
-			case <-timer.C:
-				l.broadcastHeartbeat()
 			}
 		}
 	}()

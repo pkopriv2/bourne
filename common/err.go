@@ -1,6 +1,23 @@
 package common
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+	"time"
+)
+
+type TimeoutError struct {
+	timeout time.Duration
+	msg     string
+}
+
+func NewTimeoutError(timeout time.Duration, msg string) TimeoutError {
+	return TimeoutError{timeout, msg}
+}
+
+func (t TimeoutError) Error() string {
+	return fmt.Sprintf("Timeout[%v]: %v", t.timeout, t.msg)
+}
 
 func RunIf(fn func()) func(v interface{}) {
 	return func(v interface{}) {

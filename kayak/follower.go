@@ -34,26 +34,14 @@ func (c *followerSpawner) start() {
 	}()
 }
 
-func newLeaderConnectionPool(r *replica) net.ConnectionPool {
-	if r.term.leader == nil {
-		return nil
-	}
-
-	leader, found := r.Peer(*r.term.leader)
-	if !found {
-		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.leader, r.Cluster()))
-	}
-
-	return net.NewConnectionPool("tcp", leader.addr, 30, r.ElectionTimeout)
-}
-
+// The follower machine.  This
 type follower struct {
 	logger     common.Logger
 	in         chan<- *replica
 	candidate  chan<- *replica
 	proxyPool  concurrent.WorkPool
 	appendPool concurrent.WorkPool
-	conns      net.ConnectionPool
+	connPool   net.ConnectionPool
 	term       term
 	replica    *replica
 	closed     chan struct{}
@@ -70,7 +58,7 @@ func spawnFollower(in chan<- *replica, candidate chan<- *replica, replica *repli
 		candidate:  candidate,
 		proxyPool:  concurrent.NewWorkPool(16),
 		appendPool: concurrent.NewWorkPool(16),
-		conns:      newLeaderConnectionPool(replica),
+		connPool:   newLeaderConnectionPool(replica),
 		term:       replica.CurrentTerm(),
 		replica:    replica,
 		closed:     make(chan struct{}),
@@ -99,8 +87,8 @@ func (l *follower) Close() error {
 	close(l.closed)
 	l.proxyPool.Close()
 	l.appendPool.Close()
-	if l.conns != nil {
-		l.conns.Close()
+	if l.connPool != nil {
+		l.connPool.Close()
 	}
 	return nil
 }
@@ -120,6 +108,7 @@ func (c *follower) start() {
 		}()
 	}
 
+	// Main routine
 	go func() {
 		for {
 			timer := time.NewTimer(c.replica.ElectionTimeout)
@@ -142,7 +131,6 @@ func (c *follower) start() {
 }
 
 func (c *follower) handleMachineAppend(append machineAppend) {
-	// must be processed out of band so as to avoid potential deadlocks
 	err := c.appendPool.SubmitTimeout(c.replica.RequestTimeout, func() {
 		append.reply(c.replica.MachineProxyAppend(append.event))
 	})
@@ -155,9 +143,9 @@ func (c *follower) handleProxyMachineAppend(append machineAppend) {
 	timeout := c.replica.RequestTimeout / 2
 
 	err := c.proxyPool.SubmitTimeout(timeout, func() {
-		conn := c.conns.TakeTimeout(timeout)
+		conn := c.connPool.TakeTimeout(timeout)
 		if conn == nil {
-			append.reply(false, NewTimeoutError(timeout, "Error retrieving connection from pool."))
+			append.reply(false, common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
 			return
 		}
 		defer conn.Close()
@@ -188,8 +176,8 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	maxLogIndex, maxLogTerm, _ := c.replica.Log.Snapshot()
 	if vote.term == c.replica.term.num {
 		if c.replica.term.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
-			c.replica.Term(c.replica.term.num, nil, &vote.id) // correct?
 			vote.reply(c.replica.term.num, true)
+			c.replica.Term(c.replica.term.num, nil, &vote.id) // correct?
 			c.transition(c.in)
 			return
 		}
@@ -202,11 +190,12 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 		vote.reply(vote.term, true)
 		c.replica.Term(vote.term, nil, &vote.id)
-	} else {
-		vote.reply(vote.term, false)
-		c.replica.Term(vote.term, nil, nil)
+		c.transition(c.in)
+		return
 	}
 
+	vote.reply(vote.term, false)
+	c.replica.Term(vote.term, nil, nil)
 	c.transition(c.in)
 }
 
@@ -233,4 +222,17 @@ func (c *follower) handleAppendEvents(append appendEvents) {
 	c.replica.Log.Insert(append.events, append.prevLogIndex+1, append.term)
 	c.replica.Log.Commit(append.commit)
 	append.reply(append.term, true)
+}
+
+func newLeaderConnectionPool(r *replica) net.ConnectionPool {
+	if r.term.leader == nil {
+		return nil
+	}
+
+	leader, found := r.Peer(*r.term.leader)
+	if !found {
+		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.leader, r.Cluster()))
+	}
+
+	return net.NewConnectionPool("tcp", leader.addr, 30, r.ElectionTimeout)
 }

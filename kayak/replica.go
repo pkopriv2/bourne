@@ -220,7 +220,7 @@ func (h *replica) MachineProxyAppend(events Event) (bool, error) {
 	case <-h.closed:
 		return false, ClosedError
 	case <-timer.C:
-		return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		return false, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 	case h.ProxyMachineAppends <- append:
 		select {
 		case <-h.closed:
@@ -228,7 +228,7 @@ func (h *replica) MachineProxyAppend(events Event) (bool, error) {
 		case r := <-append.ack:
 			return r.success, r.err
 		case <-timer.C:
-			return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+			return false, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 		}
 	}
 }
@@ -241,7 +241,7 @@ func (h *replica) MachineAppend(event Event) (bool, error) {
 	case <-h.closed:
 		return false, ClosedError
 	case <-timer.C:
-		return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		return false, common.NewTimeoutError(h.RequestTimeout, "MachineAppend")
 	case h.ProxyMachineAppends <- append:
 		select {
 		case <-h.closed:
@@ -249,7 +249,7 @@ func (h *replica) MachineAppend(event Event) (bool, error) {
 		case r := <-append.ack:
 			return r.success, r.err
 		case <-timer.C:
-			return false, NewTimeoutError(h.RequestTimeout, "ClientAppend")
+			return false, common.NewTimeoutError(h.RequestTimeout, "MachineAppend")
 		}
 	}
 }
