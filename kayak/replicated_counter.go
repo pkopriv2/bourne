@@ -4,6 +4,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
@@ -63,7 +64,8 @@ type counterValue struct {
 type counter struct {
 	ctx       common.Context
 	value     counterValue
-	valueLock *sync.Cond
+	valueLock *sync.Mutex
+	subs      concurrent.Map
 	commits   chan counterValue
 	swaps     chan *swapRequest
 	swapPool  concurrent.WorkPool
@@ -73,8 +75,7 @@ type counter struct {
 
 func NewReplicatedCounter(ctx common.Context, port int, peers []string) (ReplicatedCounter, error) {
 	counter := &counter{
-		ctx:       ctx,
-		valueLock: &sync.Cond{L: &sync.Mutex{}},
+		ctx: ctx,
 	}
 	return counter, nil
 }
@@ -152,8 +153,6 @@ func (c *counter) Run(log MachineLog) {
 			select {
 			case <-c.closed:
 				return
-			case <-log.Closed():
-				return
 			case u := <-c.swaps:
 				c.handleSwapRequest(log, u)
 			}
@@ -163,21 +162,38 @@ func (c *counter) Run(log MachineLog) {
 
 func (c *counter) Commit(i LogItem) {
 	swap := i.Event.(swapEvent)
-	c.updateVal(func(cur counterValue) counterValue {
+	c.updateVal(func(cur counterValue) (val counterValue) {
 		if cur.index != i.Index-1 {
 			panic("Out of order item")
 		}
 
 		if cur.Next != swap.Prev {
-			return counterValue{cur.swapEvent, i.Index}
+			val = counterValue{cur.swapEvent, i.Index}
 		} else {
-			return counterValue{swap, i.Index}
+			val = counterValue{swap, i.Index}
 		}
+
+		listeners := c.listeners()
+		for _, l := range listeners {
+			select {
+			case <-c.closed:
+				return
+			case <-l.closed:
+				return
+			case l.ch <- val:
+			}
+		}
+		return
 	})
 }
 
 func (c *counter) handleSwapRequest(log MachineLog, u *swapRequest) {
 	c.swapPool.Submit(func() {
+		listener, err := c.Listen()
+		if err != nil {
+			u.reply(false, err)
+		}
+		defer listener.Close()
 
 		item, err := log.Append(u.swapEvent)
 		if err != nil {
@@ -185,47 +201,95 @@ func (c *counter) handleSwapRequest(log MachineLog, u *swapRequest) {
 			return
 		}
 
-		// FIXME:  This currently has a race condition where we may
-		// miss the value we're interested in.  If we do, then
-		// we would return an unsuccessful response, when in fact,
-		// we just don't know.
-		//
-		// Make a listener that watches the counter state (committed, swap)
-		// in realtime and make sure to take the listener before append!
-		val, err := c.sync(item.Index)
-		if err != nil {
-			u.reply(false, err)
-			return
+		var val counterValue
+		for {
+			select {
+			case <-listener.Closed():
+				u.reply(false, ClosedError)
+				return
+			case v := <-listener.Values():
+				if v.index > item.Index {
+					u.reply(false, errors.Wrapf(EventError, "Missed committed value [%v]", item.Index))
+					return
+				}
+
+				if v.index == item.Index {
+					val = v
+				}
+			}
 		}
 
 		u.reply(val.swapEvent == u.swapEvent, nil)
 	})
 }
 
-func (c *counter) sync(index int) (val counterValue, err error) {
-	c.valueLock.L.Lock()
-	defer c.valueLock.L.Unlock()
-	for val = c.val(); val.index < index; val = c.val() {
-		c.valueLock.Wait()
-		select {
-		default:
-			continue
-		case <-c.closed:
-			return val, ClosedError
-		}
+func (c *counter) ensureOpen() error {
+	select {
+	case <-c.closed:
+		return ClosedError
+	default:
+		return nil
+	}
+}
+
+func (c *counter) listeners() (ret []*counterListener) {
+	all := c.subs.All()
+	ret = make([]*counterListener, 0, len(all))
+	for k, _ := range all {
+		ret = append(ret, k.(*counterListener))
 	}
 	return
 }
 
+func (c *counter) Listen() (*counterListener, error) {
+	if err := c.ensureOpen(); err != nil {
+		return nil, err
+	}
+
+	ret := newCounterListener(c)
+	c.subs.Put(ret, struct{}{})
+	return ret, nil
+}
+
 func (c *counter) val() counterValue {
-	c.valueLock.L.Lock()
-	defer c.valueLock.L.Unlock()
+	c.valueLock.Lock()
+	defer c.valueLock.Unlock()
 	return c.value
 }
 
 func (c *counter) updateVal(fn func(counterValue) counterValue) {
-	c.valueLock.L.Lock()
+	c.valueLock.Lock()
 	c.value = fn(c.value)
-	c.valueLock.L.Unlock()
-	c.valueLock.Broadcast()
+	c.valueLock.Unlock()
+}
+
+type counterListener struct {
+	counter *counter
+	ch      chan counterValue
+	closed  chan struct{}
+	closer  chan struct{}
+}
+
+func newCounterListener(counter *counter) *counterListener {
+	return &counterListener{counter, make(chan counterValue, 8), make(chan struct{}), make(chan struct{}, 1)}
+}
+
+func (l *counterListener) Closed() <-chan struct{} {
+	return l.closed
+}
+
+func (l *counterListener) Values() <-chan counterValue {
+	return l.ch
+}
+
+func (l *counterListener) Close() error {
+	select {
+	case <-l.closed:
+		return ClosedError
+	case l.closer <- struct{}{}:
+	}
+
+	l.counter.subs.Remove(l)
+	close(l.closed)
+	return nil
 }

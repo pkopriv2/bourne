@@ -5,10 +5,41 @@ import (
 
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 )
 
 // The event log maintains a set of events sorted (ascending) by
 // insertion time.
+type eventLogListener struct {
+	log    *eventLog
+	ch     chan eventLogItem
+	closed chan struct{}
+	closer chan struct{}
+}
+
+func newEventLogListener(log *eventLog) *eventLogListener {
+	return &eventLogListener{log, make(chan eventLogItem, 1024), make(chan struct{}), make(chan struct{}, 1)}
+}
+
+func (l *eventLogListener) Closed() <-chan struct{} {
+	return l.closed
+}
+
+func (l *eventLogListener) Items() <-chan eventLogItem {
+	return l.ch
+}
+
+func (l *eventLogListener) Close() error {
+	select {
+	case <-l.closed:
+		return ClosedError
+	case l.closer <- struct{}{}:
+	}
+
+	l.log.subs.Remove(l)
+	close(l.closed)
+	return nil
+}
 
 type eventLogItem struct {
 	index int
@@ -27,7 +58,7 @@ type eventLog struct {
 	commit int
 
 	// A channel of committed events.
-	ch chan eventLogItem
+	subs concurrent.Map
 
 	// closing utilities.
 	closed chan struct{}
@@ -37,7 +68,7 @@ type eventLog struct {
 }
 
 func newEventLog(ctx common.Context) *eventLog {
-	return &eventLog{amoeba.NewBTreeIndex(32), -1, -1, make(chan eventLogItem, 1024), make(chan struct{}), make(chan struct{}, 1)}
+	return &eventLog{amoeba.NewBTreeIndex(32), -1, -1, concurrent.NewMap(), make(chan struct{}), make(chan struct{}, 1)}
 }
 
 func (d *eventLog) Close() error {
@@ -47,13 +78,40 @@ func (d *eventLog) Close() error {
 	case d.closer <- struct{}{}:
 	}
 
-	close(d.ch)
+	for _, l := range d.listeners() {
+		l.Close()
+	}
+
 	close(d.closed)
 	return nil
 }
 
-func (d *eventLog) Commits() <-chan eventLogItem {
-	return d.ch
+func (c *eventLog) ensureOpen() error {
+	select {
+	case <-c.closed:
+		return ClosedError
+	default:
+		return nil
+	}
+}
+
+func (c *eventLog) listeners() (ret []*eventLogListener) {
+	all := c.subs.All()
+	ret = make([]*eventLogListener, 0, len(all))
+	for k, _ := range all {
+		ret = append(ret, k.(*eventLogListener))
+	}
+	return
+}
+
+func (c *eventLog) Listen() (*eventLogListener, error) {
+	if err := c.ensureOpen(); err != nil {
+		return nil, err
+	}
+
+	ret := newEventLogListener(c)
+	c.subs.Put(ret, struct{}{})
+	return ret, nil
 }
 
 func (d *eventLog) Head() (pos int) {
@@ -115,11 +173,17 @@ func (d *eventLog) Commit(pos int) {
 		}
 
 		d.commit = pos
+
+		listeners := d.listeners()
 		for _, e := range committed {
-			select {
-			case <-d.closed:
-				return
-			case d.ch <- e:
+			for _, l := range listeners {
+				select {
+				case <-d.closed:
+					return
+				case <-l.closed:
+					return
+				case l.ch <- e:
+				}
 			}
 		}
 	})

@@ -234,7 +234,7 @@ func (h *replica) MachineProxyAppend(event Event) (int, error) {
 }
 
 func (h *replica) MachineAppend(event Event) (int, error) {
-	append := machineAppend{event, make(chan proxyAppendResponse, 1)}
+	append := machineAppend{event, make(chan machineAppendResponse, 1)}
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
@@ -286,24 +286,24 @@ func (a *appendEvents) reply(term int, success bool) {
 // These come from active clients.
 type machineAppend struct {
 	event Event
-	ack   chan proxyAppendResponse
+	ack   chan machineAppendResponse
 }
 
 func newMachineAppend(event Event) machineAppend {
-	return machineAppend{event, make(chan proxyAppendResponse, 1)}
+	return machineAppend{event, make(chan machineAppendResponse, 1)}
 }
 
 func (a machineAppend) reply(index int, err error) {
-	a.ack <- proxyAppendResponse{index, err}
+	a.ack <- machineAppendResponse{index, err}
 }
 
 // Client append request.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.
 //
 // These come from active clients.
-type proxyAppendResponse struct {
-	index   int
-	err     error
+type machineAppendResponse struct {
+	index int
+	err   error
 }
 
 // Internal response type.  These are returned through the

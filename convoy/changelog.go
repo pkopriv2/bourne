@@ -78,14 +78,16 @@ func newChangeLogListener(cl *changeLog) *changeLogListener {
 	return &changeLogListener{cl, make(chan change, 1024), make(chan struct{}), make(chan struct{}, 1)}
 }
 
+func (l *changeLogListener) Closed() <-chan struct{} {
+	return l.closed
+}
+
 func (l *changeLogListener) Ch() <-chan change {
 	return l.ch
 }
 
 func (l *changeLogListener) Close() error {
 	select {
-	case <-l.cl.closed:
-		return ClosedError
 	case <-l.closed:
 		return ClosedError
 	case l.closer <- struct{}{}:
@@ -93,8 +95,7 @@ func (l *changeLogListener) Close() error {
 
 	l.cl.subs.Remove(l)
 
-	close(l.ch)
-	l.ch = nil
+	close(l.closed)
 	return nil
 }
 
@@ -211,22 +212,11 @@ func (c *changeLog) Append(key string, val string, del bool) (chg change, err er
 	}
 
 	for _, l := range c.listeners() {
-		// do not allow listener to be closed
 		select {
-		case <-c.closed:
-			return change{}, ClosedError
 		case <-l.closed:
 			continue
-		case l.closer <- struct{}{}:
-		}
-
-		select {
 		case l.ch <- chg:
-		default:
-			// drop
 		}
-
-		<-l.closer
 	}
 	return
 }

@@ -122,13 +122,10 @@ type Machine interface {
 type MachineLog interface {
 	io.Closer
 
-	// Control channel that returns immediately once the
-	// log has been closed.
-	Closed() <-chan struct{}
-
-	// Adds a listener to the log commits.  The listener
-	// is guaranteed
-	Commits() Listener
+	// Adds a listener to the log commits.  The listener is guaranteed
+	// to receive items in the order they are committed.
+	//
+	Listen() (Listener, error)
 
 	// Appends the event to the log.
 	//
@@ -142,12 +139,18 @@ type MachineLog interface {
 
 type Listener interface {
 	io.Closer
-	Next() LogItem
+
+	// Returns a channel that returns items as they are passed.
+	Items() <-chan LogItem
+
+	// Returns a channel that immeditely returns when the listener
+	// is closed
+	Closed() <-chan struct{}
 }
 
 type LogItem struct {
-	Event Event
 	Index int
+	Event Event
 }
 
 func Run(machine Machine, self string, peers []string) error {

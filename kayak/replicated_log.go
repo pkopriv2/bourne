@@ -8,6 +8,42 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+type listener struct {
+	raw *eventLogListener
+	items chan LogItem
+}
+
+func newListener(raw *eventLogListener) *listener {
+	l := &listener{raw, make(chan LogItem, 8)}
+	go func() {
+		for {
+			select {
+			case <-l.raw.closed:
+				return
+			case i := <-l.raw.Items():
+				select {
+				case <-l.raw.closed:
+					return
+				case l.items<-LogItem{i.index, i.event}:
+				}
+			}
+		}
+	}()
+	return l
+}
+
+func (l *listener) Close() error {
+	return l.raw.Close()
+}
+
+func (l *listener) Items() <-chan LogItem {
+	return l.items
+}
+
+func (l *listener) Closed() <-chan struct{} {
+	return l.raw.closed
+}
+
 // The primary host machine abstraction.
 //
 // Internally, this consists of a single member object that hosts all the member
@@ -29,12 +65,6 @@ type replicatedLog struct {
 
 	// the leader sub-machine
 	leader *leaderSpawner
-
-	// closing utilities.
-	closed chan struct{}
-
-	// closing lock.  (a buffered channel of 1 entry.)
-	closer chan struct{}
 }
 
 func newReplicatedLog(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, stash stash.Stash) (*replicatedLog, error) {
@@ -46,44 +76,48 @@ func newReplicatedLog(ctx common.Context, logger common.Logger, self peer, other
 	follower := make(chan *replica)
 	candidate := make(chan *replica)
 	leader := make(chan *replica)
-	closed := make(chan struct{})
-	closer := make(chan struct{}, 1)
 
 	m := &replicatedLog{
 		replica:   rep,
-		follower:  newFollowerSpawner(follower, candidate, closed),
-		candidate: newCandidateSpawner(ctx, candidate, leader, follower, closed),
-		leader:    newLeaderSpawner(ctx, leader, follower, closed),
-		closed:    closed,
-		closer:    closer,
+		follower:  newFollowerSpawner(follower, candidate, rep.closed),
+		candidate: newCandidateSpawner(ctx, candidate, leader, follower, rep.closed),
+		leader:    newLeaderSpawner(ctx, leader, follower, rep.closed),
 	}
 	m.start()
 	return m, nil
 }
 
 func (h *replicatedLog) Close() error {
-	select {
-	case <-h.closed:
-		return ClosedError
-	case h.closer <- struct{}{}:
-	}
-
-	h.replica.Close()
-	close(h.closed)
-	return nil
+	return h.replica.Close()
 }
 
-func (h *replicatedLog) start() {
+func (h *replicatedLog) start() error {
+	listener, err := h.Log().Listen()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		defer listener.Close()
+		for {
+			select {
+			case <-h.replica.closed:
+				return
+			case <-listener.Closed():
+				return
+			case i := <-listener.Items():
+				h.replica.Logger.Info("Commit!: %v", i)
+				// h.replica.Machine.Commit(LogItem{i.index, i.event})
+			}
+		}
+	}()
+
 	h.follower.in <- h.replica
+	return nil
 }
 
 func (h *replicatedLog) Context() common.Context {
 	return h.replica.Ctx
-}
-
-func (h *replicatedLog) Commits() <-chan Event {
-	return nil
-	// return h.replica.Log.Commits()
 }
 
 func (h *replicatedLog) Self() peer {
@@ -122,6 +156,25 @@ func (h *replicatedLog) MachineAppend(event Event) (int, error) {
 	return h.replica.MachineAppend(event)
 }
 
+// Public apis
+func (r *replicatedLog) Listen() (Listener, error) {
+	l, err := r.Log().Listen()
+	if err != nil {
+		return nil, err
+	}
+
+	return newListener(l), nil
+}
+
+func (r *replicatedLog) Append(e Event) (LogItem, error) {
+	index, err := r.MachineAppend(e)
+	if err != nil {
+		return LogItem{}, err
+	}
+
+	return LogItem{index, e}, nil
+}
+
 // Internal request vote.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.
 //
@@ -141,4 +194,3 @@ func (r requestVote) String() string {
 func (r requestVote) reply(term int, success bool) {
 	r.ack <- response{term, success}
 }
-
