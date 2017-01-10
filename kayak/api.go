@@ -111,11 +111,6 @@ type Machine interface {
 
 	// Runs the main machine routine.
 	Run(log MachineLog)
-
-	// Commits the log item to the machine. This is guaranteed to be
-	// called sequentially for every log item that is appended and
-	// subsequently committed (i.e. received by a majority) to the log.
-	Commit(LogItem)
 }
 
 // The machine log is a replicated log.
@@ -125,7 +120,7 @@ type MachineLog interface {
 	// Returns all the machine log's items (Useful for backfilling state)
 	All() []LogItem
 
-	// Adds a listener to the log commits.  The listener is guaranteed
+	// Adds a real-time listener to the log commits.  The listener is guaranteed
 	// to receive ALL items in the order they are committed - however -
 	// the listener does NOT return all historical items.
 	//
