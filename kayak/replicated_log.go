@@ -1,48 +1,10 @@
 package kayak
 
 import (
-	"fmt"
-
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
-
-type listener struct {
-	raw *eventLogListener
-	items chan LogItem
-}
-
-func newListener(raw *eventLogListener) *listener {
-	l := &listener{raw, make(chan LogItem, 8)}
-	go func() {
-		for {
-			select {
-			case <-l.raw.closed:
-				return
-			case i := <-l.raw.Items():
-				select {
-				case <-l.raw.closed:
-					return
-				case l.items<-LogItem{i.index, i.event}:
-				}
-			}
-		}
-	}()
-	return l
-}
-
-func (l *listener) Close() error {
-	return l.raw.Close()
-}
-
-func (l *listener) Items() <-chan LogItem {
-	return l.items
-}
-
-func (l *listener) Closed() <-chan struct{} {
-	return l.raw.closed
-}
 
 // The primary host machine abstraction.
 //
@@ -148,8 +110,8 @@ func (h *replicatedLog) RequestVote(id uuid.UUID, term int, logIndex int, logTer
 	return h.replica.RequestVote(id, term, logIndex, logTerm)
 }
 
-func (h *replicatedLog) MachineProxyAppend(event Event) (int, error) {
-	return h.replica.MachineProxyAppend(event)
+func (h *replicatedLog) ProxyAppend(event Event) (int, error) {
+	return h.replica.ProxyAppend(event)
 }
 
 func (h *replicatedLog) MachineAppend(event Event) (int, error) {
@@ -157,15 +119,6 @@ func (h *replicatedLog) MachineAppend(event Event) (int, error) {
 }
 
 // Public apis
-func (r *replicatedLog) Listen() (Listener, error) {
-	l, err := r.Log().Listen()
-	if err != nil {
-		return nil, err
-	}
-
-	return newListener(l), nil
-}
-
 func (r *replicatedLog) Append(e Event) (LogItem, error) {
 	index, err := r.MachineAppend(e)
 	if err != nil {
@@ -175,22 +128,39 @@ func (r *replicatedLog) Append(e Event) (LogItem, error) {
 	return LogItem{index, e}, nil
 }
 
-// Internal request vote.  Requests are put onto the internal member
-// channel and consumed by the currently active sub-machine.
 //
-// Request votes ONLY come from members who are candidates.
-type requestVote struct {
-	id          uuid.UUID
-	term        int
-	maxLogTerm  int
-	maxLogIndex int
-	ack         chan response
+type listener struct {
+	raw   *eventLogListener
+	items chan LogItem
 }
 
-func (r requestVote) String() string {
-	return fmt.Sprintf("RequestVote(%v,%v)", r.id.String()[:8], r.term)
+func newListener(raw *eventLogListener) *listener {
+	l := &listener{raw, make(chan LogItem, 8)}
+	go func() {
+		for {
+			select {
+			case <-l.raw.closed:
+				return
+			case i := <-l.raw.Items():
+				select {
+				case <-l.raw.closed:
+					return
+				case l.items <- LogItem{i.index, i.event}:
+				}
+			}
+		}
+	}()
+	return l
 }
 
-func (r requestVote) reply(term int, success bool) {
-	r.ack <- response{term, success}
+func (l *listener) Close() error {
+	return l.raw.Close()
+}
+
+func (l *listener) Items() <-chan LogItem {
+	return l.items
+}
+
+func (l *listener) Closed() <-chan struct{} {
+	return l.raw.closed
 }

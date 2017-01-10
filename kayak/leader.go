@@ -139,7 +139,7 @@ func (l *leader) start() {
 	}()
 }
 
-func (c *leader) handleProxyMachineAppend(append machineAppend) {
+func (c *leader) handleProxyMachineAppend(append localAppend) {
 	err := c.proxyPool.Submit(func() {
 		append.reply(c.replica.MachineAppend(append.event))
 	})
@@ -149,7 +149,7 @@ func (c *leader) handleProxyMachineAppend(append machineAppend) {
 	}
 }
 
-func (c *leader) handleMachineAppend(append machineAppend) {
+func (c *leader) handleMachineAppend(append localAppend) {
 	err := c.appendPool.Submit(func() {
 		append.reply(c.syncer.Append(append.event))
 	})

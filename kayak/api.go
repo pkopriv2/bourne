@@ -111,21 +111,13 @@ type Machine interface {
 
 	// Runs the main machine routine.
 	Run(log MachineLog)
-
-	// Commits the log item to the machine. This is guaranteed to be
-	// called sequentially for every log item that is appended and
-	// subsequently committed (i.e. received by a majority) to the log.
-	Commit(LogItem)
 }
 
 // The machine log is a replicated log.
 type MachineLog interface {
 	io.Closer
 
-	// Adds a listener to the log commits.  The listener is guaranteed
-	// to receive items in the order they are committed.
-	//
-	Listen() (Listener, error)
+	Commits() <-chan LogItem
 
 	// Appends the event to the log.
 	//
@@ -135,17 +127,6 @@ type MachineLog interface {
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
 	Append(Event) (LogItem, error)
-}
-
-type Listener interface {
-	io.Closer
-
-	// Returns a channel that returns items as they are passed.
-	Items() <-chan LogItem
-
-	// Returns a channel that immeditely returns when the listener
-	// is closed
-	Closed() <-chan struct{}
 }
 
 type LogItem struct {

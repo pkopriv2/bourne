@@ -115,10 +115,6 @@ func (h *host) Log() *eventLog {
 	return h.core.Log()
 }
 
-func (h *host) Listen() (Listener, error) {
-	return h.core.Listen()
-}
-
 func (h *host) Append(e Event) (LogItem, error) {
 	return h.core.Append(e)
 }

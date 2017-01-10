@@ -98,7 +98,7 @@ func (s *server) ProxyAppend(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	index, err := s.self.MachineProxyAppend(event)
+	index, err := s.self.ProxyAppend(event)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

@@ -147,8 +147,21 @@ func (c *counter) Swap(e int, a int) (bool, error) {
 }
 
 func (c *counter) Run(log MachineLog) {
+	// Committer routine
 	go func() {
 		defer log.Close()
+		for {
+			select {
+			case <-c.closed:
+				return
+			case i := <-log.Commits():
+				c.handleCommmit(i)
+			}
+		}
+	}()
+
+	// Request routine
+	go func() {
 		for {
 			select {
 			case <-c.closed:
@@ -160,7 +173,7 @@ func (c *counter) Run(log MachineLog) {
 	}()
 }
 
-func (c *counter) Commit(i LogItem) {
+func (c *counter) handleCommmit(i LogItem) {
 	swap := i.Event.(swapEvent)
 	c.updateVal(func(cur counterValue) (val counterValue) {
 		if cur.index != i.Index-1 {

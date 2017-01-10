@@ -63,10 +63,10 @@ type replica struct {
 	LogAppends chan appendEvents
 
 	// append requests (from clients)
-	ProxyMachineAppends chan machineAppend
+	ProxyMachineAppends chan localAppend
 
 	// append requests (from local state machine)
-	MachineAppends chan machineAppend
+	MachineAppends chan localAppend
 
 	// closing utilities
 	closed chan struct{}
@@ -91,7 +91,7 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		Log:                 newEventLog(ctx),
 		LogAppends:          make(chan appendEvents),
 		Votes:               make(chan requestVote),
-		ProxyMachineAppends: make(chan machineAppend),
+		ProxyMachineAppends: make(chan localAppend),
 		ElectionTimeout:     time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
 		RequestTimeout:      10 * time.Second,
 		closed:              make(chan struct{}),
@@ -212,7 +212,7 @@ func (h *replica) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int)
 	}
 }
 
-func (h *replica) MachineProxyAppend(event Event) (int, error) {
+func (h *replica) ProxyAppend(event Event) (int, error) {
 	append := newMachineAppend(event)
 
 	timer := time.NewTimer(h.RequestTimeout)
@@ -234,7 +234,7 @@ func (h *replica) MachineProxyAppend(event Event) (int, error) {
 }
 
 func (h *replica) MachineAppend(event Event) (int, error) {
-	append := machineAppend{event, make(chan machineAppendResponse, 1)}
+	append := localAppend{event, make(chan localAppendResponse, 1)}
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
@@ -280,28 +280,48 @@ func (a *appendEvents) reply(term int, success bool) {
 	a.ack <- response{term, success}
 }
 
+// Internal request vote.  Requests are put onto the internal member
+// channel and consumed by the currently active sub-machine.
+//
+// Request votes ONLY come from members who are candidates.
+type requestVote struct {
+	id          uuid.UUID
+	term        int
+	maxLogTerm  int
+	maxLogIndex int
+	ack         chan response
+}
+
+func (r requestVote) String() string {
+	return fmt.Sprintf("RequestVote(%v,%v)", r.id.String()[:8], r.term)
+}
+
+func (r requestVote) reply(term int, success bool) {
+	r.ack <- response{term, success}
+}
+
 // Client append request.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.
 //
 // These come from active clients.
-type machineAppend struct {
+type localAppend struct {
 	event Event
-	ack   chan machineAppendResponse
+	ack   chan localAppendResponse
 }
 
-func newMachineAppend(event Event) machineAppend {
-	return machineAppend{event, make(chan machineAppendResponse, 1)}
+func newMachineAppend(event Event) localAppend {
+	return localAppend{event, make(chan localAppendResponse, 1)}
 }
 
-func (a machineAppend) reply(index int, err error) {
-	a.ack <- machineAppendResponse{index, err}
+func (a localAppend) reply(index int, err error) {
+	a.ack <- localAppendResponse{index, err}
 }
 
 // Client append request.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.
 //
 // These come from active clients.
-type machineAppendResponse struct {
+type localAppendResponse struct {
 	index int
 	err   error
 }

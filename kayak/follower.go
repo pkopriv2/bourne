@@ -130,7 +130,7 @@ func (c *follower) start() {
 	}()
 }
 
-func (c *follower) handleMachineAppend(append machineAppend) {
+func (c *follower) handleMachineAppend(append localAppend) {
 	timeout := c.replica.RequestTimeout / 2
 
 	err := c.proxyPool.SubmitTimeout(timeout, func() {
@@ -155,7 +155,7 @@ func (c *follower) handleMachineAppend(append machineAppend) {
 
 }
 
-func (c *follower) handleProxyMachineAppend(append machineAppend) {
+func (c *follower) handleProxyMachineAppend(append localAppend) {
 	err := c.appendPool.SubmitTimeout(c.replica.RequestTimeout, func() {
 		append.reply(0, NotLeaderError)
 	})
