@@ -413,7 +413,7 @@ func (s *logSyncer) sync(p peer) {
 				}
 
 				// send the append request.
-				resp, err := cl.AppendEvents(s.root.Id, s.root.term.num, prevIndex, prevTerm, batch, s.root.Log.Committed())
+				resp, err := cl.AppendEvents(s.root.Id, s.root.term.num, prevIndex, prevTerm, eventLogExtractEvents(batch), s.root.Log.Committed())
 				if err != nil {
 					cl = nil
 					continue

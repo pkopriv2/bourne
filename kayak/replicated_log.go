@@ -81,9 +81,9 @@ func (h *replicatedLog) Context() common.Context {
 	return h.replica.Ctx
 }
 
-func (h *replicatedLog) Commits() <-chan Event {
-	return h.replica.Log.Commits()
-}
+// func (h *replicatedLog) Commits() <-chan Event {
+	// return h.replica.Log.Commits()
+// }
 
 func (h *replicatedLog) Self() peer {
 	return h.replica.Self

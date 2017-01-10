@@ -26,24 +26,66 @@ type Event interface {
 
 // A machine is anything that is expressable as a sequence of events.
 //
-// However, this machine has the special behavior that it may host
-// an optional proxy server.  In raft parlance, this is akin to
-// being the leader, however, the consumer only sees it as two
-// components, one that is responsible for handling committed
-// state changes.
+// Multiple machines may be run as a group, to form a replicated
+// machine.  Each machine will have access to a distributed log.
+// It is very important to remember that each instance of the machine
+// is interacting with all others, in order to maintain a consistent
+// view of the log, and moreover, each instance may have to reconcile
+// it's view with a peer.  The focus of this api is on creating
+// applications who favor correctness over performance.
 //
-// Although not strictly required, a typical state machine design
-// will include at least two primary routines:
+// # Distributed Consensus
 //
-//   * The main routine.  (may be split further as desired)
-//   * The proxy routine.  Only active when the local instance
-//     happens to also be the leader.
+// Underpinning every machine is a log that implements the Raft,
+// distributed consensus protocol.  While most of the details of the
+// protocol are abstracted away, it is useful to know some of the
+// high level details.
 //
-// A typical signaling design may look like:
+// At startup, the machines are aware of each other's existence
+// and form a fully-connected graph between them.  The machines
+// use the raft leader election protocol to establish a leader
+// amongst the group and the leader maintains its leadership through
+// the use of periodic heartbeats.
 //
-//                    |------*commits*-----|
-//                    v                    |
-// {consumer} ----->{Main}---*append*--->{Log}<------>{Peer}
+// If a leader dies or becomes unreachable, the previous followers
+// will hold an election to determine a new leader.  If the previous
+// leader is able to re-establish a connection with the group, it
+// detects that it has been usurped and becomes a follower.  The
+// protocol also specifies how to bring the former leader back into
+// a consistent state.
+//
+// Perhaps the most important aspect of Raft is its simplicity with
+// respect to data flow design.
+//
+// * Updates flow from leader to follower. Period.
+//
+// And it turns out that this one property can make the management
+// of a distributed log a very tractable problem, even when exposed
+// directly to consumer machines.
+//
+// # Building State Machines
+//
+// Now that we've got some of the basics of distributed consensus out of
+// the way, we can start looking at some basic machine designs. The
+// machine and log interactions look like the following:
+//
+//
+//                               |-------*commits*-----|
+//                               v                     |
+// {consumer} ---*updates*-->{Machine}---*append*--->{Log}<------>{Peer}
+//
+//
+// And now we've got to the first issue of machine design:
+//
+// * Appends and commits are separate, unsynchronized streams.
+//
+// Moreover, users of these apis CANNOT make any assumptions about the
+// relationship of one stream to the other.  In other words, a successful
+// append ONLY gives the guarantee that it has been committed to a majority
+//
+// TODO: Is this necessary?  Can the log guarantee that an append only
+// returns once it has been replicated to this instance?
+//
 //
 type Machine interface {
 
@@ -70,9 +112,9 @@ type Machine interface {
 	// Runs the main machine routine.
 	Run(log MachineLog)
 
-	// Commits the log item to the machine. This is guaranteed
-	// to be called sequentially for every log item that is appended
-	// the log.
+	// Commits the log item to the machine. This is guaranteed to be
+	// called sequentially for every log item that is appended and
+	// subsequently committed (i.e. received by a majority) to the log.
 	Commit(LogItem)
 }
 
@@ -92,6 +134,11 @@ type MachineLog interface {
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
 	Append(Event) (LogItem, error)
+}
+
+type Listener interface {
+	io.Closer
+	Next() LogItem
 }
 
 type LogItem struct {
