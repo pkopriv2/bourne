@@ -97,6 +97,24 @@ func (ac *AtomicCounter) Get() uint64 {
 	return atomic.LoadUint64((*uint64)(ac))
 }
 
+func (ac *AtomicCounter) Set(val uint64) {
+	atomic.StoreUint64((*uint64)(ac), val)
+}
+
+func (ac *AtomicCounter) Swap(e uint64, a uint64) bool {
+	return atomic.CompareAndSwapUint64((*uint64)(ac), e, a)
+}
+
+func (ac *AtomicCounter) Update(fn func(val uint64) uint64) uint64 {
+	for {
+		c := ac.Get()
+		u := fn(c)
+		if ac.Swap(c, u) {
+			return u
+		}
+	}
+}
+
 func (ac *AtomicCounter) Inc() uint64 {
 	return ac.Update(func(i uint64) uint64 {
 		return i+1
@@ -107,14 +125,4 @@ func (ac *AtomicCounter) Dec() uint64 {
 	return ac.Update(func(i uint64) uint64 {
 		return i-1
 	})
-}
-
-func (ac *AtomicCounter) Update(fn func(val uint64) uint64) uint64 {
-	for {
-		c := ac.Get()
-		u := fn(c)
-		if atomic.CompareAndSwapUint64((*uint64)(ac), c, u) {
-			return u
-		}
-	}
 }

@@ -48,7 +48,7 @@ type replica struct {
 	RequestTimeout time.Duration
 
 	// the replicated state machine.
-	Machine StateMachine
+	Machine Machine
 
 	// the event log.
 	Log *eventLog
@@ -94,8 +94,8 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		ProxyMachineAppends: make(chan machineAppend),
 		ElectionTimeout:     time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
 		RequestTimeout:      10 * time.Second,
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1),
+		closed:              make(chan struct{}),
+		closer:              make(chan struct{}, 1),
 	}, nil
 }
 
@@ -256,4 +256,56 @@ func (h *replica) MachineAppend(event Event) (bool, error) {
 
 func majority(num int) int {
 	return int(math.Ceil(float64(num) / float64(2)))
+}
+
+// Internal append events request.  Requests are put onto the internal member
+// channel and consumed by the currently active sub-machine.
+//
+// Append events ONLY come from members who are leaders. (Or think they are leaders)
+type appendEvents struct {
+	id           uuid.UUID
+	term         int
+	prevLogIndex int
+	prevLogTerm  int
+	events       []Event
+	commit       int
+	ack          chan response
+}
+
+func (a appendEvents) String() string {
+	return fmt.Sprintf("AppendEvents(id=%v,prevIndex=%v,prevTerm%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, len(a.events))
+}
+
+func (a *appendEvents) reply(term int, success bool) {
+	a.ack <- response{term, success}
+}
+
+// Client append request.  Requests are put onto the internal member
+// channel and consumed by the currently active sub-machine.
+//
+// These come from active clients.
+type machineAppend struct {
+	event Event
+	ack   chan proxyAppendResponse
+}
+
+func (a *machineAppend) reply(success bool, err error) {
+	a.ack <- proxyAppendResponse{success, err}
+}
+
+// Client append request.  Requests are put onto the internal member
+// channel and consumed by the currently active sub-machine.
+//
+// These come from active clients.
+type proxyAppendResponse struct {
+	success bool
+	err     error
+}
+
+// Internal response type.  These are returned through the
+// request 'ack'/'response' channels by the currently active
+// sub-machine component.
+type response struct {
+	term    int
+	success bool
 }

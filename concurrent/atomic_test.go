@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAtomicRef_Counter(t *testing.T) {
+func TestAtomicCounter(t *testing.T) {
 	ctr := NewAtomicCounter()
 
 	var wait sync.WaitGroup

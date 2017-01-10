@@ -1,60 +1,156 @@
 package kayak
 
 import (
+	"sync"
+
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 )
 
 type ReplicatedCounter interface {
-	Inc() (int, error)
-	Dec() (int, error)
-	Get() (int, error)
+	// Inc() (int, error)
+	// Dec() (int, error)
+	Get() int
+	Swap(int, int) (bool, error)
 }
 
-type counterEvent struct {
+type swapEvent struct {
 	Prev int
-	Inc  bool
+	Next int
 }
 
-func (c counterEvent) Write(w scribe.Writer) {
+func (c swapEvent) Write(w scribe.Writer) {
 	w.WriteInt("prev", c.Prev)
-	w.WriteBool("inc", c.Inc)
+	w.WriteInt("next", c.Next)
 }
 
-func counterParser(r scribe.Reader) (Event, error) {
-	var evt counterEvent
+func swapParser(r scribe.Reader) (Event, error) {
+	var evt swapEvent
 	var err error
-	err = r.ReadBool("inc", &evt.Inc)
+
 	err = common.Or(err, r.ReadInt("prev", &evt.Prev))
+	err = common.Or(err, r.ReadInt("next", &evt.Next))
 	return evt, err
 }
 
-type replicatedCounter struct {
-	value int
-	in    chan Event
+type swapResponse struct {
+	success bool
+	err     error
 }
 
-func (r *replicatedCounter) Close() error {
-	panic("not implemented")
+type counterUpdate struct {
+	swapEvent
+	ack chan swapResponse
 }
 
-type replicatedCounterMachine struct {
-	value int
+func newCounterUpdate(e swapEvent) *counterUpdate {
+	return &counterUpdate{e, make(chan swapResponse, 1)}
 }
 
-func (r *replicatedCounterMachine) Close() error {
-	panic("not implemented")
+func (c *counterUpdate) reply(success bool, err error) {
+	c.ack <- swapResponse{success, err}
 }
 
-func (r *replicatedCounterMachine) Snapshot() []Event {
-	panic("not implemented")
+type counterValue struct {
+	raw   int
+	index int
 }
 
-func (r *replicatedCounterMachine) Handle(Event) bool {
-	panic("not implemented")
+type counter struct {
+	ctx common.Context
+
+	value     counterValue
+	valueLock sync.Mutex
+
+	updates     chan *counterUpdate
+	requestPool concurrent.WorkPool
+	closed      chan struct{}
+	closer      chan struct{}
 }
 
-func NewReplicatedCounter(peers []string) (*replicatedCounter, error) {
+func (r *counter) Close() error {
+	// r.host.Close()
+	close(r.closed)
+	return nil
+}
+
+func (c *counter) Get() int {
+	return c.val().raw
+}
+
+func (c *counter) Context() common.Context {
+	return c.ctx
+}
+
+func (c *counter) Parser() Parser {
+	return swapParser
+}
+
+func (c *counter) Swap(e int, a int) (bool, error) {
+	update := newCounterUpdate(swapEvent{e, a})
+	select {
+	case <-c.closed:
+		return false, ClosedError
+	case c.updates<-update:
+		select {
+		case <-c.closed:
+			return false, ClosedError
+		case r := <-update.ack:
+			return r.success, r.err
+		}
+	}
+}
+
+func (c *counter) Snapshot() ([]Event, error) {
+	return []Event{swapEvent{0, c.Get()}}, nil
+}
+
+func (c *counter) Run(log MachineLog) {
+	go func() {
+		for {
+		}
+	}()
+
+}
+
+func (c *counter) startAppender() {
+	// go func() {
+		// for req := range ch {
+//
+		// }
+	// }()
+}
+
+func (c *counter) RunProxy(ch <-chan AppendRequest) {
+	// go func() {
+		// for req := range ch {
+//
+		// }
+	// }()
+}
+
+func (c *counter) val() counterValue {
+	c.valueLock.Lock()
+	defer c.valueLock.Unlock()
+	return c.value
+}
+
+func (c *counter) swap(cur counterValue, new counterValue) bool {
+	c.valueLock.Lock()
+	defer c.valueLock.Unlock()
+	if c.value == cur {
+		return false
+	}
+
+	c.value = new
+	return true
+}
+
+
+
+
+func NewReplicatedCounter(ctx common.Context, port int, peers []string) (ReplicatedCounter, error) {
 	return nil, nil
 }
 

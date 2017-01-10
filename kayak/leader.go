@@ -140,7 +140,7 @@ func (l *leader) start() {
 
 func (c *leader) handleProxyMachineAppend(append machineAppend) {
 	err := c.proxyPool.Submit(func() {
-		append.reply(c.replica.Machine.Handle(append.event), nil)
+		// append.reply(c.replica.Machine.Handle(append.event))
 	})
 
 	if err != nil {
