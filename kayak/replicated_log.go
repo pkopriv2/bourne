@@ -119,6 +119,7 @@ func (h *replicatedLog) MachineAppend(event Event) (int, error) {
 }
 
 // Public apis
+
 func (r *replicatedLog) Append(e Event) (LogItem, error) {
 	index, err := r.MachineAppend(e)
 	if err != nil {

@@ -111,13 +111,26 @@ type Machine interface {
 
 	// Runs the main machine routine.
 	Run(log MachineLog)
+
+	// Commits the log item to the machine. This is guaranteed to be
+	// called sequentially for every log item that is appended and
+	// subsequently committed (i.e. received by a majority) to the log.
+	Commit(LogItem)
 }
 
 // The machine log is a replicated log.
 type MachineLog interface {
 	io.Closer
 
-	Commits() <-chan LogItem
+	// Returns all the machine log's items (Useful for backfilling state)
+	All() []LogItem
+
+	// Adds a listener to the log commits.  The listener is guaranteed
+	// to receive ALL items in the order they are committed - however -
+	// the listener does NOT return all historical items.
+	//
+	// Please use #All() for backfilling.
+	Listen() (Listener, error)
 
 	// Appends the event to the log.
 	//
@@ -129,11 +142,23 @@ type MachineLog interface {
 	Append(Event) (LogItem, error)
 }
 
+// The log listener.
+type Listener interface {
+	io.Closer
+
+	// Returns a channel that returns items as they are passed.
+	Items() <-chan LogItem
+
+	// Returns a channel that immeditely returns when the listener
+	// is closed
+	Closed() <-chan struct{}
+}
+
 type LogItem struct {
 	Index int
 	Event Event
 }
 
-func Run(machine Machine, self string, peers []string) error {
+func Replicate(machine Machine, self string, peers []string) error {
 	return nil
 }

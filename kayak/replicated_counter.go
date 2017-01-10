@@ -150,11 +150,21 @@ func (c *counter) Run(log MachineLog) {
 	// Committer routine
 	go func() {
 		defer log.Close()
+
+		l, err := log.Listen()
+		if err != nil {
+			return
+		}
+		defer l.Close()
+
+
 		for {
 			select {
 			case <-c.closed:
 				return
-			case i := <-log.Commits():
+			case <-l.Closed():
+				return
+			case i := <-l.Items():
 				c.handleCommmit(i)
 			}
 		}
