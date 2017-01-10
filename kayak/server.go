@@ -98,12 +98,12 @@ func (s *server) ProxyAppend(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	success, err := s.self.MachineProxyAppend(event)
+	index, err := s.self.MachineProxyAppend(event)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return newProxyAppendResponse(success)
+	return newProxyAppendResponse(index)
 }
 
 // Helper functions
@@ -137,9 +137,9 @@ func newProxyAppendRequest(e Event) net.Request {
 	}))
 }
 
-func newProxyAppendResponse(success bool) net.Response {
+func newProxyAppendResponse(index int) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		w.WriteBool("success", success)
+		w.WriteInt("index", index)
 	}))
 }
 
@@ -153,9 +153,9 @@ func readProxyAppendRequest(r scribe.Reader, fn Parser) (e Event, err error) {
 	return fn(msg)
 }
 
-func readProxyAppendResponse(res net.Response) (success bool, err error) {
+func readProxyAppendResponse(res net.Response) (index int, err error) {
 	err = res.Error()
-	err = common.Or(err, res.Body().ReadBool("success", &success))
+	err = common.Or(err, res.Body().ReadInt("index", &index))
 	return
 }
 

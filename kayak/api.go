@@ -126,6 +126,10 @@ type MachineLog interface {
 	// log has been closed.
 	Closed() <-chan struct{}
 
+	// Adds a listener to the log commits.  The listener
+	// is guaranteed
+	Commits() Listener
+
 	// Appends the event to the log.
 	//
 	// !IMPORTANT!
@@ -149,18 +153,3 @@ type LogItem struct {
 func Run(machine Machine, self string, peers []string) error {
 	return nil
 }
-
-// type AppendRequest struct {
-	// Event Event
-	// ack   chan AppendResponse
-// }
-//
-// func (a *AppendRequest) Reply(i int, s bool, e error) {
-	// a.ack <- AppendResponse{i, s, e}
-// }
-//
-// type AppendResponse struct {
-	// Index   int
-	// Success bool
-	// Error   error
-// }

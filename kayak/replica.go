@@ -212,44 +212,44 @@ func (h *replica) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int)
 	}
 }
 
-func (h *replica) MachineProxyAppend(events Event) (bool, error) {
-	append := machineAppend{events, make(chan proxyAppendResponse, 1)}
+func (h *replica) MachineProxyAppend(event Event) (int, error) {
+	append := newMachineAppend(event)
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
 	case <-h.closed:
-		return false, ClosedError
+		return 0, ClosedError
 	case <-timer.C:
-		return false, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 	case h.ProxyMachineAppends <- append:
 		select {
 		case <-h.closed:
-			return false, ClosedError
+			return 0, ClosedError
 		case r := <-append.ack:
-			return r.success, r.err
+			return r.index, r.err
 		case <-timer.C:
-			return false, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+			return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 		}
 	}
 }
 
-func (h *replica) MachineAppend(event Event) (bool, error) {
+func (h *replica) MachineAppend(event Event) (int, error) {
 	append := machineAppend{event, make(chan proxyAppendResponse, 1)}
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
 	case <-h.closed:
-		return false, ClosedError
+		return 0, ClosedError
 	case <-timer.C:
-		return false, common.NewTimeoutError(h.RequestTimeout, "MachineAppend")
+		return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 	case h.ProxyMachineAppends <- append:
 		select {
 		case <-h.closed:
-			return false, ClosedError
+			return 0, ClosedError
 		case r := <-append.ack:
-			return r.success, r.err
+			return r.index, r.err
 		case <-timer.C:
-			return false, common.NewTimeoutError(h.RequestTimeout, "MachineAppend")
+			return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 		}
 	}
 }
@@ -289,8 +289,12 @@ type machineAppend struct {
 	ack   chan proxyAppendResponse
 }
 
-func (a *machineAppend) reply(success bool, err error) {
-	a.ack <- proxyAppendResponse{success, err}
+func newMachineAppend(event Event) machineAppend {
+	return machineAppend{event, make(chan proxyAppendResponse, 1)}
+}
+
+func (a machineAppend) reply(index int, err error) {
+	a.ack <- proxyAppendResponse{index, err}
 }
 
 // Client append request.  Requests are put onto the internal member
@@ -298,7 +302,7 @@ func (a *machineAppend) reply(success bool, err error) {
 //
 // These come from active clients.
 type proxyAppendResponse struct {
-	success bool
+	index   int
 	err     error
 }
 

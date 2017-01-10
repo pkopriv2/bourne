@@ -27,10 +27,10 @@ func (c *client) AppendEvents(id uuid.UUID, term int, logIndex int, logTerm int,
 	return readResponseResponse(resp)
 }
 
-func (c *client) ProxyAppend(e Event) (bool, error) {
+func (c *client) ProxyAppend(e Event) (int, error) {
 	resp, err := c.raw.Send(newProxyAppendRequest(e))
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 
 	return readProxyAppendResponse(resp)

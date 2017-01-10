@@ -81,9 +81,10 @@ func (h *replicatedLog) Context() common.Context {
 	return h.replica.Ctx
 }
 
-// func (h *replicatedLog) Commits() <-chan Event {
+func (h *replicatedLog) Commits() <-chan Event {
+	return nil
 	// return h.replica.Log.Commits()
-// }
+}
 
 func (h *replicatedLog) Self() peer {
 	return h.replica.Self
@@ -113,11 +114,11 @@ func (h *replicatedLog) RequestVote(id uuid.UUID, term int, logIndex int, logTer
 	return h.replica.RequestVote(id, term, logIndex, logTerm)
 }
 
-func (h *replicatedLog) MachineProxyAppend(event Event) (bool, error) {
+func (h *replicatedLog) MachineProxyAppend(event Event) (int, error) {
 	return h.replica.MachineProxyAppend(event)
 }
 
-func (h *replicatedLog) MachineAppend(event Event) (bool, error) {
+func (h *replicatedLog) MachineAppend(event Event) (int, error) {
 	return h.replica.MachineAppend(event)
 }
 

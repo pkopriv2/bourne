@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	uuid "github.com/satori/go.uuid"
@@ -140,21 +141,21 @@ func (l *leader) start() {
 
 func (c *leader) handleProxyMachineAppend(append machineAppend) {
 	err := c.proxyPool.Submit(func() {
-		// append.reply(c.replica.Machine.Handle(append.event))
+		append.reply(c.replica.MachineAppend(append.event))
 	})
 
 	if err != nil {
-		append.reply(true, ClosedError)
+		append.reply(0, errors.Wrapf(err, "Error submitting work to proxy pool."))
 	}
 }
 
 func (c *leader) handleMachineAppend(append machineAppend) {
 	err := c.appendPool.Submit(func() {
-		append.reply(true, c.syncer.Append([]Event{append.event}))
+		append.reply(c.syncer.Append(append.event))
 	})
 
 	if err != nil {
-		append.reply(true, ClosedError)
+		append.reply(0, errors.Wrapf(err, "Error submitting work to append pool."))
 	}
 }
 
@@ -317,22 +318,17 @@ func (s *logSyncer) getHeadWhenGreater(cur int) (head int, err error) {
 	return
 }
 
-func (s *logSyncer) Append(batch []Event) (err error) {
+func (s *logSyncer) Append(event Event) (head int, err error) {
 	select {
 	case <-s.closed:
-		return ClosedError
+		return 0, ClosedError
 	default:
-	}
-
-	// if nothing was sent, just return immediately
-	if len(batch) == 0 {
-		return nil
 	}
 
 	committed := make(chan struct{}, 1)
 	go func() {
 		// append
-		head := s.root.Log.Append(batch, s.root.term.num)
+		head = s.root.Log.Append([]Event{event}, s.root.term.num)
 
 		// notify sync'ers
 		s.moveHead(head)
@@ -360,9 +356,9 @@ func (s *logSyncer) Append(batch []Event) (err error) {
 
 	select {
 	case <-s.closed:
-		return common.Or(s.failure, ClosedError)
+		return 0, common.Or(s.failure, ClosedError)
 	case <-committed:
-		return nil
+		return head, nil
 	}
 }
 
