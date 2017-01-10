@@ -26,7 +26,25 @@ type Event interface {
 
 // A machine is anything that is expressable as a sequence of events.
 //
-// This is the primary consumer abstraction
+// However, this machine has the special behavior that it may host
+// an optional proxy server.  In raft parlance, this is akin to
+// being the leader, however, the consumer only sees it as two
+// components, one that is responsible for handling committed
+// state changes.
+//
+// Although not strictly required, a typical state machine design
+// will include at least two primary routines:
+//
+//   * The main routine.  (may be split further as desired)
+//   * The proxy routine.  Only active when the local instance
+//     happens to also be the leader.
+//
+// A typical signaling design may look like:
+//
+//                    |------*commits*-----|
+//                    v                    |
+// {consumer} ----->{Main}---*append*--->{Log}<------>{Peer}
+//
 type Machine interface {
 
 	// The context used to create this machine.
@@ -52,30 +70,28 @@ type Machine interface {
 	// Runs the main machine routine.
 	Run(log MachineLog)
 
-	// Runs the proxy instance of the machine.
-	RunProxy(<-chan AppendRequest)
+	// Commits the log item to the machine. This is guaranteed
+	// to be called sequentially for every log item that is appended
+	// the log.
+	Commit(LogItem)
 }
 
+// The machine log is a replicated log.
 type MachineLog interface {
 	io.Closer
 
-	// channel immediately returns values when closed.
+	// Control channel that returns immediately once the
+	// log has been closed.
 	Closed() <-chan struct{}
-
-	// // Returns a flag indicating whether this log is the master log.
-	// IsMaster() bool
-
-	// Returns the items in the log as they have been fully replicated. These
-	// are guaranteed to return in the order they were appended without
-	// jumps in the logs.
-	Committed() <-chan LogItem
 
 	// Appends the event to the log.
 	//
 	// !IMPORTANT!
 	// If the append is successful, Do not assume that all committed items
-	// have been replicated to this instance.  To faciliate the
-	Append(Event) (bool, LogItem, error)
+	// have been replicated to this instance.  Appends should always accompany
+	// a sync routine that ensures that the log has been caught up prior to
+	// returning control.
+	Append(Event) (LogItem, error)
 }
 
 type LogItem struct {
@@ -83,33 +99,21 @@ type LogItem struct {
 	Index int
 }
 
-func Replicate(machine Machine, self string, peers []string) error {
+func Run(machine Machine, self string, peers []string) error {
 	return nil
 }
 
-func NewAppendRequest(e Event) *AppendRequest {
-	return &AppendRequest{e, make(chan AppendResponse)}
-}
-
-type AppendRequest struct {
-	Event Event
-	ack   chan AppendResponse
-}
-
-func (a *AppendRequest) Reject() {
-	a.ack <- AppendResponse{false, 0, nil}
-}
-
-func (a *AppendRequest) Fail(err error) {
-	a.ack <- AppendResponse{false, 0, err}
-}
-
-func (a *AppendRequest) committed(index int) {
-	a.ack <- AppendResponse{true, index, nil}
-}
-
-type AppendResponse struct {
-	Committed bool
-	Index     int
-	Error     error
-}
+// type AppendRequest struct {
+	// Event Event
+	// ack   chan AppendResponse
+// }
+//
+// func (a *AppendRequest) Reply(i int, s bool, e error) {
+	// a.ack <- AppendResponse{i, s, e}
+// }
+//
+// type AppendResponse struct {
+	// Index   int
+	// Success bool
+	// Error   error
+// }

@@ -1,6 +1,7 @@
 package kayak
 
 import (
+	"io"
 	"sync"
 
 	"github.com/pkopriv2/bourne/common"
@@ -9,8 +10,10 @@ import (
 )
 
 type ReplicatedCounter interface {
-	// Inc() (int, error)
-	// Dec() (int, error)
+	io.Closer
+
+	Inc() (int, error)
+	Dec() (int, error)
 	Get() int
 	Swap(int, int) (bool, error)
 }
@@ -25,7 +28,7 @@ func (c swapEvent) Write(w scribe.Writer) {
 	w.WriteInt("next", c.Next)
 }
 
-func swapParser(r scribe.Reader) (Event, error) {
+func swapEventParser(r scribe.Reader) (Event, error) {
 	var evt swapEvent
 	var err error
 
@@ -34,49 +37,61 @@ func swapParser(r scribe.Reader) (Event, error) {
 	return evt, err
 }
 
+type swapRequest struct {
+	swapEvent
+	ack chan swapResponse
+}
+
+func newSwapRequest(cur int, next int) *swapRequest {
+	return &swapRequest{swapEvent{cur, next}, make(chan swapResponse, 1)}
+}
+
+func (c *swapRequest) reply(success bool, err error) {
+	c.ack <- swapResponse{success, err}
+}
+
 type swapResponse struct {
 	success bool
 	err     error
 }
 
-type counterUpdate struct {
-	swapEvent
-	ack chan swapResponse
-}
-
-func newCounterUpdate(e swapEvent) *counterUpdate {
-	return &counterUpdate{e, make(chan swapResponse, 1)}
-}
-
-func (c *counterUpdate) reply(success bool, err error) {
-	c.ack <- swapResponse{success, err}
-}
-
 type counterValue struct {
-	raw   int
+	swapEvent
 	index int
 }
 
 type counter struct {
-	ctx common.Context
-
+	ctx       common.Context
 	value     counterValue
-	valueLock sync.Mutex
+	valueLock *sync.Cond
+	commits   chan counterValue
+	swaps     chan *swapRequest
+	swapPool  concurrent.WorkPool
+	closed    chan struct{}
+	closer    chan struct{}
+}
 
-	updates     chan *counterUpdate
-	requestPool concurrent.WorkPool
-	closed      chan struct{}
-	closer      chan struct{}
+func NewReplicatedCounter(ctx common.Context, port int, peers []string) (ReplicatedCounter, error) {
+	counter := &counter{
+		ctx:       ctx,
+		valueLock: &sync.Cond{L: &sync.Mutex{}},
+	}
+	return counter, nil
 }
 
 func (r *counter) Close() error {
-	// r.host.Close()
+	select {
+	case <-r.closed:
+		return ClosedError
+	case r.closer <- struct{}{}:
+	}
+
 	close(r.closed)
 	return nil
 }
 
 func (c *counter) Get() int {
-	return c.val().raw
+	return c.val().Next
 }
 
 func (c *counter) Context() common.Context {
@@ -84,143 +99,133 @@ func (c *counter) Context() common.Context {
 }
 
 func (c *counter) Parser() Parser {
-	return swapParser
-}
-
-func (c *counter) Swap(e int, a int) (bool, error) {
-	update := newCounterUpdate(swapEvent{e, a})
-	select {
-	case <-c.closed:
-		return false, ClosedError
-	case c.updates<-update:
-		select {
-		case <-c.closed:
-			return false, ClosedError
-		case r := <-update.ack:
-			return r.success, r.err
-		}
-	}
+	return swapEventParser
 }
 
 func (c *counter) Snapshot() ([]Event, error) {
 	return []Event{swapEvent{0, c.Get()}}, nil
 }
 
+func (c *counter) Inc() (inc int, err error) {
+	var success bool
+	for {
+		cur := c.Get()
+		inc = cur + 1
+		success, err = c.Swap(cur, inc)
+		if err != nil || success {
+			return
+		}
+	}
+}
+
+func (c *counter) Dec() (dec int, err error) {
+	var success bool
+	for {
+		cur := c.Get()
+		dec = cur - 1
+		success, err = c.Swap(cur, dec)
+		if err != nil || success {
+			return
+		}
+	}
+}
+
+func (c *counter) Swap(e int, a int) (bool, error) {
+	req := newSwapRequest(e, a)
+	select {
+	case <-c.closed:
+		return false, ClosedError
+	case c.swaps <- req:
+		select {
+		case <-c.closed:
+			return false, ClosedError
+		case r := <-req.ack:
+			return r.success, r.err
+		}
+	}
+}
+
 func (c *counter) Run(log MachineLog) {
 	go func() {
+		defer log.Close()
 		for {
+			select {
+			case <-c.closed:
+				return
+			case <-log.Closed():
+				return
+			case u := <-c.swaps:
+				c.handleSwapRequest(log, u)
+			}
 		}
 	}()
-
 }
 
-func (c *counter) startAppender() {
-	// go func() {
-		// for req := range ch {
-//
-		// }
-	// }()
+func (c *counter) Commit(i LogItem) {
+	swap := i.Event.(swapEvent)
+	c.updateVal(func(cur counterValue) counterValue {
+		if cur.index != i.Index-1 {
+			panic("Out of order item")
+		}
+
+		if cur.Next != swap.Prev {
+			return counterValue{cur.swapEvent, i.Index}
+		} else {
+			return counterValue{swap, i.Index}
+		}
+	})
 }
 
-func (c *counter) RunProxy(ch <-chan AppendRequest) {
-	// go func() {
-		// for req := range ch {
-//
-		// }
-	// }()
+func (c *counter) handleSwapRequest(log MachineLog, u *swapRequest) {
+	c.swapPool.Submit(func() {
+
+		item, err := log.Append(u.swapEvent)
+		if err != nil {
+			u.reply(false, err)
+			return
+		}
+
+		// FIXME:  This currently has a race condition where we may
+		// miss the value we're interested in.  If we do, then
+		// we would return an unsuccessful response, when in fact,
+		// we just don't know.
+		//
+		// Make a listener that watches the counter state (committed, swap)
+		// in realtime and make sure to take the listener before append!
+		val, err := c.sync(item.Index)
+		if err != nil {
+			u.reply(false, err)
+			return
+		}
+
+		u.reply(val.swapEvent == u.swapEvent, nil)
+	})
+}
+
+func (c *counter) sync(index int) (val counterValue, err error) {
+	c.valueLock.L.Lock()
+	defer c.valueLock.L.Unlock()
+	for val = c.val(); val.index < index; val = c.val() {
+		c.valueLock.Wait()
+		select {
+		default:
+			continue
+		case <-c.closed:
+			return val, ClosedError
+		}
+	}
+	return
 }
 
 func (c *counter) val() counterValue {
-	c.valueLock.Lock()
-	defer c.valueLock.Unlock()
+	c.valueLock.L.Lock()
+	defer c.valueLock.L.Unlock()
 	return c.value
 }
 
-func (c *counter) swap(cur counterValue, new counterValue) bool {
-	c.valueLock.Lock()
-	defer c.valueLock.Unlock()
-	if c.value == cur {
-		return false
-	}
-
-	c.value = new
-	return true
+func (c *counter) updateVal(fn func(counterValue) counterValue) {
+	c.valueLock.L.Lock()
+	c.value = fn(c.value)
+	c.valueLock.L.Unlock()
+	c.valueLock.Broadcast()
 }
-
-
-
-
-func NewReplicatedCounter(ctx common.Context, port int, peers []string) (ReplicatedCounter, error) {
-	return nil, nil
-}
-
-// // An item in a store.
-// type Item struct {
-// Key []byte
-// Val []byte
-// Ver int
-//
-// // internal only
-// time time.Time
-// }
-//
-// func readItem(r scribe.Reader) (item Item, err error) {
-// err = common.Or(err, r.ReadBytes("key", &item.Key))
-// err = common.Or(err, r.ReadBytes("val", &item.Val))
-// err = common.Or(err, r.ReadInt("ver", &item.Ver))
-// return
-// }
-//
-// func (i Item) Write(w scribe.Writer) {
-// w.WriteBytes("key", i.Key)
-// w.WriteBytes("val", i.Val)
-// w.WriteInt("ver", i.Ver)
-// }
-//
-// func (i Item) String() string {
-// return fmt.Sprintf("(%v,%v)")
-// }
-
-// // A host is the local member participating in and disseminating a shared
-// // directory.
-// type Host interface {
-// io.Closer
-//
-// // The local store.
-// Store() Store
-// }
-//
-// // A very simple key,value store abstraction. This store uses
-// // optimistic locking to provide a single thread-safe api for
-// // both local and remote stores.
-// //
-// // If this is the local store, closing the store will NOT disconnect
-// // the replica, it simply prevents any changes to the store from
-// // occurring.
-// type Store interface {
-// io.Closer
-//
-// // Returns the item or nil if it doesn't exist.
-// //
-// // If the return value inclues an error, the other results should
-// // not be trusted.
-// Get(key []byte) (bool, error)
-//
-// // Updates the value at the given key if the version matches.
-// // Returns a flag indicating whether or not the operation was
-// // successful (ie the version matched) and if so, the updated
-// // value.  Otherwise an error is returned.
-// //
-// // If the return value inclues an error, the other results should
-// // not be trusted.
-// Put(key []byte, val []byte, prev int) (bool, error)
-//
-// // Deletes the value at the given key if the version matches.
-// // Returns a flag indicating whether or not the operation was
-// // successful (ie the version matched) and if so, the updated
-// // value.  Otherwise an error is returned.
-// //
-// // If the return value inclues an error, the other results should
-// // not be trusted.
-// Del(key []byte, prev int) (bool, error)
-// }
