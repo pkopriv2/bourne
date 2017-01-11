@@ -81,7 +81,7 @@ func (t term) String() string {
 		votedForStr = t.votedFor.String()[:8]
 	}
 
-	return fmt.Sprintf("(%v,%v,%v)", t.num, leaderStr, votedForStr)
+	return fmt.Sprintf("(num=%v,l=%v,v=%v)", t.num, leaderStr, votedForStr)
 }
 
 type storage struct {

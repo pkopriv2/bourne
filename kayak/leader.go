@@ -104,8 +104,8 @@ func (l *leader) start() {
 				return
 			case <-l.closed:
 				return
-			case append := <-l.replica.ProxyMachineAppends:
-				l.handleProxyMachineAppend(append)
+			case append := <-l.replica.RemoteAppends:
+				l.handleRemoteAppend(append)
 			}
 		}
 	}()
@@ -114,21 +114,23 @@ func (l *leader) start() {
 	go func() {
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
+			l.logger.Info("Resetting timeout [%v]", l.replica.ElectionTimeout / 5)
 
 			select {
 			case <-l.replica.closed:
 				return
 			case <-l.closed:
 				return
-			case append := <-l.replica.MachineAppends:
-				l.handleMachineAppend(append)
-			case append := <-l.replica.LogAppends:
+			case append := <-l.replica.LocalAppends:
+				l.handleLocalAppend(append)
+			case append := <-l.replica.AppendRequests:
 				l.handleAppendEvents(append)
-			case ballot := <-l.replica.Votes:
+			case ballot := <-l.replica.VoteRequests:
 				l.handleRequestVote(ballot)
 			case <-timer.C:
 				l.broadcastHeartbeat()
 			case <-l.syncer.closed:
+				l.logger.Error("Sync'er closed: %v", l.syncer.failure)
 				if l.syncer.failure == NotLeaderError {
 					l.transition(l.follower)
 					return
@@ -139,23 +141,23 @@ func (l *leader) start() {
 	}()
 }
 
-func (c *leader) handleProxyMachineAppend(append localAppend) {
+func (c *leader) handleRemoteAppend(append localAppend) {
 	err := c.proxyPool.Submit(func() {
-		append.reply(c.replica.MachineAppend(append.event))
+		append.Return(c.replica.LocalAppend(append.Event))
 	})
 
 	if err != nil {
-		append.reply(0, errors.Wrapf(err, "Error submitting work to proxy pool."))
+		append.Fail(errors.Wrapf(err, "Error submitting work to proxy pool."))
 	}
 }
 
-func (c *leader) handleMachineAppend(append localAppend) {
+func (c *leader) handleLocalAppend(append localAppend) {
 	err := c.appendPool.Submit(func() {
-		append.reply(c.syncer.Append(append.event))
+		append.Return(c.syncer.Append(append.Event))
 	})
 
 	if err != nil {
-		append.reply(0, errors.Wrapf(err, "Error submitting work to append pool."))
+		append.Fail(errors.Wrapf(err, "Error submitting work to append pool."))
 	}
 }
 
@@ -318,17 +320,19 @@ func (s *logSyncer) getHeadWhenGreater(cur int) (head int, err error) {
 	return
 }
 
-func (s *logSyncer) Append(event Event) (head int, err error) {
+func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 	select {
 	case <-s.closed:
-		return 0, ClosedError
+		return LogItem{}, ClosedError
 	default:
 	}
+
+	head, term := 0, s.root.term.num
 
 	committed := make(chan struct{}, 1)
 	go func() {
 		// append
-		head = s.root.Log.Append([]Event{event}, s.root.term.num)
+		head = s.root.Log.Append([]Event{event}, term)
 
 		// notify sync'ers
 		s.moveHead(head)
@@ -356,9 +360,9 @@ func (s *logSyncer) Append(event Event) (head int, err error) {
 
 	select {
 	case <-s.closed:
-		return 0, common.Or(s.failure, ClosedError)
+		return LogItem{}, common.Or(s.failure, ClosedError)
 	case <-committed:
-		return head, nil
+		return LogItem{head, event, term}, nil
 	}
 }
 
@@ -403,7 +407,7 @@ func (s *logSyncer) sync(p peer) {
 				}
 
 				// scan a full batch of events.
-				batch := s.root.Log.Scan(prevIndex+1, 256)
+				batch := s.root.Log.Scan(prevIndex+1, prevIndex+1+256)
 				if len(batch) == 0 {
 					panic("Inconsistent state!")
 				}
@@ -411,6 +415,7 @@ func (s *logSyncer) sync(p peer) {
 				// send the append request.
 				resp, err := cl.AppendEvents(s.root.Id, s.root.term.num, prevIndex, prevTerm, eventLogExtractEvents(batch), s.root.Log.Committed())
 				if err != nil {
+					logger.Error("Unable to append events [%v]", err)
 					cl = nil
 					continue
 				}
@@ -424,7 +429,7 @@ func (s *logSyncer) sync(p peer) {
 
 				// if it was successful, progress the peer's index and term
 				if resp.success {
-					prevIndex += len(batch)
+					prevIndex += len(batch)+1
 					prevTerm = s.root.term.num
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevTerm)
 

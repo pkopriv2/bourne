@@ -12,14 +12,14 @@ import (
 const (
 	actAppendEvents = "kayak.replica.appendEvents"
 	actRequestVote  = "kayak.replica.requestVote"
-	actProxyAppend  = "kayak.client.append"
+	actAppend  = "kayak.client.append"
 )
 
 // Meta messages
 var (
 	metaAppendEvents = serverNewMeta(actAppendEvents)
 	metaRequestVote  = serverNewMeta(actRequestVote)
-	metaProxyAppend  = serverNewMeta(actProxyAppend)
+	metaAppend  = serverNewMeta(actAppend)
 )
 
 type server struct {
@@ -58,8 +58,8 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 			return s.AppendEvents(req)
 		case actRequestVote:
 			return s.RequestVote(req)
-		case actProxyAppend:
-			return s.ProxyAppend(req)
+		case actAppend:
+			return s.Append(req)
 		}
 	}
 }
@@ -92,18 +92,18 @@ func (s *server) RequestVote(req net.Request) net.Response {
 	return newResponseResponse(resp)
 }
 
-func (s *server) ProxyAppend(req net.Request) net.Response {
-	event, err := readProxyAppendRequest(req.Body(), s.self.Parser())
+func (s *server) Append(req net.Request) net.Response {
+	event, err := readAppendRequest(req.Body(), s.self.Parser())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	index, err := s.self.ProxyAppend(event)
+	item, err := s.self.RemoteAppend(event)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return newProxyAppendResponse(index)
+	return newAppendResponse(item.Index, item.term)
 }
 
 // Helper functions
@@ -131,19 +131,20 @@ func newAppendEventsRequest(a appendEventsRequest) net.Request {
 	}))
 }
 
-func newProxyAppendRequest(e Event) net.Request {
-	return net.NewRequest(metaProxyAppend, scribe.Build(func(w scribe.Writer) {
+func newAppendRequest(e Event) net.Request {
+	return net.NewRequest(metaAppend, scribe.Build(func(w scribe.Writer) {
 		w.WriteMessage("event", e)
 	}))
 }
 
-func newProxyAppendResponse(index int) net.Response {
+func newAppendResponse(index int, term int) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
 		w.WriteInt("index", index)
+		w.WriteInt("term", term)
 	}))
 }
 
-func readProxyAppendRequest(r scribe.Reader, fn Parser) (e Event, err error) {
+func readAppendRequest(r scribe.Reader, fn Parser) (e Event, err error) {
 	var msg scribe.Message
 	err = common.Or(err, r.ReadMessage("event", &msg))
 	if err != nil {
@@ -153,9 +154,10 @@ func readProxyAppendRequest(r scribe.Reader, fn Parser) (e Event, err error) {
 	return fn(msg)
 }
 
-func readProxyAppendResponse(res net.Response) (index int, err error) {
+func readAppendResponse(res net.Response) (index int, term int, err error) {
 	err = res.Error()
 	err = common.Or(err, res.Body().ReadInt("index", &index))
+	err = common.Or(err, res.Body().ReadInt("term", &term))
 	return
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
@@ -95,7 +96,7 @@ func TestEventLog_Get_Single(t *testing.T) {
 	log.Append([]Event{&testEvent{}}, 1)
 	item, found := log.Get(0)
 	assert.True(t, found)
-	assert.Equal(t, 0, item.index)
+	assert.Equal(t, 0, item.Index)
 	assert.Equal(t, 1, item.term)
 }
 
@@ -117,8 +118,80 @@ func TestEventLog_Scan_Middle(t *testing.T) {
 	log.Append([]Event{&testEvent{}}, 1)
 	log.Append([]Event{&testEvent{}}, 1)
 	log.Append([]Event{&testEvent{}}, 1)
-	evts := log.Scan(1, 1)
+	evts := log.Scan(1, 2)
 	assert.Equal(t, 1, len(evts))
+}
+
+func TestEventLog_Listen_LogClosed(t *testing.T) {
+	log := NewTestEventLog()
+	l, err := log.Listen(0, 1)
+	assert.Nil(t, err)
+	assert.Nil(t, log.Close())
+
+	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-l.Closed():
+	default:
+		assert.Fail(t, "Not closed")
+	}
+}
+
+func TestEventLog_Listen_Close(t *testing.T) {
+	log := NewTestEventLog()
+	l, err := log.Listen(0, 1)
+	assert.Nil(t, err)
+	assert.Nil(t, l.Close())
+
+	select {
+	case <-l.Closed():
+	default:
+		assert.Fail(t, "Not closed")
+	}
+}
+
+func TestEventLog_Listen_Historical(t *testing.T) {
+
+	log := NewTestEventLog()
+	log.Append([]Event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
+	log.Commit(1)
+
+	l, _ := log.Listen(0, 1)
+	defer l.Close()
+
+	time.Sleep(10 * time.Millisecond)
+	for i := 0; i<2; i++{
+		select {
+		default:
+			assert.FailNow(t, "No item")
+		case item := <-l.Items():
+			assert.Equal(t, i, item.Index)
+		}
+	}
+}
+
+func TestEventLog_Listen_Realtime(t *testing.T) {
+
+	log := NewTestEventLog()
+	log.Append([]Event{&testEvent{}}, 1)
+	log.Append([]Event{&testEvent{}}, 1)
+	log.Commit(1)
+
+	l, _ := log.Listen(0, 1)
+	defer l.Close()
+
+	log.Append([]Event{&testEvent{}}, 1)
+	log.Commit(2)
+
+	time.Sleep(10 * time.Millisecond)
+	for i := 0; i<3; i++{
+		select {
+		default:
+			assert.FailNow(t, "No item")
+		case item := <-l.Items():
+			assert.Equal(t, i, item.Index)
+		}
+	}
 }
 
 func NewTestEventLog() *eventLog {

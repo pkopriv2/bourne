@@ -27,13 +27,18 @@ func (c *client) AppendEvents(id uuid.UUID, term int, logIndex int, logTerm int,
 	return readResponseResponse(resp)
 }
 
-func (c *client) ProxyAppend(e Event) (int, error) {
-	resp, err := c.raw.Send(newProxyAppendRequest(e))
+func (c *client) Append(e Event) (LogItem, error) {
+	resp, err := c.raw.Send(newAppendRequest(e))
 	if err != nil {
-		return 0, err
+		return LogItem{}, err
 	}
 
-	return readProxyAppendResponse(resp)
+	index, term, err := readAppendResponse(resp)
+	if err != nil {
+		return LogItem{}, err
+	}
+
+	return LogItem{index, e, term}, nil
 }
 
 func (c *client) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {

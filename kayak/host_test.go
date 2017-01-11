@@ -85,15 +85,21 @@ func TestHost_Cluster_Leader_Failure(t *testing.T) {
 }
 
 func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
 	cluster := StartTestCluster(ctx, 3)
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
-	_, err := leader.Append(&testEvent{})
+	evt := &testEvent{}
+	item, err := leader.Append(evt)
 	assert.Nil(t, err)
+	assert.Equal(t, LogItem{0, evt, 1}, item)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
@@ -109,7 +115,11 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
 }
 
 func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
 	cluster := StartTestCluster(ctx, 3)
@@ -119,7 +129,7 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
 	cl, err := leader.Client()
 	assert.Nil(t, err)
 
-	_, err = cl.ProxyAppend(&testEvent{})
+	_, err = cl.Append(&testEvent{})
 	assert.Nil(t, err)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
@@ -153,7 +163,7 @@ func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
 			defer cl.Close()
 
 			for i := 0; i < 10; i++ {
-				cl.ProxyAppend(&testEvent{})
+				cl.Append(&testEvent{})
 			}
 		}()
 	}
@@ -191,7 +201,7 @@ func TestHost_Cluster_Follower_ClientAppend_SingleBatch_SingleItem(t *testing.T)
 	assert.Nil(t, err)
 	assert.NotNil(t, cl)
 
-	_, err = cl.ProxyAppend(&testEvent{})
+	_, err = cl.Append(&testEvent{})
 	assert.Nil(t, err)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {

@@ -54,6 +54,10 @@ type Index interface {
 
 // Access methods for an index.
 type View interface {
+
+	Min() (Key, interface{})
+	Max() (Key, interface{})
+
 	// the start time of the transaction. (consistent throughout the transaction)
 	Time() time.Time
 

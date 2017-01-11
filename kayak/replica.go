@@ -57,16 +57,16 @@ type replica struct {
 	terms *storage
 
 	// request vote events.
-	Votes chan requestVote
+	VoteRequests chan requestVote
 
 	// append requests (presumably from leader)
-	LogAppends chan appendEvents
+	AppendRequests chan appendEvents
 
 	// append requests (from clients)
-	ProxyMachineAppends chan localAppend
+	RemoteAppends chan localAppend
 
 	// append requests (from local state machine)
-	MachineAppends chan localAppend
+	LocalAppends chan localAppend
 
 	// closing utilities
 	closed chan struct{}
@@ -80,22 +80,23 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 	}
 
 	return &replica{
-		Ctx:                 ctx,
-		Id:                  self.id,
-		Self:                self,
-		peers:               others,
-		Logger:              logger,
-		Parser:              parser,
-		term:                term,
-		terms:               terms,
-		Log:                 newEventLog(ctx),
-		LogAppends:          make(chan appendEvents),
-		Votes:               make(chan requestVote),
-		ProxyMachineAppends: make(chan localAppend),
-		ElectionTimeout:     time.Millisecond * time.Duration((rand.Intn(1000) + 1000)),
-		RequestTimeout:      10 * time.Second,
-		closed:              make(chan struct{}),
-		closer:              make(chan struct{}, 1),
+		Ctx:             ctx,
+		Id:              self.id,
+		Self:            self,
+		peers:           others,
+		Logger:          logger,
+		Parser:          parser,
+		term:            term,
+		terms:           terms,
+		Log:             newEventLog(ctx),
+		AppendRequests:  make(chan appendEvents),
+		VoteRequests:    make(chan requestVote),
+		RemoteAppends:   make(chan localAppend),
+		LocalAppends:    make(chan localAppend),
+		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
+		RequestTimeout:  10 * time.Second,
+		closed:          make(chan struct{}),
+		closer:          make(chan struct{}, 1),
 	}, nil
 }
 
@@ -186,7 +187,7 @@ func (h *replica) RequestAppendEvents(id uuid.UUID, term int, prevLogIndex int, 
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
-	case h.LogAppends <- append:
+	case h.AppendRequests <- append:
 		select {
 		case <-h.closed:
 			return response{}, ClosedError
@@ -202,7 +203,7 @@ func (h *replica) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int)
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
-	case h.Votes <- req:
+	case h.VoteRequests <- req:
 		select {
 		case <-h.closed:
 			return response{}, ClosedError
@@ -212,44 +213,44 @@ func (h *replica) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int)
 	}
 }
 
-func (h *replica) ProxyAppend(event Event) (int, error) {
-	append := newMachineAppend(event)
+func (h *replica) RemoteAppend(event Event) (LogItem, error) {
+	append := newLocalAppend(event)
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
 	case <-h.closed:
-		return 0, ClosedError
+		return LogItem{}, ClosedError
 	case <-timer.C:
-		return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
-	case h.ProxyMachineAppends <- append:
+		return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+	case h.RemoteAppends <- append:
 		select {
 		case <-h.closed:
-			return 0, ClosedError
+			return LogItem{}, ClosedError
 		case r := <-append.ack:
-			return r.index, r.err
+			return r.Item, r.Err
 		case <-timer.C:
-			return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+			return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 		}
 	}
 }
 
-func (h *replica) MachineAppend(event Event) (int, error) {
+func (h *replica) LocalAppend(event Event) (LogItem, error) {
 	append := localAppend{event, make(chan localAppendResponse, 1)}
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
 	case <-h.closed:
-		return 0, ClosedError
+		return LogItem{}, ClosedError
 	case <-timer.C:
-		return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
-	case h.ProxyMachineAppends <- append:
+		return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+	case h.LocalAppends <- append:
 		select {
 		case <-h.closed:
-			return 0, ClosedError
+			return LogItem{}, ClosedError
 		case r := <-append.ack:
-			return r.index, r.err
+			return r.Item, r.Err
 		case <-timer.C:
-			return 0, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+			return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 		}
 	}
 }
@@ -305,16 +306,20 @@ func (r requestVote) reply(term int, success bool) {
 //
 // These come from active clients.
 type localAppend struct {
-	event Event
+	Event Event
 	ack   chan localAppendResponse
 }
 
-func newMachineAppend(event Event) localAppend {
+func newLocalAppend(event Event) localAppend {
 	return localAppend{event, make(chan localAppendResponse, 1)}
 }
 
-func (a localAppend) reply(index int, err error) {
-	a.ack <- localAppendResponse{index, err}
+func (a localAppend) Return(item LogItem, err error) {
+	a.ack <- localAppendResponse{Item: item, Err: err}
+}
+
+func (a localAppend) Fail(err error) {
+	a.ack <- localAppendResponse{Err: err}
 }
 
 // Client append request.  Requests are put onto the internal member
@@ -322,8 +327,8 @@ func (a localAppend) reply(index int, err error) {
 //
 // These come from active clients.
 type localAppendResponse struct {
-	index int
-	err   error
+	Item LogItem
+	Err  error
 }
 
 // Internal response type.  These are returned through the

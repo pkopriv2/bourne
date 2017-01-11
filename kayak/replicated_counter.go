@@ -146,29 +146,23 @@ func (c *counter) Swap(e int, a int) (bool, error) {
 	}
 }
 
-func (c *counter) Run(log MachineLog) {
-	// Committer routine
-	go func() {
-		defer log.Close()
-
-		l, err := log.Listen()
-		if err != nil {
-			return
-		}
-		defer l.Close()
-
-
-		for {
-			select {
-			case <-c.closed:
-				return
-			case <-l.Closed():
-				return
-			case i := <-l.Items():
-				c.handleCommmit(i)
-			}
-		}
-	}()
+func (c *counter) Run(log Log) {
+	// // Committer routine
+	// go func() {
+		// defer log.Close()
+//
+		// // begin indexing.
+		// for {
+			// select {
+			// case <-c.closed:
+				// return
+			// case <-l.Closed():
+				// return
+			// case i := <-l.Items():
+				// c.handleCommmit(i)
+			// }
+		// }
+	// }()
 
 	// Request routine
 	go func() {
@@ -186,8 +180,8 @@ func (c *counter) Run(log MachineLog) {
 func (c *counter) handleCommmit(i LogItem) {
 	swap := i.Event.(swapEvent)
 	c.updateVal(func(cur counterValue) (val counterValue) {
-		if cur.index != i.Index-1 {
-			panic("Out of order item")
+		if cur.index > i.Index-1 {
+			return
 		}
 
 		if cur.Next != swap.Prev {
@@ -210,7 +204,7 @@ func (c *counter) handleCommmit(i LogItem) {
 	})
 }
 
-func (c *counter) handleSwapRequest(log MachineLog, u *swapRequest) {
+func (c *counter) handleSwapRequest(log Log, u *swapRequest) {
 	c.swapPool.Submit(func() {
 		listener, err := c.Listen()
 		if err != nil {

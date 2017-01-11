@@ -26,13 +26,12 @@ type Event interface {
 
 // A machine is anything that is expressable as a sequence of events.
 //
-// Multiple machines may be run as a group, to form a replicated
-// machine.  Each machine will have access to a distributed log.
-// It is very important to remember that each instance of the machine
-// is interacting with all others, in order to maintain a consistent
-// view of the log, and moreover, each instance may have to reconcile
-// it's view with a peer.  The focus of this api is on creating
-// applications who favor correctness over performance.
+// Kayak allows consumers to utilize a generic, replicated event
+// log in order to create highly-resilient, strongly consistent
+// replicated state machines.
+//
+// Kayak machines work by using a distributed systems technique,
+// called distributed consensus.
 //
 // # Distributed Consensus
 //
@@ -70,9 +69,13 @@ type Event interface {
 // machine and log interactions look like the following:
 //
 //
-//                               |-------*commits*-----|
-//                               v                     |
-// {consumer} ---*updates*-->{Machine}---*append*--->{Log}<------>{Peer}
+//                  *Local Process*						      |  *Network Process*
+//                                                            |
+//                               |-------*commits*-----|      |
+//                               v                     |      |
+// {Consumer}---*updates*--->{Machine}---*append*--->{Log}<---+--->{Peer}
+//                                                            |
+//                                                            |
 //
 //
 // And now we've got to the first issue of machine design:
@@ -82,6 +85,9 @@ type Event interface {
 // Moreover, users of these apis CANNOT make any assumptions about the
 // relationship of one stream to the other.  In other words, a successful
 // append ONLY gives the guarantee that it has been committed to a majority
+// of peers, and not necessarily to itself.  If consumers require strict
+// linearizable reads, they are encouraged to sync their append request
+// with the commit stream.
 //
 // TODO: Is this necessary?  Can the log guarantee that an append only
 // returns once it has been replicated to this instance?
@@ -110,11 +116,13 @@ type Machine interface {
 	Snapshot() ([]Event, error)
 
 	// Runs the main machine routine.
-	Run(log MachineLog)
+	Run(log Log)
 }
 
-// The machine log is a replicated log.
-type MachineLog interface {
+// The log is the view into the replicated log state.  This allows
+// consumer the ability to append events to the log and watch the
+// log for changes.
+type Log interface {
 	io.Closer
 
 	// Returns all the machine log's items (Useful for backfilling state)
@@ -125,7 +133,14 @@ type MachineLog interface {
 	// the listener does NOT return all historical items.
 	//
 	// Please use #All() for backfilling.
-	Listen() (Listener, error)
+	Listen(from int, buf int) (Listener, error)
+
+	// Adds a real-time listener to the log commits.  The listener is guaranteed
+	// to receive ALL items in the order they are committed - however -
+	// the listener does NOT return all historical items.
+	//
+	// Please use #All() for backfilling.
+	ListenLive(buf int) (Listener, error)
 
 	// Appends the event to the log.
 	//
@@ -152,6 +167,9 @@ type Listener interface {
 type LogItem struct {
 	Index int
 	Event Event
+
+	// Internal:
+	term  int
 }
 
 func Replicate(machine Machine, self string, peers []string) error {

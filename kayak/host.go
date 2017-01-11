@@ -52,7 +52,6 @@ func (p peer) Client(ctx common.Context, parser Parser) (*client, error) {
 
 type host struct {
 
-
 	logger common.Logger
 	core   *replicatedLog
 	server net.Server
@@ -121,6 +120,14 @@ func (h *host) Append(e Event) (LogItem, error) {
 
 func (h *host) Client() (*client, error) {
 	return h.core.Self().Client(h.Context(), h.Parser())
+}
+
+func (h *host) Listen(from int, buf int) (Listener, error) {
+	return h.core.Listen(from, buf)
+}
+
+func (h *host) ListenLive(buf int) (Listener, error) {
+	return h.core.ListenLive(buf)
 }
 
 func (h *host) Close() error {

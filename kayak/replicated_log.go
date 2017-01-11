@@ -54,7 +54,7 @@ func (h *replicatedLog) Close() error {
 }
 
 func (h *replicatedLog) start() error {
-	listener, err := h.Log().Listen()
+	listener, err := h.Log().Listen(0, 1024)
 	if err != nil {
 		return err
 	}
@@ -68,8 +68,7 @@ func (h *replicatedLog) start() error {
 			case <-listener.Closed():
 				return
 			case i := <-listener.Items():
-				h.replica.Logger.Info("Commit!: %v", i)
-				// h.replica.Machine.Commit(LogItem{i.index, i.event})
+				h.replica.Logger.Info("Commit: %v", i)
 			}
 		}
 	}()
@@ -110,58 +109,22 @@ func (h *replicatedLog) RequestVote(id uuid.UUID, term int, logIndex int, logTer
 	return h.replica.RequestVote(id, term, logIndex, logTerm)
 }
 
-func (h *replicatedLog) ProxyAppend(event Event) (int, error) {
-	return h.replica.ProxyAppend(event)
+func (h *replicatedLog) RemoteAppend(event Event) (LogItem, error) {
+	return h.replica.RemoteAppend(event)
 }
 
-func (h *replicatedLog) MachineAppend(event Event) (int, error) {
-	return h.replica.MachineAppend(event)
+func (h *replicatedLog) LocalAppend(event Event) (LogItem, error) {
+	return h.replica.LocalAppend(event)
 }
-
-// Public apis
 
 func (r *replicatedLog) Append(e Event) (LogItem, error) {
-	index, err := r.MachineAppend(e)
-	if err != nil {
-		return LogItem{}, err
-	}
-
-	return LogItem{index, e}, nil
+	return r.LocalAppend(e)
 }
 
-//
-type listener struct {
-	raw   *eventLogListener
-	items chan LogItem
+func (r *replicatedLog) Listen(from int, buf int) (Listener, error) {
+	return r.Log().Listen(from, buf)
 }
 
-func newListener(raw *eventLogListener) *listener {
-	l := &listener{raw, make(chan LogItem, 8)}
-	go func() {
-		for {
-			select {
-			case <-l.raw.closed:
-				return
-			case i := <-l.raw.Items():
-				select {
-				case <-l.raw.closed:
-					return
-				case l.items <- LogItem{i.index, i.event}:
-				}
-			}
-		}
-	}()
-	return l
-}
-
-func (l *listener) Close() error {
-	return l.raw.Close()
-}
-
-func (l *listener) Items() <-chan LogItem {
-	return l.items
-}
-
-func (l *listener) Closed() <-chan struct{} {
-	return l.raw.closed
+func (r *replicatedLog) ListenLive(buf int) (Listener, error) {
+	return r.Log().ListenLive(buf)
 }

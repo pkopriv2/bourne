@@ -118,9 +118,9 @@ func (c *candidate) start() {
 			select {
 			case <-c.closed:
 				return
-			case append := <-c.replica.LogAppends:
+			case append := <-c.replica.AppendRequests:
 				c.handleAppendEvents(append)
-			case ballot := <-c.replica.Votes:
+			case ballot := <-c.replica.VoteRequests:
 				c.handleRequestVote(ballot)
 			case <-timer.C:
 				c.logger.Info("Unable to acquire necessary votes [%v/%v]", numVotes, needed)

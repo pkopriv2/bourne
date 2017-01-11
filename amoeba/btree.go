@@ -29,6 +29,14 @@ type btreeView struct {
 	now time.Time
 }
 
+func (b *btreeView) Min() (Key, interface{}) {
+	return b.idx.Min()
+}
+
+func (b *btreeView) Max() (Key, interface{}) {
+	return b.idx.Max()
+}
+
 func (b *btreeView) Time() time.Time {
 	return b.now
 }
@@ -90,6 +98,26 @@ func (r *btreeIndex) Update(fn func(Update)) {
 
 // Note: All following assume a lock has been taken.  These are NOT part
 // of the public api, except in the context of an update or read...
+func (i *btreeIndex) Min() (key Key, val interface{}) {
+	if i.Tree.Len() == 0 {
+		return
+	}
+
+	key = i.Tree.Min().(btreeKey).Key
+	val = i.Get(key)
+	return
+}
+
+func (i *btreeIndex) Max() (key Key, val interface{}) {
+	if i.Tree.Len() == 0 {
+		return
+	}
+
+	key = i.Tree.Max().(btreeKey).Key
+	val = i.Get(key)
+	return
+}
+
 func (i *btreeIndex) Put(key Key, val interface{}) {
 	i.Table[key.Hash()] = val
 	i.Tree.ReplaceOrInsert(btreeKey{key})

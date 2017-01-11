@@ -101,10 +101,10 @@ func (c *follower) start() {
 				select {
 				case <-c.closed:
 					return
-				case append := <-c.replica.MachineAppends:
-					c.handleMachineAppend(append)
-				case append := <-c.replica.ProxyMachineAppends:
-					c.handleProxyMachineAppend(append)
+				case append := <-c.replica.LocalAppends:
+					c.handleLocalAppend(append)
+				case append := <-c.replica.RemoteAppends:
+					c.handleRemoteAppend(append)
 				}
 			}
 		}()
@@ -117,9 +117,9 @@ func (c *follower) start() {
 			select {
 			case <-c.closed:
 				return
-			case append := <-c.replica.LogAppends:
+			case append := <-c.replica.AppendRequests:
 				c.handleAppendEvents(append)
-			case ballot := <-c.replica.Votes:
+			case ballot := <-c.replica.VoteRequests:
 				c.handleRequestVote(ballot)
 			case <-timer.C:
 				c.logger.Info("Waited too long for heartbeat.")
@@ -130,38 +130,33 @@ func (c *follower) start() {
 	}()
 }
 
-func (c *follower) handleMachineAppend(append localAppend) {
+func (c *follower) handleLocalAppend(append localAppend) {
 	timeout := c.replica.RequestTimeout / 2
 
 	err := c.proxyPool.SubmitTimeout(timeout, func() {
 		conn := c.connPool.TakeTimeout(timeout)
 		if conn == nil {
-			append.reply(0, common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
+			append.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
 			return
 		}
 		defer conn.Close()
 
 		raw, err := net.NewClient(c.replica.Ctx, c.replica.Logger, conn)
 		if err != nil {
-			append.reply(0, err)
+			append.Fail(err)
 			return
 		}
 
-		append.reply(newClient(raw, c.replica.Parser).ProxyAppend(append.event))
+		append.Return(newClient(raw, c.replica.Parser).Append(append.Event))
 	})
 	if err != nil {
-		append.reply(0, err)
+		append.Fail(err)
 	}
 
 }
 
-func (c *follower) handleProxyMachineAppend(append localAppend) {
-	err := c.appendPool.SubmitTimeout(c.replica.RequestTimeout, func() {
-		append.reply(0, NotLeaderError)
-	})
-	if err != nil {
-		append.reply(0, err)
-	}
+func (c *follower) handleRemoteAppend(append localAppend) {
+	append.Fail(NotLeaderError)
 }
 
 func (c *follower) handleRequestVote(vote requestVote) {
@@ -201,6 +196,8 @@ func (c *follower) handleRequestVote(vote requestVote) {
 }
 
 func (c *follower) handleAppendEvents(append appendEvents) {
+	c.logger.Debug("Handling append events: %v", append)
+
 	if append.term < c.replica.term.num {
 		append.reply(c.replica.term.num, false)
 		return
