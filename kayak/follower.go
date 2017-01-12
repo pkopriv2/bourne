@@ -114,11 +114,13 @@ func (c *follower) start() {
 	go func() {
 		for {
 			timer := time.NewTimer(c.replica.ElectionTimeout)
+			c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
+
 			select {
 			case <-c.closed:
 				return
-			case append := <-c.replica.AppendRequests:
-				c.handleAppendEvents(append)
+			case append := <-c.replica.Replications:
+				c.handleReplication(append)
 			case ballot := <-c.replica.VoteRequests:
 				c.handleRequestVote(ballot)
 			case <-timer.C:
@@ -195,9 +197,8 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	c.transition(c.in)
 }
 
-func (c *follower) handleAppendEvents(append appendEvents) {
+func (c *follower) handleReplication(append replicateEvents) {
 	c.logger.Debug("Handling append events: %v", append)
-
 	if append.term < c.replica.term.num {
 		append.reply(c.replica.term.num, false)
 		return
@@ -211,12 +212,18 @@ func (c *follower) handleAppendEvents(append appendEvents) {
 		return
 	}
 
+	// if append.prevLogIndex == -1 && append.prevLogTerm == -1 && len(append.events) == 0 {
+		// append.reply(append.term, true)
+		// return
+	// }
+
 	if logItem, ok := c.replica.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
 		c.logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
 		append.reply(append.term, false)
 		return
 	}
 
+	// c.logger.Info("Insert: [%v,%v]", append.prevLogIndex+1, append.prevLogIndex+1+len(append.events))
 	c.replica.Log.Insert(append.events, append.prevLogIndex+1, append.term)
 	c.replica.Log.Commit(append.commit)
 	append.reply(append.term, true)

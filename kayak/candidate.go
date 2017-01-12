@@ -118,7 +118,7 @@ func (c *candidate) start() {
 			select {
 			case <-c.closed:
 				return
-			case append := <-c.replica.AppendRequests:
+			case append := <-c.replica.Replications:
 				c.handleAppendEvents(append)
 			case ballot := <-c.replica.VoteRequests:
 				c.handleRequestVote(ballot)
@@ -152,7 +152,7 @@ func (c *candidate) handleRequestVote(vote requestVote) {
 	c.transition(c.follower)
 }
 
-func (c *candidate) handleAppendEvents(append appendEvents) {
+func (c *candidate) handleAppendEvents(append replicateEvents) {
 	if append.term < c.term.num {
 		append.reply(c.term.num, false)
 		return

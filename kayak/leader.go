@@ -58,8 +58,8 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 		logger:     logger,
 		follower:   follower,
 		syncer:     newLogSyncer(replica, logger),
-		proxyPool:  concurrent.NewWorkPool(16),
-		appendPool: concurrent.NewWorkPool(16),
+		proxyPool:  concurrent.NewWorkPool(10),
+		appendPool: concurrent.NewWorkPool(10),
 		term:       replica.CurrentTerm(),
 		replica:    replica,
 		closed:     make(chan struct{}),
@@ -114,7 +114,7 @@ func (l *leader) start() {
 	go func() {
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			l.logger.Info("Resetting timeout [%v]", l.replica.ElectionTimeout / 5)
+			l.logger.Info("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.replica.closed:
@@ -123,8 +123,8 @@ func (l *leader) start() {
 				return
 			case append := <-l.replica.LocalAppends:
 				l.handleLocalAppend(append)
-			case append := <-l.replica.AppendRequests:
-				l.handleAppendEvents(append)
+			case events := <-l.replica.Replications:
+				l.handleReplicate(events)
 			case ballot := <-l.replica.VoteRequests:
 				l.handleRequestVote(ballot)
 			case <-timer.C:
@@ -152,7 +152,7 @@ func (c *leader) handleRemoteAppend(append localAppend) {
 }
 
 func (c *leader) handleLocalAppend(append localAppend) {
-	err := c.appendPool.Submit(func() {
+	err := c.appendPool.SubmitTimeout(250 * time.Millisecond, func() {
 		append.Return(c.syncer.Append(append.Event))
 	})
 
@@ -182,7 +182,7 @@ func (c *leader) handleRequestVote(vote requestVote) {
 	c.transition(c.follower)
 }
 
-func (c *leader) handleAppendEvents(append appendEvents) {
+func (c *leader) handleReplicate(append replicateEvents) {
 	if append.term < c.replica.term.num {
 		append.reply(c.replica.term.num, false)
 		return
@@ -195,10 +195,7 @@ func (c *leader) handleAppendEvents(append appendEvents) {
 
 func (c *leader) broadcastHeartbeat() {
 	ch := c.replica.Broadcast(func(cl *client) response {
-		maxLogIndex, maxLogTerm, commit := c.replica.Log.Snapshot()
-		c.logger.Info("Sending heart beat (%v,%v,%v)", maxLogIndex, maxLogTerm, commit)
-
-		resp, err := cl.AppendEvents(c.replica.Id, c.replica.term.num, maxLogIndex, maxLogTerm, []Event{}, commit)
+		resp, err := cl.AppendEvents(c.replica.Id, c.replica.term.num, -1, -1, []Event{}, c.replica.Log.Committed())
 		if err != nil {
 			return response{c.replica.term.num, false}
 		} else {
@@ -245,12 +242,6 @@ type logSyncer struct {
 	// Used to access/update peer states.
 	prevLock sync.Mutex
 
-	// sets the highwater mark.
-	head int
-
-	// conditional lock on head (used to wake synchronizers waiting for work.)
-	headLock *sync.Cond
-
 	// used to indicate whether a catastrophic failure has occurred
 	failure error
 
@@ -265,8 +256,6 @@ func newLogSyncer(inst *replica, logger common.Logger) *logSyncer {
 		logger:      logger.Fmt("Syncer"),
 		prevIndices: make(map[uuid.UUID]int),
 		prevTerms:   make(map[uuid.UUID]int),
-		head:        -1,
-		headLock:    &sync.Cond{L: &sync.Mutex{}},
 		closed:      make(chan struct{}),
 		closer:      make(chan struct{}, 1),
 	}
@@ -291,33 +280,8 @@ func (l *logSyncer) shutdown(err error) error {
 
 	l.failure = err
 	close(l.closed)
-	l.headLock.Broadcast()
+	l.root.Log.appender.Notify()
 	return err
-}
-
-func (s *logSyncer) moveHead(offset int) {
-	s.headLock.L.Lock()
-	if offset > s.head {
-		s.head = offset
-	}
-	s.headLock.L.Unlock()
-	s.headLock.Broadcast()
-}
-
-func (s *logSyncer) getHeadWhenGreater(cur int) (head int, err error) {
-	s.headLock.L.Lock()
-	defer s.headLock.L.Unlock()
-
-	for head = s.head; head <= cur; head = s.head {
-		s.headLock.Wait()
-		select {
-		default:
-			continue
-		case <-s.closed:
-			return -1, ClosedError
-		}
-	}
-	return
 }
 
 func (s *logSyncer) Append(event Event) (item LogItem, err error) {
@@ -327,28 +291,32 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 	default:
 	}
 
-	head, term := 0, s.root.term.num
+	var term = s.root.term.num
+	var head int
 
 	committed := make(chan struct{}, 1)
 	go func() {
+
 		// append
 		head = s.root.Log.Append([]Event{event}, term)
 
-		// notify sync'ers
-		s.moveHead(head)
-
 		// wait for majority.
-		for needed := majority(len(s.root.peers)+1) - 1; needed > 0; {
+		majority := majority(len(s.root.peers)+1) - 1
+		for done := make(map[uuid.UUID]struct{}); len(done) < majority; {
 			for _, p := range s.root.peers {
+				if _, ok := done[p.id]; ok {
+					continue
+				}
+
 				index, term := s.GetPrevIndexAndTerm(p.id)
 				if index >= head && term == s.root.term.num {
-					needed--
+					done[p.id] = struct{}{}
 				}
 			}
 
 			select {
 			default:
-				time.Sleep(5 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
+				time.Sleep(2 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
 			case <-s.closed:
 				return
 			}
@@ -382,14 +350,14 @@ func (s *logSyncer) sync(p peer) {
 		prevIndex := commit
 		prevTerm := term
 		for {
-			head, err := s.getHeadWhenGreater(prevIndex)
+			head, err := s.root.Log.appender.WaitForChange(prevIndex, s.closed)
 			if err != nil {
 				return
 			}
 
 			// loop until this peer is completely caught up to head!
 			for prevIndex < head {
-				logger.Info("Currently [%v] behind head [%v]", head-prevIndex, head)
+				logger.Debug("Currently [%v/%v]", prevIndex, head)
 
 				// check for close each time around.
 				select {
@@ -429,12 +397,9 @@ func (s *logSyncer) sync(p peer) {
 
 				// if it was successful, progress the peer's index and term
 				if resp.success {
-					prevIndex += len(batch)+1
+					prevIndex += len(batch)
 					prevTerm = s.root.term.num
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevTerm)
-
-					// accumulates some updates
-					time.Sleep(20 * time.Millisecond)
 					continue
 				}
 

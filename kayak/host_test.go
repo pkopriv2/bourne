@@ -84,7 +84,7 @@ func TestHost_Cluster_Leader_Failure(t *testing.T) {
 	assert.NotEqual(t, leader1, leader2)
 }
 
-func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
+func TestHost_Cluster_Leader_Append_Single(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),
 	})
@@ -96,10 +96,8 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
-	evt := &testEvent{}
-	item, err := leader.Append(evt)
+	_, err := leader.Append(&testEvent{})
 	assert.Nil(t, err)
-	assert.Equal(t, LogItem{0, evt, 1}, item)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
@@ -114,7 +112,7 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_SingleItem(t *testing.T) {
 	}
 }
 
-func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
+func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),
 	})
@@ -126,63 +124,50 @@ func TestHost_Cluster_Leader_ClientAppend_SingleBatch_MultiItem(t *testing.T) {
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
-	cl, err := leader.Client()
-	assert.Nil(t, err)
-
-	_, err = cl.Append(&testEvent{})
-	assert.Nil(t, err)
-
-	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
-		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 1 && h.Log().Committed() == 1
-		})
-	})
-
-	select {
-	case <-done:
-	case <-timeout:
-		assert.Fail(t, "Timed out waiting for majority to sync")
-	}
-}
-
-func TestHost_Cluster_Leader_ClientAppend_MultiBatch(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	cluster := StartTestCluster(ctx, 3)
-	leader := Converge(cluster)
-	assert.NotNil(t, leader)
-
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 50; i++ {
 		go func() {
-			cl, _ := leader.Client()
-			defer cl.Close()
-
-			for i := 0; i < 10; i++ {
-				cl.Append(&testEvent{})
+			for i := 0; i < 100; i++ {
+				_, err := leader.Append(&testEvent{})
+				if err != nil {
+					panic(err)
+				}
 			}
 		}()
 	}
 
-	done, timeout := concurrent.NewBreaker(10*time.Second, func() {
+	done, timeout := concurrent.NewBreaker(50*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 999 && h.Log().Committed() == 999
+			return h.Log().Head() == 4999 && h.Log().Committed() == 4999
 		})
 
 		SyncMajority(cluster, func(h *host) bool {
-			return fmt.Sprintf("%v", h.Log().Scan(0, 1000)) == fmt.Sprintf("%v", leader.Log().Scan(0, 1000))
+			return fmt.Sprintf("%v", h.Log().Scan(0, 5000)) == fmt.Sprintf("%v", h.Log().Scan(0, 5000))
 		})
 	})
 
 	select {
 	case <-done:
 	case <-timeout:
-		assert.Fail(t, "Timed out waiting for majority to sync")
+		assert.FailNow(t, "Timed out waiting for majority to sync")
 	}
+
+	member := First(cluster, func(h *host) bool {
+		return h.Id() != leader.Id()
+	})
+
+	l, _ := member.Listen(0, 8)
+	for i := 0; i < 5000; i++ {
+		item := <-l.Items()
+		assert.Equal(t, i, item.Index)
+	}
+}
+
+func extractIndices(items []LogItem) []int {
+	ret := make([]int, 0, len(items))
+	for _, i := range items {
+		ret = append(ret, i.Index)
+	}
+	return ret
 }
 
 func TestHost_Cluster_Follower_ClientAppend_SingleBatch_SingleItem(t *testing.T) {

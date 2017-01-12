@@ -60,7 +60,7 @@ type replica struct {
 	VoteRequests chan requestVote
 
 	// append requests (presumably from leader)
-	AppendRequests chan appendEvents
+	Replications chan replicateEvents
 
 	// append requests (from clients)
 	RemoteAppends chan localAppend
@@ -89,7 +89,7 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		term:            term,
 		terms:           terms,
 		Log:             newEventLog(ctx),
-		AppendRequests:  make(chan appendEvents),
+		Replications:    make(chan replicateEvents),
 		VoteRequests:    make(chan requestVote),
 		RemoteAppends:   make(chan localAppend),
 		LocalAppends:    make(chan localAppend),
@@ -180,14 +180,14 @@ func (r *replica) Close() error {
 	return nil
 }
 
-func (h *replica) RequestAppendEvents(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
-	append := appendEvents{
+func (h *replica) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
+	append := replicateEvents{
 		id, term, prevLogIndex, prevLogTerm, batch, commit, make(chan response, 1)}
 
 	select {
 	case <-h.closed:
 		return response{}, ClosedError
-	case h.AppendRequests <- append:
+	case h.Replications <- append:
 		select {
 		case <-h.closed:
 			return response{}, ClosedError
@@ -263,7 +263,7 @@ func majority(num int) int {
 // channel and consumed by the currently active sub-machine.
 //
 // Append events ONLY come from members who are leaders. (Or think they are leaders)
-type appendEvents struct {
+type replicateEvents struct {
 	id           uuid.UUID
 	term         int
 	prevLogIndex int
@@ -273,11 +273,11 @@ type appendEvents struct {
 	ack          chan response
 }
 
-func (a appendEvents) String() string {
-	return fmt.Sprintf("AppendEvents(id=%v,prevIndex=%v,prevTerm%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, len(a.events))
+func (a replicateEvents) String() string {
+	return fmt.Sprintf("Replicate(id=%v,prevIndex=%v,prevTerm=%v,commit=%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, a.commit, len(a.events))
 }
 
-func (a *appendEvents) reply(term int, success bool) {
+func (a *replicateEvents) reply(term int, success bool) {
 	a.ack <- response{term, success}
 }
 

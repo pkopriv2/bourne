@@ -54,25 +54,6 @@ func (h *replicatedLog) Close() error {
 }
 
 func (h *replicatedLog) start() error {
-	listener, err := h.Log().Listen(0, 1024)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		defer listener.Close()
-		for {
-			select {
-			case <-h.replica.closed:
-				return
-			case <-listener.Closed():
-				return
-			case i := <-listener.Items():
-				h.replica.Logger.Info("Commit: %v", i)
-			}
-		}
-	}()
-
 	h.follower.in <- h.replica
 	return nil
 }
@@ -101,8 +82,8 @@ func (h *replicatedLog) CurrentTerm() term {
 	return h.replica.CurrentTerm()
 }
 
-func (h *replicatedLog) RequestAppendEvents(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
-	return h.replica.RequestAppendEvents(id, term, prevLogIndex, prevLogTerm, batch, commit)
+func (h *replicatedLog) InnerAppend(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
+	return h.replica.Replicate(id, term, prevLogIndex, prevLogTerm, batch, commit)
 }
 
 func (h *replicatedLog) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
@@ -122,9 +103,9 @@ func (r *replicatedLog) Append(e Event) (LogItem, error) {
 }
 
 func (r *replicatedLog) Listen(from int, buf int) (Listener, error) {
-	return r.Log().Listen(from, buf)
+	return r.Log().ListenCommits(from, buf)
 }
 
 func (r *replicatedLog) ListenLive(buf int) (Listener, error) {
-	return r.Log().ListenLive(buf)
+	return r.Log().ListenCommitsLive(buf)
 }

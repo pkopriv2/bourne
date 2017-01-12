@@ -13,6 +13,7 @@ var (
 	EvictedError   = errors.New("Kayak:Evicted")
 	FailedError    = errors.New("Kayak:Failed")
 	ClosedError    = errors.New("Kayak:Closed")
+	CanceledError  = errors.New("Kayak:Canceled")
 	NotLeaderError = errors.New("Kayak:NotLeader")
 	NoLeaderError  = errors.New("Kayak:NoLeader")
 	EventError     = errors.New("Kayak:EventError")
@@ -169,7 +170,7 @@ type LogItem struct {
 	Event Event
 
 	// Internal:
-	term  int
+	term int
 }
 
 func Replicate(machine Machine, self string, peers []string) error {

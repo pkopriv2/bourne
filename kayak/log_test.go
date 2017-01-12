@@ -124,7 +124,7 @@ func TestEventLog_Scan_Middle(t *testing.T) {
 
 func TestEventLog_Listen_LogClosed(t *testing.T) {
 	log := NewTestEventLog()
-	l, err := log.Listen(0, 1)
+	l, err := log.ListenCommits(0, 1)
 	assert.Nil(t, err)
 	assert.Nil(t, log.Close())
 
@@ -138,7 +138,7 @@ func TestEventLog_Listen_LogClosed(t *testing.T) {
 
 func TestEventLog_Listen_Close(t *testing.T) {
 	log := NewTestEventLog()
-	l, err := log.Listen(0, 1)
+	l, err := log.ListenCommits(0, 1)
 	assert.Nil(t, err)
 	assert.Nil(t, l.Close())
 
@@ -156,11 +156,11 @@ func TestEventLog_Listen_Historical(t *testing.T) {
 	log.Append([]Event{&testEvent{}}, 1)
 	log.Commit(1)
 
-	l, _ := log.Listen(0, 1)
+	l, _ := log.ListenCommits(0, 1)
 	defer l.Close()
 
 	time.Sleep(10 * time.Millisecond)
-	for i := 0; i<2; i++{
+	for i := 0; i < 2; i++ {
 		select {
 		default:
 			assert.FailNow(t, "No item")
@@ -177,14 +177,14 @@ func TestEventLog_Listen_Realtime(t *testing.T) {
 	log.Append([]Event{&testEvent{}}, 1)
 	log.Commit(1)
 
-	l, _ := log.Listen(0, 1)
+	l, _ := log.ListenCommits(0, 1)
 	defer l.Close()
 
 	log.Append([]Event{&testEvent{}}, 1)
 	log.Commit(2)
 
 	time.Sleep(10 * time.Millisecond)
-	for i := 0; i<3; i++{
+	for i := 0; i < 3; i++ {
 		select {
 		default:
 			assert.FailNow(t, "No item")

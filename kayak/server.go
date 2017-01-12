@@ -12,14 +12,14 @@ import (
 const (
 	actAppendEvents = "kayak.replica.appendEvents"
 	actRequestVote  = "kayak.replica.requestVote"
-	actAppend  = "kayak.client.append"
+	actAppend       = "kayak.client.append"
 )
 
 // Meta messages
 var (
 	metaAppendEvents = serverNewMeta(actAppendEvents)
 	metaRequestVote  = serverNewMeta(actRequestVote)
-	metaAppend  = serverNewMeta(actAppend)
+	metaAppend       = serverNewMeta(actAppend)
 )
 
 type server struct {
@@ -70,7 +70,7 @@ func (s *server) AppendEvents(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	resp, err := s.self.RequestAppendEvents(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
+	resp, err := s.self.InnerAppend(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

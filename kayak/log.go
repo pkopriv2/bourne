@@ -1,7 +1,6 @@
 package kayak
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/pkopriv2/bourne/amoeba"
@@ -15,10 +14,10 @@ type eventLog struct {
 	data amoeba.Index
 
 	// index of last item inserted. (initialized to -1)
-	head int
+	appender *position
 
 	// index of last item committed.(initialized to -1)
-	committer *committer
+	committer *position
 
 	// closing utilities.
 	closed chan struct{}
@@ -28,7 +27,8 @@ type eventLog struct {
 }
 
 func newEventLog(ctx common.Context) *eventLog {
-	return &eventLog{amoeba.NewBTreeIndex(32), -1, newCommitter(), make(chan struct{}), make(chan struct{}, 1)}
+	closed := make(chan struct{})
+	return &eventLog{amoeba.NewBTreeIndex(32), newCommitter(closed), newCommitter(closed), closed, make(chan struct{}, 1)}
 }
 
 func (d *eventLog) Close() error {
@@ -39,35 +39,33 @@ func (d *eventLog) Close() error {
 	}
 
 	d.committer.Notify()
+	d.appender.Notify()
 	close(d.closed)
 	return nil
 }
 
-func (d *eventLog) Listen(from int, buf int) (*eventLogListener, error) {
+func (d *eventLog) ListenCommits(from int, buf int) (*commitListener, error) {
 	select {
 	case <-d.closed:
 		return nil, ClosedError
 	default:
 	}
 
-	return newEventLogListener(d, from, buf), nil
+	return newCommitListener(d, from, buf), nil
 }
 
-func (d *eventLog) ListenLive(buf int) (*eventLogListener, error) {
+func (d *eventLog) ListenCommitsLive(buf int) (*commitListener, error) {
 	select {
 	case <-d.closed:
 		return nil, ClosedError
 	default:
 	}
 
-	return newEventLogListener(d, d.committer.Get(), buf), nil
+	return newCommitListener(d, d.committer.Get(), buf), nil
 }
 
 func (d *eventLog) Head() (pos int) {
-	d.data.Update(func(u amoeba.Update) {
-		pos = d.head
-	})
-	return
+	return d.appender.Get()
 }
 
 func (d *eventLog) Committed() (pos int) {
@@ -75,11 +73,12 @@ func (d *eventLog) Committed() (pos int) {
 }
 
 func (d *eventLog) snapshot(u amoeba.View) (int, int, int) {
-	if d.head < 0 {
+	head := d.appender.Get()
+	if head < 0 {
 		return -1, -1, -1
 	}
 
-	item, _ := d.get(u, d.head)
+	item, _ := d.get(u, head)
 	return item.Index, item.term, d.committer.Get()
 }
 
@@ -104,13 +103,8 @@ func (d *eventLog) Commit(pos int) {
 		return // -1 is normal
 	}
 
-	d.committer.Update(func(val int) int {
-		head := d.Head()
-		if pos > head {
-			panic(fmt.Sprintf("Invalid commit [%v/%v]", pos, head))
-		}
-
-		return common.Max(val, pos)
+	d.committer.Update(func(cur int) int {
+		return common.Min(pos, d.appender.Get())
 	})
 }
 
@@ -144,7 +138,7 @@ func (d *eventLog) Append(batch []Event, term int) (index int) {
 			u.Put(amoeba.IntKey(index), LogItem{index, e, term})
 		}
 
-		d.head = index
+		d.appender.Set(index)
 	})
 	return
 }
@@ -155,36 +149,38 @@ func (d *eventLog) Insert(batch []Event, index int, term int) {
 	}
 
 	d.data.Update(func(u amoeba.Update) {
+		head := d.appender.Get()
 		for _, e := range batch {
 			u.Put(amoeba.IntKey(index), LogItem{index, e, term})
-			if index > d.head {
-				d.head = index
+			if index > head {
+				head = index
 			}
-
 			index++
 		}
+
+		d.appender.Set(head)
 	})
 }
 
-type eventLogListener struct {
+type commitListener struct {
 	log    *eventLog
 	ch     chan LogItem
 	closed chan struct{}
 	closer chan struct{}
 }
 
-func newEventLogListener(log *eventLog, from int, buf int) *eventLogListener {
-	l := &eventLogListener{log, make(chan LogItem, buf), make(chan struct{}), make(chan struct{}, 1)}
+func newCommitListener(log *eventLog, from int, buf int) *commitListener {
+	l := &commitListener{log, make(chan LogItem, buf), make(chan struct{}), make(chan struct{}, 1)}
 	l.start(from)
 	return l
 }
 
-func (l *eventLogListener) start(from int) {
+func (l *commitListener) start(from int) {
 	go func() {
 		defer l.Close()
 
 		for {
-			next, err := l.log.committer.WaitForChange(from, l.closed, l.log.closed)
+			next, err := l.log.committer.WaitForChange(from, l.closed)
 			if err != nil {
 				return
 			}
@@ -199,20 +195,20 @@ func (l *eventLogListener) start(from int) {
 				}
 			}
 
-			from = next+1
+			from = next + 1
 		}
 	}()
 }
 
-func (l *eventLogListener) Closed() <-chan struct{} {
+func (l *commitListener) Closed() <-chan struct{} {
 	return l.closed
 }
 
-func (l *eventLogListener) Items() <-chan LogItem {
+func (l *commitListener) Items() <-chan LogItem {
 	return l.ch
 }
 
-func (l *eventLogListener) Close() error {
+func (l *commitListener) Close() error {
 	select {
 	case <-l.closed:
 		return ClosedError
@@ -223,48 +219,62 @@ func (l *eventLogListener) Close() error {
 	return nil
 }
 
-type committer struct {
-	commit     int
-	commitLock *sync.Cond
+type position struct {
+	pos     int
+	posLock *sync.Cond
+	cancel  <-chan struct{}
 }
 
-func newCommitter() *committer {
-	return &committer{-1, &sync.Cond{L: &sync.Mutex{}}}
+func newCommitter(cancel <-chan struct{}) *position {
+	return &position{-1, &sync.Cond{L: &sync.Mutex{}}, cancel}
 }
 
-func (c *committer) WaitForChange(pos int, done1 <-chan struct{}, done2 <-chan struct{}) (commit int, err error) {
-	c.commitLock.L.Lock()
-	defer c.commitLock.L.Unlock()
+func (c *position) WaitForChange(pos int, done <-chan struct{}) (commit int, err error) {
+	c.posLock.L.Lock()
+	defer c.posLock.L.Unlock()
 
-	for commit = c.commit; commit <= pos; commit = c.commit {
-		c.commitLock.Wait()
+	for commit = c.pos; commit <= pos; commit = c.pos {
+		c.posLock.Wait()
 		select {
 		default:
 			continue
-		case <-done1:
-			return -1, ClosedError
-		case <-done2:
-			return -1, ClosedError
+		case <-done:
+			return pos, CanceledError
+		case <-c.cancel:
+			return pos, CanceledError
 		}
 	}
 	return
 }
 
-func (c *committer) Notify() {
-	c.commitLock.Broadcast()
+func (c *position) Notify() {
+	c.posLock.Broadcast()
 }
 
-func (c *committer) Update(fn func(int) int) {
-	c.commitLock.L.Lock()
-	c.commit = fn(c.commit)
-	c.commitLock.L.Unlock()
-	c.commitLock.Broadcast()
+func (c *position) Update(fn func(int) int) {
+	c.posLock.L.Lock()
+	pos := fn(c.pos)
+	if pos > c.pos {
+		c.pos = pos
+	}
+	c.posLock.Broadcast()
+	c.posLock.L.Unlock()
 }
 
-func (c *committer) Get() (pos int) {
-	c.commitLock.L.Lock()
-	pos = c.commit
-	c.commitLock.L.Unlock()
+func (c *position) Set(pos int) {
+	c.posLock.L.Lock()
+	if pos > c.pos {
+		c.pos = pos
+	}
+
+	c.posLock.Broadcast()
+	c.posLock.L.Unlock()
+}
+
+func (c *position) Get() (pos int) {
+	c.posLock.L.Lock()
+	pos = c.pos
+	c.posLock.L.Unlock()
 	return
 }
 
@@ -293,4 +303,3 @@ func eventLogExtractEvents(items []LogItem) []Event {
 	}
 	return ret
 }
-
