@@ -70,7 +70,7 @@ func (s *server) AppendEvents(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	resp, err := s.self.InnerAppend(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
+	resp, err := s.self.Replicate(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

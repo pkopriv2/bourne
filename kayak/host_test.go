@@ -1,7 +1,6 @@
 package kayak
 
 import (
-	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -124,9 +123,9 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 100; i++ {
 		go func() {
-			for i := 0; i < 100; i++ {
+			for i := 0; i < 1000; i++ {
 				_, err := leader.Append(&testEvent{})
 				if err != nil {
 					panic(err)
@@ -135,14 +134,14 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 		}()
 	}
 
-	done, timeout := concurrent.NewBreaker(50*time.Second, func() {
+	done, timeout := concurrent.NewBreaker(500*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 4999 && h.Log().Committed() == 4999
+			return h.Log().Head() == 99999 && h.Log().Committed() == 99999
 		})
 
-		SyncMajority(cluster, func(h *host) bool {
-			return fmt.Sprintf("%v", h.Log().Scan(0, 5000)) == fmt.Sprintf("%v", h.Log().Scan(0, 5000))
-		})
+		// SyncMajority(cluster, func(h *host) bool {
+		// return fmt.Sprintf("%v", h.Log().Scan(0, 100000)) == fmt.Sprintf("%v", h.Log().Scan(0, 100000))
+		// })
 	})
 
 	select {
@@ -155,7 +154,7 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 		return h.Id() != leader.Id()
 	})
 
-	l, _ := member.Listen(0, 8)
+	l, _ := member.Listen(0, 1024)
 	for i := 0; i < 5000; i++ {
 		item := <-l.Items()
 		assert.Equal(t, i, item.Index)

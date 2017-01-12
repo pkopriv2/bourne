@@ -16,6 +16,7 @@ var (
 	CanceledError  = errors.New("Kayak:Canceled")
 	NotLeaderError = errors.New("Kayak:NotLeader")
 	NoLeaderError  = errors.New("Kayak:NoLeader")
+	StateError     = errors.New("Kayak:StateError")
 	EventError     = errors.New("Kayak:EventError")
 )
 
@@ -114,7 +115,7 @@ type Machine interface {
 	// ```
 	//
 	// Results in the same machine state.
-	Snapshot() ([]Event, error)
+	Snapshot() (snapshot []Event, maxIndex int, err error)
 
 	// Runs the main machine routine.
 	Run(log Log)
@@ -135,13 +136,6 @@ type Log interface {
 	//
 	// Please use #All() for backfilling.
 	Listen(from int, buf int) (Listener, error)
-
-	// Adds a real-time listener to the log commits.  The listener is guaranteed
-	// to receive ALL items in the order they are committed - however -
-	// the listener does NOT return all historical items.
-	//
-	// Please use #All() for backfilling.
-	ListenLive(buf int) (Listener, error)
 
 	// Appends the event to the log.
 	//
@@ -171,6 +165,11 @@ type LogItem struct {
 
 	// Internal:
 	term int
+	// config bool
+}
+
+func newEventLogItem(i int, t int, e Event) LogItem {
+	return LogItem{Index: i, term: t, Event: e}
 }
 
 func Replicate(machine Machine, self string, peers []string) error {

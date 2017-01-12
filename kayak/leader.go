@@ -114,7 +114,7 @@ func (l *leader) start() {
 	go func() {
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			l.logger.Info("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
+			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.replica.closed:
@@ -152,7 +152,7 @@ func (c *leader) handleRemoteAppend(append localAppend) {
 }
 
 func (c *leader) handleLocalAppend(append localAppend) {
-	err := c.appendPool.SubmitTimeout(250 * time.Millisecond, func() {
+	err := c.appendPool.SubmitTimeout(50 * time.Millisecond, func() {
 		append.Return(c.syncer.Append(append.Event))
 	})
 
@@ -296,7 +296,6 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 
 	committed := make(chan struct{}, 1)
 	go func() {
-
 		// append
 		head = s.root.Log.Append([]Event{event}, term)
 
@@ -314,12 +313,12 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 				}
 			}
 
-			select {
-			default:
-				time.Sleep(2 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
-			case <-s.closed:
-				return
-			}
+			// select {
+			// default:
+				// time.Sleep(5 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
+			// case <-s.closed:
+				// return
+			// }
 		}
 
 		s.root.Log.Commit(head) // commutative, so safe in the event of out of order commits.
@@ -344,10 +343,10 @@ func (s *logSyncer) sync(p peer) {
 		defer common.RunIf(func() { cl.Close() })(cl)
 
 		// snapshot the local log
-		_, term, commit := s.root.Log.Snapshot()
+		head, term, _ := s.root.Log.Snapshot()
 
 		// we will start syncing at current commit offset
-		prevIndex := commit
+		prevIndex := head
 		prevTerm := term
 		for {
 			head, err := s.root.Log.appender.WaitForChange(prevIndex, s.closed)

@@ -58,17 +58,13 @@ func (p *pool) Submit(fn func()) error {
 }
 
 func (p *pool) SubmitTimeout(dur time.Duration, fn func()) (err error) {
-	done, timeout := NewBreaker(dur, func() {
-		err = p.push()
-	})
-
+	timer := time.NewTimer(dur)
 	select {
-	case <-done:
-		if err != nil {
-			return err
-		}
-	case e := <-timeout:
-		return e
+	case <-p.closed:
+		return PoolClosedError
+	case <-timer.C:
+		return NewTimeoutError(dur, "Concurrent:Pool")
+	case p.active <- struct{}{}:
 	}
 
 	go func() {

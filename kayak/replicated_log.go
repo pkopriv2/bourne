@@ -6,6 +6,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+
 // The primary host machine abstraction.
 //
 // Internally, this consists of a single member object that hosts all the member
@@ -82,7 +83,7 @@ func (h *replicatedLog) CurrentTerm() term {
 	return h.replica.CurrentTerm()
 }
 
-func (h *replicatedLog) InnerAppend(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
+func (h *replicatedLog) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
 	return h.replica.Replicate(id, term, prevLogIndex, prevLogTerm, batch, commit)
 }
 
@@ -104,8 +105,4 @@ func (r *replicatedLog) Append(e Event) (LogItem, error) {
 
 func (r *replicatedLog) Listen(from int, buf int) (Listener, error) {
 	return r.Log().ListenCommits(from, buf)
-}
-
-func (r *replicatedLog) ListenLive(buf int) (Listener, error) {
-	return r.Log().ListenCommitsLive(buf)
 }

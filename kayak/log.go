@@ -3,6 +3,7 @@ package kayak
 import (
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 )
@@ -122,6 +123,32 @@ func (d *eventLog) Scan(start int, end int) (batch []LogItem) {
 
 	d.data.Read(func(u amoeba.View) {
 		batch = eventLogScan(u, start, end)
+	})
+	return
+}
+
+func (d *eventLog) Compact(snapshot []Event, head int) (err error) {
+	d.data.Update(func(u amoeba.Update) {
+		// get the
+		raw, ok := d.get(u, head)
+		if !ok {
+			err = errors.Wrapf(StateError, "Unable to compact to [%v].  It doesn't exist!", head)
+			return
+		}
+
+		minKey, _ := u.Min()
+		min := int(minKey.(amoeba.IntKey))
+		num := len(snapshot)
+
+		// delete everything up to and including head
+		for i:=min; i<head+1; i++ {
+			u.Del(amoeba.IntKey(i))
+		}
+
+		// start inserting
+		for i:=0; i<len(snapshot); i++ {
+			u.Put(amoeba.IntKey(head-num+i), newEventLogItem(head-num+i, raw.term, snapshot[i]))
+		}
 	})
 	return
 }

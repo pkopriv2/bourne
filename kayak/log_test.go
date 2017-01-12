@@ -150,7 +150,6 @@ func TestEventLog_Listen_Close(t *testing.T) {
 }
 
 func TestEventLog_Listen_Historical(t *testing.T) {
-
 	log := NewTestEventLog()
 	log.Append([]Event{&testEvent{}}, 1)
 	log.Append([]Event{&testEvent{}}, 1)
@@ -171,7 +170,6 @@ func TestEventLog_Listen_Historical(t *testing.T) {
 }
 
 func TestEventLog_Listen_Realtime(t *testing.T) {
-
 	log := NewTestEventLog()
 	log.Append([]Event{&testEvent{}}, 1)
 	log.Append([]Event{&testEvent{}}, 1)

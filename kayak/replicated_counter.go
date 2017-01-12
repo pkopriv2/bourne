@@ -147,22 +147,27 @@ func (c *counter) Swap(e int, a int) (bool, error) {
 }
 
 func (c *counter) Run(log Log) {
-	// // Committer routine
-	// go func() {
-		// defer log.Close()
-//
-		// // begin indexing.
-		// for {
-			// select {
-			// case <-c.closed:
-				// return
-			// case <-l.Closed():
-				// return
-			// case i := <-l.Items():
-				// c.handleCommmit(i)
-			// }
-		// }
-	// }()
+	// Committer routine
+	go func() {
+		defer log.Close()
+
+		l, err := log.Listen(0, 1024)
+		if err != nil {
+			return
+		}
+
+		// begin indexing.
+		for {
+			select {
+			case <-c.closed:
+				return
+			case <-l.Closed():
+				return
+			case i := <-l.Items():
+				c.handleCommmit(i)
+			}
+		}
+	}()
 
 	// Request routine
 	go func() {

@@ -110,10 +110,44 @@ func (c *follower) start() {
 		}()
 	}
 
+	// FIXME: Remove once testing has improved
+	if c.replica.Machine != nil {
+		go func() {
+			l, err := c.replica.Log.ListenCommits(0, 0)
+			if err != nil {
+				c.logger.Error("Unable to start commit listener: %+v", err)
+				return
+			}
+			for {
+				for i := 0; i<c.replica.SnapshotThreshold; i++ {
+					select {
+					case <-c.closed:
+						return
+					case <-l.Closed():
+						return
+					case <-l.Items():
+						continue
+					}
+				}
+
+				snapshot, index, err := c.replica.Machine.Snapshot()
+				if err != nil {
+					c.logger.Error("Error taking snapshot: %+v", err)
+					continue
+				}
+
+				if err := c.replica.Log.Compact(snapshot, index); err != nil {
+					c.logger.Error("Error compacting log: %+v", err)
+					continue
+				}
+			}
+		}()
+	}
+
 	// Main routine
 	go func() {
 		for {
-			timer := time.NewTimer(c.replica.ElectionTimeout)
+			electionTimer := time.NewTimer(c.replica.ElectionTimeout)
 			c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
 
 			select {
@@ -123,7 +157,7 @@ func (c *follower) start() {
 				c.handleReplication(append)
 			case ballot := <-c.replica.VoteRequests:
 				c.handleRequestVote(ballot)
-			case <-timer.C:
+			case <-electionTimer.C:
 				c.logger.Info("Waited too long for heartbeat.")
 				c.transition(c.candidate)
 				return
@@ -212,18 +246,12 @@ func (c *follower) handleReplication(append replicateEvents) {
 		return
 	}
 
-	// if append.prevLogIndex == -1 && append.prevLogTerm == -1 && len(append.events) == 0 {
-		// append.reply(append.term, true)
-		// return
-	// }
-
 	if logItem, ok := c.replica.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
 		c.logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
 		append.reply(append.term, false)
 		return
 	}
 
-	// c.logger.Info("Insert: [%v,%v]", append.prevLogIndex+1, append.prevLogIndex+1+len(append.events))
 	c.replica.Log.Insert(append.events, append.prevLogIndex+1, append.term)
 	c.replica.Log.Commit(append.commit)
 	append.reply(append.term, true)

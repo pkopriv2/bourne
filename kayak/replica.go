@@ -41,6 +41,9 @@ type replica struct {
 	// the other peers. (currently static list)
 	peers []peer
 
+	// the number of commits before a compaction is triggered.
+	SnapshotThreshold int
+
 	// the election timeout.  (heartbeat: = timeout / 5)
 	ElectionTimeout time.Duration
 
