@@ -54,6 +54,7 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
 	logger.Info("Becoming leader")
 
+	closed := make(chan struct{})
 	l := &leader{
 		logger:     logger,
 		follower:   follower,
@@ -62,7 +63,7 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 		appendPool: concurrent.NewWorkPool(10),
 		term:       replica.CurrentTerm(),
 		replica:    replica,
-		closed:     make(chan struct{}),
+		closed:     closed,
 		closer:     make(chan struct{}, 1),
 	}
 
@@ -141,7 +142,7 @@ func (l *leader) start() {
 	}()
 }
 
-func (c *leader) handleRemoteAppend(append localAppend) {
+func (c *leader) handleRemoteAppend(append machineAppend) {
 	err := c.proxyPool.Submit(func() {
 		append.Return(c.replica.LocalAppend(append.Event))
 	})
@@ -151,8 +152,8 @@ func (c *leader) handleRemoteAppend(append localAppend) {
 	}
 }
 
-func (c *leader) handleLocalAppend(append localAppend) {
-	err := c.appendPool.SubmitTimeout(50 * time.Millisecond, func() {
+func (c *leader) handleLocalAppend(append machineAppend) {
+	err := c.appendPool.SubmitTimeout(50*time.Millisecond, func() {
 		append.Return(c.syncer.Append(append.Event))
 	})
 
@@ -195,7 +196,7 @@ func (c *leader) handleReplicate(append replicateEvents) {
 
 func (c *leader) broadcastHeartbeat() {
 	ch := c.replica.Broadcast(func(cl *client) response {
-		resp, err := cl.AppendEvents(c.replica.Id, c.replica.term.num, -1, -1, []Event{}, c.replica.Log.Committed())
+		resp, err := cl.Replicate(c.replica.Id, c.replica.term.num, -1, -1, []LogItem{}, c.replica.Log.Committed())
 		if err != nil {
 			return response{c.replica.term.num, false}
 		} else {
@@ -280,7 +281,7 @@ func (l *logSyncer) shutdown(err error) error {
 
 	l.failure = err
 	close(l.closed)
-	l.root.Log.appender.Notify()
+	l.root.Log.append.Notify()
 	return err
 }
 
@@ -315,9 +316,9 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 
 			// select {
 			// default:
-				// time.Sleep(5 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
+			// time.Sleep(5 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
 			// case <-s.closed:
-				// return
+			// return
 			// }
 		}
 
@@ -349,7 +350,7 @@ func (s *logSyncer) sync(p peer) {
 		prevIndex := head
 		prevTerm := term
 		for {
-			head, err := s.root.Log.appender.WaitForChange(prevIndex, s.closed)
+			head, err := s.root.Log.append.WaitForChange(prevIndex, s.closed)
 			if err != nil {
 				return
 			}
@@ -374,13 +375,13 @@ func (s *logSyncer) sync(p peer) {
 				}
 
 				// scan a full batch of events.
-				batch := s.root.Log.Scan(prevIndex+1, prevIndex+1+256)
-				if len(batch) == 0 {
+				batch, err := s.root.Log.Scan(prevIndex+1, prevIndex+1+256)
+				if len(batch) == 0 || err == nil {
 					panic("Inconsistent state!")
 				}
 
 				// send the append request.
-				resp, err := cl.AppendEvents(s.root.Id, s.root.term.num, prevIndex, prevTerm, eventLogExtractEvents(batch), s.root.Log.Committed())
+				resp, err := cl.Replicate(s.root.Id, s.root.term.num, prevIndex, prevTerm, batch, s.root.Log.Committed())
 				if err != nil {
 					logger.Error("Unable to append events [%v]", err)
 					cl = nil

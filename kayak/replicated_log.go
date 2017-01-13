@@ -31,7 +31,7 @@ type replicatedLog struct {
 }
 
 func newReplicatedLog(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, stash stash.Stash) (*replicatedLog, error) {
-	rep, err := newReplica(ctx, logger, self, others, parser, openTermStorage(stash))
+	rep, err := newReplica(ctx, logger, self, others, parser, stash)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func (h *replicatedLog) CurrentTerm() term {
 	return h.replica.CurrentTerm()
 }
 
-func (h *replicatedLog) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
+func (h *replicatedLog) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []LogItem, commit int) (response, error) {
 	return h.replica.Replicate(id, term, prevLogIndex, prevLogTerm, batch, commit)
 }
 

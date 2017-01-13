@@ -94,6 +94,9 @@ type Event interface {
 // TODO: Is this necessary?  Can the log guarantee that an append only
 // returns once it has been replicated to this instance?
 //
+// References:
+// * Original Lamport Paxos paper:
+//     https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/The-Part-Time-Parliament.pdf
 //
 type Machine interface {
 
@@ -166,6 +169,31 @@ type LogItem struct {
 	// Internal:
 	term int
 	// config bool
+}
+
+func (l *LogItem) Write(w scribe.Writer) {
+	w.WriteInt("index", l.Index)
+	w.WriteInt("term", l.term)
+	w.WriteMessage("event", l.Event)
+}
+
+func readLogItem(r scribe.Reader, parse Parser) (item LogItem, err error) {
+	var msg scribe.Message
+	var evt Event
+	err = common.Or(err, r.ReadInt("index", &item.Index))
+	err = common.Or(err, r.ReadInt("term", &item.term))
+	err = common.Or(err, r.ReadMessage("event", &msg))
+	if err != nil {
+		return
+	}
+
+	evt, err = parse(msg)
+	if err != nil {
+		return
+	}
+
+	item.Event = evt
+	return
 }
 
 func newEventLogItem(i int, t int, e Event) LogItem {

@@ -10,16 +10,16 @@ import (
 
 // server endpoints
 const (
-	actAppendEvents = "kayak.replica.appendEvents"
-	actRequestVote  = "kayak.replica.requestVote"
-	actAppend       = "kayak.client.append"
+	actReplicate   = "kayak.replica.replicate"
+	actRequestVote = "kayak.replica.requestVote"
+	actAppend      = "kayak.client.append"
 )
 
 // Meta messages
 var (
-	metaAppendEvents = serverNewMeta(actAppendEvents)
-	metaRequestVote  = serverNewMeta(actRequestVote)
-	metaAppend       = serverNewMeta(actAppend)
+	metaReplicate   = serverNewMeta(actReplicate)
+	metaRequestVote = serverNewMeta(actRequestVote)
+	metaAppend      = serverNewMeta(actAppend)
 )
 
 type server struct {
@@ -54,8 +54,8 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 		switch action {
 		default:
 			return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
-		case actAppendEvents:
-			return s.AppendEvents(req)
+		case actReplicate:
+			return s.Replicate(req)
 		case actRequestVote:
 			return s.RequestVote(req)
 		case actAppend:
@@ -64,13 +64,13 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 	}
 }
 
-func (s *server) AppendEvents(req net.Request) net.Response {
-	append, err := readAppendEventsRequest(req.Body(), s.self.Parser())
+func (s *server) Replicate(req net.Request) net.Response {
+	append, err := readReplicateRequest(req.Body(), s.self.Parser())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	resp, err := s.self.Replicate(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.events, append.commit)
+	resp, err := s.self.Replicate(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.items, append.commit)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -125,8 +125,8 @@ func newRequestVoteRequest(r requestVoteRequest) net.Request {
 	}))
 }
 
-func newAppendEventsRequest(a appendEventsRequest) net.Request {
-	return net.NewRequest(metaAppendEvents, scribe.Build(func(w scribe.Writer) {
+func newReplicateRequest(a replicateRequest) net.Request {
+	return net.NewRequest(metaReplicate, scribe.Build(func(w scribe.Writer) {
 		a.Write(w)
 	}))
 }
@@ -197,29 +197,29 @@ func (r requestVoteRequest) Write(w scribe.Writer) {
 	w.WriteInt("maxLogIndex", r.maxLogIndex)
 }
 
-type appendEventsRequest struct {
+type replicateRequest struct {
 	id           uuid.UUID
 	term         int
-	events       []Event
+	items        []LogItem
 	prevLogIndex int
 	prevLogTerm  int
 	commit       int
 }
 
-func (a appendEventsRequest) Write(w scribe.Writer) {
+func (a replicateRequest) Write(w scribe.Writer) {
 	w.WriteUUID("id", a.id)
 	w.WriteInt("term", a.term)
-	w.WriteMessages("events", a.events)
+	w.WriteMessages("items", a.items)
 	w.WriteInt("prevLogIndex", a.prevLogIndex)
 	w.WriteInt("prevLogTerm", a.prevLogTerm)
 	w.WriteInt("commit", a.commit)
 }
 
-func readAppendEventsRequest(r scribe.Reader, parse Parser) (ret appendEventsRequest, err error) {
+func readReplicateRequest(r scribe.Reader, parse Parser) (ret replicateRequest, err error) {
 	var msgs []scribe.Message
 	err = common.Or(err, r.ReadUUID("id", &ret.id))
 	err = common.Or(err, r.ReadInt("term", &ret.term))
-	err = common.Or(err, r.ReadMessages("events", &msgs))
+	err = common.Or(err, r.ReadMessages("items", &msgs))
 	err = common.Or(err, r.ReadInt("prevLogTerm", &ret.prevLogTerm))
 	err = common.Or(err, r.ReadInt("prevLogIndex", &ret.prevLogIndex))
 	err = common.Or(err, r.ReadInt("commit", &ret.commit))
@@ -227,15 +227,15 @@ func readAppendEventsRequest(r scribe.Reader, parse Parser) (ret appendEventsReq
 		return
 	}
 
-	events := make([]Event, 0, len(msgs))
+	items := make([]LogItem, 0, len(msgs))
 	for _, m := range msgs {
-		event, err := parse(m)
+		item, err := readLogItem(m, parse)
 		if err != nil {
-			return appendEventsRequest{}, err
+			return replicateRequest{}, err
 		}
-		events = append(events, event)
+		items = append(items, item)
 	}
 
-	ret.events = events
+	ret.items = items
 	return ret, err
 }

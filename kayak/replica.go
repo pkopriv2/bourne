@@ -8,13 +8,17 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
-// The member is the primary identity within a cluster.  Within the core machine,
-// only a single instance ever exists, but its location within the machine
-// may change over time.  Therefore all updates/requests must be forwarded
-// to the machine currently processing the member.
+// The replica is the state container for a member of a cluster.  The
+// replica is managed by a single member of the replicated log state machine
+// network.  However, the replica is also a machine itself.  Consumers can
+// interact with it and it can respond to its own state changes.
+//
+// The replica is the primary gatekeeper to the external state machine
+// and it manages the flow of data to/from it.
 type replica struct {
 
 	// configuration used to build this instance.
@@ -66,41 +70,103 @@ type replica struct {
 	Replications chan replicateEvents
 
 	// append requests (from clients)
-	RemoteAppends chan localAppend
+	RemoteAppends chan machineAppend
 
 	// append requests (from local state machine)
-	LocalAppends chan localAppend
+	LocalAppends chan machineAppend
 
 	// closing utilities
 	closed chan struct{}
 	closer chan struct{}
 }
 
-func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, terms *storage) (*replica, error) {
-	term, err := terms.Get(self.id)
-	if err != nil {
-		return nil, err
-	}
-
-	return &replica{
+func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, stash stash.Stash) (*replica, error) {
+	r := &replica{
 		Ctx:             ctx,
 		Id:              self.id,
 		Self:            self,
 		peers:           others,
 		Logger:          logger,
 		Parser:          parser,
-		term:            term,
-		terms:           terms,
+		terms:           openTermStorage(stash),
 		Log:             newEventLog(ctx),
 		Replications:    make(chan replicateEvents),
 		VoteRequests:    make(chan requestVote),
-		RemoteAppends:   make(chan localAppend),
-		LocalAppends:    make(chan localAppend),
+		RemoteAppends:   make(chan machineAppend),
+		LocalAppends:    make(chan machineAppend),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
 		RequestTimeout:  10 * time.Second,
 		closed:          make(chan struct{}),
 		closer:          make(chan struct{}, 1),
-	}, nil
+	}
+	return r, r.start()
+}
+
+func (r *replica) Close() error {
+	select {
+	case <-r.closed:
+		return ClosedError
+	case r.closer <- struct{}{}:
+	}
+
+	close(r.closed)
+	return nil
+}
+
+func (h *replica) start() error {
+
+	// set the term from the durable store
+	term, err := h.terms.Get(h.Self.id)
+	if err != nil {
+		return err
+	}
+
+	// set the term from durable storage.
+	h.Term(term.num, term.leader, term.votedFor)
+
+	// start snapshotter
+	if h.Machine != nil {
+		if err := h.startSnapshotter(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (h *replica) startSnapshotter() error {
+	// l, err := h.Log.ListenCommits(0, 0)
+	// if err != nil {
+	// return err
+	// }
+
+	go func() {
+		// logger := h.Logger.Fmt("Snapshotter: ")
+		for {
+			// var item LogItem
+			// for i := 0; i < h.SnapshotThreshold; i++ {
+			// select {
+			// case <-h.closed:
+			// return
+			// case <-l.Closed():
+			// return
+			// case item = <-l.Items():
+			// }
+			// }
+			//
+			// snapshot, index, err := h.Machine.Snapshot()
+			// if err != nil {
+			// logger.Error("Error taking snapshot: %+v", err)
+			// continue
+			// }
+			//
+			// if err := h.Log.Compact(snapshot, index); err != nil {
+			// logger.Error("Error compacting log: %+v", err)
+			// continue
+			// }
+		}
+	}()
+	return nil
 }
 
 func (h *replica) String() string {
@@ -172,20 +238,9 @@ func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 	return ret
 }
 
-func (r *replica) Close() error {
-	select {
-	case <-r.closed:
-		return ClosedError
-	case r.closer <- struct{}{}:
-	}
-
-	close(r.closed)
-	return nil
-}
-
-func (h *replica) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, batch []Event, commit int) (response, error) {
+func (h *replica) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, items []LogItem, commit int) (response, error) {
 	append := replicateEvents{
-		id, term, prevLogIndex, prevLogTerm, batch, commit, make(chan response, 1)}
+		id, term, prevLogIndex, prevLogTerm, items, commit, make(chan response, 1)}
 
 	select {
 	case <-h.closed:
@@ -238,7 +293,7 @@ func (h *replica) RemoteAppend(event Event) (LogItem, error) {
 }
 
 func (h *replica) LocalAppend(event Event) (LogItem, error) {
-	append := localAppend{event, make(chan localAppendResponse, 1)}
+	append := machineAppend{event, make(chan machineAppendResponse, 1)}
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
@@ -271,13 +326,13 @@ type replicateEvents struct {
 	term         int
 	prevLogIndex int
 	prevLogTerm  int
-	events       []Event
+	items        []LogItem
 	commit       int
 	ack          chan response
 }
 
 func (a replicateEvents) String() string {
-	return fmt.Sprintf("Replicate(id=%v,prevIndex=%v,prevTerm=%v,commit=%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, a.commit, len(a.events))
+	return fmt.Sprintf("Replicate(id=%v,prevIndex=%v,prevTerm=%v,commit=%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, a.commit, len(a.items))
 }
 
 func (a *replicateEvents) reply(term int, success bool) {
@@ -308,28 +363,28 @@ func (r requestVote) reply(term int, success bool) {
 // channel and consumed by the currently active sub-machine.
 //
 // These come from active clients.
-type localAppend struct {
+type machineAppend struct {
 	Event Event
-	ack   chan localAppendResponse
+	ack   chan machineAppendResponse
 }
 
-func newLocalAppend(event Event) localAppend {
-	return localAppend{event, make(chan localAppendResponse, 1)}
+func newLocalAppend(event Event) machineAppend {
+	return machineAppend{event, make(chan machineAppendResponse, 1)}
 }
 
-func (a localAppend) Return(item LogItem, err error) {
-	a.ack <- localAppendResponse{Item: item, Err: err}
+func (a machineAppend) Return(item LogItem, err error) {
+	a.ack <- machineAppendResponse{Item: item, Err: err}
 }
 
-func (a localAppend) Fail(err error) {
-	a.ack <- localAppendResponse{Err: err}
+func (a machineAppend) Fail(err error) {
+	a.ack <- machineAppendResponse{Err: err}
 }
 
 // Client append request.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.
 //
 // These come from active clients.
-type localAppendResponse struct {
+type machineAppendResponse struct {
 	Item LogItem
 	Err  error
 }
@@ -340,4 +395,44 @@ type localAppendResponse struct {
 type response struct {
 	term    int
 	success bool
+}
+
+type listener struct {
+	raw *commitListener
+	ch  chan LogItem
+}
+
+func newListener(raw *commitListener) *listener {
+	return &listener{raw, make(chan LogItem)}
+}
+
+func (l *listener) start() {
+	go func() {
+		for {
+			var i LogItem
+			select {
+			case <-l.raw.Closed():
+				return
+			case i = <-l.raw.Items():
+			}
+
+			select {
+			case <-l.raw.Closed():
+				return
+			case l.ch <- i:
+			}
+		}
+	}()
+}
+
+func (l *listener) Closed() <-chan struct{} {
+	return l.raw.Closed()
+}
+
+func (l *listener) Items() <-chan LogItem {
+	return l.ch
+}
+
+func (l *listener) Close() error {
+	return l.raw.Close()
 }

@@ -110,40 +110,6 @@ func (c *follower) start() {
 		}()
 	}
 
-	// FIXME: Remove once testing has improved
-	if c.replica.Machine != nil {
-		go func() {
-			l, err := c.replica.Log.ListenCommits(0, 0)
-			if err != nil {
-				c.logger.Error("Unable to start commit listener: %+v", err)
-				return
-			}
-			for {
-				for i := 0; i<c.replica.SnapshotThreshold; i++ {
-					select {
-					case <-c.closed:
-						return
-					case <-l.Closed():
-						return
-					case <-l.Items():
-						continue
-					}
-				}
-
-				snapshot, index, err := c.replica.Machine.Snapshot()
-				if err != nil {
-					c.logger.Error("Error taking snapshot: %+v", err)
-					continue
-				}
-
-				if err := c.replica.Log.Compact(snapshot, index); err != nil {
-					c.logger.Error("Error compacting log: %+v", err)
-					continue
-				}
-			}
-		}()
-	}
-
 	// Main routine
 	go func() {
 		for {
@@ -166,7 +132,7 @@ func (c *follower) start() {
 	}()
 }
 
-func (c *follower) handleLocalAppend(append localAppend) {
+func (c *follower) handleLocalAppend(append machineAppend) {
 	timeout := c.replica.RequestTimeout / 2
 
 	err := c.proxyPool.SubmitTimeout(timeout, func() {
@@ -191,7 +157,7 @@ func (c *follower) handleLocalAppend(append localAppend) {
 
 }
 
-func (c *follower) handleRemoteAppend(append localAppend) {
+func (c *follower) handleRemoteAppend(append machineAppend) {
 	append.Fail(NotLeaderError)
 }
 
@@ -252,7 +218,7 @@ func (c *follower) handleReplication(append replicateEvents) {
 		return
 	}
 
-	c.replica.Log.Insert(append.events, append.prevLogIndex+1, append.term)
+	// c.replica.Log.Insert(append.events, append.prevLogIndex+1, append.term)
 	c.replica.Log.Commit(append.commit)
 	append.reply(append.term, true)
 }
