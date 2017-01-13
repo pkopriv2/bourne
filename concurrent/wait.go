@@ -41,8 +41,8 @@ func (w *wait) Wait() <-chan struct{} {
 		for w.refs > 0 {
 			w.cond.Wait()
 		}
-		w.cond.L.Unlock()
 		close(done)
+		w.cond.L.Unlock()
 	}()
 	return done
 }

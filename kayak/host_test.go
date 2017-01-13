@@ -123,9 +123,12 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
-	for i := 0; i < 100; i++ {
+	numThreads := 100
+	numItemsPerThread := 1000
+
+	for i := 0; i < numThreads; i++ {
 		go func() {
-			for i := 0; i < 1000; i++ {
+			for j := 0; j < numItemsPerThread; j++ {
 				_, err := leader.Append(&testEvent{})
 				if err != nil {
 					panic(err)
@@ -135,14 +138,31 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	}
 
 	done, timeout := concurrent.NewBreaker(500*time.Second, func() {
-		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() == 99999 && h.Log().Committed() == 99999
+		done, timeout := concurrent.NewBreaker(500*time.Second, func() {
+			SyncAll(cluster, func(h *host) bool {
+				l, _ := h.Listen(0, 1024)
+				defer l.Close()
+
+				for i := 0; i < (numThreads * numItemsPerThread); i++ {
+					item := <-l.Items()
+					assert.Equal(t, i, item.Index)
+				}
+
+				return true
+			})
 		})
 
-		// SyncMajority(cluster, func(h *host) bool {
-		// return fmt.Sprintf("%v", h.Log().Scan(0, 100000)) == fmt.Sprintf("%v", h.Log().Scan(0, 100000))
-		// })
+		SyncAll(cluster, func(h *host) bool {
+			return h.Log().Head() == (numThreads * numItemsPerThread) -1 && h.Log().Committed() == (numThreads * numItemsPerThread) -1
+		})
+
+		select {
+		case <-done:
+		case <-timeout:
+			assert.FailNow(t, "Timed out waiting for majority to sync")
+		}
 	})
+
 
 	select {
 	case <-done:
@@ -150,15 +170,6 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 		assert.FailNow(t, "Timed out waiting for majority to sync")
 	}
 
-	member := First(cluster, func(h *host) bool {
-		return h.Id() != leader.Id()
-	})
-
-	l, _ := member.Listen(0, 1024)
-	for i := 0; i < 5000; i++ {
-		item := <-l.Items()
-		assert.Equal(t, i, item.Index)
-	}
 }
 
 func extractIndices(items []LogItem) []int {

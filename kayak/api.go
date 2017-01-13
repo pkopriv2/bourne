@@ -120,8 +120,11 @@ type Machine interface {
 	// Results in the same machine state.
 	Snapshot() (snapshot []Event, maxIndex int, err error)
 
-	// Runs the main machine routine.
-	Run(log Log)
+	// Runs the main machine routine.  This may be called many
+	// times throughout the lifetime of the machine.
+	//
+	// The provided log will
+	Run(log Log) error
 }
 
 // The log is the view into the replicated log state.  This allows
@@ -129,9 +132,9 @@ type Machine interface {
 // log for changes.
 type Log interface {
 	io.Closer
-
-	// Returns all the machine log's items (Useful for backfilling state)
-	All() []LogItem
+//
+	// // Returns all the machine log's items (Useful for backfilling state)
+	// Scan(start int, end int) ([]LogItem, error)
 
 	// Adds a real-time listener to the log commits.  The listener is guaranteed
 	// to receive ALL items in the order they are committed - however -
@@ -171,7 +174,7 @@ type LogItem struct {
 	// config bool
 }
 
-func (l *LogItem) Write(w scribe.Writer) {
+func (l LogItem) Write(w scribe.Writer) {
 	w.WriteInt("index", l.Index)
 	w.WriteInt("term", l.term)
 	w.WriteMessage("event", l.Event)

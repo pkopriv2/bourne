@@ -104,5 +104,5 @@ func (r *replicatedLog) Append(e Event) (LogItem, error) {
 }
 
 func (r *replicatedLog) Listen(from int, buf int) (Listener, error) {
-	return r.Log().ListenCommits(from, buf)
+	return r.Log().ListenCommits(from, buf), nil
 }

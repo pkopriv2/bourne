@@ -153,7 +153,7 @@ func (c *leader) handleRemoteAppend(append machineAppend) {
 }
 
 func (c *leader) handleLocalAppend(append machineAppend) {
-	err := c.appendPool.SubmitTimeout(50*time.Millisecond, func() {
+	err := c.appendPool.SubmitTimeout(1000*time.Millisecond, func() {
 		append.Return(c.syncer.Append(append.Event))
 	})
 
@@ -268,6 +268,15 @@ func newLogSyncer(inst *replica, logger common.Logger) *logSyncer {
 	return s
 }
 
+func (l *logSyncer) Closed() bool {
+	select {
+	default:
+		return false
+	case <-l.closed:
+		return true
+	}
+}
+
 func (l *logSyncer) Close() error {
 	return l.shutdown(nil)
 }
@@ -281,17 +290,11 @@ func (l *logSyncer) shutdown(err error) error {
 
 	l.failure = err
 	close(l.closed)
-	l.root.Log.append.Notify()
+	l.root.Log.head.Notify()
 	return err
 }
 
 func (s *logSyncer) Append(event Event) (item LogItem, err error) {
-	select {
-	case <-s.closed:
-		return LogItem{}, ClosedError
-	default:
-	}
-
 	var term = s.root.term.num
 	var head int
 
@@ -314,12 +317,9 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 				}
 			}
 
-			// select {
-			// default:
-			// time.Sleep(5 * time.Millisecond) // should sleep for expected delivery of one batch. (not 100% sure how to anticipate that.  need to apply RTT techniques)
-			// case <-s.closed:
-			// return
-			// }
+			if s.Closed() {
+				return
+			}
 		}
 
 		s.root.Log.Commit(head) // commutative, so safe in the event of out of order commits.
@@ -343,28 +343,31 @@ func (s *logSyncer) sync(p peer) {
 		defer logger.Info("Shutting down")
 		defer common.RunIf(func() { cl.Close() })(cl)
 
+		var err error
+
 		// snapshot the local log
 		head, term, _ := s.root.Log.Snapshot()
 
-		// we will start syncing at current commit offset
+		// we will start syncing at current head offset
 		prevIndex := head
 		prevTerm := term
+
+		// the sync'er needs to be unaffected by segment
+		// compactions.
+		segment := s.root.Log.Active()
 		for {
-			head, err := s.root.Log.append.WaitForChange(prevIndex, s.closed)
-			if err != nil {
+			next, ok := s.root.Log.head.WaitForGreaterThanOrEqual(prevIndex+1)
+			if !ok || s.Closed() {
 				return
 			}
 
 			// loop until this peer is completely caught up to head!
-			for prevIndex < head {
-				logger.Debug("Currently [%v/%v]", prevIndex, head)
-
-				// check for close each time around.
-				select {
-				default:
-				case <-s.closed:
+			for prevIndex < next {
+				if s.Closed() {
 					return
 				}
+
+				logger.Debug("Currently [%v/%v]", prevIndex, next)
 
 				// might have to reinitialize client after each batch.
 				if cl == nil {
@@ -374,11 +377,14 @@ func (s *logSyncer) sync(p peer) {
 					}
 				}
 
-				// scan a full batch of events.
-				batch, err := s.root.Log.Scan(prevIndex+1, prevIndex+1+256)
-				if len(batch) == 0 || err == nil {
-					panic("Inconsistent state!")
+				// if we've moved beyond the current segment, move to next active segment
+				head := segment.Head()
+				if prevIndex+1 > head {
+					segment = s.root.Log.Active()
 				}
+
+				// scan a full batch of events.
+				batch := segment.Scan(prevIndex+1, common.Min(prevIndex+1+256, head))
 
 				// send the append request.
 				resp, err := cl.Replicate(s.root.Id, s.root.term.num, prevIndex, prevTerm, batch, s.root.Log.Committed())
@@ -404,6 +410,7 @@ func (s *logSyncer) sync(p peer) {
 				}
 
 				// consistency check failed, start moving backwards one index at a time.
+
 				// TODO: Implement optimization to come to faster agreement.
 				prevIndex -= 1
 				if prevIndex < -1 {
@@ -418,7 +425,7 @@ func (s *logSyncer) sync(p peer) {
 				}
 			}
 
-			logger.Debug("Sync'ed to [%v]", head)
+			logger.Debug("Sync'ed to [%v]", next)
 		}
 	}()
 }

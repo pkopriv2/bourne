@@ -124,6 +124,22 @@ func (h *replica) start() error {
 	// set the term from durable storage.
 	h.Term(term.num, term.leader, term.votedFor)
 
+	go func() {
+		l := h.Log.ListenCommits(0, 0)
+
+		for i:=0;; i++{
+			select {
+			case <-h.closed:
+				return
+			case <-l.Closed():
+				return
+			case i:=<-l.Items():
+				h.Logger.Info("Commit: %v", i)
+			}
+		}
+	}()
+	return nil
+
 	// start snapshotter
 	if h.Machine != nil {
 		if err := h.startSnapshotter(); err != nil {
@@ -135,12 +151,10 @@ func (h *replica) start() error {
 }
 
 func (h *replica) startSnapshotter() error {
-	// l, err := h.Log.ListenCommits(0, 0)
-	// if err != nil {
-	// return err
-	// }
 
 	go func() {
+		// l := h.Log.ListenCommits(0, 0)
+
 		// logger := h.Logger.Fmt("Snapshotter: ")
 		for {
 			// var item LogItem
@@ -398,11 +412,11 @@ type response struct {
 }
 
 type listener struct {
-	raw *commitListener
+	raw *positionListener
 	ch  chan LogItem
 }
 
-func newListener(raw *commitListener) *listener {
+func newListener(raw *positionListener) *listener {
 	return &listener{raw, make(chan LogItem)}
 }
 

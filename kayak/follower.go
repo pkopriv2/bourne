@@ -218,7 +218,7 @@ func (c *follower) handleReplication(append replicateEvents) {
 		return
 	}
 
-	// c.replica.Log.Insert(append.events, append.prevLogIndex+1, append.term)
+	c.replica.Log.Insert(append.items)
 	c.replica.Log.Commit(append.commit)
 	append.reply(append.term, true)
 }
