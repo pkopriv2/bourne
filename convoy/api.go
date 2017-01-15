@@ -62,29 +62,6 @@ const (
 	defaultServerPoolSize      = 20
 )
 
-// Publishes the db to the given port.  This is the "first" member of the
-// cluster and will not discover anyone else until it is contacted.
-func StartSeedHost(ctx common.Context, path string, port int) (host Host, err error) {
-	var db *database
-
-	db, err = openDatabase(ctx, path)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error opening db [%v]")
-	}
-	defer common.RunIf(func() { db.Close() })(err)
-	host, err = newSeedHost(ctx, db, "localhost", port)
-	return
-}
-
-func StartHost(ctx common.Context, path string, port int, peerPort int) (host Host, err error) {
-	db, err := openDatabase(ctx, path)
-	if err != nil {
-		return nil, errors.Wrapf(err, "Error opening db [%v]", path)
-	}
-	defer common.RunIf(func() { db.Close() })(err)
-	host, err = newHost(ctx, db, "localhost", port, net.NewAddr("localhost", strconv.Itoa(peerPort)))
-	return
-}
 
 // A host is the local member participating in and disseminating a shared
 // directory.
@@ -202,4 +179,26 @@ type Item struct {
 	Val string
 	Ver int
 	Del bool
+}
+
+// Publishes the db to the given port.  This is the "first" member of the
+// cluster and will not discover anyone else until it is contacted.
+func StartSeedHost(ctx common.Context, path string, port int) (host Host, err error) {
+	db, err := openDatabase(ctx, path)
+	if err != nil {
+		return nil, errors.Wrap(err, "Error opening db [%v]")
+	}
+	defer common.RunIf(func() { db.Close() })(err)
+	host, err = newSeedHost(ctx, db, "localhost", port)
+	return
+}
+
+func StartHost(ctx common.Context, path string, port int, peerPort int) (host Host, err error) {
+	db, err := openDatabase(ctx, path)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Error opening db [%v]", path)
+	}
+	defer common.RunIf(func() { db.Close() })(err)
+	host, err = newHost(ctx, db, "localhost", port, net.NewAddr("localhost", strconv.Itoa(peerPort)))
+	return
 }

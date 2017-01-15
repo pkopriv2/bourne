@@ -10,7 +10,8 @@ Convoy is intended to serve as the foundation of distributed systems that requir
 
 # Membership Overview
 
-The heart of convoy is really just the SWIM membership protocol.  Members join, and then serve as an information relay.  In more abstract terms, members form the vertices of a connected graph.  Each disseminated event is guaranteed to visit every member at least once.  For information to spread in a atomic broadcast fashion (i.e. all members of the group eventually see all information), every member must propagate to some random subset of other members. The original mathematical analysis of randomly connected graphs was done by Paul Erdos¨ and Alfred Renyi [2].  They concluded that for a random graph to become fully connected, each vertex has to have at least *n ~ ln(N)* random edges.
+The heart of convoy is really just the SWIM membership protocol.  Members join, and then serve as an information relay.  In more abstract terms, members form the vertices of a connected graph.  When data is disseminated within the graph, the protocol ensures that every vertex is visited at least once - otherwise known as a graph traversal.  The edges that are created as part of this propagation is random, and it is through that randomness that makes this protocol so efficient. In fact, Paul Erdos and Alred Renyi were able to prove that in order for a random graph (ie a graph whose edges are created randomly) to becomefully connected, each vertex needs to have at least:  *n ~ ln(N)* random edges.  In the membership protocol, this just represents the number of members that must be notified each time a message is received.  Convoy goes to great lengths to ensure that propagation is efficient by batching notifications when it can.  
+
 
 To speed up the dissemination of information, convoy allows consumers to configure the number of recipients of a message based on factors of *ln(N)*.  Due to some very specialised buffer management a mathematical analysis of the speed of dissemination has not been done (Translation: Author sucks at stats)  Anyone wishing to help out with this endeavor is welcome to take a crack at it.  Preston is available anytime to answer any design questions you may require.  
 
@@ -20,7 +21,7 @@ In the meantime, here are the results of benchmarks performed locally as a funct
 
 ## Member Health 
 
-During each dissemination period, members are also probed for health.  Due to the expense of being marked as failed, a member cannot be contacted, a health probe is sent to a random subset of members who will attempt to contact the suspected node.  Only when none of the members of the probe return success is the member deemed failed and evicted from the cluster. 
+During each dissemination period, members are also probed for health.  Due to the expense of being marked as failed, a member cannot be contacted, a health probe is sent to a random subset of members who will attempt to contact the suspected node.  Only when none of the members of the probe return success is the member deemed failed and evicted from the cluster.
 
 # Getting Started
 
