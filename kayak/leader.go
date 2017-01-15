@@ -301,7 +301,11 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 	committed := make(chan struct{}, 1)
 	go func() {
 		// append
-		head = s.root.Log.Append([]Event{event}, term)
+		head, err = s.root.Log.Append([]Event{event}, term)
+		if err != nil {
+			s.shutdown(err)
+			return
+		}
 
 		// wait for majority.
 		majority := majority(len(s.root.peers)+1) - 1
@@ -330,7 +334,7 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 	case <-s.closed:
 		return LogItem{}, common.Or(s.failure, ClosedError)
 	case <-committed:
-		return LogItem{head, event, term}, nil
+		return newEventLogItem(head, term, event), nil
 	}
 }
 
@@ -378,13 +382,22 @@ func (s *logSyncer) sync(p peer) {
 				}
 
 				// if we've moved beyond the current segment, move to next active segment
-				head := segment.Head()
+				head, err := segment.Head()
+				if err != nil {
+					s.shutdown(err)
+					return
+				}
+
 				if prevIndex+1 > head {
 					segment = s.root.Log.Active()
 				}
 
 				// scan a full batch of events.
-				batch := segment.Scan(prevIndex+1, common.Min(prevIndex+1+256, head))
+				batch, err := segment.Scan(prevIndex+1, common.Min(prevIndex+1+256, head))
+				if err != nil {
+					s.shutdown(err)
+					return
+				}
 
 				// send the append request.
 				resp, err := cl.Replicate(s.root.Id, s.root.term.num, prevIndex, prevTerm, batch, s.root.Log.Committed())
@@ -418,7 +431,13 @@ func (s *logSyncer) sync(p peer) {
 					return
 				}
 
-				if prevItem, ok := s.root.Log.Get(prevIndex); ok {
+				prevItem, ok, err := s.root.Log.Get(prevIndex)
+				if err != nil {
+					s.shutdown(err)
+					return
+				}
+
+				if ok {
 					s.SetPrevIndexAndTerm(p.id, prevIndex, prevItem.term)
 				} else {
 					s.SetPrevIndexAndTerm(p.id, -1, -1)

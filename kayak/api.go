@@ -5,7 +5,6 @@ import (
 	"io"
 
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/scribe"
 )
 
 // Public Error Types
@@ -18,24 +17,16 @@ var (
 	NoLeaderError  = errors.New("Kayak:NoLeader")
 	StateError     = errors.New("Kayak:StateError")
 	EventError     = errors.New("Kayak:EventError")
+	StorageError   = errors.New("Kayak:StorageError")
 )
 
-// An event is just a byte slice.  Interpretation of the bytes are the
-// responsibility of the consumer.
+// Events are the fundamental unit of replication.  This the primary
+// consumer data structure used in interacting with the replicated log.
+// The onus of interpretting an event is soley a consumer responsibility.
 type Event []byte
 
 func (e Event) Raw() []byte {
 	return []byte(e)
-}
-
-func (e Event) Write(w scribe.Writer) {
-	w.WriteBytes("raw", []byte(e))
-}
-
-func parseEvent(r scribe.Reader) (interface{}, error) {
-	var ret []byte
-	err := r.ReadBytes("raw", &ret)
-	return Event(ret), err
 }
 
 // A machine is anything that is expressable as a sequence of events.
@@ -107,6 +98,10 @@ func parseEvent(r scribe.Reader) (interface{}, error) {
 // returns once it has been replicated to this instance?
 //
 // References:
+// * Reft Spec:
+//     https://raft.github.io/raft.pdf
+// * Raft Book:
+//
 // * Original Lamport Paxos paper:
 //     https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/The-Part-Time-Parliament.pdf
 //
@@ -183,26 +178,18 @@ type LogItem struct {
 	Event Event
 
 	// Internal Only: the current election cycle number.
-	term  int
-}
+	term int
 
-func (l LogItem) Write(w scribe.Writer) {
-	w.WriteInt("index", l.Index)
-	w.WriteInt("term", l.term)
-	w.WriteBytes("event", l.Event.Raw())
-}
-
-func readLogItem(r scribe.Reader) (interface{}, error) {
-	var err error
-	var item LogItem
-	err = common.Or(err, r.ReadInt("index", &item.Index))
-	err = common.Or(err, r.ReadInt("term", &item.term))
-	err = common.Or(err, r.ParseMessage("event", &item.Event, parseEvent))
-	return item, err
+	// Internal Only: whether or not this item represents configuration
+	config bool
 }
 
 func newEventLogItem(i int, t int, e Event) LogItem {
 	return LogItem{Index: i, term: t, Event: e}
+}
+
+func newConfigLogItem(i int, t int, c bool) LogItem {
+	return LogItem{Index: i, term: t, config: c}
 }
 
 func Replicate(machine Machine, self string, peers []string) error {

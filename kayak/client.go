@@ -37,7 +37,7 @@ func (c *client) Append(e Event) (LogItem, error) {
 		return LogItem{}, err
 	}
 
-	return LogItem{index, e, term}, nil
+	return newEventLogItem(index, term, e), nil
 }
 
 func (c *client) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {

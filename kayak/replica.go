@@ -85,7 +85,7 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		peers:           others,
 		Logger:          logger,
 		terms:           openTermStorage(stash),
-		Log:             newEventLog(ctx),
+		// Log:             newEventLog(ctx),
 		Replications:    make(chan replicateEvents),
 		VoteRequests:    make(chan requestVote),
 		RemoteAppends:   make(chan machineAppend),

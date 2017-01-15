@@ -212,7 +212,7 @@ func (c *follower) handleReplication(append replicateEvents) {
 		return
 	}
 
-	if logItem, ok := c.replica.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
+	if logItem, ok, _ := c.replica.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
 		c.logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
 		append.reply(append.term, false)
 		return

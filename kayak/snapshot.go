@@ -1,8 +1,6 @@
 package kayak
 
 import (
-	"sync"
-
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
@@ -12,82 +10,28 @@ import (
 )
 
 var (
-	latestBucket    = []byte("kayak.latest.segment")
 	segmentsBucket  = []byte("kayak.segments")
+	activeBucket    = []byte("kayak.seg.active")
 	itemsBucket     = []byte("kayak.seg.items")
+	maxesBucket     = []byte("kayak.seg.max")
 	headsBucket     = []byte("kayak.heads")
 	commitsBucket   = []byte("kayak.commits")
 	snapshotsBucket = []byte("kayak.snapshots")
 	eventsBucket    = []byte("kayak.events")
 )
 
-type durableLog struct {
-	id uuid.UUID
-
-	// the stash instanced used for durability
-	stash stash.Stash
-
-	// the currently active segment.
-	active durableSegment
-
-	// lock around the active segment.  Protects against concurrent updates during compactions.
-	activeLock sync.RWMutex
-
-	// // index of last item inserted. (initialized to -1)
-	head *position
-
-	// index of last item committed.(initialized to -1)
-	commit *position
-
-	// closing utilities.
-	closed chan struct{}
-
-	// closing lock.  (a buffered channel of 1 entry.)
-	closer chan struct{}
+func setActiveSegment(bucket *bolt.Bucket, logId uuid.UUID, activeId uuid.UUID) error {
+	return bucket.Put(stash.NewUUIDKey(logId), stash.NewUUIDKey(activeId))
 }
 
-func openLog(id uuid.UUID, stash stash.Stash) *durableLog {
-	return nil
-}
-
-func (e *durableLog) Close() error {
-	select {
-	case <-e.closed:
-		return ClosedError
-	case e.closer <- struct{}{}:
+func getActiveSegment(bucket *bolt.Bucket, logId uuid.UUID) (durableSegment, error) {
+	raw := bucket.Get(stash.NewUUIDKey(logId))
+	if raw == nil {
+		return durableSegment{id: logId, prevIndex: -1, prevTerm: -1}, nil
 	}
 
-	close(e.closed)
-	e.commit.Close()
-	e.head.Close()
-	return nil
+	return parseDurableSegment(raw)
 }
-
-func (e *durableLog) Closed() bool {
-	select {
-	case <-e.closed:
-		return true
-	default:
-		return false
-	}
-}
-
-func (e *durableLog) Committed() (pos int) {
-	return e.commit.Get()
-}
-
-func (e *durableLog) Active() durableSegment {
-	e.activeLock.RLock()
-	defer e.activeLock.RUnlock()
-	return e.active
-}
-
-func (e *eventLog) UpdateActive(fn func(s durableSegment) durableSegment) {
-	e.activeLock.Lock()
-	defer e.activeLock.Unlock()
-	e.active = fn(e.active)
-}
-
 
 func setPos(bucket *bolt.Bucket, logId uuid.UUID, pos int) error {
 	return bucket.Put(stash.NewUUIDKey(logId), stash.IntBytes(pos))
@@ -100,6 +44,26 @@ func getPos(bucket *bolt.Bucket, logId uuid.UUID) (int, error) {
 	}
 
 	return stash.ParseInt(val)
+}
+
+func (l LogItem) Write(w scribe.Writer) {
+	w.WriteInt("index", l.Index)
+	w.WriteInt("term", l.term)
+	w.WriteBytes("event", l.Event.Raw())
+}
+
+func readLogItem(r scribe.Reader) (interface{}, error) {
+	var err error
+	var item LogItem
+	var bytes []byte
+	err = common.Or(err, r.ReadInt("index", &item.Index))
+	err = common.Or(err, r.ReadInt("term", &item.term))
+	err = common.Or(err, r.ReadBytes("event", &bytes))
+	if err != nil {
+		return item, err
+	}
+	item.Event = Event(bytes)
+	return item, err
 }
 
 func parseItem(bytes []byte) (LogItem, error) {
@@ -116,20 +80,6 @@ func parseItem(bytes []byte) (LogItem, error) {
 	return raw.(LogItem), nil
 }
 
-func parseDurableSegment(bytes []byte) (*durableSegment, error) {
-	msg, err := scribe.Parse(bytes)
-	if err != nil {
-		return nil, err
-	}
-
-	raw, err := readDurableSegment(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	return raw.(*durableSegment), nil
-}
-
 func parseDurableItem(bytes []byte) (durableItem, error) {
 	msg, err := scribe.Parse(bytes)
 	if err != nil {
@@ -142,6 +92,20 @@ func parseDurableItem(bytes []byte) (durableItem, error) {
 	}
 
 	return raw.(durableItem), nil
+}
+
+func parseDurableSegment(bytes []byte) (durableSegment, error) {
+	msg, err := scribe.Parse(bytes)
+	if err != nil {
+		return durableSegment{}, err
+	}
+
+	raw, err := readDurableSegment(msg)
+	if err != nil {
+		return durableSegment{}, err
+	}
+
+	return raw.(durableSegment), nil
 }
 
 func readDurableItem(r scribe.Reader) (interface{}, error) {
@@ -167,7 +131,7 @@ func (d durableItem) Bytes() []byte {
 }
 
 func readDurableSegment(r scribe.Reader) (interface{}, error) {
-	seg := &durableSegment{}
+	seg := durableSegment{}
 	err := r.ReadUUID("id", &seg.id)
 	err = common.Or(err, r.ReadUUID("prevSnapshot", &seg.prevSnapshot))
 	err = common.Or(err, r.ReadInt("prevIndex", &seg.prevIndex))
@@ -252,6 +216,10 @@ func (d durableSegment) Head(tx *bolt.Tx) (int, error) {
 	}
 
 	return stash.ParseInt(raw)
+}
+
+func (d durableSegment) Snapshot(tx *bolt.Tx) durableSnapshot {
+	return durableSnapshot{}
 }
 
 func (d durableSegment) Get(tx *bolt.Tx, index int) (LogItem, bool, error) {
