@@ -151,6 +151,7 @@ func (d durableSegment) Key() stash.Key {
 	return stash.NewUUIDKey(d.id).ChildInt(d.num)
 }
 
+// generates a new segment but does NOT edit the existing in any way
 func (d durableSegment) Compact(tx *bolt.Tx, until int, events []Event, config []byte) (durableSegment, error) {
 	item, found, err := d.Get(tx, until)
 	if err != nil {
@@ -203,31 +204,56 @@ func (d durableSegment) Get(tx *bolt.Tx, index int) (LogItem, bool, error) {
 	if val == nil {
 		return LogItem{}, false, nil
 	}
-	item, err := parseDurableItem(val)
+
+	item, err := parseItem(val)
 	if err != nil {
 		return LogItem{}, false, err
 	}
-	return item.raw, true, nil
+
+	return item, true, nil
 }
 
 // Scan inclusive of start and end
 func (d durableSegment) Scan(tx *bolt.Tx, start int, end int) (batch []LogItem, err error) {
 	cursor := tx.Bucket(itemsBucket).Cursor()
 
-	batch = make([]LogItem, 0, end-start)
 	if start <= d.prevIndex {
-		return batch, SlowConsumerError
+		return nil, SlowConsumerError
 	}
 
-	for _, v := cursor.Seek(d.Key().ChildInt(start).Raw()); v != nil; _, v = cursor.Next() {
-		i, e := parseDurableItem(v)
-		if e != nil {
-			return []LogItem{}, e
+	head, err := d.Head(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if end > head {
+		end = head
+	}
+
+	if end < start {
+		return []LogItem{}, nil
+	}
+
+	// store of segment key for efficiency
+	rootKey := d.Key()
+
+	// initialize the batch
+	batch = make([]LogItem, 0, end-start)
+
+	// start scanning
+	cur := start
+	for k, v := cursor.Seek(d.Key().ChildInt(cur).Raw()); v != nil && cur <= end; k, v = cursor.Next() {
+		if !rootKey.ChildInt(cur).Equals(k) {
+			return nil, SlowConsumerError
 		}
 
-		if i.segmentId == d.id {
-			batch = append(batch, i.raw)
+		i, e := parseItem(v)
+		if e != nil {
+			return nil, e
 		}
+
+		batch = append(batch, i)
+		cur++
 	}
 
 	return batch, nil
@@ -243,15 +269,17 @@ func (d durableSegment) Append(tx *bolt.Tx, batch []Event, term int) (int, error
 	for _, e := range batch {
 		index++
 
-		item := durableItem{d.id, newEventLogItem(index, term, e)}
+		item := newEventLogItem(index, term, e)
 		if err := bucket.Put(d.Key().ChildInt(index).Raw(), item.Bytes()); err != nil {
 			return index, err
 		}
 	}
 
+	d.SetHead(tx, index)
 	return index, nil
 }
 
+// expects a continguous batch, but doesn't currently enforce.
 func (d durableSegment) Insert(tx *bolt.Tx, batch []LogItem) (int, error) {
 	index, err := d.Head(tx)
 	if err != nil {
@@ -260,7 +288,7 @@ func (d durableSegment) Insert(tx *bolt.Tx, batch []LogItem) (int, error) {
 
 	bucket := tx.Bucket(itemsBucket)
 	for _, i := range batch {
-		if err := bucket.Put(d.Key().ChildInt(i.Index).Raw(), durableItem{d.id, i}.Bytes()); err != nil {
+		if err := bucket.Put(d.Key().ChildInt(i.Index).Raw(), i.Bytes()); err != nil {
 			return index, err
 		}
 
@@ -269,6 +297,7 @@ func (d durableSegment) Insert(tx *bolt.Tx, batch []LogItem) (int, error) {
 		}
 	}
 
+	d.SetHead(tx, index)
 	return index, nil
 }
 
@@ -442,40 +471,4 @@ func (d durableSnapshot) Delete(tx *bolt.Tx) error {
 
 	// finally, delete the snapshot itself
 	return tx.Bucket(snapshotsBucket).Delete(d.Key())
-}
-
-type durableItem struct {
-	segmentId uuid.UUID
-	raw       LogItem
-}
-
-func parseDurableItem(bytes []byte) (durableItem, error) {
-	msg, err := scribe.Parse(bytes)
-	if err != nil {
-		return durableItem{}, err
-	}
-
-	raw, err := readDurableItem(msg)
-	if err != nil {
-		return durableItem{}, err
-	}
-
-	return raw.(durableItem), nil
-}
-
-func readDurableItem(r scribe.Reader) (interface{}, error) {
-	var ret durableItem
-	var err error
-	err = common.Or(err, r.ReadUUID("segmentId", &ret.segmentId))
-	err = common.Or(err, r.ParseMessage("raw", &ret.raw, readLogItem))
-	return ret, err
-}
-
-func (d durableItem) Write(w scribe.Writer) {
-	w.WriteUUID("segmentId", d.segmentId)
-	w.WriteMessage("raw", d.raw)
-}
-
-func (d durableItem) Bytes() []byte {
-	return scribe.Write(d).Bytes()
 }
