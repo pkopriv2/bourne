@@ -21,6 +21,10 @@ func (k Key) ChildUUID(child uuid.UUID) Key {
 	return k.Child(child.Bytes())
 }
 
+func (k Key) Equals(other []byte) bool {
+	return bytes.Equal(k.Raw(), other)
+}
+
 func (k Key) Raw() []byte {
 	return []byte(k)
 }

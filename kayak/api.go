@@ -10,18 +10,19 @@ import (
 
 // Public Error Types
 var (
-	EvictedError   = errors.New("Kayak:Evicted")
-	FailedError    = errors.New("Kayak:Failed")
-	ClosedError    = errors.New("Kayak:Closed")
-	CanceledError  = errors.New("Kayak:Canceled")
-	NotLeaderError = errors.New("Kayak:NotLeader")
-	NoLeaderError  = errors.New("Kayak:NoLeader")
-	StateError     = errors.New("Kayak:StateError")
-	EventError     = errors.New("Kayak:EventError")
-	StorageError   = errors.New("Kayak:StorageError")
+	EvictedError      = errors.New("Kayak:Evicted")
+	FailedError       = errors.New("Kayak:Failed")
+	ClosedError       = errors.New("Kayak:Closed")
+	CanceledError     = errors.New("Kayak:Canceled")
+	NotLeaderError    = errors.New("Kayak:NotLeader")
+	NoLeaderError     = errors.New("Kayak:NoLeader")
+	StateError        = errors.New("Kayak:StateError")
+	EventError        = errors.New("Kayak:EventError")
+	StorageError      = errors.New("Kayak:StorageError")
+	SlowConsumerError = errors.New("Kayak:SlowConsumerError")
 )
 
-func Replicate(machine Machine, self string, peers []string) error {
+func Replicate(ctx common.Context, machine Machine, self string, peers []string) error {
 	return nil
 }
 
@@ -112,9 +113,6 @@ func (e Event) Raw() []byte {
 //
 type Machine interface {
 
-	// The context used to create this machine.
-	Context() common.Context
-
 	// Every state machine must be expressable as a sequence of events.
 	// The snapshot should be the minimal number of events that are
 	// required such that:
@@ -141,6 +139,7 @@ type Machine interface {
 // log for changes.
 type Log interface {
 	io.Closer
+
 	//
 	// // Returns all the machine log's items (Useful for backfilling state)
 	// Scan(start int, end int) ([]LogItem, error)
@@ -174,6 +173,8 @@ type Listener interface {
 	Closed() <-chan struct{}
 }
 
+// The basic log item.  This is typically just an event decorated with its
+// index in the log.
 type LogItem struct {
 
 	// Item index. May be used to reconcile state with log.

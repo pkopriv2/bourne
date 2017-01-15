@@ -197,7 +197,7 @@ func firstSegment(db stash.Stash) (*segment, error) {
 	var err error
 	var raw durableSegment
 	err = db.Update(func(tx *bolt.Tx) error {
-		raw, err = initDurableSegment(tx)
+		raw, err = initDurableSegment(tx, raw.id)
 		return err
 	})
 	if err != nil {
