@@ -33,9 +33,6 @@ type replica struct {
 	// the peer representing the local instance
 	Self peer
 
-	// the event parser. (used to spawn clients.)
-	Parser Parser
-
 	// data lock (currently using very coarse lock)
 	lock sync.RWMutex
 
@@ -80,14 +77,13 @@ type replica struct {
 	closer chan struct{}
 }
 
-func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, stash stash.Stash) (*replica, error) {
+func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, stash stash.Stash) (*replica, error) {
 	r := &replica{
 		Ctx:             ctx,
 		Id:              self.id,
 		Self:            self,
 		peers:           others,
 		Logger:          logger,
-		Parser:          parser,
 		terms:           openTermStorage(stash),
 		Log:             newEventLog(ctx),
 		Replications:    make(chan replicateEvents),
@@ -239,7 +235,7 @@ func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
-			cl, err := p.Client(h.Ctx, h.Parser)
+			cl, err := p.Client(h.Ctx)
 			if cl == nil || err != nil {
 				ret <- response{h.term.num, false}
 				return

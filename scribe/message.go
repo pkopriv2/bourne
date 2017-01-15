@@ -16,6 +16,43 @@ var Version = "0.1"
 // Builds a message from the given builder func
 var EmptyMessage = newWriter().Build()
 
+// Parses a message using the given parser and assigns the return value
+// the input pointer.
+func ParseMessage(val Message, ptr interface{}, fn Parser) error {
+	new, err := fn(val)
+	if err != nil {
+		return err
+	}
+
+	ptrReflect := reflect.ValueOf(ptr)
+	newReflect := reflect.ValueOf(new)
+	if ptrReflect.Kind() != reflect.Ptr || ptrReflect.IsNil() {
+		return NewIncompatibleTypeError(new, val)
+	}
+	ptrReflect.Elem().Set(newReflect)
+	return nil
+}
+
+func ParseMessages(msgs []Message, ptr interface{}, fn Parser) error {
+	valReflect := reflect.ValueOf(ptr)
+	if valReflect.Kind() != reflect.Ptr {
+		return NewIncompatibleTypeError(ptr, ptr)
+	}
+
+	slice := reflect.MakeSlice(reflect.TypeOf(ptr).Elem(), len(msgs), len(msgs))
+	for i, m := range msgs {
+		new, err := fn(m)
+		if err != nil {
+			return err
+		}
+
+		slice.Index(i).Set(reflect.ValueOf(new))
+	}
+
+	valReflect.Elem().Set(slice)
+	return nil
+}
+
 // Parses a message from the given bytes.  This assumes
 // the message was encoding with: Message#Bytes()
 func Parse(val []byte) (Message, error) {
@@ -176,9 +213,27 @@ func (m message) ReadMessage(field string, val *Message) error {
 	return nil
 }
 
+func (m message) ParseMessage(field string, ptr interface{}, fn Parser) error {
+	var raw Object
+	if err := Object(m).Read(field, &raw); err != nil {
+		return err
+	}
+
+	return ParseMessage(message(raw), ptr, fn)
+}
+
+func (m message) ParseMessages(field string, val interface{}, fn Parser) error {
+	var msgs []Message
+	if err := m.ReadMessages(field, &msgs); err != nil {
+		return err
+	}
+
+	return ParseMessages(msgs, val, fn)
+}
+
 func (m message) ReadOptionalMessage(field string, val *Message) error {
 	var raw Object
-	if ok, err := Object(m).ReadOptional(field, &raw); ! ok || err != nil {
+	if ok, err := Object(m).ReadOptional(field, &raw); !ok || err != nil {
 		return err
 	}
 
@@ -265,7 +320,6 @@ func (m message) ReadUUID(field string, val *uuid.UUID) error {
 	*val = id
 	return nil
 }
-
 
 func (m message) Stream(e Encoder) error {
 	return e.Encode(Object(m).Dump())

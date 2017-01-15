@@ -436,7 +436,7 @@ func (s *logSyncer) client(p peer) (*client, error) {
 	for timeout := 1 * time.Second; ; {
 		ch := make(chan *client)
 		go func() {
-			cl, err := p.Client(s.root.Ctx, s.root.Parser)
+			cl, err := p.Client(s.root.Ctx)
 			if err == nil && cl != nil {
 				ch <- cl
 			}

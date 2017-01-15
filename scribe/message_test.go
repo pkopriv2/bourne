@@ -144,6 +144,40 @@ func TestMessages_Write_InvalidType(t *testing.T) {
 	})
 }
 
+type embedded struct {
+	val int
+}
+
+func (e embedded) Write(w Writer) {
+	w.WriteInt("val", e.val)
+}
+
+func embeddedParser(r Reader) (interface{}, error) {
+	var ret embedded
+	err := r.ReadInt("val", &ret.val)
+	return ret, err
+}
+
+func TestParseMessage(t *testing.T) {
+	msg := Build(func(w Writer) {
+		w.WriteMessage("embedded", embedded{2})
+	})
+
+	var embed embedded
+	assert.Nil(t, msg.ParseMessage("embedded", &embed, embeddedParser))
+	assert.Equal(t, embedded{2}, embed)
+}
+
+func TestParseMessages(t *testing.T) {
+	msg := Build(func(w Writer) {
+		w.WriteMessages("embedded", []embedded{embedded{2}, embedded{1}})
+	})
+
+	var embed []embedded
+	assert.Nil(t, msg.ParseMessages("embedded", &embed, embeddedParser))
+	assert.Equal(t, []embedded{embedded{2}, embedded{1}}, embed)
+}
+
 func TestEncode_JSON_String(t *testing.T) {
 	buf := new(bytes.Buffer)
 	enc := json.NewEncoder(buf)

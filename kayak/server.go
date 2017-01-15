@@ -65,7 +65,7 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) Replicate(req net.Request) net.Response {
-	append, err := readReplicateRequest(req.Body(), s.self.Parser())
+	append, err := readReplicateRequest(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -93,7 +93,7 @@ func (s *server) RequestVote(req net.Request) net.Response {
 }
 
 func (s *server) Append(req net.Request) net.Response {
-	event, err := readAppendRequest(req.Body(), s.self.Parser())
+	event, err := readAppendRequest(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -133,7 +133,7 @@ func newReplicateRequest(a replicateRequest) net.Request {
 
 func newAppendRequest(e Event) net.Request {
 	return net.NewRequest(metaAppend, scribe.Build(func(w scribe.Writer) {
-		w.WriteMessage("event", e)
+		w.WriteBytes("event", e.Raw())
 	}))
 }
 
@@ -144,14 +144,16 @@ func newAppendResponse(index int, term int) net.Response {
 	}))
 }
 
-func readAppendRequest(r scribe.Reader, fn Parser) (e Event, err error) {
-	var msg scribe.Message
-	err = common.Or(err, r.ReadMessage("event", &msg))
-	if err != nil {
-		return
+func readEvent(r scribe.Reader, field string) (e Event, err error) {
+	var raw []byte
+	if err = r.ReadBytes(field, &raw); err == nil {
+		return Event(raw), nil
 	}
+	return
+}
 
-	return fn(msg)
+func readAppendRequest(r scribe.Reader) (e Event, err error) {
+	return readEvent(r, "event")
 }
 
 func readAppendResponse(res net.Response) (index int, term int, err error) {
@@ -215,7 +217,7 @@ func (a replicateRequest) Write(w scribe.Writer) {
 	w.WriteInt("commit", a.commit)
 }
 
-func readReplicateRequest(r scribe.Reader, parse Parser) (ret replicateRequest, err error) {
+func readReplicateRequest(r scribe.Reader) (ret replicateRequest, err error) {
 	var msgs []scribe.Message
 	err = common.Or(err, r.ReadUUID("id", &ret.id))
 	err = common.Or(err, r.ReadInt("term", &ret.term))
@@ -229,11 +231,11 @@ func readReplicateRequest(r scribe.Reader, parse Parser) (ret replicateRequest, 
 
 	items := make([]LogItem, 0, len(msgs))
 	for _, m := range msgs {
-		item, err := readLogItem(m, parse)
+		item, err := readLogItem(m)
 		if err != nil {
 			return replicateRequest{}, err
 		}
-		items = append(items, item)
+		items = append(items, item.(LogItem))
 	}
 
 	ret.items = items

@@ -20,11 +20,24 @@ var (
 	EventError     = errors.New("Kayak:EventError")
 )
 
-type Parser func(scribe.Reader) (Event, error)
+// An event is just a byte slice.  Interpretation of the bytes are the
+// responsibility of the consumer.
+type Event []byte
 
-type Event interface {
-	scribe.Writable
+func (e Event) Raw() []byte {
+	return []byte(e)
 }
+
+func (e Event) Write(w scribe.Writer) {
+	w.WriteBytes("raw", []byte(e))
+}
+
+func EventParser(r scribe.Reader) (interface{}, error) {
+	var ret []byte
+	err := r.ReadBytes("raw", &ret)
+	return Event(ret), err
+}
+
 
 // A machine is anything that is expressable as a sequence of events.
 //
@@ -103,9 +116,6 @@ type Machine interface {
 	// The context used to create this machine.
 	Context() common.Context
 
-	// Used to parse events as they are received from other replicas.
-	Parser() Parser
-
 	// Every state machine must be expressable as a sequence of events.
 	// The snapshot should be the minimal number of events that are
 	// required such that:
@@ -177,26 +187,16 @@ type LogItem struct {
 func (l LogItem) Write(w scribe.Writer) {
 	w.WriteInt("index", l.Index)
 	w.WriteInt("term", l.term)
-	w.WriteMessage("event", l.Event)
+	w.WriteBytes("event", l.Event.Raw())
 }
 
-func readLogItem(r scribe.Reader, parse Parser) (item LogItem, err error) {
-	var msg scribe.Message
-	var evt Event
+func readLogItem(r scribe.Reader) (interface{}, error) {
+	var err error
+	var item LogItem
 	err = common.Or(err, r.ReadInt("index", &item.Index))
 	err = common.Or(err, r.ReadInt("term", &item.term))
-	err = common.Or(err, r.ReadMessage("event", &msg))
-	if err != nil {
-		return
-	}
-
-	evt, err = parse(msg)
-	if err != nil {
-		return
-	}
-
-	item.Event = evt
-	return
+	err = common.Or(err, r.ParseMessage("event", &item.Event, EventParser))
+	return item, err
 }
 
 func newEventLogItem(i int, t int, e Event) LogItem {

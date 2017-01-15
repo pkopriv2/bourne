@@ -149,7 +149,7 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 			return
 		}
 
-		append.Return(newClient(raw, c.replica.Parser).Append(append.Event))
+		append.Return(newClient(raw).Append(append.Event))
 	})
 	if err != nil {
 		append.Fail(err)

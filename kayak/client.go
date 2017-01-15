@@ -7,11 +7,10 @@ import (
 
 type client struct {
 	raw    net.Client
-	parser Parser
 }
 
-func newClient(raw net.Client, p Parser) *client {
-	return &client{raw, p}
+func newClient(raw net.Client) *client {
+	return &client{raw}
 }
 
 func (c *client) Close() error {

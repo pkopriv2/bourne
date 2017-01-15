@@ -77,6 +77,8 @@ func (u *UnsupportedTypeError) Error() string {
 	return fmt.Sprintf("Unsupported type: %v", u.actual)
 }
 
+type Parser func(Reader) (interface{}, error)
+
 // A primary consumer abstraction.  Consumers wishing to define a simple
 // encoding scheme for their objects should implement this interface. Any
 // writable object is automatically embeddable in other objects and
@@ -113,6 +115,8 @@ type Reader interface {
 	ReadStrings(field string, val *[]string) error
 	ReadMessage(field string, val *Message) error
 	ReadMessages(field string, val *[]Message) error
+	ParseMessage(field string, val interface{}, fn Parser) error
+	ParseMessages(field string, val interface{}, fn Parser) error
 
 
 	// Supported extensions

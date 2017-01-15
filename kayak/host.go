@@ -41,13 +41,13 @@ func (p peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.id.String()[:8], p.addr)
 }
 
-func (p peer) Client(ctx common.Context, parser Parser) (*client, error) {
+func (p peer) Client(ctx common.Context) (*client, error) {
 	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.addr)
 	if err != nil {
 		return nil, err
 	}
 
-	return &client{raw, parser}, nil
+	return &client{raw}, nil
 }
 
 type host struct {
@@ -58,11 +58,11 @@ type host struct {
 	closer chan struct{}
 }
 
-func newHost(ctx common.Context, self peer, others []peer, parser Parser, stash stash.Stash) (h *host, err error) {
+func newHost(ctx common.Context, self peer, others []peer, stash stash.Stash) (h *host, err error) {
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 	root.Info("Starting host with peers [%v]", others)
 
-	core, err := newReplicatedLog(ctx, root, self, others, parser, stash)
+	core, err := newReplicatedLog(ctx, root, self, others, stash)
 	if err != nil {
 		return nil, err
 	}
@@ -105,10 +105,6 @@ func (h *host) Peers() []peer {
 	return h.core.Peers()
 }
 
-func (h *host) Parser() Parser {
-	return h.core.Parser()
-}
-
 func (h *host) Log() *eventLog {
 	return h.core.Log()
 }
@@ -118,7 +114,7 @@ func (h *host) Append(e Event) (LogItem, error) {
 }
 
 func (h *host) Client() (*client, error) {
-	return h.core.Self().Client(h.Context(), h.Parser())
+	return h.core.Self().Client(h.Context())
 }
 
 func (h *host) Listen(from int, buf int) (Listener, error) {

@@ -30,8 +30,8 @@ type replicatedLog struct {
 	leader *leaderSpawner
 }
 
-func newReplicatedLog(ctx common.Context, logger common.Logger, self peer, others []peer, parser Parser, stash stash.Stash) (*replicatedLog, error) {
-	rep, err := newReplica(ctx, logger, self, others, parser, stash)
+func newReplicatedLog(ctx common.Context, logger common.Logger, self peer, others []peer, stash stash.Stash) (*replicatedLog, error) {
+	rep, err := newReplica(ctx, logger, self, others, stash)
 	if err != nil {
 		return nil, err
 	}
@@ -69,10 +69,6 @@ func (h *replicatedLog) Self() peer {
 
 func (h *replicatedLog) Peers() []peer {
 	return h.replica.peers
-}
-
-func (h *replicatedLog) Parser() Parser {
-	return h.replica.Parser
 }
 
 func (h *replicatedLog) Log() *eventLog {
