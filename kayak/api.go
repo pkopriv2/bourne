@@ -32,12 +32,11 @@ func (e Event) Write(w scribe.Writer) {
 	w.WriteBytes("raw", []byte(e))
 }
 
-func EventParser(r scribe.Reader) (interface{}, error) {
+func parseEvent(r scribe.Reader) (interface{}, error) {
 	var ret []byte
 	err := r.ReadBytes("raw", &ret)
 	return Event(ret), err
 }
-
 
 // A machine is anything that is expressable as a sequence of events.
 //
@@ -142,7 +141,7 @@ type Machine interface {
 // log for changes.
 type Log interface {
 	io.Closer
-//
+	//
 	// // Returns all the machine log's items (Useful for backfilling state)
 	// Scan(start int, end int) ([]LogItem, error)
 
@@ -176,12 +175,15 @@ type Listener interface {
 }
 
 type LogItem struct {
+
+	// Item index. May be used to reconcile state with log.
 	Index int
+
+	// The event bytes.  This is the fundamental unit of replication.
 	Event Event
 
-	// Internal:
-	term int
-	// config bool
+	// Internal Only: the current election cycle number.
+	term  int
 }
 
 func (l LogItem) Write(w scribe.Writer) {
@@ -195,7 +197,7 @@ func readLogItem(r scribe.Reader) (interface{}, error) {
 	var item LogItem
 	err = common.Or(err, r.ReadInt("index", &item.Index))
 	err = common.Or(err, r.ReadInt("term", &item.term))
-	err = common.Or(err, r.ParseMessage("event", &item.Event, EventParser))
+	err = common.Or(err, r.ParseMessage("event", &item.Event, parseEvent))
 	return item, err
 }
 

@@ -53,7 +53,7 @@ func NewIntKey(key int) Key {
 
 func IntBytes(val int) []byte {
 	buf := &bytes.Buffer{}
-	binary.Write(buf, binary.BigEndian, uint32(val))
+	binary.Write(buf, binary.BigEndian, int64(val))
 	return buf.Bytes()
 }
 
