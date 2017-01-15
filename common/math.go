@@ -1,17 +1,21 @@
 package common
 
-func Min(l int , r int) int {
-	if l < r {
-		return l
-	} else {
-		return r
+func Min(l int , others... int) int {
+	min := l
+	for _, o := range others {
+		if o < min {
+			min = o
+		}
 	}
+	return min
 }
 
-func Max(l int , r int) int {
-	if l > r {
-		return l
-	} else {
-		return r
+func Max(l int , others... int) int {
+	max := l
+	for _, o := range others {
+		if o > max {
+			max = o
+		}
 	}
+	return max
 }

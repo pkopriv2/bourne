@@ -9,16 +9,17 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// BoltDB buckets.
 var (
-	segmentsBucket  = []byte("kayak.segments")
+	segmentsBucket  = []byte("kayak.seg")
 	activeBucket    = []byte("kayak.seg.active")
 	itemsBucket     = []byte("kayak.seg.items")
-	maxesBucket     = []byte("kayak.seg.max")
-	headsBucket     = []byte("kayak.heads")
+	headsBucket     = []byte("kayak.seg.heads")
 	commitsBucket   = []byte("kayak.commits")
 	snapshotsBucket = []byte("kayak.snapshots")
 	eventsBucket    = []byte("kayak.events")
 )
+
 
 func setActiveSegment(bucket *bolt.Bucket, logId uuid.UUID, activeId uuid.UUID) error {
 	return bucket.Put(stash.NewUUIDKey(logId), stash.NewUUIDKey(activeId))
@@ -46,52 +47,28 @@ func getPos(bucket *bolt.Bucket, logId uuid.UUID) (int, error) {
 	return stash.ParseInt(val)
 }
 
-func (l LogItem) Write(w scribe.Writer) {
-	w.WriteInt("index", l.Index)
-	w.WriteInt("term", l.term)
-	w.WriteBytes("event", l.Event.Raw())
+type durableLog struct {
+	id uuid.UUID
 }
 
-func readLogItem(r scribe.Reader) (interface{}, error) {
-	var err error
-	var item LogItem
-	var bytes []byte
-	err = common.Or(err, r.ReadInt("index", &item.Index))
-	err = common.Or(err, r.ReadInt("term", &item.term))
-	err = common.Or(err, r.ReadBytes("event", &bytes))
-	if err != nil {
-		return item, err
-	}
-	item.Event = Event(bytes)
-	return item, err
+func (d durableLog) Active(tx *bolt.Tx) (durableSegment, error) {
+	return durableSegment{}, nil
 }
 
-func parseItem(bytes []byte) (LogItem, error) {
-	msg, err := scribe.Parse(bytes)
-	if err != nil {
-		return LogItem{}, err
-	}
-
-	raw, err := readLogItem(msg)
-	if err != nil {
-		return LogItem{}, err
-	}
-
-	return raw.(LogItem), nil
+func (d durableLog) NextSegment(tx *bolt.Tx) (int, error) {
+	return 0, nil
 }
 
-func parseDurableItem(bytes []byte) (durableItem, error) {
-	msg, err := scribe.Parse(bytes)
-	if err != nil {
-		return durableItem{}, err
-	}
+func (d durableLog) Swap(tx *bolt.Tx, curSegment int, newSegment int) (bool, error) {
+	return false, nil
+}
 
-	raw, err := readDurableItem(msg)
-	if err != nil {
-		return durableItem{}, err
-	}
+type durableSegment struct {
+	id uuid.UUID
 
-	return raw.(durableItem), nil
+	prevSnapshot uuid.UUID
+	prevIndex    int
+	prevTerm     int
 }
 
 func parseDurableSegment(bytes []byte) (durableSegment, error) {
@@ -108,45 +85,6 @@ func parseDurableSegment(bytes []byte) (durableSegment, error) {
 	return raw.(durableSegment), nil
 }
 
-func readDurableItem(r scribe.Reader) (interface{}, error) {
-	var ret durableItem
-	var err error
-	err = common.Or(err, r.ReadUUID("segmentId", &ret.segmentId))
-	err = common.Or(err, r.ParseMessage("raw", &ret.raw, readLogItem))
-	return ret, err
-}
-
-type durableItem struct {
-	segmentId uuid.UUID
-	raw       LogItem
-}
-
-func (d durableItem) Write(w scribe.Writer) {
-	w.WriteUUID("segmentId", d.segmentId)
-	w.WriteMessage("raw", d.raw)
-}
-
-func (d durableItem) Bytes() []byte {
-	return scribe.Write(d).Bytes()
-}
-
-func readDurableSegment(r scribe.Reader) (interface{}, error) {
-	seg := durableSegment{}
-	err := r.ReadUUID("id", &seg.id)
-	err = common.Or(err, r.ReadUUID("prevSnapshot", &seg.prevSnapshot))
-	err = common.Or(err, r.ReadInt("prevIndex", &seg.prevIndex))
-	err = common.Or(err, r.ReadInt("prevTerm", &seg.prevTerm))
-	return seg, err
-}
-
-type durableSegment struct {
-	id uuid.UUID
-
-	prevSnapshot uuid.UUID
-	prevIndex    int
-	prevTerm     int
-}
-
 func initDurableSegment(tx *bolt.Tx) (durableSegment, error) {
 	return createDurableSegment(tx, []Event{}, []byte{}, -1, -1)
 }
@@ -158,6 +96,15 @@ func createDurableSegment(tx *bolt.Tx, snapshotEvents []Event, snapshotConfig []
 	}
 
 	return durableSegment{uuid.NewV1(), snapshot.id, prevIndex, prevTerm}, nil
+}
+
+func readDurableSegment(r scribe.Reader) (interface{}, error) {
+	seg := durableSegment{}
+	err := r.ReadUUID("id", &seg.id)
+	err = common.Or(err, r.ReadUUID("prevSnapshot", &seg.prevSnapshot))
+	err = common.Or(err, r.ReadInt("prevIndex", &seg.prevIndex))
+	err = common.Or(err, r.ReadInt("prevTerm", &seg.prevTerm))
+	return seg, err
 }
 
 func (d durableSegment) Write(w scribe.Writer) {
@@ -252,7 +199,6 @@ func (d durableSegment) Scan(tx *bolt.Tx, start int, end int) (batch []LogItem, 
 	}
 
 	return batch, nil
-
 }
 
 func (d durableSegment) Append(tx *bolt.Tx, batch []Event, term int) (int, error) {
@@ -294,6 +240,12 @@ func (d durableSegment) Insert(tx *bolt.Tx, batch []LogItem) (int, error) {
 	return index, nil
 }
 
+type durableSnapshot struct {
+	id     uuid.UUID
+	len    int
+	config []byte
+}
+
 func storeDurableSnapshot(tx *bolt.Tx, val durableSnapshot) error {
 	snapshots := tx.Bucket(snapshotsBucket)
 	return snapshots.Put(val.id.Bytes(), val.Bytes())
@@ -323,12 +275,6 @@ func readDurableSnapshot(r scribe.Reader) (interface{}, error) {
 	err = r.ReadInt("id", &ret.len)
 	err = r.ReadBytes("config", &ret.config)
 	return ret, err
-}
-
-type durableSnapshot struct {
-	id     uuid.UUID
-	len    int
-	config []byte
 }
 
 func (d durableSnapshot) Write(w scribe.Writer) {
@@ -362,4 +308,40 @@ func (d *durableSnapshot) Scan(tx *bolt.Tx, start int, end int) (batch []Event, 
 
 	return batch, nil
 
+}
+
+type durableItem struct {
+	segmentId uuid.UUID
+	raw       LogItem
+}
+
+func parseDurableItem(bytes []byte) (durableItem, error) {
+	msg, err := scribe.Parse(bytes)
+	if err != nil {
+		return durableItem{}, err
+	}
+
+	raw, err := readDurableItem(msg)
+	if err != nil {
+		return durableItem{}, err
+	}
+
+	return raw.(durableItem), nil
+}
+
+func readDurableItem(r scribe.Reader) (interface{}, error) {
+	var ret durableItem
+	var err error
+	err = common.Or(err, r.ReadUUID("segmentId", &ret.segmentId))
+	err = common.Or(err, r.ParseMessage("raw", &ret.raw, readLogItem))
+	return ret, err
+}
+
+func (d durableItem) Write(w scribe.Writer) {
+	w.WriteUUID("segmentId", d.segmentId)
+	w.WriteMessage("raw", d.raw)
+}
+
+func (d durableItem) Bytes() []byte {
+	return scribe.Write(d).Bytes()
 }

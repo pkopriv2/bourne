@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/scribe"
 )
 
 // Public Error Types
@@ -19,6 +20,10 @@ var (
 	EventError     = errors.New("Kayak:EventError")
 	StorageError   = errors.New("Kayak:StorageError")
 )
+
+func Replicate(machine Machine, self string, peers []string) error {
+	return nil
+}
 
 // Events are the fundamental unit of replication.  This the primary
 // consumer data structure used in interacting with the replicated log.
@@ -192,6 +197,40 @@ func newConfigLogItem(i int, t int, c bool) LogItem {
 	return LogItem{Index: i, term: t, config: c}
 }
 
-func Replicate(machine Machine, self string, peers []string) error {
-	return nil
+func readLogItem(r scribe.Reader) (interface{}, error) {
+	var err error
+	var item LogItem
+	var bytes []byte
+	err = common.Or(err, r.ReadInt("index", &item.Index))
+	err = common.Or(err, r.ReadInt("term", &item.term))
+	err = common.Or(err, r.ReadBytes("event", &bytes))
+	if err != nil {
+		return item, err
+	}
+	item.Event = Event(bytes)
+	return item, err
+}
+
+func parseItem(bytes []byte) (LogItem, error) {
+	msg, err := scribe.Parse(bytes)
+	if err != nil {
+		return LogItem{}, err
+	}
+
+	raw, err := readLogItem(msg)
+	if err != nil {
+		return LogItem{}, err
+	}
+
+	return raw.(LogItem), nil
+}
+
+func (l LogItem) Write(w scribe.Writer) {
+	w.WriteInt("index", l.Index)
+	w.WriteInt("term", l.term)
+	w.WriteBytes("event", l.Event.Raw())
+}
+
+func (l LogItem) Bytes() []byte {
+	return scribe.Write(l).Bytes()
 }

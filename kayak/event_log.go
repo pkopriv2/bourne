@@ -139,6 +139,7 @@ func (e *eventLog) Insert(batch []LogItem) (int, error) {
 
 func (e *eventLog) Snapshot() (index int, term int, commit int) {
 	return
+
 	// // must take commit prior to taking the end of the log
 	// // to ensure invariant commit <= head
 	// commit = e.Committed()
@@ -148,13 +149,40 @@ func (e *eventLog) Snapshot() (index int, term int, commit int) {
 
 func (e *eventLog) Compact(until int, snapshot []Event, config []byte) (err error) {
 
-	// Technically, this isn't thread safe.  however,
+	// Go ahead and compact the majority of the segment. (writes can still happen.)
 	new, err := e.Active().Compact(until, snapshot, config)
 	if err != nil {
 		return err
 	}
 
-	e.UpdateActive(func(s *segment) *segment {
+	// Swap existing with new.
+	e.UpdateActive(func(cur *segment) *segment {
+		var curHead int
+		var newHead int
+
+		curHead, err = cur.Head()
+		if err != nil {
+			return cur
+		}
+
+		newHead, err = new.Head()
+		if err != nil {
+			return cur
+		}
+
+		var backfill []LogItem
+		if curHead > newHead {
+			backfill, err = new.Scan(newHead, curHead)
+			if err != nil {
+				return cur
+			}
+
+			newHead, err = new.Insert(backfill)
+			if err != nil {
+				return cur
+			}
+		}
+
 		return new
 	})
 	return
@@ -165,9 +193,18 @@ type segment struct {
 	raw   durableSegment
 }
 
-func newSegment(snapshot []Event, prev int, term int) *segment {
-	return nil
-	// return &segment{snapshot, prev, term, -1, amoeba.NewBTreeIndex(32)}
+func firstSegment(db stash.Stash) (*segment, error) {
+	var err error
+	var raw durableSegment
+	err = db.Update(func(tx *bolt.Tx) error {
+		raw, err = initDurableSegment(tx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &segment{db, raw}, nil
 }
 
 func (d *segment) Head() (head int, err error) {
@@ -263,7 +300,7 @@ func (l *positionListener) start(from int) {
 				}
 
 				// scan the next batch
-				batch, err := l.segment.Scan(cur, common.Min(head, next))
+				batch, err := l.segment.Scan(cur, common.Min(head, next, cur+255))
 				if err != nil {
 					return
 				}
