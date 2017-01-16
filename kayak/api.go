@@ -189,10 +189,6 @@ type Machine interface {
 type Log interface {
 	io.Closer
 
-	//
-	// // Returns all the machine log's items (Useful for backfilling state)
-	// Scan(start int, end int) ([]LogItem, error)
-
 	// Adds a real-time listener to the log commits.  The listener is guaranteed
 	// to receive ALL items in the order they are committed - however -
 	// the listener does NOT return all historical items.
