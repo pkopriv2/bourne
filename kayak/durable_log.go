@@ -39,31 +39,6 @@ func initBuckets(tx *bolt.Tx) (err error) {
 	return
 }
 
-func setActiveSegment(bucket *bolt.Bucket, logId uuid.UUID, activeId uuid.UUID) error {
-	return bucket.Put(stash.NewUUIDKey(logId), stash.NewUUIDKey(activeId))
-}
-
-func getActiveSegment(bucket *bolt.Bucket, logId uuid.UUID) (durableSegment, error) {
-	raw := bucket.Get(stash.NewUUIDKey(logId))
-	if raw == nil {
-		return durableSegment{id: logId, prevIndex: -1, prevTerm: -1}, nil
-	}
-
-	return parseDurableSegment(raw)
-}
-
-func setPos(bucket *bolt.Bucket, logId uuid.UUID, pos int) error {
-	return bucket.Put(stash.NewUUIDKey(logId), stash.IntBytes(pos))
-}
-
-func getPos(bucket *bolt.Bucket, logId uuid.UUID) (int, error) {
-	val := bucket.Get(stash.NewUUIDKey(logId))
-	if val == nil {
-		return -1, nil
-	}
-
-	return stash.ParseInt(val)
-}
 
 type durableLog struct {
 	id uuid.UUID
@@ -226,13 +201,12 @@ func (d durableSegment) Scan(tx *bolt.Tx, start int, end int) (batch []LogItem, 
 		return nil, err
 	}
 
-	if end > head {
-		end = head
-	}
-
-	if end < start {
+	if start > head {
 		return []LogItem{}, nil
 	}
+
+	// make sure we don't overrun the log.
+	end = common.Min(head, end)
 
 	// store of segment key for efficiency
 	rootKey := d.Key()
@@ -471,4 +445,30 @@ func (d durableSnapshot) Delete(tx *bolt.Tx) error {
 
 	// finally, delete the snapshot itself
 	return tx.Bucket(snapshotsBucket).Delete(d.Key())
+}
+
+func setActiveSegment(bucket *bolt.Bucket, logId uuid.UUID, activeId uuid.UUID) error {
+	return bucket.Put(stash.NewUUIDKey(logId), stash.NewUUIDKey(activeId))
+}
+
+func getActiveSegment(bucket *bolt.Bucket, logId uuid.UUID) (durableSegment, error) {
+	raw := bucket.Get(stash.NewUUIDKey(logId))
+	if raw == nil {
+		return durableSegment{id: logId, prevIndex: -1, prevTerm: -1}, nil
+	}
+
+	return parseDurableSegment(raw)
+}
+
+func setPos(bucket *bolt.Bucket, logId uuid.UUID, pos int) error {
+	return bucket.Put(stash.NewUUIDKey(logId), stash.IntBytes(pos))
+}
+
+func getPos(bucket *bolt.Bucket, logId uuid.UUID) (int, error) {
+	val := bucket.Get(stash.NewUUIDKey(logId))
+	if val == nil {
+		return -1, nil
+	}
+
+	return stash.ParseInt(val)
 }

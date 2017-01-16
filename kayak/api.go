@@ -10,19 +10,44 @@ import (
 
 // Public Error Types
 var (
-	EvictedError      = errors.New("Kayak:Evicted")
-	FailedError       = errors.New("Kayak:Failed")
-	ClosedError       = errors.New("Kayak:Closed")
-	CanceledError     = errors.New("Kayak:Canceled")
-	NotLeaderError    = errors.New("Kayak:NotLeader")
-	NoLeaderError     = errors.New("Kayak:NoLeader")
-	StateError        = errors.New("Kayak:StateError")
-	EventError        = errors.New("Kayak:EventError")
-	StorageError      = errors.New("Kayak:StorageError")
-	SlowConsumerError = errors.New("Kayak:SlowConsumerError")
+	EvictedError       = errors.New("Kayak:Evicted")
+	FailedError        = errors.New("Kayak:Failed")
+	ClosedError        = errors.New("Kayak:Closed")
+	CanceledError      = errors.New("Kayak:Canceled")
+	NotLeaderError     = errors.New("Kayak:NotLeader")
+	NoLeaderError      = errors.New("Kayak:NoLeader")
+	StateError         = errors.New("Kayak:StateError")
+	EventError         = errors.New("Kayak:EventError")
+	DeletedStreamError = errors.New("Kayak:StorageError")
+	StorageError       = errors.New("Kayak:StorageError")
+	SlowConsumerError  = errors.New("Kayak:SlowConsumerError")
 )
 
-func Replicate(ctx common.Context, machine Machine, self string, peers []string) error {
+// Replicates and runs the given machine using a durable event log.
+// Machines of these types are safe from system failures, but take on
+// the performance cost of the additional IO.
+//
+// The replicated machine can survive a minority number of peer
+// failures.  Once a majority of machines can no longer form a quorum
+// to elect a leader, the system is in a failure state and cannot
+// progress. Intervention is likely required.
+//
+func ReplicateDurable(ctx common.Context, machine Machine, self string, peers []string) error {
+	return nil
+}
+
+// Replicates and runs the given machine using an in memory event log.
+// Machines of these types are much faster than their durable bretheren
+// but the local state is lost after each failure.
+//
+// The cluster will likely lose data once a majority of peers are no
+// longer alive.  In this event it is probably better to rebuild instead of
+// intervening.  The log will voluntarily destroy itself and start anew.
+//
+// For normal operations failures (where a majority are active), the machines
+// will simply be restarted and the log will copied from a peer.
+//
+func ReplicateInMemory(ctx common.Context, machine Machine, self string, peers []string) error {
 	return nil
 }
 
@@ -100,6 +125,12 @@ func (e Event) Raw() []byte {
 // linearizable reads, they are encouraged to sync their append request
 // with the commit stream.
 //
+// # Log Compactions
+//
+// For many machines, their state  is actually represented by many redundant
+// log items.  In other words, many of the items have been obviated.  The log
+// can leverage this to occasionally shrink the log.
+//
 // TODO: Is this necessary?  Can the log guarantee that an append only
 // returns once it has been replicated to this instance?
 //
@@ -125,12 +156,30 @@ type Machine interface {
 	// ```
 	//
 	// Results in the same machine state.
-	Snapshot() (snapshot []Event, maxIndex int, err error)
+	//
+	// In order to be space efficient and prevent the underlying
+	// log from growing without bounds, the log occasionally needs to be
+	// cleaned by a process known as log compaction.  Essentially, the log
+	// until a certain point will be replaced with a *hopefully* smaller snapshot.
+	// However, it cannot do this with some help from the state machine.
+	// Machines must provide a mechanism by which the log manager a compacted
+	// view of its log.  Consumers do so by returning a stream of events  that
+	// represent its state up until the index in the log.   All log items and
+	// their events will be discarded up until the index.
+	//
+	// The resulting stream must be closed when the stream has been
+	// exhausted.
+	//
+	// NOTE: I originally struggled with how to model an event stream,
+	// but realized that channels fit pretty naturally.  I tend to
+	// avoid channel based apis, but this one seems simple enough
+	// for our needs.
+	Snapshot() (stream <-chan Event, index int, err error)
 
 	// Runs the main machine routine.  This may be called many
 	// times throughout the lifetime of the machine.
 	//
-	// The provided log will
+	// The provided log is guaranteed to be
 	Run(log Log) error
 }
 
@@ -165,16 +214,31 @@ type Log interface {
 type Listener interface {
 	io.Closer
 
-	// Returns a channel that returns items as they are passed.
-	Items() <-chan LogItem
-
-	// Returns a channel that immeditely returns when the listener
-	// is closed
-	Closed() <-chan struct{}
+	// Returns the next log item in the listener.  If an error is returned,
+	// it may be for a variety of reasons.  Here are a couple:
+	//
+	// * The underlying log has been closed.
+	// * The underlying log has been compacted away.  (*Important: See Below)
+	// * There was a system/disc error.
+	//
+	// If a reader gets significantly behind the underlying log's end, it
+	// is possible for the listener to become corrupted if the underlying log
+	// is compacted away (See: Machine#Snapshot()). Consumers are allowed to
+	// choose how to deal with this, but for in-memory state machines, if the
+	// the stream was in critical path to machine state, then it's probably best
+	// to just rebuild the machine.
+	//
+	// The possible error values are:
+	//
+	// * EventError
+	// * StorageError
+	// * SlowConsumerError
+	//
+	Next() (LogItem, error)
 }
 
-// The basic log item.  This is typically just an event decorated with its
-// index in the log.
+// The basic log item.  This is typically just an event decorated with its index
+// in the log.
 type LogItem struct {
 
 	// Item index. May be used to reconcile state with log.
