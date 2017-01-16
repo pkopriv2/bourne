@@ -25,33 +25,19 @@ func (k Key) Equals(other []byte) bool {
 	return bytes.Equal(k.Raw(), other)
 }
 
+func (k Key) Compare(other []byte) int {
+	return bytes.Compare(k.Raw(), other)
+}
+
 func (k Key) Raw() []byte {
 	return []byte(k)
 }
 
-// type CompositeKey []byte
-//
-// func (k CompositeKey) Child(child []byte) CompositeKey {
-	// return CompositeKey(append([]byte(k), child...))
-// }
-//
-// func (k CompositeKey) ChildInt(child int) CompositeKey {
-	// return k.Child(IntBytes(child))
-// }
-//
-// func (k CompositeKey) ChildUUID(child uuid.UUID) CompositeKey {
-	// return k.Child(child.Bytes())
-// }
-//
-// func (k CompositeKey) Raw() []byte {
-	// return []byte(k)
-// }
-
-func NewUUIDKey(key uuid.UUID) Key {
+func UUID(key uuid.UUID) Key {
 	return Key(key.Bytes())
 }
 
-func NewIntKey(key int) Key {
+func Int(key int) Key {
 	return Key(IntBytes(key))
 }
 

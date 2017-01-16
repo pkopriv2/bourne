@@ -251,7 +251,7 @@ func (d *segment) Insert(batch []LogItem) (head int, err error) {
 func (d *segment) Compact(until int, snapshot []Event, config []byte) (seg *segment, err error) {
 	var raw durableSegment
 	d.stash.Update(func(tx *bolt.Tx) error {
-		raw, err = d.raw.Compact(tx, until, snapshot, config)
+		raw, err = d.raw.CompactOnly(tx, until, snapshot, config)
 		seg = &segment{d.stash, raw}
 		return err
 	})
