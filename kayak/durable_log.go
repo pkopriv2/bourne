@@ -81,10 +81,6 @@ func deleteActiveSegmentId(tx *bolt.Tx, logId uuid.UUID) error {
 	return tx.Bucket(logActiveSegBucket).Delete(stash.UUID(logId))
 }
 
-func setCommit(tx *bolt.Tx, logId uuid.UUID, pos int) error {
-	return tx.Bucket(logCommitBucket).Put(stash.UUID(logId), stash.Int(pos))
-}
-
 func getCommit(tx *bolt.Tx, logId uuid.UUID) (int, bool, error) {
 	val := tx.Bucket(logCommitBucket).Get(stash.UUID(logId))
 	if val == nil {
@@ -97,6 +93,19 @@ func getCommit(tx *bolt.Tx, logId uuid.UUID) (int, bool, error) {
 	}
 
 	return i, true, nil
+}
+
+func setCommit(tx *bolt.Tx, logId uuid.UUID, pos int) (int, error) {
+	cur, ok, err := getCommit(tx, logId)
+	if err != nil {
+		return 0, err
+	}
+
+	if ok && cur >= pos {
+		return cur, nil
+	}
+
+	return pos, tx.Bucket(logCommitBucket).Put(stash.UUID(logId), stash.Int(pos))
 }
 
 func deleteCommit(tx *bolt.Tx, logId uuid.UUID) error {
@@ -125,7 +134,7 @@ func openDurableLog(db stash.Stash, logId uuid.UUID) (log durableLog, err error)
 			return err
 		}
 
-		err = setCommit(tx, logId, -1)
+		_, err = setCommit(tx, logId, -1)
 		if err != nil {
 			return errors.Wrapf(InvariantError, "Error setting commit [%v]: -1", logId)
 		}
@@ -160,7 +169,7 @@ func (d durableLog) getActiveSegmentId(tx *bolt.Tx) (uuid.UUID, error) {
 	return s, nil
 }
 
-func (d durableLog) setCommit(tx *bolt.Tx, pos int) error {
+func (d durableLog) setCommit(tx *bolt.Tx, pos int) (int, error) {
 	return setCommit(tx, d.id, pos)
 }
 
@@ -193,7 +202,7 @@ func (d durableLog) swapActive(tx *bolt.Tx, cur durableSegment, new durableSegme
 	}
 
 	if id != cur.id {
-		return false, err
+		return false, nil
 	}
 
 	if new.prevIndex < cur.prevIndex {
@@ -225,7 +234,12 @@ func (d durableLog) swapActive(tx *bolt.Tx, cur durableSegment, new durableSegme
 		return false, err
 	}
 
-	return true, d.setActiveSegmentId(tx, new.id)
+	err = d.setActiveSegmentId(tx, new.id)
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (d durableLog) GetCommit(db stash.Stash) (pos int, err error) {
@@ -236,10 +250,12 @@ func (d durableLog) GetCommit(db stash.Stash) (pos int, err error) {
 	return
 }
 
-func (d durableLog) SetCommit(db stash.Stash, pos int) error {
-	return db.Update(func(tx *bolt.Tx) error {
-		return d.setCommit(tx, pos)
+func (d durableLog) SetCommit(db stash.Stash, pos int) (new int, err error) {
+	err = db.Update(func(tx *bolt.Tx) error {
+		new, err = d.setCommit(tx, pos)
+		return err
 	})
+	return
 }
 
 func (d durableLog) Active(db stash.Stash) (seg durableSegment, err error) {
@@ -328,15 +344,22 @@ func createDurableSegment(db stash.Stash, snapshotEvents <-chan Event, snapshotS
 
 	seg = durableSegment{uuid.NewV1(), snapshot.id, prevIndex, prevTerm}
 	err = db.Update(func(tx *bolt.Tx) error {
-		e := tx.Bucket(segBucket).Put(seg.Key(), seg.Bytes())
-		if e != nil {
+		head := prevIndex
+		if prevIndex > -1 {
+			head = prevIndex+1
+		}
+
+		if e := tx.Bucket(segHeadsBucket).Put(seg.Key(), stash.Int(head)); e != nil {
 			return e
 		}
 
-		return tx.Bucket(segHeadsBucket).Put(seg.Key(), stash.Int(prevIndex))
+		if e := tx.Bucket(segBucket).Put(seg.Key(), seg.Bytes()); e != nil {
+			return e
+		}
 
+		return nil
 	})
-	return seg, err
+	return
 }
 
 func deleteDurableSegment(db stash.Stash, id uuid.UUID) error {
@@ -438,6 +461,19 @@ func (d durableSegment) Key() stash.Key {
 
 // this is NOT commutative, but rather last move wins.
 
+func (d durableSegment) assert(tx *bolt.Tx, index int, term int) (bool, error) {
+	if index == d.prevIndex {
+		return d.prevTerm == term, nil
+	}
+
+	item, ok, err := d.get(tx, index)
+	if err != nil || ! ok {
+		return false, err
+	}
+
+	return item.term == term, nil
+}
+
 func (d durableSegment) head(tx *bolt.Tx) (int, error) {
 	raw := tx.Bucket(segHeadsBucket).Get(d.Key())
 	if raw == nil {
@@ -502,14 +538,23 @@ func (d durableSegment) scan(tx *bolt.Tx, beg int, end int) (batch []LogItem, er
 	return batch, nil
 }
 
-func (d durableSegment) setHead(tx *bolt.Tx, head int) error {
-	return tx.Bucket(segHeadsBucket).Put(d.Key(), stash.IntBytes(head))
+func (d durableSegment) setHead(tx *bolt.Tx, pos int) error {
+	cur, err := d.head(tx)
+	if err != nil {
+		return err
+	}
+
+	if cur >= pos {
+		return nil
+	}
+
+	return tx.Bucket(segHeadsBucket).Put(d.Key(), stash.IntBytes(pos))
 }
 
 func (d durableSegment) append(tx *bolt.Tx, batch []Event, term int) (int, error) {
 	index, err := d.head(tx)
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 
 	bucket := tx.Bucket(segItemsBucket)
@@ -522,44 +567,63 @@ func (d durableSegment) append(tx *bolt.Tx, batch []Event, term int) (int, error
 		}
 	}
 
-	d.setHead(tx, index)
+	if err := d.setHead(tx, index); err != nil {
+		return 0, err
+	}
+
 	return index, nil
 }
 
 func (d durableSegment) insert(tx *bolt.Tx, batch []LogItem) (int, error) {
-	if len(batch) == 0 {
-		return 0, nil
-	}
 
 	head, err := d.head(tx)
 	if err != nil {
 		return 0, err
 	}
 
+	if len(batch) == 0 {
+		return head, nil
+	}
+
 	bucket := tx.Bucket(segItemsBucket)
 
-	var prev *int
+	prev := d.prevIndex
 	for _, i := range batch {
-		if i.Index > head+1 || (prev != nil && i.Index > *prev+1) {
-			return 0, errors.Wrapf(OutOfBoundsError, "Illegal index [%v]. Log cannot have gaps. Head [%v]", i.Index, head)
+		if i.Index > head+1 {
+			return 0, errors.Wrapf(OutOfBoundsError, "Illegal index [%v]. Item index is greater than head+1. Head [%v]", i.Index, head)
+		}
+
+		if prev > d.prevIndex && i.Index != prev+1 {
+			return 0, errors.Wrapf(OutOfBoundsError, "Illegal index [%v]. Items must be inserted contiguously. Prev [%v]", i.Index, prev)
 		}
 
 		if err := bucket.Put(d.Key().ChildInt(i.Index).Raw(), i.Bytes()); err != nil {
 			return 0, err
 		}
 
+		prev = i.Index
 		if i.Index > head {
 			head = i.Index
 		}
-
-		prev = &i.Index
 	}
 
-	return head, d.setHead(tx, head)
+	if err := d.setHead(tx, head); err != nil {
+		return 0, err
+	}
+
+	return head, nil
+}
+
+func (d durableSegment) Assert(db stash.Stash, i int, t int) (b bool, e error) {
+	e = db.View(func(tx *bolt.Tx) error {
+		b, e = d.assert(tx,i,t)
+		return e
+	})
+	return
 }
 
 func (d durableSegment) Head(db stash.Stash) (h int, e error) {
-	db.View(func(tx *bolt.Tx) error {
+	e = db.View(func(tx *bolt.Tx) error {
 		h, e = d.head(tx)
 		return e
 	})
@@ -567,7 +631,7 @@ func (d durableSegment) Head(db stash.Stash) (h int, e error) {
 }
 
 func (d durableSegment) Get(db stash.Stash, index int) (i LogItem, o bool, e error) {
-	db.View(func(tx *bolt.Tx) error {
+	e = db.View(func(tx *bolt.Tx) error {
 		i, o, e = d.get(tx, index)
 		return e
 	})
@@ -576,7 +640,7 @@ func (d durableSegment) Get(db stash.Stash, index int) (i LogItem, o bool, e err
 
 // Scan inclusive of start and end
 func (d durableSegment) Scan(db stash.Stash, start int, end int) (batch []LogItem, err error) {
-	db.View(func(tx *bolt.Tx) error {
+	err = db.View(func(tx *bolt.Tx) error {
 		batch, err = d.scan(tx, start, end)
 		return err
 	})
@@ -584,7 +648,7 @@ func (d durableSegment) Scan(db stash.Stash, start int, end int) (batch []LogIte
 }
 
 func (d durableSegment) Append(db stash.Stash, batch []Event, term int) (head int, err error) {
-	db.Update(func(tx *bolt.Tx) error {
+	err = db.Update(func(tx *bolt.Tx) error {
 		head, err = d.append(tx, batch, term)
 		return err
 	})
@@ -592,7 +656,7 @@ func (d durableSegment) Append(db stash.Stash, batch []Event, term int) (head in
 }
 
 func (d durableSegment) Insert(db stash.Stash, batch []LogItem) (head int, err error) {
-	db.Update(func(tx *bolt.Tx) error {
+	err = db.Update(func(tx *bolt.Tx) error {
 		head, err = d.insert(tx, batch)
 		return err
 	})

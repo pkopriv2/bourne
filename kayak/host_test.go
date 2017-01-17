@@ -8,6 +8,7 @@ import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/net"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -129,7 +130,7 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	for i := 0; i < numThreads; i++ {
 		go func() {
 			for j := 0; j < numItemsPerThread; j++ {
-				_, err := leader.Append(Event{byte(i*j + j)})
+				_, err := leader.Append(Event(stash.Int(i*j + j)))
 				if err != nil {
 					panic(err)
 				}
@@ -138,34 +139,9 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	}
 
 	done, timeout := concurrent.NewBreaker(500*time.Second, func() {
-		done, timeout := concurrent.NewBreaker(500*time.Second, func() {
-			SyncAll(cluster, func(h *host) bool {
-				l, _ := h.Listen(0, 1024)
-				defer l.Close()
-
-				for i := 0; i < (numThreads * numItemsPerThread); i++ {
-					item, err := l.Next()
-					if err != nil {
-						t.FailNow()
-						return true
-					}
-
-					assert.Equal(t, i, item.Index)
-				}
-
-				return true
-			})
-		})
-
 		SyncAll(cluster, func(h *host) bool {
 			return h.Log().Head() == (numThreads*numItemsPerThread)-1 && h.Log().Committed() == (numThreads*numItemsPerThread)-1
 		})
-
-		select {
-		case <-done:
-		case <-timeout:
-			assert.FailNow(t, "Timed out waiting for majority to sync")
-		}
 	})
 
 	select {
@@ -173,7 +149,6 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	case <-timeout:
 		assert.FailNow(t, "Timed out waiting for majority to sync")
 	}
-
 }
 
 func extractIndices(items []LogItem) []int {

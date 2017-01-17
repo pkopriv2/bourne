@@ -79,7 +79,7 @@ type replica struct {
 
 func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, stash stash.Stash) (*replica, error) {
 
-	log, err := openEventLog(stash, self.id)
+	log, err := openEventLog(logger, stash, self.id)
 	if err != nil {
 		return nil, err
 	}
@@ -127,10 +127,17 @@ func (h *replica) start() error {
 	h.Term(term.num, term.leader, term.votedFor)
 
 	go func() {
-		l := h.Log.ListenCommits(0, 0)
-		for i,e := l.Next(); e == nil; i,e = l.Next() {
-			h.Logger.Info("Commit: %v", i.Index)
-		}
+		// l := h.Log.ListenCommits(0, 0)
+		// for i,e := l.Next(); e == nil; i,e = l.Next() {
+			// if i.Index % 1000 == 0 {
+				// h.Logger.Error("Compacting: %v", i.Index)
+				// err := h.Log.Compact(i.Index, NewEventChannel([]Event{Event{0,1}}), 1, []byte{})
+				// h.Logger.Error("Done compacting: %v", err)
+			// }
+			// h.Logger.Info("Commit: %v", i.Index)
+		// }
+
+		// h.Logger.Error("ERROR: ", err)
 	}()
 	return nil
 

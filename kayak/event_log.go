@@ -23,6 +23,9 @@ type eventLog struct {
 	// the currently active segment.
 	id uuid.UUID
 
+	// logger
+	logger common.Logger
+
 	// the stash instanced used for durability
 	stash stash.Stash
 
@@ -48,7 +51,7 @@ type eventLog struct {
 	closer chan struct{}
 }
 
-func openEventLog(stash stash.Stash, id uuid.UUID) (*eventLog, error) {
+func openEventLog(logger common.Logger, stash stash.Stash, id uuid.UUID) (*eventLog, error) {
 	raw, err := openDurableLog(stash, id)
 	if err != nil {
 		return nil, err
@@ -72,6 +75,7 @@ func openEventLog(stash stash.Stash, id uuid.UUID) (*eventLog, error) {
 	return &eventLog{
 		stash:  stash,
 		raw:    raw,
+		logger: logger.Fmt("EventLog"),
 		active: &segment{stash, seg},
 		head:   newPosition(head),
 		commit: newPosition(commit),
@@ -121,20 +125,28 @@ func (e *eventLog) ListenCommits(from int, buf int) *positionListener {
 	return newPositionListener(e, e.commit, from, buf)
 }
 
-func (e *eventLog) Commit(pos int) (err error) {
-	e.commit.Update(func(cur int) int {
-		err = e.raw.SetCommit(e.stash, pos)
-		if err != nil {
+func (e *eventLog) Commit(pos int) (new int, err error) {
+	new = e.commit.Update(func(cur int) int {
+		if cur >= pos {
 			return cur
 		}
 
-		return common.Min(pos, e.head.Get())
+		pos, err = e.raw.SetCommit(e.stash, common.Min(pos, e.Head()))
+		if err != nil {
+			return cur
+		} else {
+			return pos
+		}
 	})
 	return
 }
 
 func (e *eventLog) Head() int {
 	return e.head.Get()
+}
+
+func (e *eventLog) Assert(index int, term int) (bool, error) {
+	return e.Active().Assert(index, term)
 }
 
 func (e *eventLog) Get(index int) (LogItem, bool, error) {
@@ -210,6 +222,10 @@ func (d *segment) Head() (int, error) {
 	return d.raw.Head(d.stash)
 }
 
+func (d *segment) Assert(index int, term int) (bool, error) {
+	return d.raw.Assert(d.stash, index, term)
+}
+
 func (d *segment) Get(index int) (LogItem, bool, error) {
 	return d.raw.Get(d.stash, index)
 }
@@ -237,15 +253,22 @@ func (d *segment) Compact(until int, snapshot <-chan Event, snapshotSize int, co
 }
 
 type positionListener struct {
-	log    *eventLog
-	pos    *position
-	ch     chan struct{LogItem; error}
+	log *eventLog
+	pos *position
+	ch  chan struct {
+		LogItem
+		error
+	}
+
 	closed chan struct{}
 	closer chan struct{}
 }
 
 func newPositionListener(log *eventLog, pos *position, from int, buf int) *positionListener {
-	l := &positionListener{log, pos, make(chan struct{LogItem; error}, buf), make(chan struct{}), make(chan struct{}, 1)}
+	l := &positionListener{log, pos, make(chan struct {
+		LogItem
+		error
+	}, buf), make(chan struct{}), make(chan struct{}, 1)}
 	l.start(from)
 	return l
 }
@@ -268,18 +291,22 @@ func (l *positionListener) start(from int) {
 
 				// start emitting
 				for _, i := range batch {
+					tuple := struct {
+						LogItem
+						error
+					}{i, err}
+
 					select {
 					case <-l.log.closed:
 						return
 					case <-l.closed:
 						return
-					case l.ch <- struct{LogItem; error}{i, err}:
+					case l.ch <- tuple:
 						if err != nil {
 							return
 						}
 					}
 				}
-
 
 				// update current
 				cur = cur + len(batch)

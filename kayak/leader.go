@@ -365,7 +365,7 @@ func (s *logSyncer) sync(p peer) error {
 
 		// the sync'er needs to be unaffected by segment
 		// compactions.
-		segment := s.root.Log.Active()
+		// segment := s.root.Log.Active()
 		for {
 			next, ok := s.root.Log.head.WaitForGreaterThanOrEqual(prevIndex+1)
 			if !ok || s.Closed() {
@@ -389,18 +389,18 @@ func (s *logSyncer) sync(p peer) error {
 				}
 
 				// if we've moved beyond the current segment, move to next active segment
-				head, err := segment.Head()
-				if err != nil {
-					s.shutdown(err)
-					return
-				}
-
-				if prevIndex+1 > head {
-					segment = s.root.Log.Active()
-				}
+				// head, err := segment.Head()
+				// if err != nil {
+					// s.shutdown(err)
+					// return
+				// }
+//
+				// if prevIndex+1 > head {
+					// segment = s.root.Log.Active()
+				// }
 
 				// scan a full batch of events.
-				batch, err := segment.Scan(prevIndex+1, common.Min(prevIndex+1+256, head))
+				batch, err := s.root.Log.Scan(prevIndex+1, prevIndex+1+256)
 				if err != nil {
 					s.shutdown(err)
 					return

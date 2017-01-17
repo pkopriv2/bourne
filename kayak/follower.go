@@ -217,14 +217,34 @@ func (c *follower) handleReplication(append replicateEvents) {
 		return
 	}
 
-	if logItem, ok, _ := c.replica.Log.Get(append.prevLogIndex); ok && logItem.term != append.prevLogTerm {
-		c.logger.Info("Inconsistent log detected [%v,%v]. Rolling back", logItem.term, append.prevLogTerm)
+	//
+	c.replica.Log.Commit(append.commit)
+	if append.prevLogIndex == -1 && len(append.items) == 0 {
+		append.reply(append.term, true)
+		return
+	}
+
+	// consistency check
+	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); ! ok || err != nil {
+		c.logger.Error("Consistency check failed: %v", err)
 		append.reply(append.term, false)
 		return
 	}
 
-	c.replica.Log.Insert(append.items)
-	c.replica.Log.Commit(append.commit)
+	// insert items.
+	if _, err := c.replica.Log.Insert(append.items); err != nil {
+		c.logger.Error("Error inserting batch: %v", err)
+		append.reply(append.term, false)
+		return
+	}
+
+	// // commit
+	// if _, err := c.replica.Log.Commit(append.commit); err != nil {
+		// c.logger.Error("Error committing items: %v", err)
+		// append.reply(append.term, false)
+		// return
+	// }
+
 	append.reply(append.term, true)
 }
 

@@ -13,7 +13,7 @@ func TestEventLog_Empty(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 	assert.Equal(t, -1, log.Committed())
 	assert.Equal(t, -1, log.Head())
@@ -23,7 +23,7 @@ func TestEventLog_Snapshot_Empty(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	head, term, commit, err := log.Snapshot()
@@ -37,7 +37,7 @@ func TestEventLog_Append_SingleBatch_SingleItem(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	idx, err := log.Append([]Event{Event{0}}, 1)
@@ -55,7 +55,7 @@ func TestEventLog_Append_SingleBatch_MultiItem(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	idx, err := log.Append([]Event{Event{0}, Event{1}}, 1)
@@ -73,7 +73,7 @@ func TestEventLog_Append_MultiBatch_MultiItem(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	_, err = log.Append([]Event{Event{0}, Event{1}}, 1)
@@ -94,7 +94,7 @@ func TestEventLog_Insert_Batch_GreaterThanHead(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	_, err = log.Insert([]LogItem{LogItem{Index: 1, term: 1}})
@@ -105,7 +105,7 @@ func TestEventLog_Insert_SingleBatch_SingleItem(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	idx, err := log.Insert([]LogItem{LogItem{Index: 0, term: 1, Event: Event{0}}})
@@ -123,7 +123,7 @@ func TestEventLog_Get_Empty(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	_, found, err := log.Get(1)
@@ -135,7 +135,7 @@ func TestEventLog_Get_NotFound(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	_, err = log.Append([]Event{Event{0}}, 1)
@@ -150,7 +150,7 @@ func TestEventLog_Get_Single(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	_, err = log.Append([]Event{Event{0}}, 1)
@@ -167,7 +167,7 @@ func TestEventLog_Scan_Empty(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	items, err := log.Scan(0, 1)
@@ -178,7 +178,7 @@ func TestEventLog_Scan_Single(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	_, err = log.Append([]Event{Event{0}}, 1)
@@ -193,7 +193,7 @@ func TestEventLog_Scan_Middle(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	_, err = log.Append([]Event{Event{0}}, 1)
@@ -212,7 +212,7 @@ func TestEventLog_Listen_LogClosed(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	l := log.ListenCommits(0, 1)
@@ -226,7 +226,7 @@ func TestEventLog_Listen_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	l := log.ListenCommits(0, 1)
@@ -241,7 +241,7 @@ func TestEventLog_Listen_Historical(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	log.Append([]Event{Event{0}}, 1)
@@ -262,7 +262,7 @@ func TestEventLog_Listen_Realtime(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	log, err := openEventLog(OpenTestLogStash(ctx), uuid.NewV1())
+	log, err := openEventLog(ctx.Logger(), OpenTestLogStash(ctx), uuid.NewV1())
 	assert.Nil(t, err)
 
 	commits := log.ListenCommits(0, 10)
