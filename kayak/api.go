@@ -233,6 +233,11 @@ type Listener interface {
 	Next() (LogItem, error)
 }
 
+type EventStream interface {
+	io.Closer
+	Next() (Event, error)
+}
+
 // The basic log item.  This is typically just an event decorated with its index
 // in the log.
 type LogItem struct {

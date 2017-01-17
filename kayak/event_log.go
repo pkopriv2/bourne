@@ -3,7 +3,6 @@ package kayak
 import (
 	"sync"
 
-	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
@@ -194,68 +193,63 @@ type segment struct {
 }
 
 func firstSegment(db stash.Stash) (*segment, error) {
-	var err error
-	var raw durableSegment
-	err = db.Update(func(tx *bolt.Tx) error {
-		raw, err = initDurableSegment(tx, raw.id)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &segment{db, raw}, nil
+	return nil, nil
+	// var err error
+	// var raw durableSegment
+	// err = db.Update(func(tx *bolt.Tx) error {
+	// raw, err = initDurableSegment(tx, raw.id)
+	// return err
+	// })
+	// if err != nil {
+	// return nil, err
+	// }
+	//
+	// return &segment{db, raw}, nil
 }
 
 func (d *segment) Head() (head int, err error) {
-	d.stash.View(func(tx *bolt.Tx) error {
-		head, err = d.raw.Head(tx)
-		return err
-	})
+	// d.stash.View(func(tx *bolt.Tx) error {
+	// head, err = d.raw.Head(tx)
+	// return err
+	// })
 	return
 }
 
 func (d *segment) Get(index int) (item LogItem, ok bool, err error) {
-	d.stash.View(func(tx *bolt.Tx) error {
-		item, ok, err = d.raw.Get(tx, index)
-		return err
-	})
+	// d.stash.View(func(tx *bolt.Tx) error {
+	// item, ok, err = d.raw.Get(tx, index)
+	// return err
+	// })
 	return
 }
 
 // scans from [start,end], inclusive on start and end
 func (d *segment) Scan(start int, end int) (batch []LogItem, err error) {
-	d.stash.View(func(tx *bolt.Tx) error {
-		batch, err = d.raw.Scan(tx, start, end)
-		return err
-	})
+	// d.stash.View(func(tx *bolt.Tx) error {
+	// batch, err = d.raw.Scan(tx, start, end)
+	// return err
+	// })
 	return
 }
 
 func (d *segment) Append(batch []Event, term int) (head int, err error) {
-	d.stash.Update(func(tx *bolt.Tx) error {
-		head, err = d.raw.Append(tx, batch, term)
-		return err
-	})
+	// d.stash.Update(func(tx *bolt.Tx) error {
+	// head, err = d.raw.append(tx, batch, term)
+	// return err
+	// })
 	return
 }
 
 func (d *segment) Insert(batch []LogItem) (head int, err error) {
-	d.stash.Update(func(tx *bolt.Tx) error {
-		head, err = d.raw.Insert(tx, batch)
-		return err
-	})
+	// d.stash.Update(func(tx *bolt.Tx) error {
+	// head, err = d.raw.Insert(tx, batch)
+	// return err
+	// })
 	return
 }
 
 func (d *segment) Compact(until int, snapshot []Event, config []byte) (seg *segment, err error) {
-	var raw durableSegment
-	d.stash.Update(func(tx *bolt.Tx) error {
-		raw, err = d.raw.CompactOnly(tx, until, snapshot, config)
-		seg = &segment{d.stash, raw}
-		return err
-	})
-	return
+	return nil, nil
 }
 
 type positionListener struct {

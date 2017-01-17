@@ -7,7 +7,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
-	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,29 +27,20 @@ func TestDurableLog_CreateSnapshot_Empty(t *testing.T) {
 	defer ctx.Close()
 
 	db := OpenTestLogStash(ctx)
-	db.Update(func(tx *bolt.Tx) error {
-		s, err := createDurableSnapshot(tx, []Event{}, []byte{})
-		if err != nil {
-			panic(err)
-		}
 
-		snapshot, ok, err := openDurableSnapshot(tx, s.id)
-		if err != nil {
-			panic(err)
-		}
+	s, err := createDurableSnapshot(db, NewEventChannel([]Event{}), 0, []byte{})
+	assert.Nil(t, err)
 
-		assert.True(t, ok)
-		assert.Equal(t, s.id, snapshot.id)
-		assert.Equal(t, s.Config(), snapshot.Config())
+	snapshot, ok, err := openDurableSnapshot(db, s.id)
+	assert.Nil(t, err)
+	assert.True(t, ok)
 
-		events, err := snapshot.Events(tx)
-		if err != nil {
-			panic(err)
-		}
+	assert.Equal(t, s.id, snapshot.id)
+	assert.Equal(t, s.Config(), snapshot.Config())
 
-		assert.Equal(t, []Event{}, events)
-		return nil
-	})
+	events, err := snapshot.Scan(db, 0, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []Event{}, events)
 }
 
 func TestDurableLog_CreateSnapshot_Config(t *testing.T) {
@@ -60,16 +50,17 @@ func TestDurableLog_CreateSnapshot_Config(t *testing.T) {
 	expected := []byte{0, 1, 2}
 
 	db := OpenTestLogStash(ctx)
-	db.Update(func(tx *bolt.Tx) error {
-		snapshot, err := createDurableSnapshot(tx, []Event{}, expected)
-		if err != nil {
-			panic(err)
-		}
 
-		assert.NotNil(t, snapshot.id)
-		assert.Equal(t, expected, snapshot.Config())
-		return nil
-	})
+	s, err := createDurableSnapshot(db, NewEventChannel([]Event{}), 0, expected)
+	assert.Nil(t, err)
+
+	snapshot, ok, err := openDurableSnapshot(db, s.id)
+	assert.Nil(t, err)
+	assert.True(t, ok)
+
+	assert.Equal(t, s.id, snapshot.id)
+	assert.Equal(t, expected, s.Config())
+	assert.Equal(t, expected, snapshot.Config())
 }
 
 func TestDurableLog_CreateSnapshot_Events(t *testing.T) {
@@ -79,23 +70,12 @@ func TestDurableLog_CreateSnapshot_Events(t *testing.T) {
 	expected := []Event{[]byte{0, 1}, []byte{0, 1}}
 
 	db := OpenTestLogStash(ctx)
-	db.Update(func(tx *bolt.Tx) error {
-		snapshot, err := createDurableSnapshot(tx, expected, []byte{})
-		if err != nil {
-			panic(err)
-		}
+	s, err := createDurableSnapshot(db, NewEventChannel(expected), len(expected), []byte{})
+	assert.Nil(t, err)
 
-		assert.NotNil(t, snapshot.id)
-		assert.Equal(t, []byte{}, snapshot.Config())
-
-		events, err := snapshot.Events(tx)
-		if err != nil {
-			panic(err)
-		}
-
-		assert.Equal(t, expected, events)
-		return nil
-	})
+	events, err := s.Scan(db, 0, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, expected, events)
 }
 
 func TestDurableLog_CreateSnapshot_MultipleWithEvents(t *testing.T) {
@@ -106,31 +86,20 @@ func TestDurableLog_CreateSnapshot_MultipleWithEvents(t *testing.T) {
 	expected2 := []Event{[]byte{0, 1, 2}, []byte{3}, []byte{4, 5}}
 
 	db := OpenTestLogStash(ctx)
-	db.Update(func(tx *bolt.Tx) error {
-		snapshot1, err := createDurableSnapshot(tx, expected1, []byte{})
-		if err != nil {
-			panic(err)
-		}
 
-		snapshot2, err := createDurableSnapshot(tx, expected2, []byte{})
-		if err != nil {
-			panic(err)
-		}
+	snapshot1, err := createDurableSnapshot(db, NewEventChannel(expected1), len(expected1), []byte{})
+	assert.Nil(t, err)
 
-		events1, err := snapshot1.Events(tx)
-		if err != nil {
-			panic(err)
-		}
+	snapshot2, err := createDurableSnapshot(db, NewEventChannel(expected2), len(expected2), []byte{})
+	assert.Nil(t, err)
 
-		events2, err := snapshot2.Events(tx)
-		if err != nil {
-			panic(err)
-		}
+	events1, err := snapshot1.Scan(db, 0, snapshot1.size)
+	assert.Nil(t, err)
+	assert.Equal(t, expected1, events1)
 
-		assert.Equal(t, expected1, events1)
-		assert.Equal(t, expected2, events2)
-		return nil
-	})
+	events2, err := snapshot2.Scan(db, 0, snapshot2.size)
+	assert.Nil(t, err)
+	assert.Equal(t, expected2, events2)
 }
 
 func TestDurableLog_DeleteSnapshot(t *testing.T) {
@@ -140,40 +109,229 @@ func TestDurableLog_DeleteSnapshot(t *testing.T) {
 	events := []Event{[]byte{0, 1}, []byte{2, 3}}
 
 	db := OpenTestLogStash(ctx)
-	db.Update(func(tx *bolt.Tx) error {
-		snapshot, err := createDurableSnapshot(tx, events, []byte{})
-		if err != nil {
-			panic(err)
-		}
 
-		assert.Nil(t, snapshot.Delete(tx))
-		assert.Equal(t, DeletedError, errors.Cause(snapshot.Delete(tx)))
+	snapshot, err := createDurableSnapshot(db, NewEventChannel(events), len(events), []byte{})
+	assert.Nil(t, err)
+	assert.Nil(t, snapshot.Delete(db))
+	assert.Nil(t, snapshot.Delete(db)) // idempotent deletes
 
-		_, err = snapshot.Events(tx)
-		assert.Equal(t, DeletedError, errors.Cause(err))
-		return nil
-	})
+	events, err = snapshot.Scan(db, 0, 100)
+	assert.Equal(t, DeletedError, errors.Cause(err))
+	assert.Nil(t, events) // idempotent deletes
 }
+
 
 func TestDurableLog_CreateSegment_Empty(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
 	db := OpenTestLogStash(ctx)
-	db.Update(func(tx *bolt.Tx) error {
-		seg1, err := initDurableSegment(tx, uuid.NewV1())
-		if err != nil {
-			panic(err)
-		}
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+	assert.Equal(t, -1, seg.prevIndex)
+	assert.Equal(t, -1, seg.prevTerm)
 
-		seg2, ok, err := openDurableSegment(tx, seg1.id, seg1.num)
-		assert.Nil(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, seg1.id, seg2.id)
+	head, err := seg.Head(db)
+	assert.Nil(t, err)
+	assert.Equal(t, -1, head)
 
-		batch, err := seg2.Scan(tx, 0, 100)
-		assert.Nil(t, err)
-		assert.Equal(t, []LogItem{}, batch)
-		return nil
-	})
+	batch, err := seg.Scan(db, 0, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []LogItem{}, batch)
+
+	snapshot, err := seg.Snapshot(db)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte{}, snapshot.Config())
+
+	events, err := snapshot.Scan(db, 0, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []Event{}, events)
+}
+
+func TestDurableLog_Segment_Append_Single(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	expected := Event{0,1}
+	head, err := seg.Append(db, []Event{expected}, 1)
+	assert.Nil(t, err)
+	assert.Equal(t, 0, head)
+
+	batch, err := seg.Scan(db, 0, 100)
+	assert.Nil(t, err)
+
+	expectedItem := LogItem{Index: 0, term: 1, Event: expected}
+	assert.Equal(t, []LogItem{expectedItem}, batch)
+}
+
+func TestDurableLog_Segment_Append_Multi(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	expected := Event{0,1}
+	head, err := seg.Append(db, []Event{expected}, 1)
+	head, err = seg.Append(db, []Event{expected}, 1)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, head)
+
+	batch, err := seg.Scan(db, 0, 100)
+	assert.Nil(t, err)
+
+	expectedItem1 := LogItem{Index: 0, term: 1, Event: expected}
+	expectedItem2 := LogItem{Index: 1, term: 1, Event: expected}
+	assert.Equal(t, []LogItem{expectedItem1, expectedItem2}, batch)
+}
+
+func TestDurableLog_Segment_Insert_IllegalIndex(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	exp := LogItem{Index: 1, term: 1, Event: Event{0,1}}
+	assert.Equal(t, OutOfBoundsError, errors.Cause(seg.Insert(db, []LogItem{exp})))
+}
+
+func TestDurableLog_Segment_Insert_Multi(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	expected1 := LogItem{Index: 0, term: 1, Event: Event{0,1}}
+	expected2 := LogItem{Index: 1, term: 1, Event: Event{0,1,2}}
+
+	err = seg.Insert(db, []LogItem{expected1})
+	assert.Nil(t, err)
+	err = seg.Insert(db, []LogItem{expected2})
+	assert.Nil(t, err)
+
+	batch, err := seg.Scan(db, 0, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []LogItem{expected1, expected2}, batch)
+}
+
+func TestDurableLog_Segment_Delete(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	expected1 := LogItem{Index: 0, term: 1, Event: Event{0,1}}
+	expected2 := LogItem{Index: 1, term: 1, Event: Event{0,1,2}}
+
+	err = seg.Insert(db, []LogItem{expected1})
+	assert.Nil(t, err)
+	err = seg.Insert(db, []LogItem{expected2})
+	assert.Nil(t, err)
+
+	err = seg.Delete(db)
+	assert.Nil(t, err)
+
+	_, err = seg.Scan(db, 0, 100)
+	assert.Equal(t, DeletedError, errors.Cause(err))
+}
+
+func TestDurableLog_Segment_Compact_Empty(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	_, err = seg.CompactAndCopy(db, 1, NewEventChannel([]Event{}), 0, []byte{})
+	assert.Equal(t, OutOfBoundsError, errors.Cause(err))
+
+	cop, err := seg.CompactAndCopy(db, -1, NewEventChannel([]Event{}), 0, []byte{})
+	assert.Nil(t, err)
+	assert.NotEqual(t, cop.id, seg.id)
+}
+
+func TestDurableLog_Segment_Compact_SingleItem(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	prevHead, err := seg.Append(db, []Event{Event{0,1}}, 1)
+	assert.Nil(t, err)
+
+	compacted, err := seg.CompactAndCopy(db, 0, NewEventChannel([]Event{Event{0}}), 0, []byte{})
+	assert.Nil(t, err)
+
+	newHead, err := compacted.Head(db)
+	assert.Nil(t, err)
+	assert.Equal(t, prevHead, newHead)
+	assert.Equal(t, compacted.prevIndex, 0)
+	assert.Equal(t, compacted.prevTerm, 1)
+}
+
+func TestDurableLog_Segment_Compact_Multiple(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	prevHead, err := seg.Append(db, []Event{Event{0,1},Event{0,1}}, 1)
+	assert.Nil(t, err)
+
+	compacted, err := seg.CompactAndCopy(db, 1, NewEventChannel([]Event{Event{0}}), 0, []byte{})
+	assert.Nil(t, err)
+
+	newHead, err := compacted.Head(db)
+	assert.Nil(t, err)
+	assert.Equal(t, prevHead, newHead)
+	assert.Equal(t, compacted.prevIndex, 1)
+	assert.Equal(t, compacted.prevTerm, 1)
+
+	_, err = compacted.Scan(db, 0, 0)
+	assert.Equal(t, OutOfBoundsError, errors.Cause(err))
+}
+
+func TestDurableLog_Segment_Compact_UntilLessThanHead(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	seg, err := initDurableSegment(db)
+	assert.Nil(t, err)
+
+	prevHead, err := seg.Append(db, []Event{Event{0,1,1},Event{0,1}}, 1)
+	assert.Nil(t, err)
+
+	compacted, err := seg.CompactAndCopy(db, 0, NewEventChannel([]Event{Event{0}}), 0, []byte{})
+	assert.Nil(t, err)
+
+	newHead, err := compacted.Head(db)
+	assert.Nil(t, err)
+	assert.Equal(t, prevHead, newHead)
+	assert.Equal(t, compacted.prevIndex, 0)
+	assert.Equal(t, compacted.prevTerm, 1)
+
+	scanned, err := compacted.Scan(db,1,100)
+	assert.Nil(t, err)
+	assert.Equal(t, []LogItem{LogItem{Index: 1, term: 1, Event: Event{0,1}}}, scanned)
 }

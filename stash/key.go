@@ -29,6 +29,14 @@ func (k Key) Compare(other []byte) int {
 	return bytes.Compare(k.Raw(), other)
 }
 
+func (k Key) ParentOf(child []byte) bool {
+	return bytes.HasPrefix(child, k)
+}
+
+func (k Key) ChildOf(parent []byte) bool {
+	return bytes.HasPrefix(k, parent)
+}
+
 func (k Key) Raw() []byte {
 	return []byte(k)
 }
@@ -48,7 +56,9 @@ func IntBytes(val int) []byte {
 }
 
 func ParseInt(val []byte) (ret int, err error) {
+	var raw int64
 	buf := bytes.NewBuffer(val)
-	err = binary.Read(buf, binary.BigEndian, &ret)
+	err = binary.Read(buf, binary.BigEndian, &raw)
+	ret = int(raw)
 	return
 }
