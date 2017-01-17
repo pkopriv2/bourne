@@ -171,7 +171,12 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
-	maxLogIndex, maxLogTerm, _ := c.replica.Log.Snapshot()
+	maxLogIndex, maxLogTerm, _, err := c.replica.Log.Snapshot()
+	if err != nil {
+		vote.reply(c.replica.term.num, false)
+		return
+	}
+
 	if vote.term == c.replica.term.num {
 		if c.replica.term.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 			vote.reply(c.replica.term.num, true)

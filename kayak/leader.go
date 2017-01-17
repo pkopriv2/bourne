@@ -171,7 +171,12 @@ func (c *leader) handleRequestVote(vote requestVote) {
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	maxLogIndex, maxLogTerm, _ := c.replica.Log.Snapshot()
+	maxLogIndex, maxLogTerm, _, err := c.replica.Log.Snapshot()
+	if err != nil {
+		vote.reply(vote.term, false)
+		return
+	}
+
 	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
 		c.replica.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
@@ -338,19 +343,21 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 	}
 }
 
-func (s *logSyncer) sync(p peer) {
+func (s *logSyncer) sync(p peer) error {
 	logger := s.logger.Fmt("Routine(%v)", p)
 	logger.Info("Starting peer synchronizer")
+
+	// snapshot the local log
+	head, term, _, err := s.root.Log.Snapshot()
+	if err != nil {
+		return err
+	}
 
 	var cl *client
 	go func() {
 		defer logger.Info("Shutting down")
 		defer common.RunIf(func() { cl.Close() })(cl)
-
 		var err error
-
-		// snapshot the local log
-		head, term, _ := s.root.Log.Snapshot()
 
 		// we will start syncing at current head offset
 		prevIndex := head
@@ -447,6 +454,7 @@ func (s *logSyncer) sync(p peer) {
 			logger.Debug("Sync'ed to [%v]", next)
 		}
 	}()
+	return nil
 }
 
 func (s *logSyncer) client(p peer) (*client, error) {

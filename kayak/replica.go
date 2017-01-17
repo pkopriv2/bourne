@@ -121,18 +121,18 @@ func (h *replica) start() error {
 	h.Term(term.num, term.leader, term.votedFor)
 
 	go func() {
-		l := h.Log.ListenCommits(0, 0)
-
-		for i:=0;; i++{
-			select {
-			case <-h.closed:
-				return
-			case <-l.Closed():
-				return
-			case i:=<-l.Items():
-				h.Logger.Info("Commit: %v", i)
-			}
-		}
+		// l := h.Log.ListenCommits(0, 0)
+//
+		// for i:=0;; i++{
+			// select {
+			// case <-h.closed:
+				// return
+			// case <-l.Closed():
+				// return
+			// case i:=<-l.Items():
+				// h.Logger.Info("Commit: %v", i)
+			// }
+		// }
 	}()
 	return nil
 

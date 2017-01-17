@@ -26,6 +26,9 @@ type eventLog struct {
 	// the stash instanced used for durability
 	stash stash.Stash
 
+	//
+	raw durableLog
+
 	// the currently active segment.
 	active *segment
 
@@ -48,15 +51,6 @@ type eventLog struct {
 func openEventLog(id uuid.UUID, stash stash.Stash) (*eventLog, error) {
 	return nil, nil
 }
-
-// func newEventLog(ctx common.Context) *eventLog {
-// return &eventLog{
-// active: newSegment([]Event{}, -1, -1),
-// head:   newPosition(-1),
-// commit: newPosition(-1),
-// closed: make(chan struct{}),
-// closer: make(chan struct{}, 1)}
-// }
 
 func (e *eventLog) Close() error {
 	select {
@@ -102,6 +96,11 @@ func (e *eventLog) ListenCommits(from int, buf int) *positionListener {
 
 func (e *eventLog) Commit(pos int) {
 	e.commit.Update(func(cur int) int {
+		err := e.raw.SetCommit(e.stash, pos)
+		if err != nil {
+			return cur
+		}
+
 		return common.Min(pos, e.head.Get())
 	})
 }
@@ -136,52 +135,39 @@ func (e *eventLog) Insert(batch []LogItem) (int, error) {
 	return e.head.Set(head), nil // commutative, so safe for out of order scheduling
 }
 
-func (e *eventLog) Snapshot() (index int, term int, commit int) {
-	return
-
+func (e *eventLog) Snapshot() (index int, term int, commit int, err error) {
 	// // must take commit prior to taking the end of the log
 	// // to ensure invariant commit <= head
-	// commit = e.Committed()
-	// last, error := e.Active().Head()
-	// return last.Index, last.term, commit
+	commit, active := e.Committed(), e.Active()
+
+	head, err := active.Head()
+	if err != nil {
+		return -1,-1,-1,err
+	}
+
+	item, ok, err := active.Get(head)
+	if err != nil || ! ok {
+		return -1,-1,-1,err
+	}
+
+	return item.Index, item.term, commit, nil
 }
 
-func (e *eventLog) Compact(until int, snapshot []Event, config []byte) (err error) {
+func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (err error) {
+	cur := e.Active()
 
 	// Go ahead and compact the majority of the segment. (writes can still happen.)
-	new, err := e.Active().Compact(until, snapshot, config)
+	new, err := cur.Compact(until, snapshot, snapshotSize, config)
 	if err != nil {
 		return err
 	}
 
 	// Swap existing with new.
 	e.UpdateActive(func(cur *segment) *segment {
-		var curHead int
-		var newHead int
-
-		curHead, err = cur.Head()
-		if err != nil {
+		ok, err := e.raw.SwapActive(e.stash, cur.raw, new.raw)
+		if err != nil || ! ok {
 			return cur
 		}
-
-		newHead, err = new.Head()
-		if err != nil {
-			return cur
-		}
-
-		var backfill []LogItem
-		if curHead > newHead {
-			backfill, err = new.Scan(newHead, curHead)
-			if err != nil {
-				return cur
-			}
-
-			newHead, err = new.Insert(backfill)
-			if err != nil {
-				return cur
-			}
-		}
-
 		return new
 	})
 	return
@@ -192,69 +178,38 @@ type segment struct {
 	raw   durableSegment
 }
 
-func firstSegment(db stash.Stash) (*segment, error) {
-	return nil, nil
-	// var err error
-	// var raw durableSegment
-	// err = db.Update(func(tx *bolt.Tx) error {
-	// raw, err = initDurableSegment(tx, raw.id)
-	// return err
-	// })
-	// if err != nil {
-	// return nil, err
-	// }
-	//
-	// return &segment{db, raw}, nil
+func (d *segment) Head() (int, error) {
+	return d.raw.Head(d.stash)
 }
 
-func (d *segment) Head() (head int, err error) {
-	// d.stash.View(func(tx *bolt.Tx) error {
-	// head, err = d.raw.Head(tx)
-	// return err
-	// })
-	return
-}
-
-func (d *segment) Get(index int) (item LogItem, ok bool, err error) {
-	// d.stash.View(func(tx *bolt.Tx) error {
-	// item, ok, err = d.raw.Get(tx, index)
-	// return err
-	// })
-	return
+func (d *segment) Get(index int) (LogItem, bool, error) {
+	return d.raw.Get(d.stash, index)
 }
 
 // scans from [start,end], inclusive on start and end
-func (d *segment) Scan(start int, end int) (batch []LogItem, err error) {
-	// d.stash.View(func(tx *bolt.Tx) error {
-	// batch, err = d.raw.Scan(tx, start, end)
-	// return err
-	// })
-	return
+func (d *segment) Scan(start int, end int) ([]LogItem, error) {
+	return d.raw.Scan(d.stash, start, end)
 }
 
-func (d *segment) Append(batch []Event, term int) (head int, err error) {
-	// d.stash.Update(func(tx *bolt.Tx) error {
-	// head, err = d.raw.append(tx, batch, term)
-	// return err
-	// })
-	return
+func (d *segment) Append(batch []Event, term int) (int, error) {
+	return d.raw.Append(d.stash, batch, term)
 }
 
-func (d *segment) Insert(batch []LogItem) (head int, err error) {
-	// d.stash.Update(func(tx *bolt.Tx) error {
-	// head, err = d.raw.Insert(tx, batch)
-	// return err
-	// })
-	return
+func (d *segment) Insert(batch []LogItem) (int, error) {
+	return d.raw.Insert(d.stash, batch)
 }
 
-func (d *segment) Compact(until int, snapshot []Event, config []byte) (seg *segment, err error) {
-	return nil, nil
+func (d *segment) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (*segment, error) {
+	new, err := d.raw.CopyAndCompact(d.stash, until, snapshot, snapshotSize, config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &segment{d.stash, new}, nil
 }
 
 type positionListener struct {
 	log     *eventLog
-	segment *segment
 	pos     *position
 	ch      chan LogItem
 	closed  chan struct{}
@@ -262,7 +217,7 @@ type positionListener struct {
 }
 
 func newPositionListener(log *eventLog, pos *position, from int, buf int) *positionListener {
-	l := &positionListener{log, log.Active(), pos, make(chan LogItem, buf), make(chan struct{}), make(chan struct{}, 1)}
+	l := &positionListener{log, pos, make(chan LogItem, buf), make(chan struct{}), make(chan struct{}, 1)}
 	l.start(from)
 	return l
 }
@@ -283,18 +238,8 @@ func (l *positionListener) start(from int) {
 
 			for cur <= next {
 
-				// if we've moved beyond the current segment, reset to active.
-				head, err := l.segment.Head()
-				if err != nil {
-					return
-				}
-
-				if cur > head {
-					l.segment = l.log.Active()
-				}
-
 				// scan the next batch
-				batch, err := l.segment.Scan(cur, common.Min(head, next, cur+255))
+				batch, err := l.log.Scan(cur, common.Min(next, cur+255))
 				if err != nil {
 					return
 				}

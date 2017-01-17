@@ -90,7 +90,11 @@ func (c *candidate) Close() error {
 func (c *candidate) start() {
 
 	ballots := c.replica.Broadcast(func(cl *client) response {
-		maxLogIndex, maxLogTerm, _ := c.replica.Log.Snapshot()
+		maxLogIndex, maxLogTerm, _, err := c.replica.Log.Snapshot()
+		if err != nil {
+			return response{c.replica.term.num, false}
+		}
+
 		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.num, maxLogIndex, maxLogTerm)
 		if err != nil {
 			return response{c.replica.term.num, false}
