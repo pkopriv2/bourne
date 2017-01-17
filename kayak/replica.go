@@ -78,6 +78,12 @@ type replica struct {
 }
 
 func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, stash stash.Stash) (*replica, error) {
+
+	log, err := openEventLog(stash, self.id)
+	if err != nil {
+		return nil, err
+	}
+
 	r := &replica{
 		Ctx:             ctx,
 		Id:              self.id,
@@ -85,7 +91,7 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		peers:           others,
 		Logger:          logger,
 		terms:           openTermStorage(stash),
-		// Log:             newEventLog(ctx),
+		Log:             log,
 		Replications:    make(chan replicateEvents),
 		VoteRequests:    make(chan requestVote),
 		RemoteAppends:   make(chan machineAppend),
@@ -106,7 +112,7 @@ func (r *replica) Close() error {
 	}
 
 	close(r.closed)
-	return nil
+	return r.Log.Close()
 }
 
 func (h *replica) start() error {
@@ -121,18 +127,10 @@ func (h *replica) start() error {
 	h.Term(term.num, term.leader, term.votedFor)
 
 	go func() {
-		// l := h.Log.ListenCommits(0, 0)
-//
-		// for i:=0;; i++{
-			// select {
-			// case <-h.closed:
-				// return
-			// case <-l.Closed():
-				// return
-			// case i:=<-l.Items():
-				// h.Logger.Info("Commit: %v", i)
-			// }
-		// }
+		l := h.Log.ListenCommits(0, 0)
+		for i,e := l.Next(); e == nil; i,e = l.Next() {
+			h.Logger.Info("Commit: %v", i.Index)
+		}
 	}()
 	return nil
 
@@ -405,44 +403,4 @@ type machineAppendResponse struct {
 type response struct {
 	term    int
 	success bool
-}
-
-type listener struct {
-	raw *positionListener
-	ch  chan LogItem
-}
-
-func newListener(raw *positionListener) *listener {
-	return &listener{raw, make(chan LogItem)}
-}
-
-func (l *listener) start() {
-	go func() {
-		for {
-			var i LogItem
-			select {
-			case <-l.raw.Closed():
-				return
-			case i = <-l.raw.Items():
-			}
-
-			select {
-			case <-l.raw.Closed():
-				return
-			case l.ch <- i:
-			}
-		}
-	}()
-}
-
-func (l *listener) Closed() <-chan struct{} {
-	return l.raw.Closed()
-}
-
-func (l *listener) Items() <-chan LogItem {
-	return l.ch
-}
-
-func (l *listener) Close() error {
-	return l.raw.Close()
 }

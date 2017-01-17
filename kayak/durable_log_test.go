@@ -19,10 +19,6 @@ func OpenTestLogStash(ctx common.Context) stash.Stash {
 	return db
 }
 
-func OpenTestDurableLog(ctx common.Context) durableLog {
-	return durableLog{}
-}
-
 func TestDurableLog_CreateSnapshot_Empty(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()

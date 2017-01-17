@@ -105,6 +105,11 @@ func deleteCommit(tx *bolt.Tx, logId uuid.UUID) error {
 
 func openDurableLog(db stash.Stash, logId uuid.UUID) (log durableLog, err error) {
 	err = db.Update(func(tx *bolt.Tx) error {
+		err := initBuckets(tx)
+		if err != nil {
+			return err
+		}
+
 		_, found, err := getActiveSegmentId(tx, logId)
 		if err != nil {
 			return err
@@ -232,7 +237,7 @@ func (d durableLog) GetCommit(db stash.Stash) (pos int, err error) {
 }
 
 func (d durableLog) SetCommit(db stash.Stash, pos int) error {
-	return db.View(func(tx *bolt.Tx) error {
+	return db.Update(func(tx *bolt.Tx) error {
 		return d.setCommit(tx, pos)
 	})
 }

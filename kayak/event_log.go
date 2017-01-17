@@ -48,8 +48,35 @@ type eventLog struct {
 	closer chan struct{}
 }
 
-func openEventLog(id uuid.UUID, stash stash.Stash) (*eventLog, error) {
-	return nil, nil
+func openEventLog(stash stash.Stash, id uuid.UUID) (*eventLog, error) {
+	raw, err := openDurableLog(stash, id)
+	if err != nil {
+		return nil, err
+	}
+
+	seg, err := raw.Active(stash)
+	if err != nil {
+		return nil, err
+	}
+
+	head, err := seg.Head(stash)
+	if err != nil {
+		return nil, err
+	}
+
+	commit, err := raw.GetCommit(stash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &eventLog{
+		stash:  stash,
+		raw:    raw,
+		active: &segment{stash, seg},
+		head:   newPosition(head),
+		commit: newPosition(commit),
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}, nil
 }
 
 func (e *eventLog) Close() error {
@@ -94,15 +121,16 @@ func (e *eventLog) ListenCommits(from int, buf int) *positionListener {
 	return newPositionListener(e, e.commit, from, buf)
 }
 
-func (e *eventLog) Commit(pos int) {
+func (e *eventLog) Commit(pos int) (err error) {
 	e.commit.Update(func(cur int) int {
-		err := e.raw.SetCommit(e.stash, pos)
+		err = e.raw.SetCommit(e.stash, pos)
 		if err != nil {
 			return cur
 		}
 
 		return common.Min(pos, e.head.Get())
 	})
+	return
 }
 
 func (e *eventLog) Head() int {
@@ -142,12 +170,12 @@ func (e *eventLog) Snapshot() (index int, term int, commit int, err error) {
 
 	head, err := active.Head()
 	if err != nil {
-		return -1,-1,-1,err
+		return -1, -1, -1, err
 	}
 
 	item, ok, err := active.Get(head)
-	if err != nil || ! ok {
-		return -1,-1,-1,err
+	if err != nil || !ok {
+		return -1, -1, -1, err
 	}
 
 	return item.Index, item.term, commit, nil
@@ -165,7 +193,7 @@ func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, c
 	// Swap existing with new.
 	e.UpdateActive(func(cur *segment) *segment {
 		ok, err := e.raw.SwapActive(e.stash, cur.raw, new.raw)
-		if err != nil || ! ok {
+		if err != nil || !ok {
 			return cur
 		}
 		return new
@@ -209,15 +237,15 @@ func (d *segment) Compact(until int, snapshot <-chan Event, snapshotSize int, co
 }
 
 type positionListener struct {
-	log     *eventLog
-	pos     *position
-	ch      chan LogItem
-	closed  chan struct{}
-	closer  chan struct{}
+	log    *eventLog
+	pos    *position
+	ch     chan struct{LogItem; error}
+	closed chan struct{}
+	closer chan struct{}
 }
 
 func newPositionListener(log *eventLog, pos *position, from int, buf int) *positionListener {
-	l := &positionListener{log, pos, make(chan LogItem, buf), make(chan struct{}), make(chan struct{}, 1)}
+	l := &positionListener{log, pos, make(chan struct{LogItem; error}, buf), make(chan struct{}), make(chan struct{}, 1)}
 	l.start(from)
 	return l
 }
@@ -227,12 +255,9 @@ func (l *positionListener) start(from int) {
 		defer l.Close()
 
 		for cur := from; ; {
-			if l.isClosed() {
-				return
-			}
 
 			next, ok := l.pos.WaitForGreaterThanOrEqual(cur)
-			if !ok {
+			if !ok || l.isClosed() {
 				return
 			}
 
@@ -240,9 +265,6 @@ func (l *positionListener) start(from int) {
 
 				// scan the next batch
 				batch, err := l.log.Scan(cur, common.Min(next, cur+255))
-				if err != nil {
-					return
-				}
 
 				// start emitting
 				for _, i := range batch {
@@ -251,9 +273,13 @@ func (l *positionListener) start(from int) {
 						return
 					case <-l.closed:
 						return
-					case l.ch <- i:
+					case l.ch <- struct{LogItem; error}{i, err}:
+						if err != nil {
+							return
+						}
 					}
 				}
+
 
 				// update current
 				cur = cur + len(batch)
@@ -271,12 +297,13 @@ func (l *positionListener) isClosed() bool {
 	}
 }
 
-func (l *positionListener) Closed() <-chan struct{} {
-	return l.closed
-}
-
-func (l *positionListener) Items() <-chan LogItem {
-	return l.ch
+func (p *positionListener) Next() (LogItem, error) {
+	select {
+	case <-p.closed:
+		return LogItem{}, ClosedError
+	case i := <-p.ch:
+		return i.LogItem, i.error
+	}
 }
 
 func (l *positionListener) Close() error {
