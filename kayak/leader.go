@@ -315,6 +315,7 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 		// wait for majority.
 		majority := majority(len(s.root.peers)+1) - 1
 		for done := make(map[uuid.UUID]struct{}); len(done) < majority; {
+			// time.Sleep(10*time.Millisecond)
 			for _, p := range s.root.peers {
 				if _, ok := done[p.id]; ok {
 					continue

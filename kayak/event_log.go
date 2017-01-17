@@ -109,16 +109,33 @@ func (e *eventLog) Committed() (pos int) {
 	return e.commit.Get()
 }
 
-func (e *eventLog) Active() *segment {
+func (e *eventLog) UseActive(fn func(*segment)) {
 	e.activeLock.RLock()
 	defer e.activeLock.RUnlock()
-	return e.active
+	fn(e.active)
 }
 
 func (e *eventLog) UpdateActive(fn func(s *segment) *segment) {
 	e.activeLock.Lock()
 	defer e.activeLock.Unlock()
 	e.active = fn(e.active)
+}
+
+// NOT SAFE!!
+func (e *eventLog) Active() *segment {
+	e.activeLock.RLock()
+	defer e.activeLock.RUnlock()
+	return e.active
+}
+
+func (e *eventLog) Size() (int, error) {
+	segment := e.Active()
+	head, err := segment.Head()
+	if err != nil {
+		return 0, err
+	}
+
+	return head - segment.raw.prevIndex, nil
 }
 
 func (e *eventLog) ListenCommits(from int, buf int) *positionListener {
@@ -145,34 +162,48 @@ func (e *eventLog) Head() int {
 	return e.head.Get()
 }
 
-func (e *eventLog) Assert(index int, term int) (bool, error) {
-	return e.Active().Assert(index, term)
+func (e *eventLog) Assert(index int, term int) (ok bool, err error) {
+	e.UseActive(func(s *segment) {
+		ok, err = s.Assert(index, term)
+	})
+	return
 }
 
-func (e *eventLog) Get(index int) (LogItem, bool, error) {
-	return e.Active().Get(index)
+func (e *eventLog) Get(index int) (i LogItem, o bool, f error) {
+	e.UseActive(func(s *segment) {
+		i, o, f = s.Get(index)
+	})
+	return
 }
 
-func (e *eventLog) Scan(start int, end int) ([]LogItem, error) {
-	return e.Active().Scan(start, end)
+func (e *eventLog) Scan(start int, end int) (r []LogItem, f error) {
+	e.UseActive(func(s *segment) {
+		r, f = s.Scan(start, end)
+	})
+	return
 }
 
-func (e *eventLog) Append(batch []Event, term int) (int, error) {
-	head, err := e.Active().Append(batch, term)
-	if err != nil {
-		return 0, err
+func (e *eventLog) Append(batch []Event, term int) (h int, f error) {
+	e.UseActive(func(s *segment) {
+		h, f = s.Append(batch, term)
+	})
+	if f != nil {
+		return
 	}
 
-	return e.head.Set(head), nil // commutative, so safe for out of order scheduling
+	return e.head.Set(h), nil // commutative, so safe for out of order scheduling
+
 }
 
-func (e *eventLog) Insert(batch []LogItem) (int, error) {
-	head, err := e.Active().Insert(batch)
-	if err != nil {
-		return 0, err
+func (e *eventLog) Insert(batch []LogItem) (h int, f error) {
+	e.UseActive(func(s *segment) {
+		h, f = s.Insert(batch)
+	})
+	if f != nil {
+		return
 	}
 
-	return e.head.Set(head), nil // commutative, so safe for out of order scheduling
+	return e.head.Set(h), nil // commutative, so safe for out of order scheduling
 }
 
 func (e *eventLog) Snapshot() (index int, term int, commit int, err error) {

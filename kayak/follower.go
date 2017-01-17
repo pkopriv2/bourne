@@ -226,7 +226,11 @@ func (c *follower) handleReplication(append replicateEvents) {
 
 	// consistency check
 	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); ! ok || err != nil {
-		c.logger.Error("Consistency check failed: %v", err)
+		head := c.replica.Log.Head()
+		act, _, _ := c.replica.Log.Get(append.prevLogIndex)
+		prev := c.replica.Log.Active().raw.prevIndex
+
+		c.logger.Error("Consistency check failed(%v): %v, Actual: %v, Head: %v, Prev: %v", err, append, act, head, prev)
 		append.reply(append.term, false)
 		return
 	}

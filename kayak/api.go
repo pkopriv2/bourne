@@ -10,44 +10,18 @@ import (
 
 // Public Error Types
 var (
-	EvictedError       = errors.New("Kayak:Evicted")
-	FailedError        = errors.New("Kayak:Failed")
 	ClosedError        = errors.New("Kayak:Closed")
-	CanceledError      = errors.New("Kayak:Canceled")
 	NotLeaderError     = errors.New("Kayak:NotLeader")
 	NoLeaderError      = errors.New("Kayak:NoLeader")
-	StateError         = errors.New("Kayak:StateError")
-	EventError         = errors.New("Kayak:EventError")
-	DeletedStreamError = errors.New("Kayak:StorageError")
-	StorageError       = errors.New("Kayak:StorageError")
-	SlowConsumerError  = errors.New("Kayak:SlowConsumerError")
 )
 
-// Replicates and runs the given machine using a durable event log.
-// Machines of these types are safe from system failures, but take on
-// the performance cost of the additional IO.
+// Runs the machine, using a replicated event log as the durable storage
+// engine.  Machines of these types can continue to function as long
+// as a majority of peers remain alive.  If the remaining members are
+// unable to form a quorum, client requests will be returned with a
+// NoLeaderError
 //
-// The replicated machine can survive a minority number of peer
-// failures.  Once a majority of machines can no longer form a quorum
-// to elect a leader, the system is in a failure state and cannot
-// progress. Intervention is likely required.
-//
-func ReplicateDurable(ctx common.Context, machine Machine, self string, peers []string) error {
-	return nil
-}
-
-// Replicates and runs the given machine using an in memory event log.
-// Machines of these types are much faster than their durable bretheren
-// but the local state is lost after each failure.
-//
-// The cluster will likely lose data once a majority of peers are no
-// longer alive.  In this event it is probably better to rebuild instead of
-// intervening.  The log will voluntarily destroy itself and start anew.
-//
-// For normal operations failures (where a majority are active), the machines
-// will simply be restarted and the log will copied from a peer.
-//
-func ReplicateInMemory(ctx common.Context, machine Machine, self string, peers []string) error {
+func Run(ctx common.Context, app Machine, self string, peers []string) error {
 	return nil
 }
 
@@ -174,12 +148,13 @@ type Machine interface {
 	// but realized that channels fit pretty naturally.  I tend to
 	// avoid channel based apis, but this one seems simple enough
 	// for our needs.
-	Snapshot() (stream <-chan Event, index int, err error)
+	Snapshot() (num int, stream <-chan Event, lastIncluded int, err error)
 
 	// Runs the main machine routine.  This may be called many
-	// times throughout the lifetime of the machine.
+	// times throughout the lifetime of the machine, therefore,
+	// care needs to be taken to maintain consistency between
+	// the machine state and the snapshot.
 	//
-	// The provided log is guaranteed to be
 	Run(log Log) error
 }
 
@@ -232,13 +207,6 @@ type Listener interface {
 	//
 	Next() (LogItem, error)
 }
-
-type EventStream interface {
-	io.Closer
-
-	Next() (Event, error)
-}
-
 
 // The basic log item.  This is typically just an event decorated with its index
 // in the log.
