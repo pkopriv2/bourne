@@ -105,9 +105,6 @@ func (e Event) Raw() []byte {
 // log items.  In other words, many of the items have been obviated.  The log
 // can leverage this to occasionally shrink the log.
 //
-// TODO: Is this necessary?  Can the log guarantee that an append only
-// returns once it has been replicated to this instance?
-//
 // References:
 // * Reft Spec:
 //     https://raft.github.io/raft.pdf
@@ -135,59 +132,56 @@ type Machine interface {
 type Log interface {
 	io.Closer
 
-	// Adds a listener to the log commits starting with and including
-	// from. The listener is guaranteed to receive ALL items in the order
+	// Listen generates a listener interested in log commits starting from
+	// and incuding sthe start index.
+	//
+	// The listener is guaranteed to receive ALL items in the order
 	// they are committed - however - if a listener becomes significantly
 	// lagged, so much so that its current segment is compacted away,
-	// it will fail. However, this should be unlikely, as consumers have
-	// been given control over compactions.  Moreover, it is not expected
-	// that consumers need be concerned with log state.  In many cases,
-	// simply returning from the main machine's run loop and restarting
-	// is sufficient to resume operations.
+	// it will fail.  This should be unlikely, as consumers have been given
+	// control over compactions.  Moreover, it is not expected that consumers
+	// need be concerned with log state.  In many cases, simply returning
+	// from the main machine's run loop and restarting is sufficient to resume
+	// operations.
 	//
-	// Please use #All() for backfilling.
-	Listen(from int, buf int) (Listener, error)
+	// This method also gives control over the underlying buffer size.
+	// Consumers which need highly synchronized state with the log should
+	// choose smaller buffers.
+	//
+	Listen(start int, buf int) (Listener, error)
 
-	// Appends and commits the event to the log.
+	// Append appends and commits the event to the log.
 	//
 	// If the append is successful, Do not assume that all committed items
 	// have been replicated to this instance.  Appends should always accompany
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
+	//
 	Append(Event) (LogItem, error)
 
-	// Compacts the log with the given snapshot that is valid until
-	// and including the given index.  This is able to happen concurrently
-	// with other requests, so consuming machines can continue to serve
-	// requests normally.  However, for sufficiently large machines,
-	// expect this to have a non-negligible impact on machine performance.
+	// Compact replaces the log until the given point with the given snapshot
 	//
-	// Every state machine must be expressable as a sequence of events.
-	// The snapshot should be the minimal number of events that are
-	// required such that:
+	// Once the snapshot has been safely stored, the log until and including
+	// the index will be deleted. This method is synchronous, but can be called
+	// concurrent to other log methods. It should be considered safe for the
+	// machine to continue to serve requests normally while a compaction is
+	// processing.
 	//
-	// ```go
-	// copy := NewStateMachine(...)
-	// for _, e := range machine.Snapshot() {
-	//    copy.Handle(e)
-	// }
-	// ```
+	// Concurrent compactions are possible, however, the log ensures that
+	// the only the latest snapshot is retained. In the event that a compaction
+	// is obseleted concurrently, an error will be thrown. This likely means
+	// that the machine is in an inconsistent state and must reconcile.
 	//
-	// Results in the same machine state.
-	//
-	// NOTE: I originally struggled with how to model an event stream,
-	// but realized that channels fit pretty naturally.  I tend to
-	// avoid channel based apis, but this one seems simple enough
-	// for our needs.
 	Compact(until int, snapshot <-chan Event, size int) error
 }
 
-// A simple log listening interface.
+// A listener represents a stream of log items.
+//
 type Listener interface {
 	io.Closer
 
 	// Returns the next log item in the listener.  If an error is returned,
-	// it may be for a variety of reasons.  Here are a couple:
+	// it may be for a variety of reasons:
 	//
 	// * The underlying log has been closed.
 	// * The underlying log has been compacted away.  (*Important: See Below)
