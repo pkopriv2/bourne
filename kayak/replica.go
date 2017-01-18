@@ -129,9 +129,9 @@ func (h *replica) start() error {
 	go func() {
 		l := h.Log.ListenCommits(0, 0)
 		for i,e := l.Next(); e == nil; i,e = l.Next() {
-			if i.Index > 0 && i.Index % 250 == 0 {
+			if i.Index > 0 && i.Index % 5 == 0 {
 				before := h.Log.Active().raw.prevIndex
-				h.Log.Compact(i.Index-250, NewEventChannel([]Event{Event{0,1}}), 1, []byte{})
+				h.Log.Compact(i.Index-5, NewEventChannel([]Event{Event{0,1}}), 1, []byte{})
 				after := h.Log.Active().raw.prevIndex
 				h.Logger.Error("Done compacting: Before [%v] items. After [%v] items", before, after)
 			}

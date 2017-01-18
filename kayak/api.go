@@ -45,7 +45,7 @@ func (e Event) Raw() []byte {
 //
 // # Distributed Consensus
 //
-// Underpinning every machine is a log that implements the Raft,
+// Underpinning every machine is a log that implements the Raft
 // distributed consensus protocol.  While most of the details of the
 // protocol are abstracted away, it is useful to know some of the
 // high level details.
@@ -126,9 +126,9 @@ type Machine interface {
 	Run(log Log, snapshot <-chan Event) error
 }
 
-// The log is the view into the replicated log state.  This allows
-// consumer the ability to append events to the log and watch the
-// log for changes.
+// The log is the primary view into the replicated log state.  Consumers
+// can append events or listen for items as they committed.
+//
 type Log interface {
 	io.Closer
 
@@ -161,6 +161,12 @@ type Log interface {
 
 	// Compact replaces the log until the given point with the given snapshot
 	//
+	// In order to guard against premature termination of a snapshot, the
+	// consumer must provide the log with an expectation of the snapshot size.
+	// Only once all items in the snapshot have been stored can the snapshot
+	// take effect.  If the snapshot stream is terminated prematurely,
+	// the compaction will abort.
+	//
 	// Once the snapshot has been safely stored, the log until and including
 	// the index will be deleted. This method is synchronous, but can be called
 	// concurrent to other log methods. It should be considered safe for the
@@ -169,7 +175,7 @@ type Log interface {
 	//
 	// Concurrent compactions are possible, however, the log ensures that
 	// the only the latest snapshot is retained. In the event that a compaction
-	// is obseleted concurrently, an error will be thrown. This likely means
+	// is obseleted concurrently, an error will be returned. This likely means
 	// that the machine is in an inconsistent state and must reconcile.
 	//
 	Compact(until int, snapshot <-chan Event, size int) error
