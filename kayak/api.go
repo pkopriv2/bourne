@@ -118,37 +118,7 @@ func (e Event) Raw() []byte {
 //
 type Machine interface {
 
-	// Every state machine must be expressable as a sequence of events.
-	// The snapshot should be the minimal number of events that are
-	// required such that:
-	//
-	// ```go
-	// copy := NewStateMachine(...)
-	// for _, e := range machine.Snapshot() {
-	//    copy.Handle(e)
-	// }
-	// ```
-	//
-	// Results in the same machine state.
-	//
-	// In order to be space efficient and prevent the underlying
-	// log from growing without bounds, the log occasionally needs to be
-	// cleaned by a process known as log compaction.  Essentially, the log
-	// until a certain point will be replaced with a *hopefully* smaller snapshot.
-	// However, it cannot do this with some help from the state machine.
-	// Machines must provide a mechanism by which the log manager a compacted
-	// view of its log.  Consumers do so by returning a stream of events  that
-	// represent its state up until the index in the log.   All log items and
-	// their events will be discarded up until the index.
-	//
-	// The resulting stream must be closed when the stream has been
-	// exhausted.
-	//
-	// NOTE: I originally struggled with how to model an event stream,
-	// but realized that channels fit pretty naturally.  I tend to
-	// avoid channel based apis, but this one seems simple enough
-	// for our needs.
-	Snapshot() (num int, stream <-chan Event, lastIncluded int, err error)
+	// // Snapshot() (num int, stream <-chan Event, lastIncluded int, err error)
 
 	// Runs the main machine routine.  This may be called many
 	// times throughout the lifetime of the machine, therefore,
@@ -179,6 +149,37 @@ type Log interface {
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
 	Append(Event) (LogItem, error)
+
+	// Every state machine must be expressable as a sequence of events.
+	// The snapshot should be the minimal number of events that are
+	// required such that:
+	//
+	// ```go
+	// copy := NewStateMachine(...)
+	// for _, e := range machine.Snapshot() {
+	//    copy.Handle(e)
+	// }
+	// ```
+	//
+	// Results in the same machine state.
+	//
+	// In order to be space efficient and prevent the underlying
+	// log from growing without bounds, the log occasionally needs to be
+	// cleaned by a process known as log compaction.  Essentially, the log
+	// until a certain point will be replaced with a *hopefully* smaller snapshot.
+	// However, it cannot do this with some help from the state machine.
+	// Machines must provide a mechanism by which the log manager a compacted
+	// view of its log.  Consumers do so by returning a stream of events  that
+	// represent its state up until the index in the log.   All log items and
+	// their events will be discarded up until the index.
+	//
+	//
+	// NOTE: I originally struggled with how to model an event stream,
+	// but realized that channels fit pretty naturally.  I tend to
+	// avoid channel based apis, but this one seems simple enough
+	// for our needs.
+	Compact(until int, stream <-chan Event, size int) error
+
 }
 
 // The log listener.
