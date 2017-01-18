@@ -118,14 +118,15 @@ func (e Event) Raw() []byte {
 //
 type Machine interface {
 
-	// // Snapshot() (num int, stream <-chan Event, lastIncluded int, err error)
-
-	// Runs the main machine routine.  This may be called many
-	// times throughout the lifetime of the machine, therefore,
-	// care needs to be taken to maintain consistency between
-	// the machine state and the snapshot.
+	// Runs the main machine routine.  This is consumer's window
+	// into the lifecycle management of the log itself.  For example,
+	// for consumers wishing to rebuild their internal state, simply
+	// return from this method.  The machine will automatically be
+	// restarted.  However, the converse is true as well.  If the
+	// log service is no longer able to maintain a consistent state
+	// with its peers, it can return errors.
 	//
-	Run(log Log) error
+	Run(log Log, snapshot <-chan Event) error
 }
 
 // The log is the view into the replicated log state.  This allows
@@ -134,22 +135,33 @@ type Machine interface {
 type Log interface {
 	io.Closer
 
-	// Adds a real-time listener to the log commits.  The listener is guaranteed
-	// to receive ALL items in the order they are committed - however -
-	// the listener does NOT return all historical items.
+	// Adds a listener to the log commits starting with and including
+	// from. The listener is guaranteed to receive ALL items in the order
+	// they are committed - however - if a listener becomes significantly
+	// lagged, so much so that its current segment is compacted away,
+	// it will fail. However, this should be unlikely, as consumers have
+	// been given control over compactions.  Moreover, it is not expected
+	// that consumers need be concerned with log state.  In many cases,
+	// simply returning from the main machine's run loop and restarting
+	// is sufficient to resume operations.
 	//
 	// Please use #All() for backfilling.
 	Listen(from int, buf int) (Listener, error)
 
-	// Appends the event to the log.
+	// Appends and commits the event to the log.
 	//
-	// !IMPORTANT!
 	// If the append is successful, Do not assume that all committed items
 	// have been replicated to this instance.  Appends should always accompany
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
 	Append(Event) (LogItem, error)
 
+	// Compacts the log with the given snapshot that is valid until
+	// and including the given index.  This is able to happen concurrently
+	// with other requests, so consuming machines can continue to serve
+	// requests normally.  However, for sufficiently large machines,
+	// expect this to have a non-negligible impact on machine performance.
+	//
 	// Every state machine must be expressable as a sequence of events.
 	// The snapshot should be the minimal number of events that are
 	// required such that:
@@ -163,26 +175,14 @@ type Log interface {
 	//
 	// Results in the same machine state.
 	//
-	// In order to be space efficient and prevent the underlying
-	// log from growing without bounds, the log occasionally needs to be
-	// cleaned by a process known as log compaction.  Essentially, the log
-	// until a certain point will be replaced with a *hopefully* smaller snapshot.
-	// However, it cannot do this with some help from the state machine.
-	// Machines must provide a mechanism by which the log manager a compacted
-	// view of its log.  Consumers do so by returning a stream of events  that
-	// represent its state up until the index in the log.   All log items and
-	// their events will be discarded up until the index.
-	//
-	//
 	// NOTE: I originally struggled with how to model an event stream,
 	// but realized that channels fit pretty naturally.  I tend to
 	// avoid channel based apis, but this one seems simple enough
 	// for our needs.
-	Compact(until int, stream <-chan Event, size int) error
-
+	Compact(until int, snapshot <-chan Event, size int) error
 }
 
-// The log listener.
+// A simple log listening interface.
 type Listener interface {
 	io.Closer
 
@@ -195,16 +195,14 @@ type Listener interface {
 	//
 	// If a reader gets significantly behind the underlying log's end, it
 	// is possible for the listener to become corrupted if the underlying log
-	// is compacted away (See: Machine#Snapshot()). Consumers are allowed to
-	// choose how to deal with this, but for in-memory state machines, if the
-	// the stream was in critical path to machine state, then it's probably best
-	// to just rebuild the machine.
+	// is compacted away. Consumers are allowed to choose how to deal with this,
+	// but for in-memory state machines, if the the stream was in critical path
+	// to machine state, then it's probably best to just rebuild the machine.
 	//
 	// The possible error values are:
 	//
-	// * EventError
-	// * StorageError
-	// * SlowConsumerError
+	// * OutOfBoundsError
+	// * DeletedError
 	//
 	Next() (LogItem, error)
 }

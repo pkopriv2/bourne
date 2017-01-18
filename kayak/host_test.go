@@ -124,8 +124,8 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
-	numThreads := 100
-	numItemsPerThread := 100
+	numThreads := 10
+	numItemsPerThread := 10
 
 	for i := 0; i < numThreads; i++ {
 		go func() {

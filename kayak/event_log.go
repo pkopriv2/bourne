@@ -286,6 +286,7 @@ func (d *segment) Compact(until int, snapshot <-chan Event, snapshotSize int, co
 type positionListener struct {
 	log *eventLog
 	pos *position
+	buf int
 	ch  chan struct {
 		LogItem
 		error
@@ -296,7 +297,7 @@ type positionListener struct {
 }
 
 func newPositionListener(log *eventLog, pos *position, from int, buf int) *positionListener {
-	l := &positionListener{log, pos, make(chan struct {
+	l := &positionListener{log, pos, buf, make(chan struct {
 		LogItem
 		error
 	}, buf), make(chan struct{}), make(chan struct{}, 1)}
@@ -318,7 +319,7 @@ func (l *positionListener) start(from int) {
 			for cur <= next {
 
 				// scan the next batch
-				batch, err := l.log.Scan(cur, common.Min(next, cur+255))
+				batch, err := l.log.Scan(cur, common.Min(next, cur+l.buf))
 
 				// start emitting
 				for _, i := range batch {
