@@ -11,13 +11,10 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// Public Error Types
-var (
-	DeletedError     = errors.New("Kayak:DeletedError")
-	EndOfStreamError = errors.New("Kayak:EndOfStream")
-	OutOfBoundsError = errors.New("Kayak:OutOfBounds")
-	InvariantError   = errors.New("Kayak:InvariantError")
-)
+// Durable log implementations.
+//
+// Design work:
+//
 
 // Db buckets.
 var (
@@ -54,62 +51,8 @@ func initBuckets(tx *bolt.Tx) (err error) {
 // * log.active segment will exist for non deleted log.
 // * log.commit will be set for a non deleted log.
 //
-
 type durableLog struct {
 	id uuid.UUID
-}
-
-func setActiveSegmentId(tx *bolt.Tx, logId uuid.UUID, segmentId uuid.UUID) error {
-	return tx.Bucket(logActiveSegBucket).Put(stash.UUID(logId), stash.UUID(segmentId))
-}
-
-func getActiveSegmentId(tx *bolt.Tx, logId uuid.UUID) (uuid.UUID, bool, error) {
-	cur := tx.Bucket(logActiveSegBucket).Get(stash.UUID(logId))
-	if cur == nil {
-		return uuid.UUID{}, false, nil
-	}
-
-	id, err := uuid.FromBytes(cur)
-	if err != nil {
-		return uuid.UUID{}, false, err
-	}
-
-	return id, true, nil
-}
-
-func deleteActiveSegmentId(tx *bolt.Tx, logId uuid.UUID) error {
-	return tx.Bucket(logActiveSegBucket).Delete(stash.UUID(logId))
-}
-
-func getCommit(tx *bolt.Tx, logId uuid.UUID) (int, bool, error) {
-	val := tx.Bucket(logCommitBucket).Get(stash.UUID(logId))
-	if val == nil {
-		return -1, false, nil
-	}
-
-	i, err := stash.ParseInt(val)
-	if err != nil {
-		return -1, false, err
-	}
-
-	return i, true, nil
-}
-
-func setCommit(tx *bolt.Tx, logId uuid.UUID, pos int) (int, error) {
-	cur, ok, err := getCommit(tx, logId)
-	if err != nil {
-		return 0, err
-	}
-
-	if ok && cur >= pos {
-		return cur, nil
-	}
-
-	return pos, tx.Bucket(logCommitBucket).Put(stash.UUID(logId), stash.Int(pos))
-}
-
-func deleteCommit(tx *bolt.Tx, logId uuid.UUID) error {
-	return tx.Bucket(logCommitBucket).Delete(stash.UUID(logId))
 }
 
 func openDurableLog(db stash.Stash, logId uuid.UUID) (log durableLog, err error) {
@@ -156,6 +99,42 @@ func deleteDurableLog(db stash.Stash, id uuid.UUID) error {
 	return nil
 }
 
+func (d durableLog) GetCommit(db stash.Stash) (pos int, err error) {
+	err = db.View(func(tx *bolt.Tx) error {
+		pos, err = d.getCommit(tx)
+		return err
+	})
+	return
+}
+
+func (d durableLog) SetCommit(db stash.Stash, pos int) (new int, err error) {
+	err = db.Update(func(tx *bolt.Tx) error {
+		new, err = d.setCommit(tx, pos)
+		return err
+	})
+	return
+}
+
+func (d durableLog) Active(db stash.Stash) (seg durableSegment, err error) {
+	err = db.View(func(tx *bolt.Tx) error {
+		seg, err = d.active(tx)
+		return err
+	})
+	return
+}
+
+func (d durableLog) SwapActive(db stash.Stash, cur durableSegment, next durableSegment) (ok bool, err error) {
+	db.Update(func(tx *bolt.Tx) error {
+		ok, err = d.swapActive(tx, cur, next)
+		return err
+	})
+	return
+}
+
+func (d durableLog) Delete(db stash.Stash) (bool, error) {
+	return false, nil
+}
+
 func (d durableLog) setActiveSegmentId(tx *bolt.Tx, id uuid.UUID) error {
 	return setActiveSegmentId(tx, d.id, id)
 }
@@ -163,7 +142,7 @@ func (d durableLog) setActiveSegmentId(tx *bolt.Tx, id uuid.UUID) error {
 func (d durableLog) getActiveSegmentId(tx *bolt.Tx) (uuid.UUID, error) {
 	s, ok, e := getActiveSegmentId(tx, d.id)
 	if e != nil || !ok {
-		return uuid.UUID{}, common.Or(e, errors.Wrapf(DeletedError, "Log [%v] dropped.", d.id))
+		return uuid.UUID{}, common.Or(e, errors.Wrapf(AccessError, "Log [%v] dropped.", d.id))
 	}
 
 	return s, nil
@@ -176,7 +155,7 @@ func (d durableLog) setCommit(tx *bolt.Tx, pos int) (int, error) {
 func (d durableLog) getCommit(tx *bolt.Tx) (int, error) {
 	i, ok, e := getCommit(tx, d.id)
 	if e != nil || !ok {
-		return -1, common.Or(e, errors.Wrapf(DeletedError, "Log [%v] dropped.", d.id))
+		return -1, common.Or(e, errors.Wrapf(AccessError, "Log [%v] dropped.", d.id))
 	}
 
 	return i, e
@@ -190,7 +169,7 @@ func (d durableLog) active(tx *bolt.Tx) (durableSegment, error) {
 
 	seg, found, err := openDurableSegment(tx, id)
 	if err != nil || !found {
-		return durableSegment{}, common.Or(err, errors.Wrapf(DeletedError, "Log [%v] deleted."))
+		return durableSegment{}, common.Or(err, errors.Wrapf(AccessError, "Log [%v] deleted."))
 	}
 	return seg, nil
 }
@@ -242,73 +221,6 @@ func (d durableLog) swapActive(tx *bolt.Tx, cur durableSegment, new durableSegme
 	return true, nil
 }
 
-func (d durableLog) GetCommit(db stash.Stash) (pos int, err error) {
-	err = db.View(func(tx *bolt.Tx) error {
-		pos, err = d.getCommit(tx)
-		return err
-	})
-	return
-}
-
-func (d durableLog) SetCommit(db stash.Stash, pos int) (new int, err error) {
-	err = db.Update(func(tx *bolt.Tx) error {
-		new, err = d.setCommit(tx, pos)
-		return err
-	})
-	return
-}
-
-func (d durableLog) Active(db stash.Stash) (seg durableSegment, err error) {
-	err = db.View(func(tx *bolt.Tx) error {
-		seg, err = d.active(tx)
-		return err
-	})
-	return
-}
-
-func (d durableLog) SwapActive(db stash.Stash, cur durableSegment, next durableSegment) (ok bool, err error) {
-	db.Update(func(tx *bolt.Tx) error {
-		ok, err = d.swapActive(tx, cur, next)
-		return err
-	})
-	return
-}
-
-func (d durableLog) Compact(db stash.Stash, until int, events <-chan Event, num int, config []byte) error {
-	cur, err := d.Active(db)
-	if err != nil {
-		return err
-	}
-
-	new, err := cur.CopyAndCompact(db, until, events, num, config)
-	if err != nil {
-		return err
-	}
-
-	ok, err := d.SwapActive(db, cur, new)
-	if err != nil || !ok {
-		return common.Or(err, errors.Wrapf(InvariantError, "Concurrent compaction resulting in shortened log."))
-	}
-
-	defer cur.Delete(db)
-	return nil // err on delete suppressed.
-}
-
-func (d durableLog) Delete(db stash.Stash) (bool, error) {
-	return false, nil
-	// cur, err := d.Active(db)
-	// if err != nil {
-	// return false, err
-	// }
-	//
-	// new, err := cur.CompactAndCopy(db, until, events, num, config)
-	// if err != nil {
-	// return false, err
-	// }
-	//
-	// return d.SwapActive(db, new)
-}
-
 type durableSegment struct {
 	id uuid.UUID
 
@@ -346,7 +258,7 @@ func createDurableSegment(db stash.Stash, snapshotEvents <-chan Event, snapshotS
 	err = db.Update(func(tx *bolt.Tx) error {
 		head := prevIndex
 		if prevIndex > -1 {
-			head = prevIndex+1
+			head = prevIndex + 1
 		}
 
 		if e := tx.Bucket(segHeadsBucket).Put(seg.Key(), stash.Int(head)); e != nil {
@@ -368,10 +280,10 @@ func deleteDurableSegment(db stash.Stash, id uuid.UUID) error {
 		return err
 	}
 
-	return db.Update(func(tx *bolt.Tx) error {
-		e := tx.Bucket(segHeadsBucket).Delete(stash.UUID(id))
+	return db.Update(func(tx *bolt.Tx) (e error) {
+		e = tx.Bucket(segHeadsBucket).Delete(stash.UUID(id))
 		e = common.Or(e, tx.Bucket(segBucket).Delete(stash.UUID(id)))
-		return e
+		return
 	})
 }
 
@@ -404,7 +316,7 @@ func deleteDurableSegmentItems(db stash.Stash, id uuid.UUID) (err error) {
 			return nil
 		})
 		if err != nil {
-			return err
+			return
 		}
 	}
 	return
@@ -467,7 +379,7 @@ func (d durableSegment) assert(tx *bolt.Tx, index int, term int) (bool, error) {
 	}
 
 	item, ok, err := d.get(tx, index)
-	if err != nil || ! ok {
+	if err != nil || !ok {
 		return false, err
 	}
 
@@ -477,7 +389,7 @@ func (d durableSegment) assert(tx *bolt.Tx, index int, term int) (bool, error) {
 func (d durableSegment) head(tx *bolt.Tx) (int, error) {
 	raw := tx.Bucket(segHeadsBucket).Get(d.Key())
 	if raw == nil {
-		return -1, DeletedError
+		return -1, AccessError
 	}
 	return stash.ParseInt(raw)
 }
@@ -507,12 +419,11 @@ func (d durableSegment) scan(tx *bolt.Tx, beg int, end int) (batch []LogItem, er
 		return nil, err
 	}
 
-	// prove log isn't empty
 	if head-d.prevIndex == 0 {
 		return []LogItem{}, nil
 	}
 
-	// prove batch will be empty
+	// prove batch isn't empty
 	end = common.Min(head, end)
 	if end-beg < 0 {
 		return []LogItem{}, nil
@@ -522,7 +433,7 @@ func (d durableSegment) scan(tx *bolt.Tx, beg int, end int) (batch []LogItem, er
 	cur, cursor, batch := beg, tx.Bucket(segItemsBucket).Cursor(), make([]LogItem, 0, end-beg+1)
 	for k, v := cursor.Seek(d.Key().ChildInt(cur).Raw()); v != nil && cur <= end; k, v = cursor.Next() {
 		if !d.Key().ChildInt(cur).Equals(k) {
-			return nil, errors.Wrapf(DeletedError, "Segment deleted [%v]", d.id) // this shouldn't be possible.
+			return nil, errors.Wrapf(AccessError, "Segment deleted [%v]", d.id) // this shouldn't be possible.
 		}
 
 		i, e := parseItem(v)
@@ -616,7 +527,7 @@ func (d durableSegment) insert(tx *bolt.Tx, batch []LogItem) (int, error) {
 
 func (d durableSegment) Assert(db stash.Stash, i int, t int) (b bool, e error) {
 	e = db.View(func(tx *bolt.Tx) error {
-		b, e = d.assert(tx,i,t)
+		b, e = d.assert(tx, i, t)
 		return e
 	})
 	return
@@ -670,7 +581,7 @@ func (d durableSegment) Snapshot(db stash.Stash) (durableSnapshot, error) {
 	}
 
 	if !ok {
-		return durableSnapshot{}, errors.Wrapf(DeletedError, "Segment deleted [%v,%v]", d.id)
+		return durableSnapshot{}, errors.Wrapf(AccessError, "Segment deleted [%v,%v]", d.id)
 	}
 
 	return s, nil
@@ -696,7 +607,7 @@ func (d durableSegment) CopyAndCompact(db stash.Stash, until int, events <-chan 
 	}
 
 	if until < d.prevIndex || until > head {
-		return durableSegment{}, errors.Wrapf(OutOfBoundsError, "Cannot compact. Mark [%v] out of bounds", until)
+		return durableSegment{}, errors.Wrapf(OutOfBoundsError, "Cannot compact. Until mark [%v] out of bounds", until)
 	}
 
 	if head-d.prevIndex <= 0 {
@@ -709,7 +620,7 @@ func (d durableSegment) CopyAndCompact(db stash.Stash, until int, events <-chan 
 	}
 
 	if !found {
-		return durableSegment{}, errors.Wrapf(DeletedError, "Segment [%v] deleted.  Cannot compact", d.id)
+		return durableSegment{}, errors.Wrapf(AccessError, "Segment [%v] deleted.  Cannot compact", d.id)
 	}
 
 	seg, err = createDurableSegment(db, events, num, config, prevItem.Index, prevItem.term)
@@ -766,8 +677,6 @@ func storeDurableSnapshot(db stash.Stash, val durableSnapshot) error {
 }
 
 func storeDurableSnapshotEvents(db stash.Stash, id uuid.UUID, num int, ch <-chan Event) (err error) {
-	prefix := stash.UUID(id)
-
 	for i := 0; i < num; {
 		chunkStart := i
 		chunk := make([]Event, 0, 1024)
@@ -779,6 +688,26 @@ func storeDurableSnapshotEvents(db stash.Stash, id uuid.UUID, num int, ch <-chan
 			}
 
 			chunk = append(chunk, e)
+		}
+
+		err := storeDurableSnapshotSegment(db, id, chunkStart, chunk)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func storeDurableSnapshotSegment(db stash.Stash, id uuid.UUID, offset int, events []Event) (err error) {
+	prefix := stash.UUID(id)
+
+	num := len(events)
+	for i := 0; i < num; {
+		chunkStart := offset + i
+		chunk := make([]Event, 0, 1024)
+
+		for cur := 0; cur < 1024 && i < num; cur, i = cur+1, i+1 {
+			chunk = append(chunk, events[i])
 		}
 
 		err = db.Update(func(tx *bolt.Tx) error {
@@ -907,7 +836,7 @@ func (d durableSnapshot) Scan(db stash.Stash, start int, end int) (batch []Event
 			}
 
 			if !d.Key().ChildInt(cur).Equals(k) {
-				return errors.Wrapf(DeletedError, "Snapshot deleted [%v]", d.id) // already deleted
+				return errors.Wrapf(AccessError, "Snapshot deleted [%v]", d.id) // already deleted
 			}
 
 			batch = append(batch, Event(v))
@@ -917,11 +846,64 @@ func (d durableSnapshot) Scan(db stash.Stash, start int, end int) (batch []Event
 	})
 
 	if len(batch) != end-start+1 {
-		return nil, errors.Wrapf(DeletedError, "Snapshot deleted [%v]", d.id) // already deleted
+		return nil, errors.Wrapf(AccessError, "Snapshot deleted [%v]", d.id) // already deleted
 	}
 	return
 }
 
 func (d durableSnapshot) Delete(db stash.Stash) error {
 	return deleteDurableSnapshot(db, d.id)
+}
+
+func setActiveSegmentId(tx *bolt.Tx, logId uuid.UUID, segmentId uuid.UUID) error {
+	return tx.Bucket(logActiveSegBucket).Put(stash.UUID(logId), stash.UUID(segmentId))
+}
+
+func getActiveSegmentId(tx *bolt.Tx, logId uuid.UUID) (uuid.UUID, bool, error) {
+	cur := tx.Bucket(logActiveSegBucket).Get(stash.UUID(logId))
+	if cur == nil {
+		return uuid.UUID{}, false, nil
+	}
+
+	id, err := uuid.FromBytes(cur)
+	if err != nil {
+		return uuid.UUID{}, false, err
+	}
+
+	return id, true, nil
+}
+
+func deleteActiveSegmentId(tx *bolt.Tx, logId uuid.UUID) error {
+	return tx.Bucket(logActiveSegBucket).Delete(stash.UUID(logId))
+}
+
+func getCommit(tx *bolt.Tx, logId uuid.UUID) (int, bool, error) {
+	val := tx.Bucket(logCommitBucket).Get(stash.UUID(logId))
+	if val == nil {
+		return -1, false, nil
+	}
+
+	i, err := stash.ParseInt(val)
+	if err != nil {
+		return -1, false, err
+	}
+
+	return i, true, nil
+}
+
+func setCommit(tx *bolt.Tx, logId uuid.UUID, pos int) (int, error) {
+	cur, ok, err := getCommit(tx, logId)
+	if err != nil {
+		return 0, err
+	}
+
+	if ok && cur >= pos {
+		return cur, nil
+	}
+
+	return pos, tx.Bucket(logCommitBucket).Put(stash.UUID(logId), stash.Int(pos))
+}
+
+func deleteCommit(tx *bolt.Tx, logId uuid.UUID) error {
+	return tx.Bucket(logCommitBucket).Delete(stash.UUID(logId))
 }

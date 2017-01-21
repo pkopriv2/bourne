@@ -4,10 +4,7 @@ import (
 	"container/list"
 	"io"
 	"net"
-	"sync"
 	"time"
-
-	"github.com/pkopriv2/bourne/common"
 )
 
 // implements a simple connection pool.
@@ -18,6 +15,8 @@ type ConnectionPool interface {
 	Max() int
 	Take() Connection
 	TakeTimeout(time.Duration) Connection
+	Return(Connection)
+	Fail(Connection)
 }
 
 type pool struct {
@@ -40,7 +39,7 @@ func NewConnectionPool(network string, addr string, max int, timeout time.Durati
 		max:     max,
 		conns:   list.New(),
 		take:    make(chan Connection),
-		ret:     make(chan Connection, 8),
+		ret:     make(chan Connection, max),
 		closed:  make(chan struct{}),
 		closer:  make(chan struct{}, 1),
 	}
@@ -55,14 +54,17 @@ func (p *pool) start() {
 
 		var take chan Connection
 		var next Connection
+		// var err error
 		for {
 			take = nil
+			next = nil
 			if out < p.max {
-				next, _ = p.takeOrSpawn()
-				if next != nil {
-					take = p.take
+				for next == nil {
+					next, _ = p.takeOrSpawn()
 				}
+				take = p.take
 			}
+
 			select {
 			case <-p.closed:
 				return
@@ -70,7 +72,6 @@ func (p *pool) start() {
 				out++
 			case conn := <-p.ret:
 				out--
-
 				if conn != nil {
 					p.returnn(conn)
 				}
@@ -99,7 +100,7 @@ func (p *pool) Take() Connection {
 	case <-p.closed:
 		return nil
 	case conn := <-p.take:
-		return newPooledConn(p, conn)
+		return conn
 	}
 }
 
@@ -111,11 +112,12 @@ func (p *pool) TakeTimeout(dur time.Duration) (conn Connection) {
 	case <-p.closed:
 		return nil
 	case conn := <-p.take:
-		return newPooledConn(p, conn)
+		return conn
 	}
 }
 
 func (p *pool) Fail(c Connection) {
+	defer c.Close()
 	select {
 	case <-p.closed:
 	case p.ret <- nil:
@@ -139,82 +141,84 @@ func (p *pool) returnn(c Connection) {
 
 func (p *pool) takeOrSpawn() (Connection, error) {
 	if item := p.conns.Front(); item != nil {
+		p.conns.Remove(item)
 		return item.Value.(Connection), nil
 	}
 
 	return p.spawn()
 }
 
-type pooledConn struct {
-	pool *pool
-	raw  Connection
-	lock sync.RWMutex
-	err  error
-}
-
-func newPooledConn(pool *pool, raw Connection) *pooledConn {
-	return &pooledConn{
-		pool: pool,
-		raw:  raw,
-	}
-}
-
-func (p *pooledConn) Read(buf []byte) (n int, err error) {
-	if err := p.ensureOpen(); err != nil {
-		return 0, err
-	}
-	defer common.RunIf(func() { p.shutdown(err) })(err)
-	n, err = p.raw.Read(buf)
-	return
-}
-
-func (p *pooledConn) Write(buf []byte) (n int, err error) {
-	if err := p.ensureOpen(); err != nil {
-		return 0, err
-	}
-	defer common.RunIf(func() { p.shutdown(err) })(err)
-	n, err = p.raw.Write(buf)
-	return
-}
-
-func (p *pooledConn) ensureOpen() error {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-	return p.err
-}
-
-func (p *pooledConn) shutdown(err error) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-	if p.err != nil {
-		return
-	}
-
-	if err == nil {
-		p.pool.Return(p.raw)
-		p.err = ClosedError
-	} else {
-		p.pool.Fail(p.raw)
-		p.err = err
-	}
-}
-
-func (p *pooledConn) Close() error {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-	if p.err != nil {
-		return p.err
-	}
-
-	p.pool.Return(p.raw)
-	p.err = ClosedError
-	return nil
-}
-
-func (p *pooledConn) LocalAddr() net.Addr {
-	return p.raw.LocalAddr()
-}
-
-func (p *pooledConn) RemoteAddr() net.Addr {
-	return p.raw.RemoteAddr()
-}
+// type pooledConn struct {
+// pool *pool
+// raw  Connection
+// lock sync.RWMutex
+// err  error
+// }
+//
+// func newPooledConn(pool *pool, raw Connection) *pooledConn {
+// return &pooledConn{
+// pool: pool,
+// raw:  raw,
+// }
+// }
+//
+// func (p *pooledConn) Read(buf []byte) (n int, err error) {
+// if err := p.ensureOpen(); err != nil {
+// return 0, err
+// }
+// defer common.RunIf(func() { p.shutdown(err) })(err)
+// n, err = p.raw.Read(buf)
+// return
+// }
+//
+// func (p *pooledConn) Write(buf []byte) (n int, err error) {
+// if err := p.ensureOpen(); err != nil {
+// return 0, err
+// }
+// defer common.RunIf(func() { p.shutdown(err) })(err)
+// n, err = p.raw.Write(buf)
+// return
+// }
+//
+// func (p *pooledConn) ensureOpen() error {
+// p.lock.Lock()
+// defer p.lock.Unlock()
+// return p.err
+// }
+//
+// func (p *pooledConn) shutdown(err error) {
+// p.lock.Lock()
+// defer p.lock.Unlock()
+// if p.err != nil {
+// return
+// }
+//
+// if err == nil {
+// p.pool.Return(p.raw)
+// p.err = ClosedError
+// } else {
+// p.pool.Fail(p.raw)
+// p.err = err
+// }
+// }
+//
+// func (p *pooledConn) Close() error {
+// p.lock.Lock()
+// defer p.lock.Unlock()
+// if p.err != nil {
+// p.pool.Fail(p.raw)
+// return p.err
+// }
+//
+// p.pool.Return(p.raw)
+// p.err = ClosedError
+// return nil
+// }
+//
+// func (p *pooledConn) LocalAddr() net.Addr {
+// return p.raw.LocalAddr()
+// }
+//
+// func (p *pooledConn) RemoteAddr() net.Addr {
+// return p.raw.RemoteAddr()
+// }

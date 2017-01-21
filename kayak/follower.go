@@ -36,21 +36,29 @@ func (c *followerSpawner) start() {
 
 // The follower machine.  This
 type follower struct {
-	logger     common.Logger
-	in         chan<- *replica
-	candidate  chan<- *replica
-	proxyPool  concurrent.WorkPool
-	appendPool concurrent.WorkPool
-	connPool   net.ConnectionPool
-	term       term
-	replica    *replica
-	closed     chan struct{}
-	closer     chan struct{}
+	logger       common.Logger
+	in           chan<- *replica
+	candidate    chan<- *replica
+	term         term
+	replica      *replica
+	proxyPool    concurrent.WorkPool
+	snapshotPool concurrent.WorkPool
+	appendPool   concurrent.WorkPool
+	clientPool   net.ClientPool
+	// connPool     net.ConnectionPool
+	closed chan struct{}
+	closer chan struct{}
 }
 
 func spawnFollower(in chan<- *replica, candidate chan<- *replica, replica *replica) {
 	logger := replica.Logger.Fmt("Follower(%v)", replica.CurrentTerm())
 	logger.Info("Becoming follower")
+
+	conns := newLeaderConnectionPool(replica)
+	var clientPool net.ClientPool
+	if conns != nil {
+		clientPool = net.NewClientPool(replica.Ctx, logger, conns)
+	}
 
 	l := &follower{
 		logger:     logger,
@@ -58,7 +66,7 @@ func spawnFollower(in chan<- *replica, candidate chan<- *replica, replica *repli
 		candidate:  candidate,
 		proxyPool:  concurrent.NewWorkPool(16),
 		appendPool: concurrent.NewWorkPool(16),
-		connPool:   newLeaderConnectionPool(replica),
+		clientPool: clientPool,
 		term:       replica.CurrentTerm(),
 		replica:    replica,
 		closed:     make(chan struct{}),
@@ -87,8 +95,8 @@ func (l *follower) Close() error {
 	close(l.closed)
 	l.proxyPool.Close()
 	l.appendPool.Close()
-	if l.connPool != nil {
-		l.connPool.Close()
+	if l.clientPool != nil {
+		l.clientPool.Close()
 	}
 	return nil
 }
@@ -123,6 +131,8 @@ func (c *follower) start() {
 				c.handleReplication(append)
 			case ballot := <-c.replica.VoteRequests:
 				c.handleRequestVote(ballot)
+			case snapshot := <-c.replica.Snapshots:
+				c.handleInstallSnapshot(snapshot)
 			case <-electionTimer.C:
 				c.logger.Info("Waited too long for heartbeat.")
 				c.transition(c.candidate)
@@ -136,20 +146,19 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 	timeout := c.replica.RequestTimeout / 2
 
 	err := c.proxyPool.SubmitTimeout(timeout, func() {
-		conn := c.connPool.TakeTimeout(timeout)
-		if conn == nil {
+		cl := c.clientPool.TakeTimeout(timeout)
+		if cl == nil {
 			append.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
 			return
 		}
-		defer conn.Close()
 
-		raw, err := net.NewClient(c.replica.Ctx, c.replica.Logger, conn)
-		if err != nil {
-			append.Fail(err)
-			return
+		i,e := newClient(cl).Append(append.Event)
+		if e == nil {
+			c.clientPool.Return(cl)
+		} else {
+			c.clientPool.Fail(cl)
 		}
-
-		append.Return(newClient(raw).Append(append.Event))
+		append.Return(i, e)
 	})
 	if err != nil {
 		append.Fail(err)
@@ -159,6 +168,17 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 
 func (c *follower) handleRemoteAppend(append machineAppend) {
 	append.Fail(NotLeaderError)
+}
+
+func (c *follower) handleInstallSnapshot(snapshot installSnapshot) {
+	// handle: previous term vote.  (immediately decline.)
+	if snapshot.term < c.replica.term.num {
+		snapshot.Reply(c.replica.term.num, false)
+		return
+	}
+
+	// storeDurableSnapshotSegment(snapshot.snapshotId, snapshot.batchOffset, snapshot.batch)
+	snapshot.Reply(c.term.num, false)
 }
 
 func (c *follower) handleRequestVote(vote requestVote) {
@@ -171,39 +191,44 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
-	maxLogIndex, maxLogTerm, _, err := c.replica.Log.Snapshot()
+	max,err := c.replica.Log.Max()
 	if err != nil {
 		vote.reply(c.replica.term.num, false)
 		return
 	}
 
+	c.logger.Debug("Current log max: %v", max)
 	if vote.term == c.replica.term.num {
-		if c.replica.term.votedFor == nil && vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
+		if c.replica.term.votedFor == nil && vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
+			c.logger.Debug("Voting for candidate [%v]", vote.id)
 			vote.reply(c.replica.term.num, true)
 			c.replica.Term(c.replica.term.num, nil, &vote.id) // correct?
 			c.transition(c.in)
 			return
 		}
 
+		c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
 		vote.reply(c.replica.term.num, false)
+		c.transition(c.candidate)
 		return
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
+	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
+		c.logger.Debug("Voting for candidate [%v]", vote.id)
 		vote.reply(vote.term, true)
 		c.replica.Term(vote.term, nil, &vote.id)
 		c.transition(c.in)
 		return
 	}
 
+	c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
 	vote.reply(vote.term, false)
 	c.replica.Term(vote.term, nil, nil)
-	c.transition(c.in)
+	c.transition(c.candidate)
 }
 
 func (c *follower) handleReplication(append replicateEvents) {
-	c.logger.Debug("Handling append events: %v", append)
 	if append.term < c.replica.term.num {
 		append.reply(c.replica.term.num, false)
 		return
@@ -217,15 +242,17 @@ func (c *follower) handleReplication(append replicateEvents) {
 		return
 	}
 
-	//
+	// if this is a heartbeat, bail out
 	c.replica.Log.Commit(append.commit)
 	if append.prevLogIndex == -1 && len(append.items) == 0 {
 		append.reply(append.term, true)
 		return
 	}
 
+	c.logger.Debug("Handling replication: %v", append)
+
 	// consistency check
-	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); ! ok || err != nil {
+	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); !ok || err != nil {
 		head := c.replica.Log.Head()
 		act, _, _ := c.replica.Log.Get(append.prevLogIndex)
 		prev := c.replica.Log.Active().raw.prevIndex
@@ -242,13 +269,6 @@ func (c *follower) handleReplication(append replicateEvents) {
 		return
 	}
 
-	// // commit
-	// if _, err := c.replica.Log.Commit(append.commit); err != nil {
-		// c.logger.Error("Error committing items: %v", err)
-		// append.reply(append.term, false)
-		// return
-	// }
-
 	append.reply(append.term, true)
 }
 
@@ -262,5 +282,5 @@ func newLeaderConnectionPool(r *replica) net.ConnectionPool {
 		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.leader, r.Cluster()))
 	}
 
-	return net.NewConnectionPool("tcp", leader.addr, 30, r.ElectionTimeout)
+	return net.NewConnectionPool("tcp", leader.addr, 10, 2*time.Second)
 }

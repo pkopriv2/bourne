@@ -3,6 +3,7 @@ package kayak
 import (
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
@@ -206,6 +207,25 @@ func (e *eventLog) Insert(batch []LogItem) (h int, f error) {
 	return e.head.Set(h), nil // commutative, so safe for out of order scheduling
 }
 
+func (e *eventLog) Max() (i LogItem, f error) {
+	var head int
+	var ok bool
+	e.UseActive(func(s *segment) {
+		head, f = s.Head()
+		if f != nil {
+			i = LogItem{Index: -1, term: -1}
+			return
+		}
+
+		i, ok, f = s.Get(head)
+		if f != nil || !ok {
+			i = LogItem{Index: -1, term: -1}
+			return
+		}
+	})
+	return
+}
+
 func (e *eventLog) Snapshot() (index int, term int, commit int, err error) {
 	// // must take commit prior to taking the end of the log
 	// // to ensure invariant commit <= head
@@ -225,13 +245,17 @@ func (e *eventLog) Snapshot() (index int, term int, commit int, err error) {
 }
 
 func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (err error) {
+	e.logger.Info("Compacting log until [%v] with a snapshot of [%v] events", until, snapshotSize)
+
 	cur := e.Active()
 
 	// Go ahead and compact the majority of the segment. (writes can still happen.)
 	new, err := cur.Compact(until, snapshot, snapshotSize, config)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "Error compacting current segment [%v]", cur.raw.id)
 	}
+
+	defer cur.Delete()
 
 	// Swap existing with new.
 	e.UpdateActive(func(cur *segment) *segment {
@@ -241,6 +265,18 @@ func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, c
 		}
 		return new
 	})
+
+	before, err := cur.Head()
+	if err != nil {
+		e.logger.Error("Error retrieving before head: %v", err)
+	}
+
+	after, err := new.Head()
+	if err != nil {
+		e.logger.Error("Error retrieving after head: %v", err)
+	}
+
+	e.logger.Info("Compaction finished. Before [%v]. After [%v]", before-cur.raw.prevIndex, after-new.raw.prevIndex)
 	return
 }
 
@@ -272,6 +308,10 @@ func (d *segment) Append(batch []Event, term int) (int, error) {
 
 func (d *segment) Insert(batch []LogItem) (int, error) {
 	return d.raw.Insert(d.stash, batch)
+}
+
+func (d *segment) Delete() error {
+	return d.raw.Delete(d.stash)
 }
 
 func (d *segment) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (*segment, error) {
@@ -398,7 +438,7 @@ func (c *position) WaitForGreaterThanOrEqual(pos int) (commit int, alive bool) {
 	for commit, alive = c.val, !c.dead; commit < pos; commit, alive = c.val, !c.dead {
 		c.lock.Wait()
 		if c.dead {
-			return pos, true
+			return pos, false
 		}
 	}
 	return

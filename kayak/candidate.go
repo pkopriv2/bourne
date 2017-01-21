@@ -89,13 +89,14 @@ func (c *candidate) Close() error {
 
 func (c *candidate) start() {
 
+	max, err := c.replica.Log.Max()
 	ballots := c.replica.Broadcast(func(cl *client) response {
-		maxLogIndex, maxLogTerm, _, err := c.replica.Log.Snapshot()
+		c.logger.Debug("Sending ballots: %v", max)
 		if err != nil {
 			return response{c.replica.term.num, false}
 		}
 
-		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.num, maxLogIndex, maxLogTerm)
+		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.num, max.Index, max.term)
 		if err != nil {
 			return response{c.replica.term.num, false}
 		} else {
@@ -128,8 +129,14 @@ func (c *candidate) start() {
 				c.handleRequestVote(ballot)
 			case <-timer.C:
 				c.logger.Info("Unable to acquire necessary votes [%v/%v]", numVotes, needed)
-				c.transition(c.in) // becomes a new candidate
-				return
+				timer := time.NewTimer(c.replica.ElectionTimeout)
+				select {
+				case <-c.closed:
+					return
+				case <-timer.C:
+					c.transition(c.in) // becomes a new candidate
+					return
+				}
 			case vote := <-ballots:
 				if vote.term > c.term.num {
 					c.replica.Term(vote.term, nil, nil)
@@ -146,14 +153,29 @@ func (c *candidate) start() {
 }
 
 func (c *candidate) handleRequestVote(vote requestVote) {
+	c.logger.Debug("Handling request vote: %v", vote)
 	if vote.term <= c.term.num {
 		vote.reply(c.term.num, false)
 		return
 	}
 
-	vote.reply(vote.term, true)
-	c.replica.Term(vote.term, nil, &vote.id)
-	c.transition(c.follower)
+	max, err := c.replica.Log.Max()
+	if err != nil {
+		vote.reply(c.replica.term.num, false)
+		return
+	}
+
+	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
+		c.logger.Debug("Voting for candidate [%v]", vote.id.String()[:8])
+		vote.reply(vote.term, true)
+		c.replica.Term(vote.term, nil, &vote.id)
+		c.transition(c.follower)
+		return
+	}
+
+	c.logger.Debug("Rejecting candidate vote [%v]", vote.id.String()[:8])
+	vote.reply(vote.term, false)
+	c.replica.Term(vote.term, nil, nil)
 }
 
 func (c *candidate) handleAppendEvents(append replicateEvents) {

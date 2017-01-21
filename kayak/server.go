@@ -23,13 +23,9 @@ var (
 )
 
 type server struct {
-	//
-	ctx common.Context
-
-	// the root server logger.
+	ctx    common.Context
 	logger common.Logger
 
-	// the member
 	self *replicatedLog
 }
 
@@ -62,6 +58,20 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 			return s.Append(req)
 		}
 	}
+}
+
+func (s *server) InstallSnapshot(req net.Request) net.Response {
+	append, err := readReplicateRequest(req.Body())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	resp, err := s.self.Replicate(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.items, append.commit)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return newResponseResponse(resp)
 }
 
 func (s *server) Replicate(req net.Request) net.Response {
@@ -144,6 +154,14 @@ func newAppendResponse(index int, term int) net.Response {
 	}))
 }
 
+func eventParser(r scribe.Reader) (interface{}, error) {
+	var tmp []byte
+	if e := r.ReadBytes("raw", &tmp); e != nil {
+		return nil, e
+	}
+	return Event(tmp), nil
+}
+
 func readEvent(r scribe.Reader, field string) (e Event, err error) {
 	var raw []byte
 	if err = r.ReadBytes(field, &raw); err == nil {
@@ -195,8 +213,8 @@ func readRequestVoteRequest(r scribe.Reader) (ret requestVoteRequest, err error)
 func (r requestVoteRequest) Write(w scribe.Writer) {
 	w.WriteUUID("id", r.id)
 	w.WriteInt("term", r.term)
-	w.WriteInt("maxLogTerm", r.maxLogTerm)
 	w.WriteInt("maxLogIndex", r.maxLogIndex)
+	w.WriteInt("maxLogTerm", r.maxLogTerm)
 }
 
 type replicateRequest struct {
@@ -240,4 +258,41 @@ func readReplicateRequest(r scribe.Reader) (ret replicateRequest, err error) {
 
 	ret.items = items
 	return ret, err
+}
+
+type installSnapshotRequest struct {
+	snapshotId   uuid.UUID
+	leaderId     uuid.UUID
+	term         int
+	prevLogIndex int
+	prevLogTerm  int
+	prevConfig   []byte
+	batchOffset  int
+	batch        []Event
+	done bool
+}
+
+func (a installSnapshotRequest) Write(w scribe.Writer) {
+	w.WriteUUID("snapshotId", a.snapshotId)
+	w.WriteUUID("leaderId", a.leaderId)
+	w.WriteInt("term", a.term)
+	w.WriteInt("prevLogIndex", a.prevLogIndex)
+	w.WriteInt("prevLogTerm", a.prevLogTerm)
+	w.WriteBytes("prevConfig", a.prevConfig)
+	w.WriteInt("batchOffset", a.batchOffset)
+	w.WriteMessages("batch", a.batch)
+	w.WriteBool("done", a.done)
+}
+
+func readIntallSnapshotRequest(r scribe.Reader) (ret installSnapshotRequest, err error) {
+	err = common.Or(err, r.ReadUUID("snapshotId", &ret.snapshotId))
+	err = common.Or(err, r.ReadUUID("leaderId", &ret.leaderId))
+	err = common.Or(err, r.ReadInt("term", &ret.term))
+	err = common.Or(err, r.ReadInt("prevLogTerm", &ret.prevLogTerm))
+	err = common.Or(err, r.ReadInt("prevLogIndex", &ret.prevLogIndex))
+	err = common.Or(err, r.ReadBytes("prevConfig", &ret.prevConfig))
+	err = common.Or(err, r.ReadInt("batchOffset", &ret.batchOffset))
+	err = common.Or(err, r.ParseMessages("batch", &ret.batch, eventParser))
+	err = common.Or(err, r.ReadBool("done", &ret.done))
+	return
 }

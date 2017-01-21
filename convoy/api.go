@@ -76,7 +76,9 @@ type Host interface {
 
 	// Performs an immediate shutdown of the host.
 	//
-	// !! Exposed mainly for quick shutdown during testing. You've been warned. !!
+	// !! Not safe for production use !! Always try to leave a cluster
+	// gracefully.
+	//
 	Shutdown() error
 
 	// Provides access to the distributed directory.

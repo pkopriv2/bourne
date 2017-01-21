@@ -9,24 +9,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// References:
-//
-// * https://raft.github.io/raft.pdf
-// * https://www.youtube.com/watch?v=LAqyTyNUYSY
-// * https://github.com/ongardie/dissertation/blob/master/book.pdf?raw=true
-//
-//
-// Considered a BFA (Byzantine-Federated-Agreement) approach, but looked too complex for our
-// initial needs. (consider for future systems)
-//
-// * https://www.stellar.org/papers/stellar-consensus-protocol.pdf
-//
-// NOTE: Currently only election is implemented.
-// TODO:
-//  * Support changing cluster membership
-//  * Support durable log!!
-//
-
 // A peer contains the identifying info of a cluster member.
 type peer struct {
 	id   uuid.UUID
@@ -50,6 +32,7 @@ func (p peer) Client(ctx common.Context) (*client, error) {
 	return &client{raw}, nil
 }
 
+// a host simply binds a network service with the core log machine.
 type host struct {
 	logger common.Logger
 	core   *replicatedLog

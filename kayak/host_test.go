@@ -1,10 +1,12 @@
 package kayak
 
 import (
+	"sort"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/net"
@@ -66,15 +68,18 @@ func TestHost_Cluster_Close(t *testing.T) {
 }
 
 func TestHost_Cluster_Leader_Failure(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
-	cluster := StartTestCluster(ctx, 5)
+	cluster := StartTestCluster(ctx, 3)
 
 	leader1 := Converge(cluster)
 	assert.NotNil(t, leader1)
 	leader1.Close()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(4 * time.Second)
 
 	leader2 := Converge(RemoveHost(cluster, Index(cluster, func(h *host) bool {
 		return h.Id() == leader1.Id()
@@ -130,7 +135,7 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	for i := 0; i < numThreads; i++ {
 		go func() {
 			for j := 0; j < numItemsPerThread; j++ {
-				_, err := leader.Append(Event(stash.Int(i*j + j)))
+				_, err := leader.Append(Event(stash.Int(numThreads*i + j)))
 				if err != nil {
 					panic(err)
 				}
@@ -149,6 +154,163 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	case <-timeout:
 		assert.FailNow(t, "Timed out waiting for majority to sync")
 	}
+}
+
+func TestHost_Cluster_Follower_AppendMulti_WithLeaderFailure(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	cluster := StartTestCluster(ctx, 3)
+	leader := Converge(cluster)
+	assert.NotNil(t, leader)
+
+	numThreads := 10
+	numItemsPerThread := 10
+
+	member := First(cluster, func(h *host) bool {
+		return h.Id() != leader.Id()
+	})
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		leader.logger.Info("Killing leader!")
+		leader.Close()
+
+	}()
+
+	failures := concurrent.NewAtomicCounter()
+	for i := 0; i < numThreads; i++ {
+		go func(i int) {
+			for j := 0; j < numItemsPerThread; j++ {
+				_, err := member.Append(Event(stash.Int(numThreads*i+j)))
+				if err != nil {
+					failures.Inc()
+					member.logger.Info("ERROR: %v", numThreads*i+j)
+					// panic(err)
+				}
+			}
+		}(i)
+	}
+
+	done, timeout := concurrent.NewBreaker(50*time.Second, func() {
+		SyncAll(cluster, func(h *host) bool {
+			if h.Self() == leader.Self() {
+				return true
+			}
+
+			h.logger.Info("Failures: %v", failures.Get())
+			b, _ := h.Log().Scan(0, 100)
+
+			evts := make([]int, 0, 100)
+			for _, i := range b {
+				val, _ := stash.ParseInt(i.Event)
+				evts = append(evts, val)
+			}
+
+			sort.Ints(evts)
+			for _, i := range evts {
+				h.logger.Info("%v", i)
+			}
+
+			time.Sleep(1 * time.Second)
+			return h.Log().Head() == (numThreads*numItemsPerThread)-int(failures.Get()) && h.Log().Committed() == (numThreads*numItemsPerThread)-int(failures.Get())
+		})
+	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		assert.FailNow(t, "Timed out waiting for majority to sync")
+	}
+}
+
+func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	cluster := StartTestCluster(ctx, 3)
+	leader := Converge(cluster)
+	assert.NotNil(t, leader)
+
+	numThreads := 10
+	numItemsPerThread := 100
+
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		for {
+			select {
+			case <-ctx.Env().Closed():
+				return
+			case <-ticker.C:
+				leader.logger.Info("Running compactions")
+				for _, p := range cluster {
+					leader.logger.Error("Error: %v", p.Log().Compact(p.Log().Head()-10, NewEventChannel([]Event{Event(stash.Int(1))}), 1, []byte{}))
+				}
+			}
+		}
+	}()
+
+	for i := 0; i < numThreads; i++ {
+		go func(i int) {
+			for j := 0; j < numItemsPerThread; j++ {
+				_, err := leader.Append(Event(stash.Int(i*j + j)))
+				if err != nil {
+					panic(err)
+				}
+			}
+		}(i)
+	}
+
+	done, timeout := concurrent.NewBreaker(500*time.Second, func() {
+		SyncAll(cluster, func(h *host) bool {
+			return h.Log().Head() == (numThreads*numItemsPerThread)-1 && h.Log().Committed() == (numThreads*numItemsPerThread)-1
+		})
+	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		assert.FailNow(t, "Timed out waiting for majority to sync")
+	}
+
+	leader.Log().stash.View(func(tx *bolt.Tx) error {
+		numSegments := 0
+		c := tx.Bucket(segBucket).Cursor()
+		for _, v := c.First(); v != nil; _, v = c.Next() {
+			numSegments++
+		}
+		assert.Equal(t, len(cluster), numSegments)
+
+		numItems := 0
+		c = tx.Bucket(segItemsBucket).Cursor()
+		for _, v := c.First(); v != nil; _, v = c.Next() {
+			numItems++
+		}
+		assert.Equal(t, len(cluster)*10, numItems)
+
+		numSnapshots := 0
+		c = tx.Bucket(snapshotsBucket).Cursor()
+		for _, v := c.First(); v != nil; _, v = c.Next() {
+			numSnapshots++
+		}
+		assert.Equal(t, len(cluster), numSnapshots)
+
+		numEvents := 0
+		c = tx.Bucket(snapshotEventsBucket).Cursor()
+		for _, v := c.First(); v != nil; _, v = c.Next() {
+			numEvents++
+		}
+		assert.Equal(t, len(cluster), numEvents)
+		return nil
+	})
 }
 
 func extractIndices(items []LogItem) []int {
@@ -175,7 +337,7 @@ func TestHost_Cluster_Follower_ClientAppend_SingleBatch_SingleItem(t *testing.T)
 	assert.Nil(t, err)
 	assert.NotNil(t, cl)
 
-	_, err = cl.Append(Event{0})
+	_, err = cl.Append(Event{0, 1})
 	assert.Nil(t, err)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
@@ -259,6 +421,7 @@ func Converge(cluster []*host) *host {
 	select {
 	case <-done:
 		return First(cluster, func(h *host) bool {
+			h.logger.Info("SEARCHING FOR LEADER: %v, %v", h.Id(), *leader)
 			return h.Id() == *leader
 		})
 	case <-timeout:

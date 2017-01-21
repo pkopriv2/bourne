@@ -69,6 +69,14 @@ type Client interface {
 	Send(Request) (Response, error)
 }
 
+type ClientPool interface {
+	io.Closer
+	Max() int
+	TakeTimeout(time.Duration) Client
+	Return(Client)
+	Fail(Client)
+}
+
 // A request is a writable message asking the server to invoke a handler.
 type Request interface {
 	scribe.Writable
@@ -225,6 +233,10 @@ func (r *response) String() string {
 // Support for multiple encodings (intended to help troubleshoot live systems)
 type Encoding byte
 
+func (e Encoding) String() string {
+	return EncodingToString(e)
+}
+
 const (
 	Json Encoding = 0
 	Gob           = 1
@@ -278,8 +290,7 @@ func writeEncoding(conn Connection, enc Encoding) error {
 
 type client struct {
 	conn        Connection
-	enc         scribe.Encoder
-	dec         scribe.Decoder
+	enc         Encoding
 	logger      common.Logger
 	sendTimeout time.Duration
 	recvTimeout time.Duration
@@ -288,35 +299,27 @@ type client struct {
 func NewClient(ctx common.Context, log common.Logger, conn Connection) (Client, error) {
 	config := ctx.Config()
 
-	encoding, err := EncodingFromString(config.Optional(ConfClientEncoding, DefaultClientEncoding))
+	enc, err := EncodingFromString(config.Optional(ConfClientEncoding, DefaultClientEncoding))
 	if err != nil {
 		return nil, err
 	}
 
-	var encoder scribe.Encoder
-	var decoder scribe.Decoder
-	switch encoding {
+	switch enc {
 	default:
-		return nil, &UnsupportedEncodingError{EncodingToString(encoding)}
-	case Json:
-		decoder = json.NewDecoder(conn)
-		encoder = json.NewEncoder(conn)
-	case Gob:
-		decoder = gob.NewDecoder(conn)
-		encoder = gob.NewEncoder(conn)
-	}
-
-	if err := writeEncoding(conn, encoding); err != nil {
-		return nil, err
+		return nil, &UnsupportedEncodingError{EncodingToString(enc)}
+	case Json,Gob:
 	}
 
 	return &client{
 		logger:      ctx.Logger(),
 		conn:        conn,
-		enc:         encoder,
-		dec:         decoder,
+		enc:         enc,
 		sendTimeout: config.OptionalDuration(ConfClientSendTimeout, DefaultClientSendTimeout),
 		recvTimeout: config.OptionalDuration(ConfClientRecvTimeout, DefaultClientRecvTimeout)}, nil
+}
+
+func (s *client) String() string {
+	return fmt.Sprintf("%v-->%v", s.conn.LocalAddr(), s.conn.RemoteAddr())
 }
 
 func (s *client) Close() error {
@@ -339,7 +342,20 @@ func (s *client) Send(req Request) (res Response, err error) {
 
 func (s *client) send(req Request) (err error) {
 	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() {
-		err = scribe.Encode(s.enc, req)
+		var encoder scribe.Encoder
+		switch s.enc {
+		case Json:
+			encoder = json.NewEncoder(s.conn)
+		case Gob:
+			encoder = gob.NewEncoder(s.conn)
+		}
+
+		if err := writeEncoding(s.conn, s.enc); err != nil {
+			err = errors.Wrapf(err, "Error writing encoding header")
+			return
+		}
+
+		err = scribe.Encode(encoder, req)
 	})
 
 	select {
@@ -351,8 +367,16 @@ func (s *client) send(req Request) (err error) {
 }
 
 func (s *client) recv() (resp Response, err error) {
+	var decoder scribe.Decoder
+	switch s.enc {
+	case Json:
+		decoder = json.NewDecoder(s.conn)
+	case Gob:
+		decoder = gob.NewDecoder(s.conn)
+	}
+
 	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() {
-		resp, err = readResponse(s.dec)
+		resp, err = readResponse(decoder)
 	})
 
 	select {
@@ -361,6 +385,48 @@ func (s *client) recv() (resp Response, err error) {
 	case e := <-timeout:
 		return resp, errors.Wrapf(e, "client:recv")
 	}
+}
+
+// Client pooling implementation
+
+type clientPool struct {
+	ctx common.Context
+	log common.Logger
+	raw ConnectionPool
+}
+
+func NewClientPool(ctx common.Context, log common.Logger, raw ConnectionPool) *clientPool {
+	return &clientPool{ctx, log, raw}
+}
+
+func (c *clientPool) Close() error {
+	return c.raw.Close()
+}
+
+func (c *clientPool) Max() int {
+	return c.raw.Max()
+}
+
+func (c *clientPool) TakeTimeout(dur time.Duration) Client {
+	conn := c.raw.TakeTimeout(dur)
+	if conn == nil {
+		return nil
+	}
+
+	client, err := NewClient(c.ctx, c.log, conn)
+	if err != nil {
+		panic(err)
+	}
+
+	return client
+}
+
+func (c *clientPool) Return(cl Client) {
+	c.raw.Return(cl.(*client).conn)
+}
+
+func (c *clientPool) Fail(cl Client) {
+	c.raw.Fail(cl.(*client).conn)
 }
 
 // Server implementation
@@ -437,6 +503,7 @@ func (s *server) startListener() {
 		for {
 			conn, err := s.listener.Accept()
 			if err != nil {
+				s.logger.Error("Error accepting connection: %v", conn)
 				return
 			}
 
@@ -458,42 +525,42 @@ func (s *server) newWorker(conn Connection) func() {
 	return func() {
 		defer conn.Close()
 
-		var encoder scribe.Encoder
-		var decoder scribe.Decoder
-
-		encoding, err := readEncoding(conn)
-		if err != nil {
-			return
-		}
-
-		switch encoding {
-		default:
-			return // TODO: respond with error!
-		case Json:
-			decoder = json.NewDecoder(conn)
-			encoder = json.NewEncoder(conn)
-		case Gob:
-			decoder = gob.NewDecoder(conn)
-			encoder = gob.NewEncoder(conn)
-		}
-
 		for {
+			enc, err := readEncoding(conn)
+			if err != nil {
+				return
+			}
+			// s.logger.Debug("Determined encoding for request [%v]: %v", enc, conn.RemoteAddr())
+
+			var encoder scribe.Encoder
+			var decoder scribe.Decoder
+			switch enc {
+			default:
+				return // TODO: respond with error!
+			case Json:
+				decoder = json.NewDecoder(conn)
+				encoder = json.NewEncoder(conn)
+			case Gob:
+				decoder = gob.NewDecoder(conn)
+				encoder = gob.NewEncoder(conn)
+			}
+
 			req, err := s.recv(decoder)
 			if err != nil {
 				if err != io.EOF {
-					s.logger.Error("Error receiving request [%v]", err)
+					s.logger.Error("Error receiving request [%v]: %v", err, conn.RemoteAddr())
 				}
 				return
 			}
 
 			res, err := s.handle(req)
 			if err != nil {
-				s.logger.Error("Error handling request [%v]", err)
+				s.logger.Error("Error handling request [%v]: %v", err, conn.RemoteAddr())
 				return
 			}
 
 			if err = s.send(encoder, res); err != nil {
-				s.logger.Error("Error sending response [%v]", res)
+				s.logger.Error("Error sending response [%v]: %v", err, conn.RemoteAddr())
 				return
 			}
 		}
@@ -573,3 +640,5 @@ func parseError(msg string) error {
 
 	return errors.New(msg)
 }
+
+// pooling support

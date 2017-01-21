@@ -2,24 +2,31 @@ package kayak
 
 import (
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
 )
 
-// Public Error Types
 var (
-	ClosedError        = errors.New("Kayak:Closed")
-	NotLeaderError     = errors.New("Kayak:NotLeader")
-	NoLeaderError      = errors.New("Kayak:NoLeader")
+	ClosedError    = errors.New("Kayak:Closed")
+	NotLeaderError = errors.New("Kayak:NotLeader")
+	NoLeaderError  = errors.New("Kayak:NoLeader")
+)
+
+var (
+	AccessError      = errors.New("Kayak:AccessError")
+	EndOfStreamError = errors.New("Kayak:EndOfStream")
+	OutOfBoundsError = errors.New("Kayak:OutOfBounds")
+	InvariantError   = errors.New("Kayak:InvariantError")
 )
 
 // Runs the machine, using a replicated event log as the durable storage
-// engine.  Machines of these types can continue to function as long
-// as a majority of peers remain alive.  If the remaining members are
-// unable to form a quorum, client requests will be returned with a
-// NoLeaderError
+// engine.  Machines of this type can continue to function as long as a
+// majority of peers remain alive.  However, in the event that only a
+// minority of peers remain, they will continue to hold elections
+// indefinitely.
 //
 func Run(ctx common.Context, app Machine, self string, peers []string) error {
 	return nil
@@ -27,11 +34,19 @@ func Run(ctx common.Context, app Machine, self string, peers []string) error {
 
 // Events are the fundamental unit of replication.  This the primary
 // consumer data structure used in interacting with the replicated log.
-// The onus of interpretting an event is soley a consumer responsibility.
+// The onus of interpreting an event is on the consumer.
 type Event []byte
 
 func (e Event) Raw() []byte {
 	return []byte(e)
+}
+
+func (e Event) Write(w scribe.Writer) {
+	w.WriteBytes("raw", e.Raw())
+}
+
+type Client interface {
+	Run(log Log, snapshot <-chan Event) error
 }
 
 // A machine is anything that is expressable as a sequence of events.
@@ -40,19 +55,16 @@ func (e Event) Raw() []byte {
 // log in order to create highly-resilient, strongly consistent
 // replicated state machines.
 //
-// Kayak machines work by using a distributed systems technique,
-// called distributed consensus.
-//
 // # Distributed Consensus
 //
 // Underpinning every machine is a log that implements the Raft
 // distributed consensus protocol.  While most of the details of the
-// protocol are abstracted away, it is useful to know some of the
-// high level details.
+// protocol are abstracted, it is useful to know some of the high level
+// details.
 //
 // At startup, the machines are aware of each other's existence
 // and form a fully-connected graph between them.  The machines
-// use the raft leader election protocol to establish a leader
+// use the Raft leader election protocol to establish a leader
 // amongst the group and the leader maintains its leadership through
 // the use of periodic heartbeats.
 //
@@ -68,9 +80,8 @@ func (e Event) Raw() []byte {
 //
 // * Updates flow from leader to follower. Period.
 //
-// And it turns out that this one property can make the management
-// of a distributed log a very tractable problem, even when exposed
-// directly to consumer machines.
+// This one property can make the management of a distributed log a very
+// tractable problem, even when exposed directly to consumer machines.
 //
 // # Building State Machines
 //
@@ -81,68 +92,69 @@ func (e Event) Raw() []byte {
 //
 //                  *Local Process*						      |  *Network Process*
 //                                                            |
-//                               |-------*commits*-----|      |
+//                               |-------*commit*------|      |
 //                               v                     |      |
 // {Consumer}---*updates*--->{Machine}---*append*--->{Log}<---+--->{Peer}
-//                                                            |
+//                               |					   ^      |
+//                               |-------*compact*-----|      |
 //                                                            |
 //
 //
-// And now we've got to the first issue of machine design:
+// This brings us to the main issue of machine design:
 //
 // * Appends and commits are separate, unsynchronized streams.
 //
-// Moreover, users of these apis CANNOT make any assumptions about the
+// Moreover, users of these APIs must not make any assumptions about the
 // relationship of one stream to the other.  In other words, a successful
 // append ONLY gives the guarantee that it has been committed to a majority
-// of peers, and not necessarily to itself.  If consumers require strict
-// linearizable reads, they are encouraged to sync their append request
-// with the commit stream.
+// of peers, and not necessarily to itself.  If the consuming machine requires
+// strong consistency, synchronizing the request with the commit stream
+// is likely required.
 //
 // # Log Compactions
 //
-// For many machines, their state  is actually represented by many redundant
-// log items.  In other words, many of the items have been obviated.  The log
-// can leverage this to occasionally shrink the log.
-//
-// References:
-// * Reft Spec:
-//     https://raft.github.io/raft.pdf
-// * Raft Book:
-//
-// * Original Lamport Paxos paper:
-//     https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/The-Part-Time-Parliament.pdf
+// For many machines, their state is actually represented by many redundant
+// log items.  In other words, many of the items have been obviated.  The
+// machine can provide the log of a shortened 'snapshot' version of itself
+// using the Log#Compact() method.
 //
 type Machine interface {
 
-	// Runs the main machine routine.  This is consumer's window
-	// into the lifecycle management of the log itself.  For example,
-	// for consumers wishing to rebuild their internal state, simply
-	// return from this method.  The machine will automatically be
-	// restarted.  However, the converse is true as well.  If the
-	// log service is no longer able to maintain a consistent state
-	// with its peers, it can return errors.
+	// Run invokes the machines main loop.
+	//
+	// Each time the machine starts, it is provided a snapshot of events
+	// that can be used to rebuild machine state.
+	//
+	// Consumers may choose to return from this method at any time.  If
+	// the returned error is nil, the log shuts down and returns from
+	// the main kayak.Run() method.  If the returned value is not nil,
+	// the machine is automatically restarted with the latest snapshot.
+	//
+	// Consumers wishing to terminate the log permanently should close
+	// the log directly and return from the main loop.  Any errors
+	// returned at that time are returned from the main kayak.Run()
+	// loop.
 	//
 	Run(log Log, snapshot <-chan Event) error
 }
 
-// The log is the primary view into the replicated log state.  Consumers
-// can append events or listen for items as they committed.
-//
+// The log is a durable, replicated event sequence
 type Log interface {
 	io.Closer
 
+	// Head returns the index of the latest item in the log.
+	Head() int
+
 	// Listen generates a listener interested in log commits starting from
-	// and incuding sthe start index.
+	// and including the start index.
 	//
 	// The listener is guaranteed to receive ALL items in the order
 	// they are committed - however - if a listener becomes significantly
 	// lagged, so much so that its current segment is compacted away,
-	// it will fail.  This should be unlikely, as consumers have been given
-	// control over compactions.  Moreover, it is not expected that consumers
-	// need be concerned with log state.  In many cases, simply returning
-	// from the main machine's run loop and restarting is sufficient to resume
-	// operations.
+	// it will fail.  However, it is not expected that consumers need be
+	// concerned with log state.  In many cases, simply returning the
+	// error from the main machine's run loop and restarting is sufficient
+	// to resume operations.
 	//
 	// This method also gives control over the underlying buffer size.
 	// Consumers which need highly synchronized state with the log should
@@ -175,14 +187,12 @@ type Log interface {
 	//
 	// Concurrent compactions are possible, however, the log ensures that
 	// the only the latest snapshot is retained. In the event that a compaction
-	// is obseleted concurrently, an error will be returned. This likely means
-	// that the machine is in an inconsistent state and must reconcile.
+	// is obsoleted concurrently, no error will be returned.
 	//
 	Compact(until int, snapshot <-chan Event, size int) error
 }
 
 // A listener represents a stream of log items.
-//
 type Listener interface {
 	io.Closer
 
@@ -196,19 +206,13 @@ type Listener interface {
 	// If a reader gets significantly behind the underlying log's end, it
 	// is possible for the listener to become corrupted if the underlying log
 	// is compacted away. Consumers are allowed to choose how to deal with this,
-	// but for in-memory state machines, if the the stream was in critical path
+	// but for in-memory state machines, if the stream was in critical path
 	// to machine state, then it's probably best to just rebuild the machine.
-	//
-	// The possible error values are:
-	//
-	// * OutOfBoundsError
-	// * DeletedError
 	//
 	Next() (LogItem, error)
 }
 
-// The basic log item.  This is typically just an event decorated with its index
-// in the log.
+// The basic log item.
 type LogItem struct {
 
 	// Item index. May be used to reconcile state with log.
@@ -222,6 +226,20 @@ type LogItem struct {
 
 	// Internal Only: whether or not this item represents configuration
 	config bool
+}
+
+func (l LogItem) String() string {
+	return fmt.Sprintf("Item(idx=%v,term=%v,size=%v)", l.Index, l.term, len(l.Event))
+}
+
+func (l LogItem) Write(w scribe.Writer) {
+	w.WriteInt("index", l.Index)
+	w.WriteInt("term", l.term)
+	w.WriteBytes("event", l.Event)
+}
+
+func (l LogItem) Bytes() []byte {
+	return scribe.Write(l).Bytes()
 }
 
 func newEventLogItem(i int, t int, e Event) LogItem {
@@ -258,14 +276,4 @@ func parseItem(bytes []byte) (LogItem, error) {
 	}
 
 	return raw.(LogItem), nil
-}
-
-func (l LogItem) Write(w scribe.Writer) {
-	w.WriteInt("index", l.Index)
-	w.WriteInt("term", l.term)
-	w.WriteBytes("event", l.Event.Raw())
-}
-
-func (l LogItem) Bytes() []byte {
-	return scribe.Write(l).Bytes()
 }

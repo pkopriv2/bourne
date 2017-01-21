@@ -111,7 +111,7 @@ func TestDurableLog_DeleteSnapshot(t *testing.T) {
 	assert.Nil(t, snapshot.Delete(db)) // idempotent deletes
 
 	events, err = snapshot.Scan(db, 0, 100)
-	assert.Equal(t, DeletedError, errors.Cause(err))
+	assert.Equal(t, AccessError, errors.Cause(err))
 	assert.Nil(t, events) // idempotent deletes
 }
 
@@ -238,7 +238,7 @@ func TestDurableLog_Segment_Delete(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = seg.Scan(db, 0, 100)
-	assert.Equal(t, DeletedError, errors.Cause(err))
+	assert.Equal(t, AccessError, errors.Cause(err))
 }
 
 func TestDurableLog_Segment_Compact_Empty(t *testing.T) {

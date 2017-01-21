@@ -37,15 +37,15 @@ func (c *leaderSpawner) start() {
 }
 
 type leader struct {
-	logger     common.Logger
-	follower   chan<- *replica
-	syncer     *logSyncer
-	proxyPool  concurrent.WorkPool
-	appendPool concurrent.WorkPool
-	term       term
-	replica    *replica
-	closed     chan struct{}
-	closer     chan struct{}
+	logger       common.Logger
+	follower     chan<- *replica
+	syncer       *logSyncer
+	proxyPool    concurrent.WorkPool
+	appendPool   concurrent.WorkPool
+	term         term
+	replica      *replica
+	closed       chan struct{}
+	closer       chan struct{}
 }
 
 func spawnLeader(follower chan<- *replica, replica *replica) {
@@ -124,6 +124,8 @@ func (l *leader) start() {
 				return
 			case append := <-l.replica.LocalAppends:
 				l.handleLocalAppend(append)
+			case snapshot := <-l.replica.Snapshots:
+				l.handleInstallSnapshot(snapshot)
 			case events := <-l.replica.Replications:
 				l.handleReplicate(events)
 			case ballot := <-l.replica.VoteRequests:
@@ -162,22 +164,27 @@ func (c *leader) handleLocalAppend(append machineAppend) {
 	}
 }
 
+func (c *leader) handleInstallSnapshot(snapshot installSnapshot) {
+	snapshot.Reply(c.term.num, false)
+}
+
 func (c *leader) handleRequestVote(vote requestVote) {
+	c.logger.Debug("Handling request vote: %v", vote)
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
-	if vote.term <= c.replica.term.num {
-		vote.reply(c.replica.term.num, false)
+	if vote.term <= c.term.num {
+		vote.reply(c.term.num, false)
 		return
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	maxLogIndex, maxLogTerm, _, err := c.replica.Log.Snapshot()
+	max, err := c.replica.Log.Max()
 	if err != nil {
 		vote.reply(vote.term, false)
 		return
 	}
 
-	if vote.maxLogIndex >= maxLogIndex && vote.maxLogTerm >= maxLogTerm {
+	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
 		c.replica.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
 	} else {
@@ -189,8 +196,8 @@ func (c *leader) handleRequestVote(vote requestVote) {
 }
 
 func (c *leader) handleReplicate(append replicateEvents) {
-	if append.term < c.replica.term.num {
-		append.reply(c.replica.term.num, false)
+	if append.term <= c.term.num {
+		append.reply(c.term.num, false)
 		return
 	}
 
@@ -201,9 +208,9 @@ func (c *leader) handleReplicate(append replicateEvents) {
 
 func (c *leader) broadcastHeartbeat() {
 	ch := c.replica.Broadcast(func(cl *client) response {
-		resp, err := cl.Replicate(c.replica.Id, c.replica.term.num, -1, -1, []LogItem{}, c.replica.Log.Committed())
+		resp, err := cl.Replicate(c.replica.Id, c.term.num, -1, -1, []LogItem{}, c.replica.Log.Committed())
 		if err != nil {
-			return response{c.replica.term.num, false}
+			return response{c.term.num, false}
 		} else {
 			return resp
 		}
@@ -215,15 +222,15 @@ func (c *leader) broadcastHeartbeat() {
 		case <-c.closed:
 			return
 		case resp := <-ch:
-			if resp.term > c.replica.term.num {
-				c.replica.Term(resp.term, nil, c.replica.term.votedFor)
+			if resp.term > c.term.num {
+				c.replica.Term(resp.term, nil, c.term.votedFor)
 				c.transition(c.follower)
 				return
 			}
 
 			i++
 		case <-timer.C:
-			c.replica.Term(c.replica.term.num, nil, c.replica.term.votedFor)
+			c.replica.Term(c.term.num, nil, c.term.votedFor)
 			c.transition(c.follower)
 			return
 		}
@@ -348,11 +355,6 @@ func (s *logSyncer) sync(p peer) error {
 	logger := s.logger.Fmt("Routine(%v)", p)
 	logger.Info("Starting peer synchronizer")
 
-	// snapshot the local log
-	head, term, _, err := s.root.Log.Snapshot()
-	if err != nil {
-		return err
-	}
 
 	var cl *client
 	go func() {
@@ -360,26 +362,29 @@ func (s *logSyncer) sync(p peer) error {
 		defer common.RunIf(func() { cl.Close() })(cl)
 		var err error
 
-		// we will start syncing at current head offset
-		prevIndex := head
-		prevTerm := term
+		// snapshot the local log
+		max, err := s.root.Log.Max()
+		if err != nil {
+			s.shutdown(err)
+			// FIXME! Better error handling here.
+			return
+		}
 
 		// the sync'er needs to be unaffected by segment
 		// compactions.
-		// segment := s.root.Log.Active()
 		for {
-			next, ok := s.root.Log.head.WaitForGreaterThanOrEqual(prevIndex+1)
+			next, ok := s.root.Log.head.WaitForGreaterThanOrEqual(max.Index + 1)
 			if !ok || s.Closed() {
 				return
 			}
 
 			// loop until this peer is completely caught up to head!
-			for prevIndex < next {
+			for max.Index < next {
 				if s.Closed() {
 					return
 				}
 
-				logger.Debug("Currently [%v/%v]", prevIndex, next)
+				logger.Debug("Currently [%v/%v]", max.Index, next)
 
 				// might have to reinitialize client after each batch.
 				if cl == nil {
@@ -389,26 +394,15 @@ func (s *logSyncer) sync(p peer) error {
 					}
 				}
 
-				// if we've moved beyond the current segment, move to next active segment
-				// head, err := segment.Head()
-				// if err != nil {
-					// s.shutdown(err)
-					// return
-				// }
-//
-				// if prevIndex+1 > head {
-					// segment = s.root.Log.Active()
-				// }
-
 				// scan a full batch of events.
-				batch, err := s.root.Log.Scan(prevIndex+1, prevIndex+1+256)
+				batch, err := s.root.Log.Scan(max.Index+1, max.Index+1+256)
 				if err != nil {
 					s.shutdown(err)
 					return
 				}
 
 				// send the append request.
-				resp, err := cl.Replicate(s.root.Id, s.root.term.num, prevIndex, prevTerm, batch, s.root.Log.Committed())
+				resp, err := cl.Replicate(s.root.Id, s.root.term.num, max.Index, max.term, batch, s.root.Log.Committed())
 				if err != nil {
 					logger.Error("Unable to append events [%v]", err)
 					cl = nil
@@ -424,29 +418,22 @@ func (s *logSyncer) sync(p peer) error {
 
 				// if it was successful, progress the peer's index and term
 				if resp.success {
-					prevIndex += len(batch)
-					prevTerm = s.root.term.num
-					s.SetPrevIndexAndTerm(p.id, prevIndex, prevTerm)
+					max = batch[len(batch)-1]
+					s.SetPrevIndexAndTerm(p.id, max.Index, max.term)
 					continue
 				}
 
 				// consistency check failed, start moving backwards one index at a time.
+				// TODO: Install snapshot
 
-				// TODO: Implement optimization to come to faster agreement.
-				prevIndex -= 1
-				if prevIndex < -1 {
-					logger.Error("Unable to sync peer log")
-					return
-				}
-
-				prevItem, ok, err := s.root.Log.Get(prevIndex)
+				max, ok, err = s.root.Log.Get(max.Index-1)
 				if err != nil {
 					s.shutdown(err)
 					return
 				}
 
 				if ok {
-					s.SetPrevIndexAndTerm(p.id, prevIndex, prevItem.term)
+					s.SetPrevIndexAndTerm(p.id, max.Index, max.term)
 				} else {
 					s.SetPrevIndexAndTerm(p.id, -1, -1)
 				}

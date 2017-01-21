@@ -43,7 +43,7 @@ func (c *env) Close() error {
 }
 
 func (e *env) Closed() <-chan struct{} {
-	return e.Closed()
+	return e.closed
 }
 
 func (c *env) OnClose(fn func()) {

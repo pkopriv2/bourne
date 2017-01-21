@@ -33,6 +33,9 @@ type replica struct {
 	// the peer representing the local instance
 	Self peer
 
+	// the core database
+	Db stash.Stash
+
 	// data lock (currently using very coarse lock)
 	lock sync.RWMutex
 
@@ -51,9 +54,6 @@ type replica struct {
 	// the client timeout
 	RequestTimeout time.Duration
 
-	// the replicated state machine.
-	Machine Machine
-
 	// the event log.
 	Log *eventLog
 
@@ -65,6 +65,9 @@ type replica struct {
 
 	// append requests (presumably from leader)
 	Replications chan replicateEvents
+
+	// snapshot install (presumably from leader)
+	Snapshots chan installSnapshot
 
 	// append requests (from clients)
 	RemoteAppends chan machineAppend
@@ -92,10 +95,12 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		Logger:          logger,
 		terms:           openTermStorage(stash),
 		Log:             log,
+		Db:              stash,
 		Replications:    make(chan replicateEvents),
 		VoteRequests:    make(chan requestVote),
 		RemoteAppends:   make(chan machineAppend),
 		LocalAppends:    make(chan machineAppend),
+		Snapshots:       make(chan installSnapshot),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
 		RequestTimeout:  10 * time.Second,
 		closed:          make(chan struct{}),
@@ -125,63 +130,6 @@ func (h *replica) start() error {
 
 	// set the term from durable storage.
 	h.Term(term.num, term.leader, term.votedFor)
-
-	go func() {
-		l := h.Log.ListenCommits(0, 0)
-		for i,e := l.Next(); e == nil; i,e = l.Next() {
-			if i.Index > 0 && i.Index % 5 == 0 {
-				before := h.Log.Active().raw.prevIndex
-				h.Log.Compact(i.Index-5, NewEventChannel([]Event{Event{0,1}}), 1, []byte{})
-				after := h.Log.Active().raw.prevIndex
-				h.Logger.Error("Done compacting: Before [%v] items. After [%v] items", before, after)
-			}
-			h.Logger.Info("Commit: %v", i.Index)
-		}
-
-		h.Logger.Error("ERROR: ", err)
-	}()
-	return nil
-
-	// start snapshotter
-	if h.Machine != nil {
-		if err := h.startSnapshotter(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (h *replica) startSnapshotter() error {
-
-	go func() {
-		// l := h.Log.ListenCommits(0, 0)
-
-		// logger := h.Logger.Fmt("Snapshotter: ")
-		for {
-			// var item LogItem
-			// for i := 0; i < h.SnapshotThreshold; i++ {
-			// select {
-			// case <-h.closed:
-			// return
-			// case <-l.Closed():
-			// return
-			// case item = <-l.Items():
-			// }
-			// }
-			//
-			// snapshot, index, err := h.Machine.Snapshot()
-			// if err != nil {
-			// logger.Error("Error taking snapshot: %+v", err)
-			// continue
-			// }
-			//
-			// if err := h.Log.Compact(snapshot, index); err != nil {
-			// logger.Error("Error compacting log: %+v", err)
-			// continue
-			// }
-		}
-	}()
 	return nil
 }
 
@@ -254,6 +202,23 @@ func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 	return ret
 }
 
+func (h *replica) InstallSnapshot(snapshotId uuid.UUID, id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, prevConfig []byte, offset int, events []Event) (response, error) {
+	req := installSnapshot{
+		snapshotId, id, term, prevLogIndex, prevLogTerm, prevConfig, offset, events, make(chan response, 1)}
+
+	select {
+	case <-h.closed:
+		return response{}, ClosedError
+	case h.Snapshots <- req:
+		select {
+		case <-h.closed:
+			return response{}, ClosedError
+		case r := <-req.ack:
+			return r, nil
+		}
+	}
+}
+
 func (h *replica) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, items []LogItem, commit int) (response, error) {
 	append := replicateEvents{
 		id, term, prevLogIndex, prevLogTerm, items, commit, make(chan response, 1)}
@@ -323,8 +288,8 @@ func (h *replica) LocalAppend(event Event) (LogItem, error) {
 			return LogItem{}, ClosedError
 		case r := <-append.ack:
 			return r.Item, r.Err
-		case <-timer.C:
-			return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		// case <-timer.C:
+			// return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 		}
 	}
 }
@@ -362,13 +327,13 @@ func (a *replicateEvents) reply(term int, success bool) {
 type requestVote struct {
 	id          uuid.UUID
 	term        int
-	maxLogTerm  int
 	maxLogIndex int
+	maxLogTerm  int
 	ack         chan response
 }
 
 func (r requestVote) String() string {
-	return fmt.Sprintf("RequestVote(%v,%v)", r.id.String()[:8], r.term)
+	return fmt.Sprintf("RequestVote(id=%v,idx=%v,term=%v)", r.id.String()[:8], r.maxLogIndex, r.maxLogTerm)
 }
 
 func (r requestVote) reply(term int, success bool) {
@@ -394,6 +359,22 @@ func (a machineAppend) Return(item LogItem, err error) {
 
 func (a machineAppend) Fail(err error) {
 	a.ack <- machineAppendResponse{Err: err}
+}
+
+type installSnapshot struct {
+	snapshotId   uuid.UUID
+	leaderId     uuid.UUID
+	term         int
+	prevLogIndex int
+	prevLogTerm  int
+	prevConfig   []byte
+	batchOffset  int
+	batch        []Event
+	ack          chan response
+}
+
+func (a installSnapshot) Reply(term int, success bool) {
+	a.ack <- response{term, success}
 }
 
 // Client append request.  Requests are put onto the internal member
