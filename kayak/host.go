@@ -16,10 +16,10 @@ type host struct {
 	closer chan struct{}
 }
 
-func newHost(ctx common.Context, self string, log StoredLog, db *bolt.DB) (h *host, err error) {
+func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *host, err error) {
 	root := ctx.Logger().Fmt("Kayak: %v", self)
 
-	core, err := newReplicatedLog(ctx, root, self, log, db)
+	core, err := newReplicatedLog(ctx, root, self, store, db)
 	if err != nil {
 		return nil, err
 	}

@@ -46,7 +46,8 @@ type replica struct {
 	term term
 
 	// the other peers. (currently static list)
-	peers []peer
+	cluster     []peer
+	clusterLock *sync.RWMutex
 
 	// the current seq position
 	seq concurrent.AtomicCounter
@@ -83,33 +84,42 @@ type replica struct {
 	closer chan struct{}
 }
 
-func newReplica(ctx common.Context, logger common.Logger, addr string, raw StoredLog, db *bolt.DB) (*replica, error) {
-	log, err := openEventLog(logger, raw)
-	if err != nil {
-		return nil, errors.Wrapf(err, "Host", raw.Id())
-	}
-
+func newReplica(ctx common.Context, logger common.Logger, addr string, store LogStore, db *bolt.DB) (*replica, error) {
 	termStore, err := openTermStorage(db)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Host", raw.Id())
+		return nil, errors.Wrapf(err, "Host")
 	}
 
 	id, ok, err := termStore.GetId(addr)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Host", raw.Id())
+		return nil, errors.Wrapf(err, "Host")
 	}
 
-	if ! ok {
+	if !ok {
 		id := uuid.NewV1()
 		if err := termStore.SetId(addr, id); err != nil {
-			return nil, errors.Wrapf(err, "Host", raw.Id())
+			return nil, errors.Wrapf(err, "Host")
 		}
 	}
+
+	raw, err := store.Get(id)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Host")
+	}
+
+	store.New(id, []byte{})
+
+
+	log, err := openEventLog(logger, raw)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Host")
+	}
+
 
 	r := &replica{
 		Ctx:             ctx,
 		Id:              id,
-		Self:            peer{id,addr},
+		Self:            peer{id, addr},
 		Logger:          logger,
 		terms:           termStore,
 		Log:             log,
@@ -140,8 +150,8 @@ func (r *replica) Close() error {
 
 func (h *replica) start() error {
 
-	// set the term from the durable store
-	term, err := h.terms.Get(h.Log.raw.Id())
+	// retrieve the term from the durable store
+	term, err := h.terms.Get(h.Self.id)
 	if err != nil {
 		return err
 	}
@@ -149,10 +159,41 @@ func (h *replica) start() error {
 	// set the term from durable storage.
 	h.Term(term.Num, term.Leader, term.VotedFor)
 
-	// snapshot,err := h.Log.Snapshot()
-	// go func() {
-//
-	// }()
+	// retrieve the latest snapshot
+	snapshot, err := h.Log.Snapshot()
+	if err != nil {
+		return errors.Wrapf(err, "Error retrieving latest snapshot for peer [%v]", h.Self.id)
+	}
+
+	// set the cluster from durable config.
+	peers, err := snapshot.Config()
+	if err != nil {
+		return errors.Wrap(err, "error parsing config from snapshot")
+	}
+
+	h.SetCluster(peers)
+
+	// start listening to the log for configuration changes.
+	l, err := h.Log.ListenAppends(snapshot.PrevIndex+1, 256)
+	if err != nil {
+		return errors.Wrap(err, "Error registering listener")
+	}
+
+	go func() {
+		defer l.Close()
+
+		for i, e := l.Next(); e == nil; i, e = l.Next() {
+			if i.Kind != Config {
+				peers, err := parsePeers(i.Event, []peer{h.Self})
+				if err != nil {
+					h.Logger.Error("Error parsing configuration [%v]", peers)
+					continue
+				}
+
+				h.SetCluster(peers)
+			}
+		}
+	}()
 
 	return nil
 }
@@ -163,18 +204,30 @@ func (h *replica) String() string {
 	return fmt.Sprintf("%v, %v:", h.Self, h.term)
 }
 
-func (h *replica) Term(num int, leader *uuid.UUID, vote *uuid.UUID) {
+func (h *replica) Term(num int, leader *uuid.UUID, vote *uuid.UUID) error {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
 	h.Logger.Info("Durably storing updated term [%v]", h.term)
-	h.terms.Save(h.Id, h.term)
+	return h.terms.Save(h.Id, h.term)
 }
 
 func (h *replica) CurrentTerm() term {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	return h.term // i assume return is bound prior to the deferred function....
+}
+
+func (h *replica) Cluster() []peer {
+	h.clusterLock.RLock()
+	defer h.clusterLock.RUnlock()
+	return append([]peer{}, h.cluster...)
+}
+
+func (h *replica) SetCluster(peers []peer) {
+	h.clusterLock.Lock()
+	defer h.clusterLock.Unlock()
+	h.cluster = peers
 }
 
 func (h *replica) Peer(id uuid.UUID) (peer, bool) {
@@ -186,25 +239,19 @@ func (h *replica) Peer(id uuid.UUID) (peer, bool) {
 	return peer{}, false
 }
 
-func (h *replica) Cluster() []peer {
-	peers := h.Peers()
-	ret := make([]peer, 0, len(peers)+1)
-	ret = append(ret, peers...)
-	ret = append(ret, h.Self)
-	return ret
-}
-
 func (h *replica) Peers() []peer {
-	h.lock.RLock()
-	defer h.lock.RUnlock()
-	ret := make([]peer, 0, len(h.peers))
-	return append(ret, h.peers...)
+	cluster := h.Cluster()
+	others := make([]peer, 0, len(cluster))
+	for _, p := range cluster {
+		if p.id != h.Self.id {
+			others = append(others, p)
+		}
+	}
+	return others
 }
 
 func (h *replica) Majority() int {
-	h.lock.RLock()
-	defer h.lock.RUnlock()
-	return majority(len(h.peers) + 1)
+	return majority(len(h.Cluster()))
 }
 
 func (h *replica) Broadcast(fn func(c *client) response) <-chan response {

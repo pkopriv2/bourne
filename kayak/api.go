@@ -262,8 +262,7 @@ func NewLogItem(i int, e Event, t int, s uuid.UUID, seq int, k int) LogItem {
 var (
 	Std       = 0
 	NoOp      = 1
-	AddMember = 2
-	DelMember = 3
+	Config    = 2
 )
 
 func (l LogItem) String() string {

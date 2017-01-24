@@ -9,6 +9,14 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// type config struct {
+// raw  []peer
+// ver  int
+// lock *sync.Cond
+// }
+//
+// func (c config)
+
 // replicated configuration
 type peers []peer
 
@@ -16,9 +24,22 @@ func (p peers) Write(w scribe.Writer) {
 	w.WriteMessage("peers", p)
 }
 
-func readPeers(r scribe.Reader) (p peers, e error) {
-	e = r.ParseMessages("peers", &p, peerParser)
+func readPeers(r scribe.Reader) (p []peer, e error) {
+	e = r.ParseMessages("peers", (*peers)(&p), peerParser)
 	return
+}
+
+func parsePeers(bytes []byte, def []peer) (p []peer, e error) {
+	if bytes == nil {
+		return def, nil
+	}
+
+	msg, err := scribe.Parse(bytes)
+	if err != nil {
+		return def, err
+	}
+
+	return readPeers(msg)
 }
 
 // A peer contains the identifying info of a cluster member.

@@ -30,8 +30,8 @@ type replicatedLog struct {
 	leader *leaderSpawner
 }
 
-func newReplicatedLog(ctx common.Context, logger common.Logger, self string, raw StoredLog, db *bolt.DB) (*replicatedLog, error) {
-	rep, err := newReplica(ctx, logger, self, raw, db)
+func newReplicatedLog(ctx common.Context, logger common.Logger, self string, store LogStore, db *bolt.DB) (*replicatedLog, error) {
+	rep, err := newReplica(ctx, logger, self, store, db)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (h *replicatedLog) Self() peer {
 }
 
 func (h *replicatedLog) Peers() []peer {
-	return h.replica.peers
+	return h.replica.Peers()
 }
 
 func (h *replicatedLog) Log() *eventLog {

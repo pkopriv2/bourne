@@ -125,12 +125,22 @@ func (e *eventLog) Commit(pos int) (new int, err error) {
 	return
 }
 
-func (e *eventLog) Snapshot() (s StoredSnapshot, f error) {
+func (e *eventLog) Snapshot() (snapshot, error) {
+	var err error
+	var snap StoredSnapshot
+	var prevIndex int
+	var prevTerm int
 	e.UseActive(func(seg StoredSegment) {
-		s, f = seg.Snapshot()
+		snap, err = seg.Snapshot()
+		if err != nil {
+			return
+		}
+
+		prevIndex = seg.PrevIndex()
+		prevTerm = seg.PrevTerm()
 		return
 	})
-	return
+	return snapshot{snap, prevIndex, prevTerm}, err
 }
 
 func (e *eventLog) Get(index int) (i LogItem, o bool, f error) {
@@ -241,6 +251,38 @@ func (e *eventLog) ListenAppends(from int, buf int) (Listener, error) {
 
 	return newRefListener(e, e.head, from, buf), nil
 }
+
+type snapshot struct {
+	raw       StoredSnapshot
+	PrevIndex int
+	PrevTerm  int
+}
+
+func (s *snapshot) Size() int {
+	return s.raw.Size()
+}
+
+func (s *snapshot) Config() ([]peer,error) {
+	return parsePeers(s.raw.Config(), []peer{})
+}
+
+func (s *snapshot) Events(cancel <-chan struct{}) <-chan Event {
+	ch := make(chan Event)
+	go func() {
+		defer close(ch)
+
+		for cur := 0; cur < s.raw.Size(); {
+			batch, err := s.raw.Scan(cur, common.Min(cur, cur+256))
+			if err != nil {
+				return
+			}
+
+			cur = cur + len(batch)
+		}
+	}()
+	return ch
+}
+
 
 type refListener struct {
 	log *eventLog

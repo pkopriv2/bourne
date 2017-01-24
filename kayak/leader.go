@@ -54,11 +54,13 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
 	logger.Info("Becoming leader")
 
+	// syncer := newLogSyncer(replica, logger)
+
 	closed := make(chan struct{})
 	l := &leader{
 		logger:     logger,
 		follower:   follower,
-		syncer:     newLogSyncer(replica, logger),
+		// syncer:     syncer,
 		proxyPool:  concurrent.NewWorkPool(10),
 		appendPool: concurrent.NewWorkPool(10),
 		term:       replica.CurrentTerm(),
@@ -274,7 +276,7 @@ func newLogSyncer(inst *replica, logger common.Logger) *logSyncer {
 		closer:      make(chan struct{}, 1),
 	}
 
-	for _, p := range s.root.peers {
+	for _, p := range s.root.Peers() {
 		s.sync(p)
 	}
 
@@ -321,10 +323,9 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 		}
 
 		// wait for majority.
-		majority := majority(len(s.root.peers)+1) - 1
+		majority := s.root.Majority()-1
 		for done := make(map[uuid.UUID]struct{}); len(done) < majority; {
-			// time.Sleep(10*time.Millisecond)
-			for _, p := range s.root.peers {
+			for _, p := range s.root.Peers() {
 				if _, ok := done[p.id]; ok {
 					continue
 				}
