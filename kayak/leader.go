@@ -37,19 +37,19 @@ func (c *leaderSpawner) start() {
 }
 
 type leader struct {
-	logger       common.Logger
-	follower     chan<- *replica
-	syncer       *logSyncer
-	proxyPool    concurrent.WorkPool
-	appendPool   concurrent.WorkPool
-	term         term
-	replica      *replica
-	closed       chan struct{}
-	closer       chan struct{}
+	logger     common.Logger
+	follower   chan<- *replica
+	syncer     *logSyncer
+	proxyPool  concurrent.WorkPool
+	appendPool concurrent.WorkPool
+	term       term
+	replica    *replica
+	closed     chan struct{}
+	closer     chan struct{}
 }
 
 func spawnLeader(follower chan<- *replica, replica *replica) {
-	replica.Term(replica.CurrentTerm().num, &replica.Id, &replica.Id)
+	replica.Term(replica.CurrentTerm().Num, &replica.Id, &replica.Id)
 
 	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
 	logger.Info("Becoming leader")
@@ -166,15 +166,15 @@ func (c *leader) handleLocalAppend(append machineAppend) {
 }
 
 func (c *leader) handleInstallSnapshot(snapshot installSnapshot) {
-	snapshot.Reply(c.term.num, false)
+	snapshot.Reply(c.term.Num, false)
 }
 
 func (c *leader) handleRequestVote(vote requestVote) {
 	c.logger.Debug("Handling request vote: %v", vote)
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
-	if vote.term <= c.term.num {
-		vote.reply(c.term.num, false)
+	if vote.term <= c.term.Num {
+		vote.reply(c.term.Num, false)
 		return
 	}
 
@@ -197,8 +197,8 @@ func (c *leader) handleRequestVote(vote requestVote) {
 }
 
 func (c *leader) handleReplication(append replicateEvents) {
-	if append.term <= c.term.num {
-		append.reply(c.term.num, false)
+	if append.term <= c.term.Num {
+		append.reply(c.term.Num, false)
 		return
 	}
 
@@ -209,9 +209,9 @@ func (c *leader) handleReplication(append replicateEvents) {
 
 func (c *leader) broadcastHeartbeat() {
 	ch := c.replica.Broadcast(func(cl *client) response {
-		resp, err := cl.Replicate(c.replica.Id, c.term.num, -1, -1, []LogItem{}, c.replica.Log.Committed())
+		resp, err := cl.Replicate(c.replica.Id, c.term.Num, -1, -1, []LogItem{}, c.replica.Log.Committed())
 		if err != nil {
-			return response{c.term.num, false}
+			return response{c.term.Num, false}
 		} else {
 			return resp
 		}
@@ -223,15 +223,15 @@ func (c *leader) broadcastHeartbeat() {
 		case <-c.closed:
 			return
 		case resp := <-ch:
-			if resp.term > c.term.num {
-				c.replica.Term(resp.term, nil, c.term.votedFor)
+			if resp.term > c.term.Num {
+				c.replica.Term(resp.term, nil, c.term.VotedFor)
 				c.transition(c.follower)
 				return
 			}
 
 			i++
 		case <-timer.C:
-			c.replica.Term(c.term.num, nil, c.term.votedFor)
+			c.replica.Term(c.term.Num, nil, c.term.VotedFor)
 			c.transition(c.follower)
 			return
 		}
@@ -308,7 +308,7 @@ func (l *logSyncer) shutdown(err error) error {
 }
 
 func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (item LogItem, err error) {
-	var term = s.root.term.num
+	var term = s.root.term.Num
 	var head int
 
 	committed := make(chan struct{}, 1)
@@ -330,7 +330,7 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 				}
 
 				index, term := s.GetPrevIndexAndTerm(p.id)
-				if index >= head && term == s.root.term.num {
+				if index >= head && term == s.root.term.Num {
 					done[p.id] = struct{}{}
 				}
 			}
@@ -355,7 +355,6 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 func (s *logSyncer) sync(p peer) error {
 	logger := s.logger.Fmt("Routine(%v)", p)
 	logger.Info("Starting peer synchronizer")
-
 
 	var cl *client
 	go func() {
@@ -403,7 +402,7 @@ func (s *logSyncer) sync(p peer) error {
 				}
 
 				// send the append request.
-				resp, err := cl.Replicate(s.root.Id, s.root.term.num, max.Index, max.Term, batch, s.root.Log.Committed())
+				resp, err := cl.Replicate(s.root.Id, s.root.term.Num, max.Index, max.Term, batch, s.root.Log.Committed())
 				if err != nil {
 					logger.Error("Unable to append events [%v]", err)
 					cl = nil
@@ -411,7 +410,7 @@ func (s *logSyncer) sync(p peer) error {
 				}
 
 				// make sure we're still a leader.
-				if resp.term > s.root.term.num {
+				if resp.term > s.root.term.Num {
 					logger.Error("No longer leader.")
 					s.shutdown(NotLeaderError)
 					return
@@ -427,7 +426,7 @@ func (s *logSyncer) sync(p peer) error {
 				// consistency check failed, start moving backwards one index at a time.
 				// TODO: Install snapshot
 
-				max, ok, err = s.root.Log.Get(max.Index-1)
+				max, ok, err = s.root.Log.Get(max.Index - 1)
 				if err != nil {
 					s.shutdown(err)
 					return

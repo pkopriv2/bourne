@@ -6,6 +6,7 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -14,7 +15,39 @@ func OpenTestLogStash(ctx common.Context) *bolt.DB {
 	db.Update(func(tx *bolt.Tx) error {
 		return initBoltBuckets(tx)
 	})
-	return db.(*bolt.DB)
+	return db
+}
+
+func TestBoltStore_New_WithConfig(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	s := NewBoltStore(OpenTestLogStash(ctx))
+	assert.NotNil(t, s)
+
+	id := uuid.NewV1()
+
+	log,err := s.New(id, []byte{0,1})
+	assert.Nil(t, err)
+	assert.NotNil(t, log)
+
+	seg,err := log.Active()
+	assert.Nil(t, err)
+
+	assert.Equal(t, -1, seg.PrevIndex())
+	assert.Equal(t, -1, seg.PrevTerm())
+}
+
+func TestBoltStore_Get_NoExist(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	s := NewBoltStore(OpenTestLogStash(ctx))
+	assert.NotNil(t, s)
+
+	log, err := s.Get(uuid.NewV1())
+	assert.Nil(t, err)
+	assert.Nil(t, log)
 }
 
 func TestBoltLog_CreateSnapshot_Empty(t *testing.T) {
@@ -110,7 +143,6 @@ func TestBoltLog_DeleteSnapshot(t *testing.T) {
 	assert.Nil(t, events) // idempotent deletes
 }
 
-
 func TestBoltLog_CreateSegment_Empty(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
@@ -167,7 +199,7 @@ func TestBoltLog_Segment_Append_Multi(t *testing.T) {
 	assert.Nil(t, err)
 
 	exp1 := LogItem{Index: 0, Term: 1, Event: Event{0}}
-	exp2 := LogItem{Index: 1, Term: 2, Event: Event{0,1}}
+	exp2 := LogItem{Index: 1, Term: 2, Event: Event{0, 1}}
 
 	head1, err := seg.Append(exp1.Event, exp1.Term, exp1.Source, exp1.Seq, exp1.Kind)
 	assert.Nil(t, err)
@@ -179,7 +211,7 @@ func TestBoltLog_Segment_Append_Multi(t *testing.T) {
 
 	batch, err := seg.Scan(0, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{exp1,exp2}, batch)
+	assert.Equal(t, []LogItem{exp1, exp2}, batch)
 }
 
 func TestBoltLog_Segment_Insert_IllegalIndex(t *testing.T) {
@@ -207,14 +239,15 @@ func TestBoltLog_Segment_Insert_Multi(t *testing.T) {
 	exp1 := LogItem{Index: 0, Term: 1, Event: Event{0, 1}}
 	exp2 := LogItem{Index: 1, Term: 1, Event: Event{0, 1, 2}}
 
-	head, err := seg.Insert([]LogItem{exp1,exp2})
+	head, err := seg.Insert([]LogItem{exp1, exp2})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, head)
 
 	batch, err := seg.Scan(0, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{exp1,exp2}, batch)
+	assert.Equal(t, []LogItem{exp1, exp2}, batch)
 }
+
 //
 func TestBoltLog_Segment_Delete(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
@@ -265,7 +298,7 @@ func TestBoltLog_Segment_Compact_SingleItem(t *testing.T) {
 	item1 := LogItem{Index: 0, Term: 1, Event: Event{0, 1}}
 	item2 := LogItem{Index: 1, Term: 2, Event: Event{0, 1, 2}}
 
-	prevHead, err := seg.Insert([]LogItem{item1,item2})
+	prevHead, err := seg.Insert([]LogItem{item1, item2})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, prevHead)
 
@@ -296,7 +329,7 @@ func TestBoltLog_Segment_Compact_All(t *testing.T) {
 	item2 := LogItem{Index: 1, Term: 2, Event: Event{0, 1, 2}}
 	item3 := LogItem{Index: 2, Term: 3, Event: Event{0, 1, 2, 3}}
 
-	prevHead, err := seg.Insert([]LogItem{item1,item2,item3})
+	prevHead, err := seg.Insert([]LogItem{item1, item2, item3})
 	assert.Nil(t, err)
 	assert.Equal(t, 2, prevHead)
 
@@ -312,23 +345,3 @@ func TestBoltLog_Segment_Compact_All(t *testing.T) {
 	_, err = compacted.Scan(2, 100)
 	assert.Equal(t, OutOfBoundsError, errors.Cause(err))
 }
-
-//
-// func TestBoltLog_OpenBoltLog_NoExist(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// defer ctx.Close()
-//
-// db := OpenTestLogStash(ctx)
-// log, err := openBoltLog(db, uuid.NewV1())
-// assert.Nil(t, err)
-//
-// seg, err := log.Active(db)
-// assert.Nil(t, err)
-// assert.Equal(t, -1, seg.prevIndex)
-// assert.Equal(t, -1, seg.prevTerm)
-//
-// snapshot, err := seg.Snapshot(db)
-// assert.Nil(t, err)
-// assert.Equal(t, 0, snapshot.size)
-// assert.Equal(t, []byte{}, snapshot.config)
-// }

@@ -13,14 +13,14 @@ import (
 
 // Bolt implementation of kayak log store.
 var (
-	logBucket            = []byte("log")
-	logCommitBucket      = []byte("log.commits")
-	logActiveSegBucket   = []byte("log.actives")
-	segBucket            = []byte("seg")
-	segItemsBucket       = []byte("seg.items")
-	segHeadsBucket       = []byte("seg.heads")
-	snapshotsBucket      = []byte("snapshots")
-	snapshotEventsBucket = []byte("snapshots.events")
+	logBucket            = []byte("kayak.log")
+	logCommitBucket      = []byte("kayak.log.commits")
+	logActiveSegBucket   = []byte("kayak.log.actives")
+	segBucket            = []byte("kayak.seg")
+	segItemsBucket       = []byte("kayak.seg.items")
+	segHeadsBucket       = []byte("kayak.seg.heads")
+	snapshotsBucket      = []byte("kayak.snapshots")
+	snapshotEventsBucket = []byte("kayak.snapshots.events")
 )
 
 func initBoltBuckets(tx *bolt.Tx) (err error) {

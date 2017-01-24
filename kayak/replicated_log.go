@@ -3,8 +3,8 @@ package kayak
 import (
 	"time"
 
+	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -30,8 +30,8 @@ type replicatedLog struct {
 	leader *leaderSpawner
 }
 
-func newReplicatedLog(ctx common.Context, logger common.Logger, self peer, others []peer, stash stash.Stash) (*replicatedLog, error) {
-	rep, err := newReplica(ctx, logger, self, others, stash)
+func newReplicatedLog(ctx common.Context, logger common.Logger, self string, raw StoredLog, db *bolt.DB) (*replicatedLog, error) {
+	rep, err := newReplica(ctx, logger, self, raw, db)
 	if err != nil {
 		return nil, err
 	}

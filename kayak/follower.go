@@ -103,7 +103,7 @@ func (l *follower) Close() error {
 
 func (c *follower) start() {
 	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
-	if c.term.leader != nil {
+	if c.term.Leader != nil {
 		go func() {
 			for {
 				select {
@@ -157,7 +157,7 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 			return
 		}
 
-		i,e := newClient(cl).Append(append.Event, append.Source, append.Seq, append.Kind)
+		i, e := newClient(cl).Append(append.Event, append.Source, append.Seq, append.Kind)
 		if e == nil {
 			c.clientPool.Return(cl)
 		} else {
@@ -176,43 +176,43 @@ func (c *follower) handleRemoteAppend(append machineAppend) {
 
 func (c *follower) handleInstallSnapshot(snapshot installSnapshot) {
 	// handle: previous term vote.  (immediately decline.)
-	if snapshot.term < c.replica.term.num {
-		snapshot.Reply(c.replica.term.num, false)
+	if snapshot.term < c.replica.term.Num {
+		snapshot.Reply(c.replica.term.Num, false)
 		return
 	}
 
 	// storeDurableSnapshotSegment(snapshot.snapshotId, snapshot.batchOffset, snapshot.batch)
-	snapshot.Reply(c.term.num, false)
+	snapshot.Reply(c.term.Num, false)
 }
 
 func (c *follower) handleRequestVote(vote requestVote) {
 	c.logger.Debug("Handling request vote [%v]", vote)
 
 	// handle: previous term vote.  (immediately decline.)
-	if vote.term < c.replica.term.num {
-		vote.reply(c.replica.term.num, false)
+	if vote.term < c.replica.term.Num {
+		vote.reply(c.replica.term.Num, false)
 		return
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
-	max,err := c.replica.Log.Max()
+	max, err := c.replica.Log.Max()
 	if err != nil {
-		vote.reply(c.replica.term.num, false)
+		vote.reply(c.replica.term.Num, false)
 		return
 	}
 
 	c.logger.Debug("Current log max: %v", max)
-	if vote.term == c.replica.term.num {
-		if c.replica.term.votedFor == nil && vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
+	if vote.term == c.replica.term.Num {
+		if c.replica.term.VotedFor == nil && vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
 			c.logger.Debug("Voting for candidate [%v]", vote.id)
-			vote.reply(c.replica.term.num, true)
-			c.replica.Term(c.replica.term.num, nil, &vote.id) // correct?
+			vote.reply(c.replica.term.Num, true)
+			c.replica.Term(c.replica.term.Num, nil, &vote.id) // correct?
 			c.transition(c.in)
 			return
 		}
 
 		c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
-		vote.reply(c.replica.term.num, false)
+		vote.reply(c.replica.term.Num, false)
 		c.transition(c.candidate)
 		return
 	}
@@ -233,12 +233,12 @@ func (c *follower) handleRequestVote(vote requestVote) {
 }
 
 func (c *follower) handleReplication(append replicateEvents) {
-	if append.term < c.replica.term.num {
-		append.reply(c.replica.term.num, false)
+	if append.term < c.replica.term.Num {
+		append.reply(c.replica.term.Num, false)
 		return
 	}
 
-	if append.term > c.replica.term.num || c.replica.term.leader == nil {
+	if append.term > c.replica.term.Num || c.replica.term.Leader == nil {
 		c.logger.Info("New leader detected [%v]", append.id)
 		append.reply(append.term, false)
 		c.replica.Term(append.term, &append.id, &append.id)
@@ -260,7 +260,7 @@ func (c *follower) handleReplication(append replicateEvents) {
 		// head := c.replica.Log.Head()
 		// act, _, _ := c.replica.Log.Get(append.prevLogIndex)
 		// prev := c.replica.Log.Active().raw.prevIndex
-//
+		//
 		// c.logger.Error("Consistency check failed(%v): %v, Actual: %v, Head: %v, Prev: %v", err, append, act, head, prev)
 		append.reply(append.term, false)
 		return
@@ -277,13 +277,13 @@ func (c *follower) handleReplication(append replicateEvents) {
 }
 
 func newLeaderConnectionPool(r *replica) net.ConnectionPool {
-	if r.term.leader == nil {
+	if r.term.Leader == nil {
 		return nil
 	}
 
-	leader, found := r.Peer(*r.term.leader)
+	leader, found := r.Peer(*r.term.Leader)
 	if !found {
-		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.leader, r.Cluster()))
+		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.Leader, r.Cluster()))
 	}
 
 	return net.NewConnectionPool("tcp", leader.addr, 10, 2*time.Second)

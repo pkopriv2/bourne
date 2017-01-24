@@ -6,17 +6,17 @@ import (
 	"github.com/pkopriv2/bourne/common"
 )
 
-type position struct {
+type ref struct {
 	val  int
 	lock *sync.Cond
 	dead bool
 }
 
-func newPosition(val int) *position {
-	return &position{val, &sync.Cond{L: &sync.Mutex{}}, false}
+func newRef(val int) *ref {
+	return &ref{val, &sync.Cond{L: &sync.Mutex{}}, false}
 }
 
-func (c *position) WaitForGreaterThanOrEqual(pos int) (commit int, alive bool) {
+func (c *ref) WaitForGreaterThanOrEqual(pos int) (commit int, alive bool) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	if c.dead {
@@ -32,18 +32,18 @@ func (c *position) WaitForGreaterThanOrEqual(pos int) (commit int, alive bool) {
 	return
 }
 
-func (c *position) Notify() {
+func (c *ref) Notify() {
 	c.lock.Broadcast()
 }
 
-func (c *position) Close() {
+func (c *ref) Close() {
 	c.lock.L.Lock()
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
 	c.dead = true
 }
 
-func (c *position) Update(fn func(int) int) int {
+func (c *ref) Update(fn func(int) int) int {
 	c.lock.L.Lock()
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
@@ -51,7 +51,7 @@ func (c *position) Update(fn func(int) int) int {
 	return c.val
 }
 
-func (c *position) Set(pos int) (new int) {
+func (c *ref) Set(pos int) (new int) {
 	c.lock.L.Lock()
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
@@ -59,7 +59,7 @@ func (c *position) Set(pos int) (new int) {
 	return c.val
 }
 
-func (c *position) Get() (pos int) {
+func (c *ref) Get() (pos int) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	return c.val

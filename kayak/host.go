@@ -1,36 +1,11 @@
 package kayak
 
 import (
-	"fmt"
-
+	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
-
-// A peer contains the identifying info of a cluster member.
-type peer struct {
-	id   uuid.UUID
-	addr string
-}
-
-func newPeer(addr string) peer {
-	return peer{id: uuid.NewV1(), addr: addr}
-}
-
-func (p peer) String() string {
-	return fmt.Sprintf("Peer(%v, %v)", p.id.String()[:8], p.addr)
-}
-
-func (p peer) Client(ctx common.Context) (*client, error) {
-	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &client{raw}, nil
-}
 
 // a host simply binds a network service with the core log machine.
 type host struct {
@@ -41,17 +16,16 @@ type host struct {
 	closer chan struct{}
 }
 
-func newHost(ctx common.Context, self peer, others []peer, stash stash.Stash) (h *host, err error) {
+func newHost(ctx common.Context, self string, log StoredLog, db *bolt.DB) (h *host, err error) {
 	root := ctx.Logger().Fmt("Kayak: %v", self)
-	root.Info("Starting host with peers [%v]", others)
 
-	core, err := newReplicatedLog(ctx, root, self, others, stash)
+	core, err := newReplicatedLog(ctx, root, self, log, db)
 	if err != nil {
 		return nil, err
 	}
 	defer common.RunIf(func() { core.Close() })(err)
 
-	_, port, err := net.SplitAddr(self.addr)
+	_, port, err := net.SplitAddr(self)
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/boltdb/bolt"
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/stash"
@@ -59,7 +61,7 @@ type replica struct {
 	Log *eventLog
 
 	// the durable term store.
-	terms *storage
+	terms *termStore
 
 	// request vote events.
 	VoteRequests chan requestVote
@@ -81,21 +83,37 @@ type replica struct {
 	closer chan struct{}
 }
 
-func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, stash stash.Stash) (*replica, error) {
-	// log, err := openEventLog(logger, stash, self.id)
-	// if err != nil {
-		// return nil, err
-	// }
+func newReplica(ctx common.Context, logger common.Logger, addr string, raw StoredLog, db *bolt.DB) (*replica, error) {
+	log, err := openEventLog(logger, raw)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Host", raw.Id())
+	}
+
+	termStore, err := openTermStorage(db)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Host", raw.Id())
+	}
+
+	id, ok, err := termStore.GetId(addr)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Host", raw.Id())
+	}
+
+	if ! ok {
+		id := uuid.NewV1()
+		if err := termStore.SetId(addr, id); err != nil {
+			return nil, errors.Wrapf(err, "Host", raw.Id())
+		}
+	}
 
 	r := &replica{
 		Ctx:             ctx,
-		Id:              self.id,
-		Self:            self,
-		peers:           others,
+		Id:              id,
+		Self:            peer{id,addr},
 		Logger:          logger,
-		terms:           openTermStorage(stash),
-		// Log:             log,
-		Db:              stash,
+		terms:           termStore,
+		Log:             log,
+		Db:              db,
 		Replications:    make(chan replicateEvents),
 		VoteRequests:    make(chan requestVote),
 		RemoteAppends:   make(chan machineAppend),
@@ -123,13 +141,19 @@ func (r *replica) Close() error {
 func (h *replica) start() error {
 
 	// set the term from the durable store
-	term, err := h.terms.Get(h.Self.id)
+	term, err := h.terms.Get(h.Log.raw.Id())
 	if err != nil {
 		return err
 	}
 
 	// set the term from durable storage.
-	h.Term(term.num, term.leader, term.votedFor)
+	h.Term(term.Num, term.Leader, term.VotedFor)
+
+	// snapshot,err := h.Log.Snapshot()
+	// go func() {
+//
+	// }()
+
 	return nil
 }
 
@@ -191,7 +215,7 @@ func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 		go func(p peer) {
 			cl, err := p.Client(h.Ctx)
 			if cl == nil || err != nil {
-				ret <- response{h.term.num, false}
+				ret <- response{h.term.Num, false}
 				return
 			}
 
@@ -314,7 +338,6 @@ func (h *replica) Listen(start int, buf int) (Listener, error) {
 func majority(num int) int {
 	return int(math.Ceil(float64(num) / float64(2)))
 }
-
 
 // Internal append events request.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.

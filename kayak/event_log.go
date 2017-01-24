@@ -23,10 +23,10 @@ type eventLog struct {
 	activeLock sync.RWMutex
 
 	// // index of last item inserted. (initialized to -1)
-	head *position
+	head *ref
 
 	// index of last item committed.(initialized to -1)
-	commit *position
+	commit *ref
 
 	// closing utilities.
 	closed chan struct{}
@@ -54,8 +54,8 @@ func openEventLog(logger common.Logger, log StoredLog) (*eventLog, error) {
 	return &eventLog{
 		logger: logger.Fmt("EventLog"),
 		active: cur,
-		head:   newPosition(head),
-		commit: newPosition(commit),
+		head:   newRef(head),
+		commit: newRef(commit),
 		closed: make(chan struct{}),
 		closer: make(chan struct{}, 1)}, nil
 }
@@ -82,10 +82,6 @@ func (e *eventLog) Closed() bool {
 	}
 }
 
-func (e *eventLog) Committed() (pos int) {
-	return e.commit.Get()
-}
-
 func (e *eventLog) UseActive(fn func(StoredSegment)) {
 	e.activeLock.RLock()
 	defer e.activeLock.RUnlock()
@@ -105,13 +101,12 @@ func (e *eventLog) Active() StoredSegment {
 	return e.active
 }
 
-func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
-	if e.Closed() {
-		return nil, ClosedError
-	}
+func (e *eventLog) Head() int {
+	return e.head.Get()
+}
 
-	return newFilteredListener(
-		newPositionListener(e, e.commit, from, buf)), nil
+func (e *eventLog) Committed() (pos int) {
+	return e.commit.Get()
 }
 
 func (e *eventLog) Commit(pos int) (new int, err error) {
@@ -130,19 +125,9 @@ func (e *eventLog) Commit(pos int) (new int, err error) {
 	return
 }
 
-func (e *eventLog) Head() int {
-	return e.head.Get()
-}
-
-func (e *eventLog) Assert(index int, term int) (ok bool, err error) {
-	var item LogItem
-	e.UseActive(func(s StoredSegment) {
-		item, ok, err = e.Get(index)
-		if ! ok || err != nil {
-			return
-		}
-
-		ok = item.Term == term
+func (e *eventLog) Snapshot() (s StoredSnapshot, f error) {
+	e.UseActive(func(seg StoredSegment) {
+		s, f = seg.Snapshot()
 		return
 	})
 	return
@@ -184,25 +169,6 @@ func (e *eventLog) Insert(batch []LogItem) (h int, f error) {
 	return e.head.Set(h), nil // commutative, so safe for out of order scheduling
 }
 
-func (e *eventLog) Max() (i LogItem, f error) {
-	var head int
-	var ok bool
-	e.UseActive(func(s StoredSegment) {
-		head, f = s.Head()
-		if f != nil {
-			i = LogItem{Index: -1, Term: -1}
-			return
-		}
-
-		i, ok, f = s.Get(head)
-		if f != nil || !ok {
-			i = LogItem{Index: -1, Term: -1}
-			return
-		}
-	})
-	return
-}
-
 func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (err error) {
 	e.logger.Info("Compacting log until [%v] with a snapshot of [%v] events", until, snapshotSize)
 
@@ -224,24 +190,61 @@ func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, c
 		}
 		return new
 	})
-
-	// before, err := cur.Head()
-	// if err != nil {
-	// e.logger.Error("Error retrieving before head: %v", err)
-	// }
-	//
-	// after, err := new.Head()
-	// if err != nil {
-	// e.logger.Error("Error retrieving after head: %v", err)
-	// }
-
-	// e.logger.Info("Compaction finished. Before [%v]. After [%v]", before-cur.raw.prevIndex, after-new.raw.prevIndex)
 	return
+}
+
+func (e *eventLog) Assert(index int, term int) (ok bool, err error) {
+	var item LogItem
+	e.UseActive(func(s StoredSegment) {
+		item, ok, err = e.Get(index)
+		if !ok || err != nil {
+			return
+		}
+
+		ok = item.Term == term
+		return
+	})
+	return
+}
+
+func (e *eventLog) Max() (i LogItem, f error) {
+	var head int
+	var ok bool
+	e.UseActive(func(s StoredSegment) {
+		head, f = s.Head()
+		if f != nil {
+			i = LogItem{Index: -1, Term: -1}
+			return
+		}
+
+		i, ok, f = s.Get(head)
+		if f != nil || !ok {
+			i = LogItem{Index: -1, Term: -1}
+			return
+		}
+	})
+	return
+}
+
+func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
+	if e.Closed() {
+		return nil, ClosedError
+	}
+
+	return newRefListener(e, e.commit, from, buf), nil
+}
+
+func (e *eventLog) ListenAppends(from int, buf int) (Listener, error) {
+	if e.Closed() {
+		return nil, ClosedError
+	}
+
+	return newRefListener(e, e.head, from, buf), nil
 }
 
 type refListener struct {
 	log *eventLog
-	pos *position
+	pos *ref
 	buf int
 	ch  chan struct {
 		LogItem
@@ -252,7 +255,7 @@ type refListener struct {
 	closer chan struct{}
 }
 
-func newPositionListener(log *eventLog, pos *position, from int, buf int) *refListener {
+func newRefListener(log *eventLog, pos *ref, from int, buf int) *refListener {
 	l := &refListener{log, pos, buf, make(chan struct {
 		LogItem
 		error

@@ -48,7 +48,7 @@ type candidate struct {
 
 func spawnCandidate(in chan<- *replica, leader chan<- *replica, follower chan<- *replica, replica *replica) {
 	// increment term and vote for self.
-	replica.Term(replica.term.num+1, nil, &replica.Id)
+	replica.Term(replica.term.Num+1, nil, &replica.Id)
 
 	logger := replica.Logger.Fmt("Candidate(%v)", replica.CurrentTerm())
 	logger.Info("Becoming candidate")
@@ -93,12 +93,12 @@ func (c *candidate) start() {
 	ballots := c.replica.Broadcast(func(cl *client) response {
 		c.logger.Debug("Sending ballots: %v", max)
 		if err != nil {
-			return response{c.replica.term.num, false}
+			return response{c.replica.term.Num, false}
 		}
 
-		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.num, max.Index, max.Term)
+		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.Num, max.Index, max.Term)
 		if err != nil {
-			return response{c.replica.term.num, false}
+			return response{c.replica.term.Num, false}
 		} else {
 			return resp
 		}
@@ -115,7 +115,7 @@ func (c *candidate) start() {
 			needed := c.replica.Majority()
 			if numVotes >= needed {
 				c.logger.Info("Acquired majority [%v] votes.", needed)
-				c.replica.Term(c.replica.term.num, &c.replica.Id, &c.replica.Id)
+				c.replica.Term(c.replica.term.Num, &c.replica.Id, &c.replica.Id)
 				c.transition(c.leader)
 				return
 			}
@@ -141,7 +141,7 @@ func (c *candidate) start() {
 					return
 				}
 			case vote := <-ballots:
-				if vote.term > c.term.num {
+				if vote.term > c.term.Num {
 					c.replica.Term(vote.term, nil, nil)
 					c.transition(c.follower)
 					return
@@ -157,14 +157,14 @@ func (c *candidate) start() {
 
 func (c *candidate) handleRequestVote(vote requestVote) {
 	c.logger.Debug("Handling request vote: %v", vote)
-	if vote.term <= c.term.num {
-		vote.reply(c.term.num, false)
+	if vote.term <= c.term.Num {
+		vote.reply(c.term.Num, false)
 		return
 	}
 
 	max, err := c.replica.Log.Max()
 	if err != nil {
-		vote.reply(c.replica.term.num, false)
+		vote.reply(c.replica.term.Num, false)
 		return
 	}
 
@@ -182,8 +182,8 @@ func (c *candidate) handleRequestVote(vote requestVote) {
 }
 
 func (c *candidate) handleAppendEvents(append replicateEvents) {
-	if append.term < c.term.num {
-		append.reply(c.term.num, false)
+	if append.term < c.term.Num {
+		append.reply(c.term.Num, false)
 		return
 	}
 

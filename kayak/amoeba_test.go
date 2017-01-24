@@ -200,24 +200,6 @@ package kayak
 // }
 //
 // func NewTestEventLog() *eventLog {
+// log := OpenTestLogStash()
 // return newEventLog(common.NewContext(common.NewEmptyConfig()))
-// }
-
-// type testEvent struct {
-// }
-//
-// func newTestEvent() *testEvent {
-// return &testEvent{}
-// }
-//
-// func (e *testEvent) Write(w scribe.Writer) {
-// w.WriteString("type", "testevent")
-// }
-//
-// func (e *testEvent) String() string {
-// return "TestEvent"
-// }
-//
-// func testEventParser(r scribe.Reader) (Event, error) {
-// return &testEvent{},nil
 // }

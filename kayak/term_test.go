@@ -3,6 +3,7 @@ package kayak
 import (
 	"testing"
 
+	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
@@ -83,14 +84,18 @@ func TestTermStash_PutGet_LeaderAndVote(t *testing.T) {
 	assert.Equal(t, exp, actual)
 }
 
-func OpenTestStash(ctx common.Context) stash.Stash {
+func OpenTestStash(ctx common.Context) *bolt.DB {
 	db, err := stash.OpenTransient(ctx)
 	if err != nil {
 		panic(err)
 	}
-	return db
+	return db.(*bolt.DB)
 }
 
-func OpenTestTermStash(ctx common.Context) *storage {
-	return openTermStorage(OpenTestStash(ctx))
+func OpenTestTermStash(ctx common.Context) *termStore {
+	ret, err := openTermStorage(OpenTestStash(ctx))
+	if err != nil {
+		panic(err)
+	}
+	return ret
 }
