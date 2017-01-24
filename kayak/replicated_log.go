@@ -1,13 +1,14 @@
 package kayak
 
 import (
+	"time"
+
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
-
-// The primary host machine abstraction.
+// The primary replicated log machine abstraction.
 //
 // Internally, this consists of a single member object that hosts all the member
 // state.  The internal instance is free to move between the various engine
@@ -16,7 +17,6 @@ import (
 // instance, except where the instance has exposed public methods.
 //
 type replicatedLog struct {
-
 	// the internal member instance.  This is guaranteed to exist in at MOST one sub-machine
 	replica *replica
 
@@ -87,18 +87,26 @@ func (h *replicatedLog) RequestVote(id uuid.UUID, term int, logIndex int, logTer
 	return h.replica.RequestVote(id, term, logIndex, logTerm)
 }
 
-func (h *replicatedLog) RemoteAppend(event Event) (LogItem, error) {
-	return h.replica.RemoteAppend(event)
+func (h *replicatedLog) RemoteAppend(event Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
+	return h.replica.RemoteAppend(event, source, seq, kind)
 }
 
-func (h *replicatedLog) LocalAppend(event Event) (LogItem, error) {
-	return h.replica.LocalAppend(event)
+func (h *replicatedLog) LocalAppend(event Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
+	return h.replica.LocalAppend(event, source, seq, kind)
 }
 
-func (r *replicatedLog) Append(e Event) (LogItem, error) {
-	return r.LocalAppend(e)
+func (r *replicatedLog) Append(e Event, kind int) (LogItem, error) {
+	return r.replica.Append(e, kind)
 }
 
-func (r *replicatedLog) Listen(from int, buf int) (Listener, error) {
-	return r.Log().ListenCommits(from, buf), nil
+func (r *replicatedLog) Listen(start int, buf int) (Listener, error) {
+	return r.replica.Listen(start, buf)
+}
+
+func (r *replicatedLog) Applied(int) {
+	panic("not implemented")
+}
+
+func (r *replicatedLog) SyncTimeout(timeout time.Duration) error {
+	panic("not implemented")
 }

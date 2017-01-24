@@ -5,36 +5,19 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
-// FIXME: compacting + listening is dangerous if the listener is significantly
-// behind.  Generally, this is OKAY for us because the only time we'll be snapshotting
-// will be AFTER the consumer state machine has safely received the values we'll be
-// removing as part of the compaction.
-//
-// May need to more tightly coordinate compacting with listeners...or change
-// the listening architecture to allow for more consistent listeners.
-
-// The event log maintains a set of events sorted (ascending) by
-// insertion time.
-
 type eventLog struct {
-	// the currently active segment.
-	id uuid.UUID
 
 	// logger
 	logger common.Logger
 
-	// the stash instanced used for durability
-	stash stash.Stash
-
-	//
-	raw durableLog
+	// the stored log.
+	raw StoredLog
 
 	// the currently active segment.
-	active *segment
+	active StoredSegment
 
 	// lock around the active segment.  Protects against concurrent updates during compactions.
 	activeLock sync.RWMutex
@@ -52,32 +35,25 @@ type eventLog struct {
 	closer chan struct{}
 }
 
-func openEventLog(logger common.Logger, stash stash.Stash, id uuid.UUID) (*eventLog, error) {
-	raw, err := openDurableLog(stash, id)
+func openEventLog(logger common.Logger, log StoredLog) (*eventLog, error) {
+	cur, err := log.Active()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Unable to retrieve latest segment for log [%v]", log.Id())
 	}
 
-	seg, err := raw.Active(stash)
+	commit, err := log.GetCommit()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Unable to retrieve commit for log [%v]", log.Id())
 	}
 
-	head, err := seg.Head(stash)
+	head, err := cur.Head()
 	if err != nil {
-		return nil, err
-	}
-
-	commit, err := raw.GetCommit(stash)
-	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Unable to retrieve head position for segment [%v]", log.Id())
 	}
 
 	return &eventLog{
-		stash:  stash,
-		raw:    raw,
 		logger: logger.Fmt("EventLog"),
-		active: &segment{stash, seg},
+		active: cur,
 		head:   newPosition(head),
 		commit: newPosition(commit),
 		closed: make(chan struct{}),
@@ -110,37 +86,32 @@ func (e *eventLog) Committed() (pos int) {
 	return e.commit.Get()
 }
 
-func (e *eventLog) UseActive(fn func(*segment)) {
+func (e *eventLog) UseActive(fn func(StoredSegment)) {
 	e.activeLock.RLock()
 	defer e.activeLock.RUnlock()
 	fn(e.active)
 }
 
-func (e *eventLog) UpdateActive(fn func(s *segment) *segment) {
+func (e *eventLog) UpdateActive(fn func(StoredSegment) StoredSegment) {
 	e.activeLock.Lock()
 	defer e.activeLock.Unlock()
 	e.active = fn(e.active)
 }
 
-// NOT SAFE!!
-func (e *eventLog) Active() *segment {
+// Use with caution
+func (e *eventLog) Active() StoredSegment {
 	e.activeLock.RLock()
 	defer e.activeLock.RUnlock()
 	return e.active
 }
 
-func (e *eventLog) Size() (int, error) {
-	segment := e.Active()
-	head, err := segment.Head()
-	if err != nil {
-		return 0, err
+func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
+	if e.Closed() {
+		return nil, ClosedError
 	}
 
-	return head - segment.raw.prevIndex, nil
-}
-
-func (e *eventLog) ListenCommits(from int, buf int) *positionListener {
-	return newPositionListener(e, e.commit, from, buf)
+	return newFilteredListener(
+		newPositionListener(e, e.commit, from, buf)), nil
 }
 
 func (e *eventLog) Commit(pos int) (new int, err error) {
@@ -149,7 +120,7 @@ func (e *eventLog) Commit(pos int) (new int, err error) {
 			return cur
 		}
 
-		pos, err = e.raw.SetCommit(e.stash, common.Min(pos, e.Head()))
+		pos, err = e.raw.SetCommit(common.Min(pos, e.Head()))
 		if err != nil {
 			return cur
 		} else {
@@ -164,40 +135,46 @@ func (e *eventLog) Head() int {
 }
 
 func (e *eventLog) Assert(index int, term int) (ok bool, err error) {
-	e.UseActive(func(s *segment) {
-		ok, err = s.Assert(index, term)
+	var item LogItem
+	e.UseActive(func(s StoredSegment) {
+		item, ok, err = e.Get(index)
+		if ! ok || err != nil {
+			return
+		}
+
+		ok = item.Term == term
+		return
 	})
 	return
 }
 
 func (e *eventLog) Get(index int) (i LogItem, o bool, f error) {
-	e.UseActive(func(s *segment) {
+	e.UseActive(func(s StoredSegment) {
 		i, o, f = s.Get(index)
 	})
 	return
 }
 
 func (e *eventLog) Scan(start int, end int) (r []LogItem, f error) {
-	e.UseActive(func(s *segment) {
+	e.UseActive(func(s StoredSegment) {
 		r, f = s.Scan(start, end)
 	})
 	return
 }
 
-func (e *eventLog) Append(batch []Event, term int) (h int, f error) {
-	e.UseActive(func(s *segment) {
-		h, f = s.Append(batch, term)
+func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind int) (h int, f error) {
+	e.UseActive(func(s StoredSegment) {
+		h, f = s.Append(evt, term, source, seq, kind)
 	})
 	if f != nil {
 		return
 	}
 
 	return e.head.Set(h), nil // commutative, so safe for out of order scheduling
-
 }
 
 func (e *eventLog) Insert(batch []LogItem) (h int, f error) {
-	e.UseActive(func(s *segment) {
+	e.UseActive(func(s StoredSegment) {
 		h, f = s.Insert(batch)
 	})
 	if f != nil {
@@ -210,38 +187,20 @@ func (e *eventLog) Insert(batch []LogItem) (h int, f error) {
 func (e *eventLog) Max() (i LogItem, f error) {
 	var head int
 	var ok bool
-	e.UseActive(func(s *segment) {
+	e.UseActive(func(s StoredSegment) {
 		head, f = s.Head()
 		if f != nil {
-			i = LogItem{Index: -1, term: -1}
+			i = LogItem{Index: -1, Term: -1}
 			return
 		}
 
 		i, ok, f = s.Get(head)
 		if f != nil || !ok {
-			i = LogItem{Index: -1, term: -1}
+			i = LogItem{Index: -1, Term: -1}
 			return
 		}
 	})
 	return
-}
-
-func (e *eventLog) Snapshot() (index int, term int, commit int, err error) {
-	// // must take commit prior to taking the end of the log
-	// // to ensure invariant commit <= head
-	commit, active := e.Committed(), e.Active()
-
-	head, err := active.Head()
-	if err != nil {
-		return -1, -1, -1, err
-	}
-
-	item, ok, err := active.Get(head)
-	if err != nil || !ok {
-		return -1, -1, -1, err
-	}
-
-	return item.Index, item.term, commit, nil
 }
 
 func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (err error) {
@@ -252,78 +211,35 @@ func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, c
 	// Go ahead and compact the majority of the segment. (writes can still happen.)
 	new, err := cur.Compact(until, snapshot, snapshotSize, config)
 	if err != nil {
-		return errors.Wrapf(err, "Error compacting current segment [%v]", cur.raw.id)
+		return errors.Wrapf(err, "Error compacting current segment [%v]", cur)
 	}
 
 	defer cur.Delete()
 
 	// Swap existing with new.
-	e.UpdateActive(func(cur *segment) *segment {
-		ok, err := e.raw.SwapActive(e.stash, cur.raw, new.raw)
+	e.UpdateActive(func(cur StoredSegment) StoredSegment {
+		ok, err := e.raw.Swap(cur, new)
 		if err != nil || !ok {
 			return cur
 		}
 		return new
 	})
 
-	before, err := cur.Head()
-	if err != nil {
-		e.logger.Error("Error retrieving before head: %v", err)
-	}
+	// before, err := cur.Head()
+	// if err != nil {
+	// e.logger.Error("Error retrieving before head: %v", err)
+	// }
+	//
+	// after, err := new.Head()
+	// if err != nil {
+	// e.logger.Error("Error retrieving after head: %v", err)
+	// }
 
-	after, err := new.Head()
-	if err != nil {
-		e.logger.Error("Error retrieving after head: %v", err)
-	}
-
-	e.logger.Info("Compaction finished. Before [%v]. After [%v]", before-cur.raw.prevIndex, after-new.raw.prevIndex)
+	// e.logger.Info("Compaction finished. Before [%v]. After [%v]", before-cur.raw.prevIndex, after-new.raw.prevIndex)
 	return
 }
 
-type segment struct {
-	stash stash.Stash
-	raw   durableSegment
-}
-
-func (d *segment) Head() (int, error) {
-	return d.raw.Head(d.stash)
-}
-
-func (d *segment) Assert(index int, term int) (bool, error) {
-	return d.raw.Assert(d.stash, index, term)
-}
-
-func (d *segment) Get(index int) (LogItem, bool, error) {
-	return d.raw.Get(d.stash, index)
-}
-
-// scans from [start,end], inclusive on start and end
-func (d *segment) Scan(start int, end int) ([]LogItem, error) {
-	return d.raw.Scan(d.stash, start, end)
-}
-
-func (d *segment) Append(batch []Event, term int) (int, error) {
-	return d.raw.Append(d.stash, batch, term)
-}
-
-func (d *segment) Insert(batch []LogItem) (int, error) {
-	return d.raw.Insert(d.stash, batch)
-}
-
-func (d *segment) Delete() error {
-	return d.raw.Delete(d.stash)
-}
-
-func (d *segment) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (*segment, error) {
-	new, err := d.raw.CopyAndCompact(d.stash, until, snapshot, snapshotSize, config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &segment{d.stash, new}, nil
-}
-
-type positionListener struct {
+type refListener struct {
 	log *eventLog
 	pos *position
 	buf int
@@ -336,8 +252,8 @@ type positionListener struct {
 	closer chan struct{}
 }
 
-func newPositionListener(log *eventLog, pos *position, from int, buf int) *positionListener {
-	l := &positionListener{log, pos, buf, make(chan struct {
+func newPositionListener(log *eventLog, pos *position, from int, buf int) *refListener {
+	l := &refListener{log, pos, buf, make(chan struct {
 		LogItem
 		error
 	}, buf), make(chan struct{}), make(chan struct{}, 1)}
@@ -345,7 +261,7 @@ func newPositionListener(log *eventLog, pos *position, from int, buf int) *posit
 	return l
 }
 
-func (l *positionListener) start(from int) {
+func (l *refListener) start(from int) {
 	go func() {
 		defer l.Close()
 
@@ -387,7 +303,7 @@ func (l *positionListener) start(from int) {
 	}()
 }
 
-func (l *positionListener) isClosed() bool {
+func (l *refListener) isClosed() bool {
 	select {
 	default:
 		return false
@@ -396,7 +312,7 @@ func (l *positionListener) isClosed() bool {
 	}
 }
 
-func (p *positionListener) Next() (LogItem, error) {
+func (p *refListener) Next() (LogItem, error) {
 	select {
 	case <-p.closed:
 		return LogItem{}, ClosedError
@@ -405,7 +321,7 @@ func (p *positionListener) Next() (LogItem, error) {
 	}
 }
 
-func (l *positionListener) Close() error {
+func (l *refListener) Close() error {
 	select {
 	case <-l.closed:
 		return ClosedError
@@ -418,61 +334,32 @@ func (l *positionListener) Close() error {
 	return nil
 }
 
-type position struct {
-	val  int
-	lock *sync.Cond
-	dead bool
+type filteredListener struct {
+	raw Listener
+	seq map[uuid.UUID]int
 }
 
-func newPosition(val int) *position {
-	return &position{val, &sync.Cond{L: &sync.Mutex{}}, false}
+func newFilteredListener(raw Listener) *filteredListener {
+	return &filteredListener{raw, make(map[uuid.UUID]int)}
 }
 
-func (c *position) WaitForGreaterThanOrEqual(pos int) (commit int, alive bool) {
-	c.lock.L.Lock()
-	defer c.lock.L.Unlock()
-	if c.dead {
-		return pos, false
-	}
-
-	for commit, alive = c.val, !c.dead; commit < pos; commit, alive = c.val, !c.dead {
-		c.lock.Wait()
-		if c.dead {
-			return pos, false
+func (p *filteredListener) Next() (LogItem, error) {
+	for {
+		next, err := p.raw.Next()
+		if err != nil {
+			return next, err
 		}
+
+		cur := p.seq[next.Source]
+		if next.Seq <= cur {
+			continue
+		}
+
+		p.seq[next.Source] = next.Seq
+		return next, nil
 	}
-	return
 }
 
-func (c *position) Notify() {
-	c.lock.Broadcast()
-}
-
-func (c *position) Close() {
-	c.lock.L.Lock()
-	defer c.lock.Broadcast()
-	defer c.lock.L.Unlock()
-	c.dead = true
-}
-
-func (c *position) Update(fn func(int) int) int {
-	c.lock.L.Lock()
-	defer c.lock.Broadcast()
-	defer c.lock.L.Unlock()
-	c.val = common.Max(fn(c.val), c.val)
-	return c.val
-}
-
-func (c *position) Set(pos int) (new int) {
-	c.lock.L.Lock()
-	defer c.lock.Broadcast()
-	defer c.lock.L.Unlock()
-	c.val = common.Max(pos, c.val)
-	return c.val
-}
-
-func (c *position) Get() (pos int) {
-	c.lock.L.Lock()
-	defer c.lock.L.Unlock()
-	return c.val
+func (l *filteredListener) Close() error {
+	return l.raw.Close()
 }

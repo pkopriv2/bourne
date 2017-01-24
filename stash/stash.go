@@ -18,7 +18,7 @@ const (
 )
 
 // A stash is nothing but a shared instance of a bolt
-// database.
+// database.  They can be
 type Stash interface {
 	io.Closer
 

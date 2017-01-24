@@ -19,7 +19,7 @@ func (c *client) Close() error {
 }
 
 func (c *client) Replicate(id uuid.UUID, term int, logIndex int, logTerm int, batch []LogItem, commit int) (response, error) {
-	resp, err := c.raw.Send(newReplicateRequest(replicateRequest{id, term, batch, logIndex, logTerm, commit}))
+	resp, err := c.raw.Send(replicateRequest{id, term, batch, logIndex, logTerm, commit}.Request())
 	if err != nil {
 		return response{}, errors.Wrapf(err, "Error sending replicate [prevIndex=%v,term=%v,num=%v]", logIndex, logTerm, len(batch))
 	}
@@ -27,22 +27,22 @@ func (c *client) Replicate(id uuid.UUID, term int, logIndex int, logTerm int, ba
 	return readResponseResponse(resp)
 }
 
-func (c *client) Append(e Event) (LogItem, error) {
-	resp, err := c.raw.Send(newAppendRequest(e))
+func (c *client) Append(e Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
+	resp, err := c.raw.Send(appendEventRequest{e,source, seq, kind}.Request())
 	if err != nil {
 		return LogItem{}, errors.Wrapf(err, "Error sending client append: %v", e)
 	}
 
-	index, term, err := readAppendResponse(resp)
+	res, err := readNetAppendEventResponse(resp)
 	if err != nil {
 		return LogItem{}, errors.Wrapf(err, "Error receiving append response: %v", e)
 	}
 
-	return newEventLogItem(index, term, e), nil
+	return LogItem{res.index, e, res.term, source, seq, kind}, nil
 }
 
 func (c *client) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
-	resp, err := c.raw.Send(newRequestVoteRequest(requestVoteRequest{id, term, logIndex, logTerm}))
+	resp, err := c.raw.Send(requestVoteRequest{id, term, logIndex, logTerm}.Request())
 	if err != nil {
 		return response{}, errors.Wrapf(err, "Error sending request vote")
 	}

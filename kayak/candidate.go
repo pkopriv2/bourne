@@ -96,7 +96,7 @@ func (c *candidate) start() {
 			return response{c.replica.term.num, false}
 		}
 
-		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.num, max.Index, max.term)
+		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.num, max.Index, max.Term)
 		if err != nil {
 			return response{c.replica.term.num, false}
 		} else {
@@ -122,6 +122,9 @@ func (c *candidate) start() {
 
 			select {
 			case <-c.closed:
+				return
+			case <-c.replica.closed:
+				c.Close()
 				return
 			case append := <-c.replica.Replications:
 				c.handleAppendEvents(append)
@@ -165,7 +168,7 @@ func (c *candidate) handleRequestVote(vote requestVote) {
 		return
 	}
 
-	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
+	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
 		c.logger.Debug("Voting for candidate [%v]", vote.id.String()[:8])
 		vote.reply(vote.term, true)
 		c.replica.Term(vote.term, nil, &vote.id)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
@@ -45,8 +46,8 @@ type replica struct {
 	// the other peers. (currently static list)
 	peers []peer
 
-	// the number of commits before a compaction is triggered.
-	SnapshotThreshold int
+	// the current seq position
+	seq concurrent.AtomicCounter
 
 	// the election timeout.  (heartbeat: = timeout / 5)
 	ElectionTimeout time.Duration
@@ -81,11 +82,10 @@ type replica struct {
 }
 
 func newReplica(ctx common.Context, logger common.Logger, self peer, others []peer, stash stash.Stash) (*replica, error) {
-
-	log, err := openEventLog(logger, stash, self.id)
-	if err != nil {
-		return nil, err
-	}
+	// log, err := openEventLog(logger, stash, self.id)
+	// if err != nil {
+		// return nil, err
+	// }
 
 	r := &replica{
 		Ctx:             ctx,
@@ -94,7 +94,7 @@ func newReplica(ctx common.Context, logger common.Logger, self peer, others []pe
 		peers:           others,
 		Logger:          logger,
 		terms:           openTermStorage(stash),
-		Log:             log,
+		// Log:             log,
 		Db:              stash,
 		Replications:    make(chan replicateEvents),
 		VoteRequests:    make(chan requestVote),
@@ -252,8 +252,8 @@ func (h *replica) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int)
 	}
 }
 
-func (h *replica) RemoteAppend(event Event) (LogItem, error) {
-	append := newLocalAppend(event)
+func (h *replica) RemoteAppend(event Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
+	append := machineAppend{event, source, seq, kind, make(chan machineAppendResponse, 1)}
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
@@ -273,8 +273,8 @@ func (h *replica) RemoteAppend(event Event) (LogItem, error) {
 	}
 }
 
-func (h *replica) LocalAppend(event Event) (LogItem, error) {
-	append := machineAppend{event, make(chan machineAppendResponse, 1)}
+func (h *replica) LocalAppend(event Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
+	append := machineAppend{event, source, seq, kind, make(chan machineAppendResponse, 1)}
 
 	timer := time.NewTimer(h.RequestTimeout)
 	select {
@@ -288,15 +288,33 @@ func (h *replica) LocalAppend(event Event) (LogItem, error) {
 			return LogItem{}, ClosedError
 		case r := <-append.ack:
 			return r.Item, r.Err
-		// case <-timer.C:
-			// return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		case <-timer.C:
+			return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 		}
 	}
+}
+
+func (h *replica) Append(event Event, kind int) (LogItem, error) {
+	seq := int(h.seq.Inc())
+
+	for atmpt := 0; atmpt < 10; atmpt++ {
+		item, err := h.LocalAppend(event, h.Self.id, seq, kind)
+		if err == nil {
+			return item, nil
+		}
+	}
+
+	return LogItem{}, nil
+}
+
+func (h *replica) Listen(start int, buf int) (Listener, error) {
+	return h.Log.ListenCommits(start, buf)
 }
 
 func majority(num int) int {
 	return int(math.Ceil(float64(num) / float64(2)))
 }
+
 
 // Internal append events request.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.
@@ -345,12 +363,11 @@ func (r requestVote) reply(term int, success bool) {
 //
 // These come from active clients.
 type machineAppend struct {
-	Event Event
-	ack   chan machineAppendResponse
-}
-
-func newLocalAppend(event Event) machineAppend {
-	return machineAppend{event, make(chan machineAppendResponse, 1)}
+	Event  Event
+	Source uuid.UUID
+	Seq    int
+	Kind   int
+	ack    chan machineAppendResponse
 }
 
 func (a machineAppend) Return(item LogItem, err error) {

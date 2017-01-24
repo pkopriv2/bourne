@@ -107,6 +107,8 @@ func (c *follower) start() {
 		go func() {
 			for {
 				select {
+				case <-c.replica.closed:
+					return
 				case <-c.closed:
 					return
 				case append := <-c.replica.LocalAppends:
@@ -126,6 +128,9 @@ func (c *follower) start() {
 
 			select {
 			case <-c.closed:
+				return
+			case <-c.replica.closed:
+				c.Close()
 				return
 			case append := <-c.replica.Replications:
 				c.handleReplication(append)
@@ -152,7 +157,7 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 			return
 		}
 
-		i,e := newClient(cl).Append(append.Event)
+		i,e := newClient(cl).Append(append.Event, append.Source, append.Seq, append.Kind)
 		if e == nil {
 			c.clientPool.Return(cl)
 		} else {
@@ -163,7 +168,6 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 	if err != nil {
 		append.Fail(err)
 	}
-
 }
 
 func (c *follower) handleRemoteAppend(append machineAppend) {
@@ -199,7 +203,7 @@ func (c *follower) handleRequestVote(vote requestVote) {
 
 	c.logger.Debug("Current log max: %v", max)
 	if vote.term == c.replica.term.num {
-		if c.replica.term.votedFor == nil && vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
+		if c.replica.term.votedFor == nil && vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
 			c.logger.Debug("Voting for candidate [%v]", vote.id)
 			vote.reply(c.replica.term.num, true)
 			c.replica.Term(c.replica.term.num, nil, &vote.id) // correct?
@@ -214,7 +218,7 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
+	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
 		c.logger.Debug("Voting for candidate [%v]", vote.id)
 		vote.reply(vote.term, true)
 		c.replica.Term(vote.term, nil, &vote.id)
@@ -253,11 +257,11 @@ func (c *follower) handleReplication(append replicateEvents) {
 
 	// consistency check
 	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); !ok || err != nil {
-		head := c.replica.Log.Head()
-		act, _, _ := c.replica.Log.Get(append.prevLogIndex)
-		prev := c.replica.Log.Active().raw.prevIndex
-
-		c.logger.Error("Consistency check failed(%v): %v, Actual: %v, Head: %v, Prev: %v", err, append, act, head, prev)
+		// head := c.replica.Log.Head()
+		// act, _, _ := c.replica.Log.Get(append.prevLogIndex)
+		// prev := c.replica.Log.Active().raw.prevIndex
+//
+		// c.logger.Error("Consistency check failed(%v): %v, Actual: %v, Head: %v, Prev: %v", err, append, act, head, prev)
 		append.reply(append.term, false)
 		return
 	}

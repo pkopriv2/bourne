@@ -118,16 +118,17 @@ func (l *leader) start() {
 			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
-			case <-l.replica.closed:
-				return
 			case <-l.closed:
+				return
+			case <-l.replica.closed:
+				l.Close()
 				return
 			case append := <-l.replica.LocalAppends:
 				l.handleLocalAppend(append)
 			case snapshot := <-l.replica.Snapshots:
 				l.handleInstallSnapshot(snapshot)
 			case events := <-l.replica.Replications:
-				l.handleReplicate(events)
+				l.handleReplication(events)
 			case ballot := <-l.replica.VoteRequests:
 				l.handleRequestVote(ballot)
 			case <-timer.C:
@@ -146,7 +147,7 @@ func (l *leader) start() {
 
 func (c *leader) handleRemoteAppend(append machineAppend) {
 	err := c.proxyPool.Submit(func() {
-		append.Return(c.replica.LocalAppend(append.Event))
+		append.Return(c.replica.LocalAppend(append.Event, append.Source, append.Seq, append.Kind))
 	})
 
 	if err != nil {
@@ -156,7 +157,7 @@ func (c *leader) handleRemoteAppend(append machineAppend) {
 
 func (c *leader) handleLocalAppend(append machineAppend) {
 	err := c.appendPool.SubmitTimeout(1000*time.Millisecond, func() {
-		append.Return(c.syncer.Append(append.Event))
+		append.Return(c.syncer.Append(append.Event, append.Source, append.Seq, append.Kind))
 	})
 
 	if err != nil {
@@ -184,7 +185,7 @@ func (c *leader) handleRequestVote(vote requestVote) {
 		return
 	}
 
-	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.term {
+	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
 		c.replica.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
 	} else {
@@ -195,7 +196,7 @@ func (c *leader) handleRequestVote(vote requestVote) {
 	c.transition(c.follower)
 }
 
-func (c *leader) handleReplicate(append replicateEvents) {
+func (c *leader) handleReplication(append replicateEvents) {
 	if append.term <= c.term.num {
 		append.reply(c.term.num, false)
 		return
@@ -306,14 +307,14 @@ func (l *logSyncer) shutdown(err error) error {
 	return err
 }
 
-func (s *logSyncer) Append(event Event) (item LogItem, err error) {
+func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (item LogItem, err error) {
 	var term = s.root.term.num
 	var head int
 
 	committed := make(chan struct{}, 1)
 	go func() {
 		// append
-		head, err = s.root.Log.Append([]Event{event}, term)
+		head, err = s.root.Log.Append(event, term, source, seq, kind)
 		if err != nil {
 			s.shutdown(err)
 			return
@@ -347,7 +348,7 @@ func (s *logSyncer) Append(event Event) (item LogItem, err error) {
 	case <-s.closed:
 		return LogItem{}, common.Or(s.failure, ClosedError)
 	case <-committed:
-		return newEventLogItem(head, term, event), nil
+		return LogItem{head, event, term, source, seq, kind}, nil
 	}
 }
 
@@ -402,7 +403,7 @@ func (s *logSyncer) sync(p peer) error {
 				}
 
 				// send the append request.
-				resp, err := cl.Replicate(s.root.Id, s.root.term.num, max.Index, max.term, batch, s.root.Log.Committed())
+				resp, err := cl.Replicate(s.root.Id, s.root.term.num, max.Index, max.Term, batch, s.root.Log.Committed())
 				if err != nil {
 					logger.Error("Unable to append events [%v]", err)
 					cl = nil
@@ -419,7 +420,7 @@ func (s *logSyncer) sync(p peer) error {
 				// if it was successful, progress the peer's index and term
 				if resp.success {
 					max = batch[len(batch)-1]
-					s.SetPrevIndexAndTerm(p.id, max.Index, max.term)
+					s.SetPrevIndexAndTerm(p.id, max.Index, max.Term)
 					continue
 				}
 
@@ -433,7 +434,7 @@ func (s *logSyncer) sync(p peer) error {
 				}
 
 				if ok {
-					s.SetPrevIndexAndTerm(p.id, max.Index, max.term)
+					s.SetPrevIndexAndTerm(p.id, max.Index, max.Term)
 				} else {
 					s.SetPrevIndexAndTerm(p.id, -1, -1)
 				}

@@ -25,18 +25,12 @@ var (
 type server struct {
 	ctx    common.Context
 	logger common.Logger
-
-	self *replicatedLog
+	self   *replicatedLog
 }
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, logger common.Logger, port string, self *replicatedLog) (net.Server, error) {
-	server := &server{
-		ctx:    ctx,
-		logger: logger.Fmt("Server"),
-		self:   self,
-	}
-
+	server := &server{ctx: ctx, logger: logger.Fmt("Server"), self: self}
 	return net.NewTcpServer(ctx, server.logger, port, serverInitHandler(server))
 }
 
@@ -103,17 +97,17 @@ func (s *server) RequestVote(req net.Request) net.Response {
 }
 
 func (s *server) Append(req net.Request) net.Response {
-	event, err := readAppendRequest(req.Body())
+	append, err := readAppendEventRequest(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	item, err := s.self.RemoteAppend(event)
+	item, err := s.self.RemoteAppend(append.event, append.source, append.seq, append.kind)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return newAppendResponse(item.Index, item.term)
+	return appendEventResponse{item.Index, item.Term}.Response()
 }
 
 // Helper functions
@@ -129,58 +123,6 @@ func serverReadMeta(meta scribe.Reader) (ret string, err error) {
 	return
 }
 
-func newRequestVoteRequest(r requestVoteRequest) net.Request {
-	return net.NewRequest(metaRequestVote, scribe.Build(func(w scribe.Writer) {
-		r.Write(w)
-	}))
-}
-
-func newReplicateRequest(a replicateRequest) net.Request {
-	return net.NewRequest(metaReplicate, scribe.Build(func(w scribe.Writer) {
-		a.Write(w)
-	}))
-}
-
-func newAppendRequest(e Event) net.Request {
-	return net.NewRequest(metaAppend, scribe.Build(func(w scribe.Writer) {
-		w.WriteBytes("event", e.Raw())
-	}))
-}
-
-func newAppendResponse(index int, term int) net.Response {
-	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
-		w.WriteInt("index", index)
-		w.WriteInt("term", term)
-	}))
-}
-
-func eventParser(r scribe.Reader) (interface{}, error) {
-	var tmp []byte
-	if e := r.ReadBytes("raw", &tmp); e != nil {
-		return nil, e
-	}
-	return Event(tmp), nil
-}
-
-func readEvent(r scribe.Reader, field string) (e Event, err error) {
-	var raw []byte
-	if err = r.ReadBytes(field, &raw); err == nil {
-		return Event(raw), nil
-	}
-	return
-}
-
-func readAppendRequest(r scribe.Reader) (e Event, err error) {
-	return readEvent(r, "event")
-}
-
-func readAppendResponse(res net.Response) (index int, term int, err error) {
-	err = res.Error()
-	err = common.Or(err, res.Body().ReadInt("index", &index))
-	err = common.Or(err, res.Body().ReadInt("term", &term))
-	return
-}
-
 func newResponseResponse(res response) net.Response {
 	return net.NewStandardResponse(scribe.Build(func(w scribe.Writer) {
 		w.WriteInt("term", res.term)
@@ -193,6 +135,65 @@ func readResponseResponse(res net.Response) (ret response, err error) {
 	err = common.Or(err, res.Body().ReadInt("term", &ret.term))
 	err = common.Or(err, res.Body().ReadBool("success", &ret.success))
 	return
+}
+
+type appendEventResponse struct {
+	index int
+	term  int
+}
+
+func (r appendEventResponse) Write(w scribe.Writer) {
+	w.WriteInt("index", r.index)
+	w.WriteInt("term", r.term)
+}
+
+func (r appendEventResponse) Response() net.Response {
+	return net.NewStandardResponse(scribe.Write(r))
+}
+
+func readAppendEventResponse(r scribe.Reader) (ret appendEventResponse, err error) {
+	err = common.Or(err, r.ReadInt("index", &ret.index))
+	err = common.Or(err, r.ReadInt("term", &ret.term))
+	return
+}
+
+func readNetAppendEventResponse(res net.Response) (ret appendEventResponse, err error) {
+	err = res.Error()
+	if err != nil {
+		return
+	}
+
+	return readAppendEventResponse(res.Body())
+}
+
+type appendEventRequest struct {
+	event  Event
+	source uuid.UUID
+	seq    int
+	kind   int
+}
+
+func readAppendEventRequest(r scribe.Reader) (ret appendEventRequest, err error) {
+	err = common.Or(err, r.ReadBytes("event", (*[]byte)(&ret.event)))
+	err = common.Or(err, r.ReadUUID("source", &ret.source))
+	err = common.Or(err, r.ReadInt("seq", &ret.seq))
+	err = common.Or(err, r.ReadInt("kind", &ret.kind))
+	return ret, err
+}
+
+func readNetAppendEventRequest(req net.Request) (ret appendEventRequest, err error) {
+	return readAppendEventRequest(req.Body())
+}
+
+func (r appendEventRequest) Request() net.Request {
+	return net.NewRequest(metaAppend, scribe.Write(r))
+}
+
+func (r appendEventRequest) Write(w scribe.Writer) {
+	w.WriteBytes("event", r.event)
+	w.WriteUUID("source", r.source)
+	w.WriteInt("seq", r.seq)
+	w.WriteInt("kind", r.kind)
 }
 
 type requestVoteRequest struct {
@@ -217,6 +218,10 @@ func (r requestVoteRequest) Write(w scribe.Writer) {
 	w.WriteInt("maxLogTerm", r.maxLogTerm)
 }
 
+func (r requestVoteRequest) Request() net.Request {
+	return net.NewRequest(metaRequestVote, scribe.Write(r))
+}
+
 type replicateRequest struct {
 	id           uuid.UUID
 	term         int
@@ -235,6 +240,10 @@ func (a replicateRequest) Write(w scribe.Writer) {
 	w.WriteInt("commit", a.commit)
 }
 
+func (r replicateRequest) Request() net.Request {
+	return net.NewRequest(metaReplicate, scribe.Write(r))
+}
+
 func readReplicateRequest(r scribe.Reader) (ret replicateRequest, err error) {
 	var msgs []scribe.Message
 	err = common.Or(err, r.ReadUUID("id", &ret.id))
@@ -249,7 +258,7 @@ func readReplicateRequest(r scribe.Reader) (ret replicateRequest, err error) {
 
 	items := make([]LogItem, 0, len(msgs))
 	for _, m := range msgs {
-		item, err := readLogItem(m)
+		item, err := ReadLogItem(m)
 		if err != nil {
 			return replicateRequest{}, err
 		}
@@ -269,7 +278,7 @@ type installSnapshotRequest struct {
 	prevConfig   []byte
 	batchOffset  int
 	batch        []Event
-	done bool
+	done         bool
 }
 
 func (a installSnapshotRequest) Write(w scribe.Writer) {

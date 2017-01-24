@@ -4,31 +4,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
+	uuid "github.com/satori/go.uuid"
 )
 
 var (
 	ClosedError    = errors.New("Kayak:Closed")
 	NotLeaderError = errors.New("Kayak:NotLeader")
 	NoLeaderError  = errors.New("Kayak:NoLeader")
+	NotPeerError   = errors.New("Kayak:NotPeer")
 )
 
-var (
-	AccessError      = errors.New("Kayak:AccessError")
-	EndOfStreamError = errors.New("Kayak:EndOfStream")
-	OutOfBoundsError = errors.New("Kayak:OutOfBounds")
-	InvariantError   = errors.New("Kayak:InvariantError")
-)
-
-// Runs the machine, using a replicated event log as the durable storage
-// engine.  Machines of this type can continue to function as long as a
-// majority of peers remain alive.  However, in the event that only a
-// minority of peers remain, they will continue to hold elections
-// indefinitely.
-//
-func Run(ctx common.Context, app Machine, self string, peers []string) error {
+func Start(ctx common.Context, app Machine, self string, peers []string) error {
 	return nil
 }
 
@@ -42,11 +32,15 @@ func (e Event) Raw() []byte {
 }
 
 func (e Event) Write(w scribe.Writer) {
-	w.WriteBytes("raw", e.Raw())
+	w.WriteBytes("bytes", e)
 }
 
-type Client interface {
-	Run(log Log, snapshot <-chan Event) error
+func eventParser(r scribe.Reader) (interface{}, error) {
+	var event Event
+	if e := r.ReadBytes("bytes", (*[]byte)(&event)); e != nil {
+		return nil, e
+	}
+	return event, nil
 }
 
 // A machine is anything that is expressable as a sequence of events.
@@ -90,12 +84,12 @@ type Client interface {
 // machine and log interactions look like the following:
 //
 //
-//                  *Local Process*						      |  *Network Process*
+//                  *Local Process*                           |  *Network Process*
 //                                                            |
 //                               |-------*commit*------|      |
 //                               v                     |      |
 // {Consumer}---*updates*--->{Machine}---*append*--->{Log}<---+--->{Peer}
-//                               |					   ^      |
+//                               |                     ^      |
 //                               |-------*compact*-----|      |
 //                                                            |
 //
@@ -116,14 +110,18 @@ type Client interface {
 // For many machines, their state is actually represented by many redundant
 // log items.  In other words, many of the items have been obviated.  The
 // machine can provide the log of a shortened 'snapshot' version of itself
-// using the Log#Compact() method.
+// using the Log#Compact() method.  On startup, the latest snapshot
+// is delivered to the machine in order to give the machine an opportunity
+// to rebuild its state.
+//
+// # Linearizability
+//
+// The raft
+//
 //
 type Machine interface {
 
 	// Run invokes the machines main loop.
-	//
-	// Each time the machine starts, it is provided a snapshot of events
-	// that can be used to rebuild machine state.
 	//
 	// Consumers may choose to return from this method at any time.  If
 	// the returned error is nil, the log shuts down and returns from
@@ -135,31 +133,28 @@ type Machine interface {
 	// returned at that time are returned from the main kayak.Run()
 	// loop.
 	//
-	Run(log Log, snapshot <-chan Event) error
+	// FIXME: Better semantics around exiting!
+	Run(log Log, sync Sync) error
 }
 
 // The log is a durable, replicated event sequence
 type Log interface {
 	io.Closer
 
-	// Head returns the index of the latest item in the log.
-	Head() int
+	// Returns the latest snaphot from the log.  Useful to rebuild
+	// internal machine state.
+	Snapshot() (until int, events <-chan Event, err error)
 
 	// Listen generates a listener interested in log commits starting from
 	// and including the start index.
 	//
-	// The listener is guaranteed to receive ALL items in the order
-	// they are committed - however - if a listener becomes significantly
-	// lagged, so much so that its current segment is compacted away,
-	// it will fail.  However, it is not expected that consumers need be
-	// concerned with log state.  In many cases, simply returning the
-	// error from the main machine's run loop and restarting is sufficient
-	// to resume operations.
+	// This listener guarantees that items are delivered with exactly-once
+	// semantics.  Because log replication can only provide at-least-once
+	// semantics, every listener will filter duplicate requests.
 	//
 	// This method also gives control over the underlying buffer size.
 	// Consumers which need highly synchronized state with the log should
 	// choose smaller buffers.
-	//
 	Listen(start int, buf int) (Listener, error)
 
 	// Append appends and commits the event to the log.
@@ -168,7 +163,6 @@ type Log interface {
 	// have been replicated to this instance.  Appends should always accompany
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
-	//
 	Append(Event) (LogItem, error)
 
 	// Compact replaces the log until the given point with the given snapshot
@@ -185,11 +179,38 @@ type Log interface {
 	// machine to continue to serve requests normally while a compaction is
 	// processing.
 	//
-	// Concurrent compactions are possible, however, the log ensures that
-	// the only the latest snapshot is retained. In the event that a compaction
-	// is obsoleted concurrently, no error will be returned.
-	//
+	// Concurrent compactions are possible, however, an invariant of the log
+	// is that it must always progress.  Therefore, an older snapshot cannot
+	// usurp a newer one.
 	Compact(until int, snapshot <-chan Event, size int) error
+}
+
+// The synchronizer gives the consuming machine the ability to synchronize
+// its state with other members of the cluster.  This is critical for
+// machines to be able to implement linearizable semantics.  This also gives
+// those with less strict requirements the ability to issue stale requests.
+//
+// In order to give linearizable reads, consumers can query for a "read-barrier"
+// index. This index is the maximum index that has been applied to all machines
+// within the cluster.  With this barrier, machines can ensure their
+// internal state has been caught up to the time the read was initiated,
+// thereby obtaining linearizability for the operation.
+//
+type Sync interface {
+
+	// Tells the synchronizer that the index (and everything that preceded)
+	// it has been applied to the state machine. This operation is commutative,
+	// meaning that if a lower index is applied after a later index, then
+	// only the latest is used for synchronization purposes.
+	Ack(index int)
+
+	// Returns the current read-barrier for the cluster.
+	Barrier() (int, error)
+
+	// Sync polls the current leader for its current applied index and
+	// blocks until the state machine has applied all items up to and
+	// including the index.
+	Sync(timeout time.Duration, barrier int)
 }
 
 // A listener represents a stream of log items.
@@ -209,10 +230,10 @@ type Listener interface {
 	// but for in-memory state machines, if the stream was in critical path
 	// to machine state, then it's probably best to just rebuild the machine.
 	//
+	// This method is not safe for concurrent access.
 	Next() (LogItem, error)
 }
 
-// The basic log item.
 type LogItem struct {
 
 	// Item index. May be used to reconcile state with log.
@@ -222,55 +243,65 @@ type LogItem struct {
 	Event Event
 
 	// Internal Only: the current election cycle number.
-	term int
+	Term int
 
-	// Internal Only: whether or not this item represents configuration
-	config bool
+	// Internal Only: (used to filter duplicate appends)
+	Source uuid.UUID
+
+	// Internal Only: (used to filter duplicate appends)
+	Seq int
+
+	// Internal Only: Used for system level events (e.g. config, noop, etc...)
+	Kind int
 }
 
+func NewLogItem(i int, e Event, t int, s uuid.UUID, seq int, k int) LogItem {
+	return LogItem{i, e, t, s, seq, k}
+}
+
+var (
+	Std       = 0
+	NoOp      = 1
+	AddMember = 2
+	DelMember = 3
+)
+
 func (l LogItem) String() string {
-	return fmt.Sprintf("Item(idx=%v,term=%v,size=%v)", l.Index, l.term, len(l.Event))
+	return fmt.Sprintf("Item(idx=%v,term=%v,size=%v)", l.Index, l.Term, len(l.Event))
 }
 
 func (l LogItem) Write(w scribe.Writer) {
 	w.WriteInt("index", l.Index)
-	w.WriteInt("term", l.term)
 	w.WriteBytes("event", l.Event)
+	w.WriteInt("term", l.Term)
+	w.WriteUUID("source", l.Source)
+	w.WriteInt("seq", l.Seq)
+	w.WriteInt("kind", l.Kind)
 }
 
 func (l LogItem) Bytes() []byte {
 	return scribe.Write(l).Bytes()
 }
 
-func newEventLogItem(i int, t int, e Event) LogItem {
-	return LogItem{Index: i, term: t, Event: e}
-}
-
-func newConfigLogItem(i int, t int, c bool) LogItem {
-	return LogItem{Index: i, term: t, config: c}
-}
-
-func readLogItem(r scribe.Reader) (interface{}, error) {
+func ReadLogItem(r scribe.Reader) (interface{}, error) {
 	var err error
 	var item LogItem
-	var bytes []byte
 	err = common.Or(err, r.ReadInt("index", &item.Index))
-	err = common.Or(err, r.ReadInt("term", &item.term))
-	err = common.Or(err, r.ReadBytes("event", &bytes))
-	if err != nil {
-		return item, err
-	}
-	item.Event = Event(bytes)
+	err = common.Or(err, r.ReadInt("term", &item.Term))
+	err = common.Or(err, r.ReadBytes("event", (*[]byte)(&item.Event)))
+	err = common.Or(err, r.ReadUUID("source", &item.Source))
+	err = common.Or(err, r.ReadInt("seq", &item.Seq))
+	err = common.Or(err, r.ReadInt("kind", &item.Kind))
 	return item, err
 }
 
-func parseItem(bytes []byte) (LogItem, error) {
+func ParseItem(bytes []byte) (LogItem, error) {
 	msg, err := scribe.Parse(bytes)
 	if err != nil {
 		return LogItem{}, err
 	}
 
-	raw, err := readLogItem(msg)
+	raw, err := ReadLogItem(msg)
 	if err != nil {
 		return LogItem{}, err
 	}

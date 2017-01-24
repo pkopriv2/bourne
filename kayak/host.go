@@ -93,7 +93,8 @@ func (h *host) Log() *eventLog {
 }
 
 func (h *host) Append(e Event) (LogItem, error) {
-	return h.core.Append(e)
+	return LogItem{}, nil
+	// return h.core.Append(e, )
 }
 
 func (h *host) Client() (*client, error) {
