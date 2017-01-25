@@ -1,8 +1,6 @@
 package kayak
 
 import (
-	"sync"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
@@ -16,13 +14,7 @@ type eventLog struct {
 	// the stored log.
 	raw StoredLog
 
-	// the currently active segment.
-	active StoredSegment
-
-	// lock around the active segment.  Protects against concurrent updates during compactions.
-	activeLock sync.RWMutex
-
-	// // index of last item inserted. (initialized to -1)
+	// index of last item inserted. (initialized to -1)
 	head *ref
 
 	// index of last item committed.(initialized to -1)
@@ -36,28 +28,29 @@ type eventLog struct {
 }
 
 func openEventLog(logger common.Logger, log StoredLog) (*eventLog, error) {
-	cur, err := log.Active()
-	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to retrieve latest segment for log [%v]", log.Id())
-	}
-
-	commit, err := log.GetCommit()
-	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to retrieve commit for log [%v]", log.Id())
-	}
-
-	head, err := cur.Head()
-	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to retrieve head position for segment [%v]", log.Id())
-	}
-
-	return &eventLog{
-		logger: logger.Fmt("EventLog"),
-		active: cur,
-		head:   newRef(head),
-		commit: newRef(commit),
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1)}, nil
+	return nil, nil
+	// cur, err := log.Active()
+	// if err != nil {
+	// return nil, errors.Wrapf(err, "Unable to retrieve latest segment for log [%v]", log.Id())
+	// }
+	//
+	// commit, err := log.GetCommit()
+	// if err != nil {
+	// return nil, errors.Wrapf(err, "Unable to retrieve commit for log [%v]", log.Id())
+	// }
+	//
+	// head, err := cur.Head()
+	// if err != nil {
+	// return nil, errors.Wrapf(err, "Unable to retrieve head position for segment [%v]", log.Id())
+	// }
+	//
+	// return &eventLog{
+	// logger: logger.Fmt("EventLog"),
+	// active: cur,
+	// head:   newRef(head),
+	// commit: newRef(commit),
+	// closed: make(chan struct{}),
+	// closer: make(chan struct{}, 1)}, nil
 }
 
 func (e *eventLog) Close() error {
@@ -82,25 +75,6 @@ func (e *eventLog) Closed() bool {
 	}
 }
 
-func (e *eventLog) UseActive(fn func(StoredSegment)) {
-	e.activeLock.RLock()
-	defer e.activeLock.RUnlock()
-	fn(e.active)
-}
-
-func (e *eventLog) UpdateActive(fn func(StoredSegment) StoredSegment) {
-	e.activeLock.Lock()
-	defer e.activeLock.Unlock()
-	e.active = fn(e.active)
-}
-
-// Use with caution
-func (e *eventLog) Active() StoredSegment {
-	e.activeLock.RLock()
-	defer e.activeLock.RUnlock()
-	return e.active
-}
-
 func (e *eventLog) Head() int {
 	return e.head.Get()
 }
@@ -115,7 +89,6 @@ func (e *eventLog) Commit(pos int) (new int, err error) {
 			return cur
 		}
 
-		pos, err = e.raw.SetCommit(common.Min(pos, e.Head()))
 		if err != nil {
 			return cur
 		} else {
@@ -125,114 +98,77 @@ func (e *eventLog) Commit(pos int) (new int, err error) {
 	return
 }
 
-func (e *eventLog) Snapshot() (snapshot, error) {
-	var err error
-	var snap StoredSnapshot
-	var prevIndex int
-	var prevTerm int
-	e.UseActive(func(seg StoredSegment) {
-		snap, err = seg.Snapshot()
-		if err != nil {
-			return
-		}
-
-		prevIndex = seg.PrevIndex()
-		prevTerm = seg.PrevTerm()
-		return
-	})
-	return snapshot{snap, prevIndex, prevTerm}, err
-}
-
 func (e *eventLog) Get(index int) (i LogItem, o bool, f error) {
-	e.UseActive(func(s StoredSegment) {
-		i, o, f = s.Get(index)
-	})
 	return
 }
 
 func (e *eventLog) Scan(start int, end int) (r []LogItem, f error) {
-	e.UseActive(func(s StoredSegment) {
-		r, f = s.Scan(start, end)
-	})
 	return
 }
 
 func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind int) (h int, f error) {
-	e.UseActive(func(s StoredSegment) {
-		h, f = s.Append(evt, term, source, seq, kind)
-	})
-	if f != nil {
-		return
-	}
-
-	return e.head.Set(h), nil // commutative, so safe for out of order scheduling
+	return
 }
 
 func (e *eventLog) Insert(batch []LogItem) (h int, f error) {
-	e.UseActive(func(s StoredSegment) {
-		h, f = s.Insert(batch)
-	})
-	if f != nil {
-		return
-	}
-
-	return e.head.Set(h), nil // commutative, so safe for out of order scheduling
+	return
 }
 
 func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (err error) {
 	e.logger.Info("Compacting log until [%v] with a snapshot of [%v] events", until, snapshotSize)
 
-	cur := e.Active()
-
-	// Go ahead and compact the majority of the segment. (writes can still happen.)
-	new, err := cur.Compact(until, snapshot, snapshotSize, config)
-	if err != nil {
-		return errors.Wrapf(err, "Error compacting current segment [%v]", cur)
-	}
-
-	defer cur.Delete()
-
-	// Swap existing with new.
-	e.UpdateActive(func(cur StoredSegment) StoredSegment {
-		ok, err := e.raw.Swap(cur, new)
-		if err != nil || !ok {
-			return cur
-		}
-		return new
-	})
+	// cur := e.Active()
+//
+	// // Go ahead and compact the majority of the segment. (writes can still happen.)
+	// new, err := cur.Compact(until, snapshot, snapshotSize, config)
+	// if err != nil {
+		// return errors.Wrapf(err, "Error compacting current segment [%v]", cur)
+	// }
+//
+	// defer cur.Delete()
+//
+	// // Swap existing with new.
+	// e.UpdateActive(func(cur StoredSegment) StoredSegment {
+		// ok, err := e.raw.Swap(cur, new)
+		// if err != nil || !ok {
+			// return cur
+		// }
+		// return new
+	// })
 	return
 }
 
+// only called from followers.
 func (e *eventLog) Assert(index int, term int) (ok bool, err error) {
-	var item LogItem
-	e.UseActive(func(s StoredSegment) {
-		item, ok, err = e.Get(index)
-		if !ok || err != nil {
-			return
-		}
-
-		ok = item.Term == term
-		return
-	})
+	// var item LogItem
+	// e.UseActive(func(s StoredSegment) {
+		// item, ok, err = e.Get(index)
+		// if !ok || err != nil {
+			// return
+		// }
+//
+		// ok = item.Term == term
+		// return
+	// })
 	return
 }
 
 func (e *eventLog) Max() (i LogItem, f error) {
-	var head int
-	var ok bool
-	e.UseActive(func(s StoredSegment) {
-		head, f = s.Head()
-		if f != nil {
-			i = LogItem{Index: -1, Term: -1}
-			return
-		}
-
-		i, ok, f = s.Get(head)
-		if f != nil || !ok {
-			i = LogItem{Index: -1, Term: -1}
-			return
-		}
-	})
+	// var head int
+	// var ok bool
+	// e.UseActive(func(s StoredSegment) {
+		// head, f = s.Head()
+		// if f != nil {
+			// i = LogItem{Index: -1, Term: -1}
+			// return
+		// }
+//
+		// i, ok, f = s.Get(head)
+		// if f != nil || !ok {
+			// i = LogItem{Index: -1, Term: -1}
+			// return
+		// }
+	// })
 	return
 }
 
@@ -262,27 +198,34 @@ func (s *snapshot) Size() int {
 	return s.raw.Size()
 }
 
-func (s *snapshot) Config() ([]peer,error) {
-	return parsePeers(s.raw.Config(), []peer{})
+func (s *snapshot) Config() []byte {
+	return s.raw.Config()
 }
 
 func (s *snapshot) Events(cancel <-chan struct{}) <-chan Event {
 	ch := make(chan Event)
 	go func() {
-		defer close(ch)
-
 		for cur := 0; cur < s.raw.Size(); {
 			batch, err := s.raw.Scan(cur, common.Min(cur, cur+256))
 			if err != nil {
 				return
 			}
 
+			for _, e := range batch {
+				select {
+				case ch <- e:
+				case <-cancel:
+					return
+				}
+			}
+
 			cur = cur + len(batch)
 		}
+
+		close(ch)
 	}()
 	return ch
 }
-
 
 type refListener struct {
 	log *eventLog
@@ -293,15 +236,24 @@ type refListener struct {
 		error
 	}
 
-	closed chan struct{}
-	closer chan struct{}
+	failure error
+	closed  chan struct{}
+	closer  chan struct{}
 }
 
 func newRefListener(log *eventLog, pos *ref, from int, buf int) *refListener {
-	l := &refListener{log, pos, buf, make(chan struct {
+	ch := make(chan struct {
 		LogItem
 		error
-	}, buf), make(chan struct{}), make(chan struct{}, 1)}
+	}, buf)
+
+	l := &refListener{
+		log:    log,
+		pos:    pos,
+		buf:    buf,
+		ch:     ch,
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}
 	l.start(from)
 	return l
 }
@@ -312,8 +264,13 @@ func (l *refListener) start(from int) {
 
 		for cur := from; ; {
 
-			next, ok := l.pos.WaitForGreaterThanOrEqual(cur)
+			next, ok := l.pos.WaitForChange(cur)
 			if !ok || l.isClosed() {
+				return
+			}
+
+			if next < cur {
+				l.shutdown(errors.Wrapf(OutOfBoundsError, "Log truncated to [%v] was [%v]", next, cur))
 				return
 			}
 
@@ -336,6 +293,7 @@ func (l *refListener) start(from int) {
 						return
 					case l.ch <- tuple:
 						if err != nil {
+							l.shutdown(err)
 							return
 						}
 					}
@@ -360,20 +318,24 @@ func (l *refListener) isClosed() bool {
 func (p *refListener) Next() (LogItem, error) {
 	select {
 	case <-p.closed:
-		return LogItem{}, ClosedError
+		return LogItem{}, common.Or(p.failure, ClosedError)
 	case i := <-p.ch:
 		return i.LogItem, i.error
 	}
 }
 
 func (l *refListener) Close() error {
+	return l.shutdown(nil)
+}
+
+func (l *refListener) shutdown(cause error) error {
 	select {
 	case <-l.closed:
 		return ClosedError
 	case l.closer <- struct{}{}:
 	}
 
-	// FIXME: This does NOT work!
+	l.failure = cause
 	close(l.closed)
 	l.pos.Notify()
 	return nil

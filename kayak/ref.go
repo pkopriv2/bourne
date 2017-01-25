@@ -1,10 +1,8 @@
 package kayak
 
-import (
-	"sync"
+import "sync"
 
-	"github.com/pkopriv2/bourne/common"
-)
+// A simply notifying integer value.
 
 type ref struct {
 	val  int
@@ -16,17 +14,17 @@ func newRef(val int) *ref {
 	return &ref{val, &sync.Cond{L: &sync.Mutex{}}, false}
 }
 
-func (c *ref) WaitForGreaterThanOrEqual(pos int) (commit int, alive bool) {
+func (c *ref) WaitForChange(cur int) (val int, alive bool) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	if c.dead {
-		return pos, false
+		return cur, false
 	}
 
-	for commit, alive = c.val, !c.dead; commit < pos; commit, alive = c.val, !c.dead {
+	for val, alive = c.val, !c.dead; val != cur; val, alive = c.val, !c.dead {
 		c.lock.Wait()
 		if c.dead {
-			return pos, false
+			return cur, false
 		}
 	}
 	return
@@ -47,7 +45,7 @@ func (c *ref) Update(fn func(int) int) int {
 	c.lock.L.Lock()
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
-	c.val = common.Max(fn(c.val), c.val)
+	c.val = fn(c.val)
 	return c.val
 }
 
@@ -55,7 +53,7 @@ func (c *ref) Set(pos int) (new int) {
 	c.lock.L.Lock()
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
-	c.val = common.Max(pos, c.val)
+	c.val = pos
 	return c.val
 }
 

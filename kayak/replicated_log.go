@@ -68,7 +68,7 @@ func (h *replicatedLog) Self() peer {
 }
 
 func (h *replicatedLog) Peers() []peer {
-	return h.replica.Peers()
+	return h.replica.Others()
 }
 
 func (h *replicatedLog) Log() *eventLog {

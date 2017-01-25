@@ -58,8 +58,8 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 
 	closed := make(chan struct{})
 	l := &leader{
-		logger:     logger,
-		follower:   follower,
+		logger:   logger,
+		follower: follower,
 		// syncer:     syncer,
 		proxyPool:  concurrent.NewWorkPool(10),
 		appendPool: concurrent.NewWorkPool(10),
@@ -240,6 +240,109 @@ func (c *leader) broadcastHeartbeat() {
 	}
 }
 
+type peerSyncer struct {
+	main *logSyncer
+	peer peer
+
+	prevIndex int
+	prevTerm  int
+
+	closed chan struct{}
+	closer chan struct{}
+}
+//
+// func (s *peerSyncer) start() {
+	// logger := s.main.logger.Fmt("Syncer(%v)", s.peer)
+	// logger.Info("Starting peer synchronizer")
+//
+	// var cl *client
+	// go func() {
+		// defer logger.Info("Shutting down")
+		// defer common.RunIf(func() { cl.Close() })(cl)
+		// var err error
+//
+		// // snapshot the local log
+		// max, err := s.main.root.Log.Max()
+		// if err != nil {
+			// // FIXME! Better error handling here.
+			// return
+		// }
+//
+		// // the sync'er needs to be unaffected by segment
+		// // compactions.
+		// for {
+			// next, ok := s.main.root.Log.head.WaitForChange(max.Index + 1)
+			// if !ok || s.Closed() {
+				// return
+			// }
+//
+			// // loop until this peer is completely caught up to head!
+			// for max.Index < next {
+				// if s.Closed() {
+					// return
+				// }
+//
+				// logger.Debug("Currently [%v/%v]", max.Index, next)
+//
+				// // might have to reinitialize client after each batch.
+				// if cl == nil {
+					// cl, err = p.Client(s.main.root.Ctx)
+					// if err != nil {
+						// return
+					// }
+				// }
+//
+				// // scan a full batch of events.
+				// batch, err := s.root.Log.Scan(max.Index+1, max.Index+1+256)
+				// if err != nil {
+					// s.shutdown(err)
+					// return
+				// }
+//
+				// // send the append request.
+				// resp, err := cl.Replicate(s.root.Id, s.root.term.Num, max.Index, max.Term, batch, s.root.Log.Committed())
+				// if err != nil {
+					// logger.Error("Unable to append events [%v]", err)
+					// cl = nil
+					// continue
+				// }
+//
+				// // make sure we're still a leader.
+				// if resp.term > s.root.term.Num {
+					// logger.Error("No longer leader.")
+					// s.shutdown(NotLeaderError)
+					// return
+				// }
+//
+				// // if it was successful, progress the peer's index and term
+				// if resp.success {
+					// max = batch[len(batch)-1]
+					// s.SetPrevIndexAndTerm(p.Id, max.Index, max.Term)
+					// continue
+				// }
+//
+				// // consistency check failed, start moving backwards one index at a time.
+				// // TODO: Install snapshot
+//
+				// max, ok, err = s.root.Log.Get(max.Index - 1)
+				// if err != nil {
+					// s.shutdown(err)
+					// return
+				// }
+//
+				// if ok {
+					// s.SetPrevIndexAndTerm(p.Id, max.Index, max.Term)
+				// } else {
+					// s.SetPrevIndexAndTerm(p.Id, -1, -1)
+				// }
+			// }
+//
+			// logger.Debug("Sync'ed to [%v]", next)
+		// }
+	// }()
+//
+// }
+
 // the log syncer should be rebuilt every time a leader comes to power.
 type logSyncer struct {
 
@@ -276,9 +379,9 @@ func newLogSyncer(inst *replica, logger common.Logger) *logSyncer {
 		closer:      make(chan struct{}, 1),
 	}
 
-	for _, p := range s.root.Peers() {
-		s.sync(p)
-	}
+	// for _, p := range s.root.Others() {
+		// // s.sync(p)
+	// }
 
 	return s
 }
@@ -323,16 +426,16 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 		}
 
 		// wait for majority.
-		majority := s.root.Majority()-1
+		majority := s.root.Majority() - 1
 		for done := make(map[uuid.UUID]struct{}); len(done) < majority; {
-			for _, p := range s.root.Peers() {
-				if _, ok := done[p.id]; ok {
+			for _, p := range s.root.Others() {
+				if _, ok := done[p.Id]; ok {
 					continue
 				}
 
-				index, term := s.GetPrevIndexAndTerm(p.id)
+				index, term := s.GetPrevIndexAndTerm(p.Id)
 				if index >= head && term == s.root.term.Num {
-					done[p.id] = struct{}{}
+					done[p.Id] = struct{}{}
 				}
 			}
 
@@ -350,129 +453,6 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 		return LogItem{}, common.Or(s.failure, ClosedError)
 	case <-committed:
 		return LogItem{head, event, term, source, seq, kind}, nil
-	}
-}
-
-func (s *logSyncer) sync(p peer) error {
-	logger := s.logger.Fmt("Routine(%v)", p)
-	logger.Info("Starting peer synchronizer")
-
-	var cl *client
-	go func() {
-		defer logger.Info("Shutting down")
-		defer common.RunIf(func() { cl.Close() })(cl)
-		var err error
-
-		// snapshot the local log
-		max, err := s.root.Log.Max()
-		if err != nil {
-			s.shutdown(err)
-			// FIXME! Better error handling here.
-			return
-		}
-
-		// the sync'er needs to be unaffected by segment
-		// compactions.
-		for {
-			next, ok := s.root.Log.head.WaitForGreaterThanOrEqual(max.Index + 1)
-			if !ok || s.Closed() {
-				return
-			}
-
-			// loop until this peer is completely caught up to head!
-			for max.Index < next {
-				if s.Closed() {
-					return
-				}
-
-				logger.Debug("Currently [%v/%v]", max.Index, next)
-
-				// might have to reinitialize client after each batch.
-				if cl == nil {
-					cl, err = s.client(p)
-					if err != nil {
-						return
-					}
-				}
-
-				// scan a full batch of events.
-				batch, err := s.root.Log.Scan(max.Index+1, max.Index+1+256)
-				if err != nil {
-					s.shutdown(err)
-					return
-				}
-
-				// send the append request.
-				resp, err := cl.Replicate(s.root.Id, s.root.term.Num, max.Index, max.Term, batch, s.root.Log.Committed())
-				if err != nil {
-					logger.Error("Unable to append events [%v]", err)
-					cl = nil
-					continue
-				}
-
-				// make sure we're still a leader.
-				if resp.term > s.root.term.Num {
-					logger.Error("No longer leader.")
-					s.shutdown(NotLeaderError)
-					return
-				}
-
-				// if it was successful, progress the peer's index and term
-				if resp.success {
-					max = batch[len(batch)-1]
-					s.SetPrevIndexAndTerm(p.id, max.Index, max.Term)
-					continue
-				}
-
-				// consistency check failed, start moving backwards one index at a time.
-				// TODO: Install snapshot
-
-				max, ok, err = s.root.Log.Get(max.Index - 1)
-				if err != nil {
-					s.shutdown(err)
-					return
-				}
-
-				if ok {
-					s.SetPrevIndexAndTerm(p.id, max.Index, max.Term)
-				} else {
-					s.SetPrevIndexAndTerm(p.id, -1, -1)
-				}
-			}
-
-			logger.Debug("Sync'ed to [%v]", next)
-		}
-	}()
-	return nil
-}
-
-func (s *logSyncer) client(p peer) (*client, error) {
-
-	// exponential backoff up to 2^6 seconds.
-	for timeout := 1 * time.Second; ; {
-		ch := make(chan *client)
-		go func() {
-			cl, err := p.Client(s.root.Ctx)
-			if err == nil && cl != nil {
-				ch <- cl
-			}
-		}()
-
-		timer := time.NewTimer(timeout)
-		select {
-		case <-s.closed:
-			return nil, ClosedError
-		case <-timer.C:
-
-			// 64 seconds is maximum timeout
-			if timeout < 2^6*time.Second {
-				timeout *= 2
-			}
-
-			continue
-		case cl := <-ch:
-			return cl, nil
-		}
 	}
 }
 

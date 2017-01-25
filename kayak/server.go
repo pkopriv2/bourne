@@ -305,3 +305,22 @@ func readIntallSnapshotRequest(r scribe.Reader) (ret installSnapshotRequest, err
 	err = common.Or(err, r.ReadBool("done", &ret.done))
 	return
 }
+
+type updateRosterRequest struct {
+	serverId     uuid.UUID
+	serverAddr   uuid.UUID
+	join         bool
+}
+
+func (u updateRosterRequest) Write(w scribe.Writer) {
+	w.WriteUUID("serverId", u.serverId)
+	w.WriteUUID("serverAddr", u.serverAddr)
+	w.WriteBool("join", u.join)
+}
+
+func readUpdateRosterRequest(r scribe.Reader) (ret updateRosterRequest, err error) {
+	err = common.Or(err, r.ReadUUID("serverId", &ret.serverId))
+	err = common.Or(err, r.ReadUUID("serverAddr", &ret.serverAddr))
+	err = common.Or(err, r.ReadBool("join", &ret.join))
+	return
+}

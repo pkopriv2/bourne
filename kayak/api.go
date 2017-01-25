@@ -18,7 +18,11 @@ var (
 	NotPeerError   = errors.New("Kayak:NotPeer")
 )
 
-func Start(ctx common.Context, app Machine, self string, peers []string) error {
+func Start(ctx common.Context, app Machine, self string) error {
+	return nil
+}
+
+func Join(ctx common.Context, app Machine, self string, peer string) error {
 	return nil
 }
 
@@ -198,7 +202,7 @@ type Log interface {
 //
 type Sync interface {
 
-	// Tells the synchronizer that the index (and everything that preceded)
+	// Ack tells the synchronizer that the index (and everything that preceded)
 	// it has been applied to the state machine. This operation is commutative,
 	// meaning that if a lower index is applied after a later index, then
 	// only the latest is used for synchronization purposes.
@@ -207,9 +211,7 @@ type Sync interface {
 	// Returns the current read-barrier for the cluster.
 	Barrier() (int, error)
 
-	// Sync polls the current leader for its current applied index and
-	// blocks until the state machine has applied all items up to and
-	// including the index.
+	// Sync waits for the machine to be caught up to the barrier.
 	Sync(timeout time.Duration, barrier int)
 }
 
@@ -260,9 +262,9 @@ func NewLogItem(i int, e Event, t int, s uuid.UUID, seq int, k int) LogItem {
 }
 
 var (
-	Std       = 0
-	NoOp      = 1
-	Config    = 2
+	Std    = 0
+	NoOp   = 1
+	Config = 2
 )
 
 func (l LogItem) String() string {
@@ -310,6 +312,7 @@ func ParseItem(bytes []byte) (LogItem, error) {
 
 // Storage apis,errors
 var (
+	FormatError      = errors.New("Kayak:Format")
 	AccessError      = errors.New("Kayak:Access")
 	EndOfStreamError = errors.New("Kayak:EndOfStream")
 	OutOfBoundsError = errors.New("Kayak:OutOfBounds")
@@ -323,26 +326,20 @@ type LogStore interface {
 
 type StoredLog interface {
 	Id() uuid.UUID
-	Active() (StoredSegment, error)
-	GetCommit() (int, error)
-	SetCommit(int) (int, error)
-	Swap(StoredSegment, StoredSegment) (bool, error)
-}
-
-type StoredSegment interface {
-	PrevIndex() int
-	PrevTerm() int
-	Snapshot() (StoredSnapshot, error)
-	Head() (int, error)
-	Get(index int) (LogItem, bool, error)
+	// Active() (StoredSegment, error)
+	Last() (int, int, error)
+	Truncate(start int) error
 	Scan(beg int, end int) ([]LogItem, error)
-	Append(Event, int, uuid.UUID, int, int) (int, error)
-	Insert([]LogItem) (int, error)
-	Compact(until int, ch <-chan Event, size int, config []byte) (StoredSegment, error)
-	Delete() error
+	Append(Event, int, uuid.UUID, int, int) (LogItem, error)
+	Get(index int) (LogItem, bool, error)
+	Insert([]LogItem) error
+	Compact(until int, ch <-chan Event, size int, config []byte) (StoredSnapshot, error)
+	Snapshot() (StoredSnapshot, error)
 }
 
 type StoredSnapshot interface {
+	LastIndex() int
+	LastTerm() int
 	Size() int
 	Config() []byte
 	Scan(beg int, end int) ([]Event, error)

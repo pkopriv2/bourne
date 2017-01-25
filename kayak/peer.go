@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
@@ -9,13 +10,39 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// type config struct {
-// raw  []peer
-// ver  int
-// lock *sync.Cond
-// }
-//
-// func (c config)
+type roster struct {
+	raw []peer
+	ver *ref
+}
+
+func (c roster) Wait(next int) (int, []peer, bool) {
+	ver, ok := c.ver.WaitForChange(next)
+	return ver, c.Get(), ok
+}
+
+func (c roster) Notify() {
+	c.ver.Notify()
+}
+
+func (c roster) Update(peers []peer) {
+	c.ver.Update(func(cur int) int {
+		c.raw = peers
+		return cur + 1
+	})
+}
+
+// not taking copy as it is assumed that array is immutable
+func (c roster) Get() (peers []peer) {
+	c.ver.Update(func(cur int) int {
+		peers = c.raw
+		return cur
+	})
+	return
+}
+
+func (c roster) Close() {
+	c.ver.Close()
+}
 
 // replicated configuration
 type peers []peer
@@ -44,20 +71,24 @@ func parsePeers(bytes []byte, def []peer) (p []peer, e error) {
 
 // A peer contains the identifying info of a cluster member.
 type peer struct {
-	id   uuid.UUID
-	addr string
+	Id   uuid.UUID
+	Addr string
 }
 
 func newPeer(addr string) peer {
-	return peer{id: uuid.NewV1(), addr: addr}
+	return peer{Id: uuid.NewV1(), Addr: addr}
 }
 
 func (p peer) String() string {
-	return fmt.Sprintf("Peer(%v, %v)", p.id.String()[:8], p.addr)
+	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
+}
+
+func (p peer) NewPool(ctx common.Context) net.ConnectionPool {
+	return net.NewConnectionPool("tcp", p.Addr, 10, 2*time.Second)
 }
 
 func (p peer) Client(ctx common.Context) (*client, error) {
-	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.addr)
+	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.Addr)
 	if err != nil {
 		return nil, err
 	}
@@ -65,15 +96,44 @@ func (p peer) Client(ctx common.Context) (*client, error) {
 	return &client{raw}, nil
 }
 
+func (p peer) Connect(ctx common.Context, cancel <-chan struct{}) (*client, error) {
+	// exponential backoff up to 2^6 seconds.
+	for timeout := 1 * time.Second; ; {
+		ch := make(chan *client)
+		go func() {
+			cl, err := p.Client(ctx)
+			if err == nil && cl != nil {
+				ch <- cl
+			}
+		}()
+
+		timer := time.NewTimer(timeout)
+		select {
+		case <-cancel:
+			return nil, ClosedError
+		case <-timer.C:
+
+			// 64 seconds is maximum timeout
+			if timeout < 2^6*time.Second {
+				timeout *= 2
+			}
+
+			continue
+		case cl := <-ch:
+			return cl, nil
+		}
+	}
+}
+
 func (p peer) Write(w scribe.Writer) {
-	w.WriteUUID("id", p.id)
-	w.WriteString("addr", p.addr)
+	w.WriteUUID("id", p.Id)
+	w.WriteString("addr", p.Addr)
 }
 
 func peerParser(r scribe.Reader) (interface{}, error) {
 	var p peer
 	var e error
-	e = common.Or(e, r.ReadUUID("id", &p.id))
-	e = common.Or(e, r.ReadString("addr", &p.addr))
+	e = common.Or(e, r.ReadUUID("id", &p.Id))
+	e = common.Or(e, r.ReadString("addr", &p.Addr))
 	return p, e
 }

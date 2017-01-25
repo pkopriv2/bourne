@@ -14,11 +14,11 @@ import (
 // Bolt implementation of kayak log store.
 var (
 	logBucket            = []byte("kayak.log")
-	logCommitBucket      = []byte("kayak.log.commits")
-	logActiveSegBucket   = []byte("kayak.log.actives")
-	segBucket            = []byte("kayak.seg")
-	segItemsBucket       = []byte("kayak.seg.items")
-	segHeadsBucket       = []byte("kayak.seg.heads")
+	logItemBucket        = []byte("kayak.log.item")
+	logMinBucket         = []byte("kayak.log.min")
+	logMaxBucket         = []byte("kayak.log.max")
+	logCommitBucket      = []byte("kayak.log.commit")
+	logSnapshotBucket    = []byte("kayak.log.snapshot")
 	snapshotsBucket      = []byte("kayak.snapshots")
 	snapshotEventsBucket = []byte("kayak.snapshots.events")
 )
@@ -27,15 +27,15 @@ func initBoltBuckets(tx *bolt.Tx) (err error) {
 	var e error
 	_, e = tx.CreateBucketIfNotExists(logBucket)
 	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(logActiveSegBucket)
+	_, e = tx.CreateBucketIfNotExists(logItemBucket)
+	err = common.Or(err, e)
+	_, e = tx.CreateBucketIfNotExists(logMinBucket)
+	err = common.Or(err, e)
+	_, e = tx.CreateBucketIfNotExists(logMaxBucket)
 	err = common.Or(err, e)
 	_, e = tx.CreateBucketIfNotExists(logCommitBucket)
 	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(segBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(segItemsBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(segHeadsBucket)
+	_, e = tx.CreateBucketIfNotExists(logSnapshotBucket)
 	err = common.Or(err, e)
 	_, e = tx.CreateBucketIfNotExists(snapshotsBucket)
 	err = common.Or(err, e)
@@ -44,721 +44,512 @@ func initBoltBuckets(tx *bolt.Tx) (err error) {
 	return
 }
 
-
 // Store impl.
 type boltStore struct {
 	db *bolt.DB
 }
 
-func NewBoltStore(db *bolt.DB) LogStore {
-	return &boltStore{db}
-}
+//
+// func NewBoltStore(db *bolt.DB) LogStore {
+// return nil
+// // return &boltStore{db}
+// }
 
-func (s *boltStore) Get(id uuid.UUID) (StoredLog, error) {
-	return openBoltLog(s.db, id)
-}
-
-func (s *boltStore) New(id uuid.UUID, config []byte) (StoredLog, error) {
-	return createBoltLog(s.db, id, config)
-}
+// func (s *boltStore) Get(id uuid.UUID) (StoredLog, error) {
+// return openBoltLog(s.db, id)
+// }
+//
+// func (s *boltStore) New(id uuid.UUID, config []byte) (StoredLog, error) {
+// return createBoltLog(s.db, id, config)
+// }
 
 // Parent log abstraction
 type boltLog struct {
-	db  *bolt.DB
-	raw logDat
-}
-
-func createBoltLog(db *bolt.DB, id uuid.UUID, config []byte) (*boltLog, error) {
-	raw, err := createBoltLogDat(db, id, config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &boltLog{db, raw}, nil
-}
-
-func openBoltLog(db *bolt.DB, id uuid.UUID) (*boltLog, error) {
-	raw, ok, err := openBoltLogDat(db, id)
-	if err != nil || !ok {
-		return nil, err
-	}
-
-	return &boltLog{db, raw}, nil
-}
-
-func (b *boltLog) Id() uuid.UUID {
-	return b.raw.id
-}
-
-func (b *boltLog) Active() (StoredSegment, error) {
-	id, err := b.raw.Active(b.db)
-	if err != nil {
-		return nil, err
-	}
-
-	return openBoltSegment(b.db, id)
-}
-
-func (b *boltLog) GetCommit() (int, error) {
-	return b.raw.GetCommit(b.db)
-}
-
-func (b *boltLog) SetCommit(pos int) (int, error) {
-	return b.raw.SetCommit(b.db, pos)
-}
-
-func (b *boltLog) Swap(cur StoredSegment, new StoredSegment) (bool, error) {
-	return b.raw.SwapActive(b.db, cur.(*boltSegment), new.(*boltSegment))
-}
-
-type logDat struct {
+	db *bolt.DB
 	id uuid.UUID
 }
 
-func (d logDat) Write(w scribe.Writer) {
-	w.WriteUUID("id", d.id)
+// func createBoltLog(db *bolt.DB, id uuid.UUID, config []byte) (*boltLog, error) {
+// raw, err := createBoltLogDat(db, id, config)
+// if err != nil {
+// return nil, err
+// }
+//
+// return &boltLog{db, raw}, nil
+// }
+//
+// func openBoltLog(db *bolt.DB, id uuid.UUID) (*boltLog, error) {
+// raw, ok, err := openBoltLogDat(db, id)
+// if err != nil || !ok {
+// return nil, err
+// }
+//
+// return &boltLog{db, raw}, nil
+// }
+
+func (b *boltLog) Id() uuid.UUID {
+	return b.id
 }
 
-func (d logDat) Bytes() []byte {
-	return scribe.Write(d).Bytes()
-}
-
-func readLog(r scribe.Reader) (l logDat, e error) {
-	e = r.ReadUUID("id", &l.id)
-	return
-}
-
-func parseLog(bytes []byte) (l logDat, o bool, e error) {
-	if bytes == nil {
-		return
-	}
-
-	var msg scribe.Message
-	msg, e = scribe.Parse(bytes)
-	if e != nil {
-		return
-	}
-
-	l, e = readLog(msg)
-	return
-}
-
-func openBoltLogDat(db stash.Stash, logId uuid.UUID) (l logDat, o bool, e error) {
-	e = db.Update(func(tx *bolt.Tx) error {
-		if e := initBoltBuckets(tx); e != nil {
-			return e
-		}
-
-		l, o, e = parseLog(tx.Bucket(logBucket).Get(stash.UUID(logId)))
+func (b *boltLog) Min() (m int, e error) {
+	e = b.db.View(func(tx *bolt.Tx) error {
+		m, e = b.minIndex(tx)
 		return e
 	})
 	return
 }
 
-func createBoltLogDat(db *bolt.DB, logId uuid.UUID, config []byte) (log logDat, err error) {
-	err = db.Update(func(tx *bolt.Tx) error {
-		if e := initBoltBuckets(tx); e != nil {
-			return e
-		}
-
-		if _, ok, e := parseLog(tx.Bucket(logBucket).Get(stash.UUID(logId))); ok || e != nil {
-			return common.Or(e, errors.Wrapf(AccessError, "Log already exists [%v]", logId))
-		}
-		return nil
-	})
-	if err != nil {
-		return
-	}
-
-	snapshot, err := createBoltSnapshot(db, NewEventChannel([]Event{}), 0, config)
-	if err != nil {
-		return
-	}
-	defer common.RunIf(func() { snapshot.Delete() })(err)
-
-	seg, err := createBoltSegment(db, snapshot.Id(), -1, -1)
-	if err != nil {
-		return
-	}
-	defer common.RunIf(func() { seg.Delete() })(err)
-
-	log = logDat{logId}
-	err = db.Update(func(tx *bolt.Tx) error {
-		err = tx.Bucket(logBucket).Put(stash.UUID(logId), log.Bytes())
-		if err != nil {
-			return err
-		}
-
-		err = setActiveSegmentId(tx, logId, seg.Id())
-		if err != nil {
-			return err
-		}
-
-		_, err = setCommit(tx, logId, -1)
-		return err
+func (b *boltLog) Max() (m int, e error) {
+	e = b.db.View(func(tx *bolt.Tx) error {
+		m, e = b.maxIndex(tx)
+		return e
 	})
 	return
 }
 
-func deleteLog(db stash.Stash, id uuid.UUID) error {
+func (b *boltLog) Last() (i int, t int, e error) {
+	e = b.db.View(func(tx *bolt.Tx) error {
+		i, t, e = b.last(tx)
+		return e
+	})
+	return
+}
+
+func (b *boltLog) Truncate(from int) error {
+	return b.db.View(func(tx *bolt.Tx) error {
+		_, e := b.truncate(tx, from)
+		return e
+	})
+}
+
+// prune must allow concurrent inserts, appends
+func (b *boltLog) Prune(until int) error {
+	min, err := b.Min()
+	if err != nil {
+		return err
+	}
+
+	for min < until {
+		err := b.db.Update(func(tx *bolt.Tx) (e error) {
+			min, e = b.prune(tx, common.Min(min+256, until))
+			return e
+		})
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (d logDat) GetCommit(db stash.Stash) (pos int, err error) {
-	err = db.View(func(tx *bolt.Tx) error {
-		pos, err = d.getCommit(tx)
-		return err
+func (b *boltLog) Scan(beg int, end int) (i []LogItem, e error) {
+	e = b.db.View(func(tx *bolt.Tx) error {
+		i, e = b.scan(tx, beg, end)
+		return e
 	})
 	return
 }
 
-func (d logDat) SetCommit(db stash.Stash, pos int) (new int, err error) {
-	err = db.Update(func(tx *bolt.Tx) error {
-		new, err = d.setCommit(tx, pos)
-		return err
+func (b *boltLog) Append(evt Event, t int, c uuid.UUID, s int, k int) (i LogItem, e error) {
+	e = b.db.Update(func(tx *bolt.Tx) error {
+		i, e = b.append(tx, evt, t, c, s, k)
+		return e
 	})
 	return
 }
 
-func (d logDat) Active(db stash.Stash) (id uuid.UUID, err error) {
-	err = db.Update(func(tx *bolt.Tx) error {
-		id, err = d.getActiveSegmentId(tx)
-		return err
+func (b *boltLog) Get(index int) (i LogItem, o bool, e error) {
+	e = b.db.View(func(tx *bolt.Tx) error {
+		i, o, e = b.get(tx, index)
+		return e
 	})
 	return
 }
 
-func (d logDat) SwapActive(db stash.Stash, cur *boltSegment, new *boltSegment) (ok bool, err error) {
-	err = db.Update(func(tx *bolt.Tx) error {
-		ok, err = d.swapActive(tx, cur, new)
-		return err
+func (b *boltLog) Insert(batch []LogItem) error {
+	return b.db.Update(func(tx *bolt.Tx) error {
+		return b.insert(tx, batch)
+	})
+}
+
+func (b *boltLog) SnapshotId() (i uuid.UUID, e error) {
+	e = b.db.View(func(tx *bolt.Tx) error {
+		i, e = b.snapshotId(tx)
+		return e
 	})
 	return
 }
 
-func (d logDat) Delete(db stash.Stash) (bool, error) {
-	return false, nil
+func (b *boltLog) Snapshot() (s StoredSnapshot, e error) {
+	var dat snapshotDat
+	e = b.db.View(func(tx *bolt.Tx) error {
+		dat, e = b.rawSnapshot(tx)
+		if e != nil {
+			return e
+		}
+
+		s = &boltSnapshot{b.db, dat}
+		return nil
+	})
+	return
 }
 
-func (d logDat) setActiveSegmentId(tx *bolt.Tx, id uuid.UUID) error {
-	return setActiveSegmentId(tx, d.id, id)
-}
+func (b *boltLog) Compact(until int, ch <-chan Event, size int, config []byte) (StoredSnapshot, error) {
+	i, ok, err := b.Get(until)
+	if err != nil || !ok {
+		return nil, common.Or(err, errors.Wrapf(OutOfBoundsError, "Cannot compact until [%v]. It doesn't exist.", until))
+	}
 
-func (d logDat) getActiveSegmentId(tx *bolt.Tx) (uuid.UUID, error) {
-	s, ok, e := getActiveSegmentId(tx, d.id)
-	if e != nil || !ok {
-		return uuid.UUID{}, common.Or(e, errors.Wrapf(AccessError, "Log [%v] dropped.", d.id))
+	// store the snapshot (done concurrently)
+	s, err := createBoltSnapshot(b.db, i.Index, i.Term, ch, size, config)
+	if err != nil {
+		return nil, err
+	}
+	defer common.RunIf(func() { s.Delete() })(err)
+
+	// swap it.
+	err = b.db.Update(func(tx *bolt.Tx) error {
+		return b.swapSnapshot(tx, s.raw)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// finally, truncate (safe to do concurrently)
+	err = b.Truncate(until)
+	if err != nil {
+		return nil, err
 	}
 
 	return s, nil
 }
 
-func (d logDat) setCommit(tx *bolt.Tx, pos int) (int, error) {
-	return setCommit(tx, d.id, pos)
-}
-
-func (d logDat) getCommit(tx *bolt.Tx) (int, error) {
-	i, ok, e := getCommit(tx, d.id)
-	if e != nil || !ok {
-		return -1, common.Or(e, errors.Wrapf(AccessError, "Log [%v] dropped.", d.id))
-	}
-
-	return i, e
-}
-
-func (d logDat) swapActive(tx *bolt.Tx, cur *boltSegment, new *boltSegment) (bool, error) {
-	id, err := d.getActiveSegmentId(tx)
-	if err != nil {
-		return false, err
-	}
-
-	if id != cur.Id() {
-		return false, nil
-	}
-
-	if new.PrevIndex() < cur.PrevIndex() {
-		return false, errors.Wrapf(SwapError, "New segment [%v, %v] is older than current. [%v]", new.Id(), new.PrevIndex(), cur.PrevTerm())
-	}
-
-	// copy over items
-	curHead, err := cur.raw.head(tx)
-	if err != nil {
-		return false, errors.Wrap(err, "Error retrieving current head position")
-	}
-
-	newHead, err := new.raw.head(tx)
-	if err != nil {
-		return false, errors.Wrap(err, "Error retrieving new head position")
-	}
-
-	if newHead >= curHead {
-		return true, d.setActiveSegmentId(tx, new.Id())
-	}
-
-	copies, err := cur.raw.scan(tx, newHead+1, curHead)
-	if err != nil {
-		return false, errors.Wrapf(err, "Error scanning items [%v,%v]", newHead+1, curHead)
-	}
-
-	_, err = new.raw.insert(tx, copies)
-	if err != nil {
-		return false, errors.Wrapf(err, "Error copying items [%v]", len(copies))
-	}
-
-	err = d.setActiveSegmentId(tx, new.Id())
-	return err == nil, err
-}
-
-//
-// func (d durableSnapshot) Delete(db stash.Stash) error {
-// return deleteDurableSnapshot(db, d.id)
-// }
-//
-func setActiveSegmentId(tx *bolt.Tx, logId uuid.UUID, segmentId uuid.UUID) error {
-	return tx.Bucket(logActiveSegBucket).Put(stash.UUID(logId), stash.UUID(segmentId))
-}
-
-func getActiveSegmentId(tx *bolt.Tx, logId uuid.UUID) (uuid.UUID, bool, error) {
-	cur := tx.Bucket(logActiveSegBucket).Get(stash.UUID(logId))
-	if cur == nil {
-		return uuid.UUID{}, false, nil
-	}
-
-	id, err := uuid.FromBytes(cur)
-	if err != nil {
-		return uuid.UUID{}, false, err
-	}
-
-	return id, true, nil
-}
-
-func deleteActiveSegmentId(tx *bolt.Tx, logId uuid.UUID) error {
-	return tx.Bucket(logActiveSegBucket).Delete(stash.UUID(logId))
-}
-
-func getCommit(tx *bolt.Tx, logId uuid.UUID) (int, bool, error) {
-	val := tx.Bucket(logCommitBucket).Get(stash.UUID(logId))
-	if val == nil {
-		return -1, false, nil
-	}
-
-	i, err := stash.ParseInt(val)
-	if err != nil {
-		return -1, false, err
-	}
-
-	return i, true, nil
-}
-
-func setCommit(tx *bolt.Tx, logId uuid.UUID, pos int) (int, error) {
-	cur, ok, err := getCommit(tx, logId)
-	if err != nil {
-		return 0, err
-	}
-
-	if ok && cur >= pos {
-		return cur, nil
-	}
-
-	return pos, tx.Bucket(logCommitBucket).Put(stash.UUID(logId), stash.Int(pos))
-}
-
-func deleteCommit(tx *bolt.Tx, logId uuid.UUID) error {
-	return tx.Bucket(logCommitBucket).Delete(stash.UUID(logId))
-}
-
-type boltSegment struct {
-	db  *bolt.DB
-	raw segmentDat
-}
-
-func createEmptyBoltSegment(db *bolt.DB, config []byte) (*boltSegment, error) {
-	snapshot, err := createEmptyBoltSnapshot(db, config)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error creating empty snapshot")
-	}
-
-	return createBoltSegment(db, snapshot.Id(), -1, -1)
-}
-
-func createBoltSegment(db *bolt.DB, snapshotId uuid.UUID, prevIndex int, prevTerm int) (*boltSegment, error) {
-	raw, err := createSegment(db, snapshotId, prevIndex, prevTerm)
-	if err != nil {
-		return nil, err
-	}
-
-	return &boltSegment{db, raw}, nil
-}
-
-func openBoltSegment(db *bolt.DB, id uuid.UUID) (*boltSegment, error) {
-	raw, ok, err := openSegment(db, id)
-	if err != nil || !ok {
-		return nil, err
-	}
-
-	return &boltSegment{db, raw}, nil
-}
-
-func (b *boltSegment) Id() uuid.UUID {
-	return b.raw.id
-}
-
-func (b *boltSegment) PrevIndex() int {
-	return b.raw.prevIndex
-}
-
-func (b *boltSegment) PrevTerm() int {
-	return b.raw.prevTerm
-}
-
-func (b *boltSegment) Snapshot() (StoredSnapshot, error) {
-	return openBoltSnapshot(b.db, b.raw.prevSnapshot)
-}
-
-func (b *boltSegment) Head() (int, error) {
-	return b.raw.Head(b.db)
-}
-
-func (b *boltSegment) Get(index int) (LogItem, bool, error) {
-	return b.raw.Get(b.db, index)
-}
-
-func (b *boltSegment) Scan(beg int, end int) ([]LogItem, error) {
-	return b.raw.Scan(b.db, beg, end)
-}
-
-func (b *boltSegment) Append(e Event, t int, s uuid.UUID, seq int, kind int) (int, error) {
-	return b.raw.Append(b.db, e, t, s, seq, kind)
-}
-
-func (b *boltSegment) Insert(batch []LogItem) (int, error) {
-	return b.raw.Insert(b.db, batch)
-}
-
-func (b *boltSegment) Compact(until int, ch <-chan Event, size int, config []byte) (StoredSegment, error) {
-	head, err := b.Head()
-	if err != nil {
-		return nil, err
-	}
-
-	if until < b.raw.prevIndex || until > head {
-		return nil, errors.Wrapf(OutOfBoundsError, "Cannot compact. Until mark [%v] out of bounds", until)
-	}
-
-	snapshot, err := createBoltSnapshot(b.db, ch, size, config)
-	defer common.RunIf(func() { snapshot.Delete() })(err)
-
-	if head-b.raw.prevIndex <= 0 {
-		return createBoltSegment(b.db, snapshot.Id(), b.raw.prevIndex, b.raw.prevTerm)
-	}
-
-	prevItem, found, err := b.Get(until)
-	if err != nil || !found {
-		return nil, common.Or(err, errors.Wrapf(AccessError, "Segment [%v] deleted.  Cannot compact", b.raw.id))
-	}
-
-	seg, err := createBoltSegment(b.db, snapshot.Id(), prevItem.Index, prevItem.Term)
-	if err != nil {
-		return nil, err
-	}
-
-	// perform copy
-	copied, err := b.Scan(until+1, head)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = seg.Insert(copied)
-	return seg, err
-}
-
-func (b *boltSegment) Delete() error {
-	return b.raw.Delete(b.db)
-}
-
-type segmentDat struct {
-	id uuid.UUID
-
-	prevSnapshot uuid.UUID
-	prevIndex    int
-	prevTerm     int
-}
-
-func createSegment(db *bolt.DB, snapshotId uuid.UUID, prevIndex int, prevTerm int) (seg segmentDat, err error) {
-	seg = segmentDat{uuid.NewV1(), snapshotId, prevIndex, prevTerm}
-	err = db.Update(func(tx *bolt.Tx) error {
-		if e := tx.Bucket(segHeadsBucket).Put(seg.Key(), stash.Int(prevIndex)); e != nil {
-			return e
-		}
-
-		if e := tx.Bucket(segBucket).Put(seg.Key(), seg.Bytes()); e != nil {
-			return e
-		}
-
-		return nil
-	})
-	return
-}
-
-func deleteSegment(db stash.Stash, id uuid.UUID) error {
-
-	err := deleteSegmentItems(db, id)
-	if err != nil {
-		return err
-	}
-
-	return db.Update(func(tx *bolt.Tx) (e error) {
-		e = tx.Bucket(segHeadsBucket).Delete(stash.UUID(id))
-		e = common.Or(e, tx.Bucket(segBucket).Delete(stash.UUID(id)))
-		return
-	})
-}
-
-func openSegment(db stash.Stash, id uuid.UUID) (s segmentDat, o bool, e error) {
-	e = db.View(func(tx *bolt.Tx) error {
-		s, o, e = parseSegment(tx.Bucket(segBucket).Get(stash.UUID(id)))
-		return e
-	})
-	return
-}
-
-func parseSegment(bytes []byte) (segmentDat, bool, error) {
-	if bytes == nil {
-		return segmentDat{}, false, nil
-	}
-
-	msg, err := scribe.Parse(bytes)
-	if err != nil {
-		return segmentDat{}, false, errors.Wrapf(err, "Error parsing scribe message")
-	}
-
-	raw, err := readSegment(msg)
-	if err != nil {
-		return segmentDat{}, false, errors.Wrapf(err, "Error reading durable segment")
-	}
-
-	return raw.(segmentDat), true, nil
-}
-
-func readSegment(r scribe.Reader) (interface{}, error) {
-	seg := segmentDat{}
-	err := r.ReadUUID("id", &seg.id)
-	err = common.Or(err, r.ReadUUID("prevSnapshot", &seg.prevSnapshot))
-	err = common.Or(err, r.ReadInt("prevIndex", &seg.prevIndex))
-	err = common.Or(err, r.ReadInt("prevTerm", &seg.prevTerm))
-	return seg, err
-}
-
-func (d segmentDat) Write(w scribe.Writer) {
-	w.WriteUUID("id", d.id)
-	w.WriteUUID("prevSnapshot", d.prevSnapshot)
-	w.WriteInt("prevIndex", d.prevIndex)
-	w.WriteInt("prevTerm", d.prevTerm)
-}
-
-func (d segmentDat) Bytes() []byte {
-	return scribe.Write(d).Bytes()
-}
-
-func (d segmentDat) Key() stash.Key {
-	return stash.UUID(d.id)
-}
-
-// generates a new segment but does NOT edit the existing in any way
-
-// this is NOT commutative, but rather last move wins.
-
-func (d segmentDat) Head(db stash.Stash) (h int, e error) {
-	e = db.View(func(tx *bolt.Tx) error {
-		h, e = d.head(tx)
-		return e
-	})
-	return
-}
-
-func (d segmentDat) Get(db stash.Stash, index int) (i LogItem, o bool, e error) {
-	e = db.View(func(tx *bolt.Tx) error {
-		i, o, e = d.get(tx, index)
-		return e
-	})
-	return
-}
-
-// Scan inclusive of start and end
-func (d segmentDat) Scan(db stash.Stash, start int, end int) (batch []LogItem, err error) {
-	err = db.View(func(tx *bolt.Tx) error {
-		batch, err = d.scan(tx, start, end)
-		return err
-	})
-	return
-}
-
-func (d segmentDat) Append(db stash.Stash, e Event, term int, source uuid.UUID, seq int, kind int) (head int, err error) {
-	err = db.Update(func(tx *bolt.Tx) error {
-		head, err = d.append(tx, e, term, source, seq, kind)
-		return err
-	})
-	return
-}
-
-func (d segmentDat) Insert(db stash.Stash, batch []LogItem) (head int, err error) {
-	err = db.Update(func(tx *bolt.Tx) error {
-		head, err = d.insert(tx, batch)
-		return err
-	})
-	return
-}
-
-func (d segmentDat) Delete(db stash.Stash) error {
-	return deleteSegment(db, d.id)
-}
-
-func (d segmentDat) CopyAndCompact(db stash.Stash, until int, events <-chan Event, num int, config []byte) (seg segmentDat, err error) {
-	return segmentDat{}, nil
-}
-
-func (d segmentDat) head(tx *bolt.Tx) (int, error) {
-	raw := tx.Bucket(segHeadsBucket).Get(d.Key())
+func (b *boltLog) maxIndex(tx *bolt.Tx) (int, error) {
+	raw := tx.Bucket(logMaxBucket).Get(stash.UUID(b.id))
 	if raw == nil {
-		return -1, AccessError
+		return 0, AccessError
 	}
+
 	return stash.ParseInt(raw)
 }
 
-func (d segmentDat) get(tx *bolt.Tx, index int) (LogItem, bool, error) {
-	val := tx.Bucket(segItemsBucket).Get(d.Key().ChildInt(index))
-	if val == nil {
+func (b *boltLog) setMaxIndex(tx *bolt.Tx, pos int) error {
+	return tx.Bucket(logMaxBucket).Put(stash.UUID(b.id), stash.IntBytes(pos))
+}
+
+func (b *boltLog) minIndex(tx *bolt.Tx) (int, error) {
+	raw := tx.Bucket(logMinBucket).Get(stash.UUID(b.id))
+	if raw == nil {
+		return 0, AccessError
+	}
+
+	return stash.ParseInt(raw)
+}
+
+func (b *boltLog) setMinIndex(tx *bolt.Tx, pos int) error {
+	return tx.Bucket(logMinBucket).Put(stash.UUID(b.id), stash.IntBytes(pos))
+}
+
+func (b *boltLog) snapshotId(tx *bolt.Tx) (uuid.UUID, error) {
+	raw := tx.Bucket(logSnapshotBucket).Get(stash.UUID(b.id))
+	if raw == nil {
+		return uuid.UUID{}, AccessError
+	}
+
+	return uuid.FromBytes(raw)
+}
+
+func (b *boltLog) setSnapshotId(tx *bolt.Tx, id uuid.UUID) error {
+	return tx.Bucket(logSnapshotBucket).Put(stash.UUID(b.id), stash.UUID(id))
+}
+
+func (b *boltLog) rawSnapshot(tx *bolt.Tx) (snapshotDat, error) {
+	id, err := b.snapshotId(tx)
+	if err != nil {
+		return snapshotDat{}, err
+	}
+
+	raw, ok, err := openRawBoltSnapshot(tx, id)
+	if err != nil || !ok {
+		return raw, common.Or(err, errors.Wrapf(AccessError, "Snapshot doesn't exist [%v]", id))
+	}
+
+	return raw, nil
+}
+
+func (b *boltLog) swapSnapshot(tx *bolt.Tx, dat snapshotDat) error {
+	cur, e := b.rawSnapshot(tx)
+	if e != nil {
+		return e
+	}
+
+	if cur.maxIndex > dat.maxIndex && cur.maxTerm >= dat.maxTerm {
+		return errors.Wrapf(SwapError, "Cannot swap snapshot [%v] with current [%v].  It is older", dat, cur)
+	}
+
+	return b.setSnapshotId(tx, dat.id)
+}
+
+func (b *boltLog) get(tx *bolt.Tx, index int) (LogItem, bool, error) {
+	raw := tx.Bucket(logItemBucket).Get(stash.UUID(b.id).ChildInt(index))
+	if raw == nil {
 		return LogItem{}, false, nil
 	}
 
-	item, err := ParseItem(val)
+	item, err := ParseItem(raw)
 	if err != nil {
-		return LogItem{}, false, err
+		return LogItem{}, false, errors.Wrapf(FormatError, "Error parsing item [%v]", index)
 	}
 
 	return item, true, nil
 }
 
-func (d segmentDat) scan(tx *bolt.Tx, beg int, end int) (batch []LogItem, err error) {
-	if beg <= d.prevIndex {
-		return nil, errors.Wrapf(OutOfBoundsError, "Start of range [%v] less than minimal recoverable index [%v]", beg, d.prevIndex)
+func (b *boltLog) last(tx *bolt.Tx) (int, int, error) {
+	max, err := b.maxIndex(tx)
+	if err != nil {
+		return 0, 0, err
 	}
 
-	// prove log isn't empty
-	head, err := d.head(tx)
+	if max > -1 {
+		item, ok, err := b.get(tx, max)
+		if err != nil || !ok {
+			return 0, 0, common.Or(err, errors.Wrapf(AccessError, "Item does not exist [%v]", max))
+		}
+
+		return item.Index, item.Term, nil
+	}
+
+	raw, err := b.rawSnapshot(tx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return raw.maxIndex, raw.maxTerm, nil
+}
+
+func (b *boltLog) append(tx *bolt.Tx, e Event, term int, source uuid.UUID, seq int, kind int) (LogItem, error) {
+	max, _, err := b.last(tx)
+	if err != nil {
+		return LogItem{}, err
+	}
+
+	item := NewLogItem(max+1, e, term, source, seq, kind)
+
+	bucket := tx.Bucket(logItemBucket)
+	if err := bucket.Put(stash.UUID(b.id).ChildInt(item.Index).Raw(), item.Bytes()); err != nil {
+		return LogItem{}, errors.Wrapf(err, "Error inserting item [%v]", item)
+	}
+
+	if err := b.setMaxIndex(tx, item.Index); err != nil {
+		return LogItem{}, err
+	}
+
+	return item, nil
+}
+
+func (b *boltLog) insert(tx *bolt.Tx, batch []LogItem) error {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	max, _, err := b.last(tx)
+	if err != nil {
+		return err
+	}
+
+	bucket := tx.Bucket(logItemBucket)
+	for _, i := range batch {
+		if i.Index != max+1 {
+			return errors.Wrapf(OutOfBoundsError, "Illegal index [%v]. Item index is greater than max+1. Head [%v]", i.Index, max)
+		}
+
+		if err := bucket.Put(stash.UUID(b.id).ChildInt(i.Index), i.Bytes()); err != nil {
+			return errors.Wrapf(err, "Error inserting item [%v]", i)
+		}
+
+		max = i.Index
+	}
+
+	return b.setMaxIndex(tx, max)
+}
+
+func (b *boltLog) prune(tx *bolt.Tx, until int) (int, error) {
+	min, err := b.minIndex(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	max, err := b.maxIndex(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	if until < min {
+		return min, nil
+	}
+
+	if min == -1 || max == -1 {
+		return 0, errors.Wrapf(OutOfBoundsError, "Cannot prune empty log")
+	}
+
+	batch, err := b.scan(tx, min, common.Min(until, max))
+	if err != nil {
+		return 0, err
+	}
+
+	bucket := tx.Bucket(logItemBucket)
+	for _, i := range batch {
+		if err := bucket.Delete(stash.UUID(b.id).ChildInt(i.Index)); err != nil {
+			return 0, errors.Wrapf(err, "Error deleting item [%v]", i.Index)
+		}
+	}
+
+	newMin := until + 1
+	newMax := max
+	if until >= max {
+		newMin = -1
+		newMax = -1
+	}
+
+	if err := b.setMinIndex(tx, newMin); err != nil {
+		return 0, errors.Wrapf(err, "Error setting min index [%v]", newMin)
+	}
+
+	if err := b.setMaxIndex(tx, newMax); err != nil {
+		return 0, errors.Wrapf(err, "Error setting min index [%v]", newMax)
+	}
+
+	return newMin, nil
+}
+
+func (b *boltLog) truncate(tx *bolt.Tx, from int) (int, error) {
+	min, err := b.minIndex(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	max, err := b.maxIndex(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	if from > max {
+		return max, nil
+	}
+
+	if min == -1 || max == -1 {
+		return 0, errors.Wrapf(OutOfBoundsError, "Cannot truncate empty log")
+	}
+
+	batch, err := b.scan(tx, common.Min(min, from), max)
+	if err != nil {
+		return 0, err
+	}
+
+	bucket := tx.Bucket(logItemBucket)
+	for _, i := range batch {
+		if err := bucket.Delete(stash.UUID(b.id).ChildInt(i.Index)); err != nil {
+			return 0, errors.Wrapf(err, "Error deleting item [%v]", i.Index)
+		}
+	}
+
+	newMax := from - 1
+	newMin := min
+	if from <= min {
+		newMin = -1
+		newMax = -1
+	}
+
+	if err := b.setMinIndex(tx, newMin); err != nil {
+		return 0, errors.Wrapf(err, "Error setting min index [%v]", newMin)
+	}
+
+	if err := b.setMaxIndex(tx, newMax); err != nil {
+		return 0, errors.Wrapf(err, "Error setting min index [%v]", newMax)
+	}
+
+	return newMax, nil
+}
+
+func (b *boltLog) scan(tx *bolt.Tx, beg int, end int) ([]LogItem, error) {
+	min, err := b.minIndex(tx)
 	if err != nil {
 		return nil, err
 	}
 
-	if head-d.prevIndex == 0 {
+	max, err := b.maxIndex(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if beg < min {
+		return nil, errors.Wrapf(OutOfBoundsError, "Accessed out of bounds [%v]", beg)
+	}
+
+	if min == -1 || max == -1 {
 		return []LogItem{}, nil
 	}
 
-	// prove batch isn't empty
-	end = common.Min(head, end)
-	if end-beg < 0 {
-		return []LogItem{}, nil
-	}
+	end = common.Min(end, max)
 
-	// init the batch
-	cur, cursor, batch := beg, tx.Bucket(segItemsBucket).Cursor(), make([]LogItem, 0, end-beg+1)
-	for k, v := cursor.Seek(d.Key().ChildInt(cur).Raw()); v != nil && cur <= end; k, v = cursor.Next() {
-		if !d.Key().ChildInt(cur).Equals(k) {
-			return nil, errors.Wrapf(AccessError, "Segment deleted [%v]", d.id) // this shouldn't be possible.
-		}
-
+	cur, cursor, batch := beg, tx.Bucket(logItemBucket).Cursor(), make([]LogItem, 0, end-beg+1)
+	for _, v := cursor.Seek(stash.UUID(b.id).ChildInt(cur).Raw()); v != nil && cur <= end; _, v = cursor.Next() {
 		i, e := ParseItem(v)
 		if e != nil {
-			return nil, e
+			return nil, errors.Wrapf(FormatError, "Error parsing item [%v]", cur)
 		}
 
 		batch = append(batch, i)
 		cur++
 	}
 
-	// should NOT be possible to get a batch smaller than end-beg+1)
 	return batch, nil
 }
 
-func (d segmentDat) setHead(tx *bolt.Tx, pos int) error {
-	cur, err := d.head(tx)
-	if err != nil {
-		return err
-	}
+// func openBoltLogDat(db stash.Stash, logId uuid.UUID) (l logDat, o bool, e error) {
+// e = db.Update(func(tx *bolt.Tx) error {
+// if e := initBoltBuckets(tx); e != nil {
+// return e
+// }
+//
+// l, o, e = parseLog(tx.Bucket(logBucket).Get(stash.UUID(logId)))
+// return e
+// })
+// return
+// }
+//
+// func createBoltLogDat(db *bolt.DB, logId uuid.UUID, config []byte) (log logDat, err error) {
+// err = db.Update(func(tx *bolt.Tx) error {
+// if e := initBoltBuckets(tx); e != nil {
+// return e
+// }
+//
+// if _, ok, e := parseLog(tx.Bucket(logBucket).Get(stash.UUID(logId))); ok || e != nil {
+// return common.Or(e, errors.Wrapf(AccessError, "Log already exists [%v]", logId))
+// }
+// return nil
+// })
+// if err != nil {
+// return
+// }
+//
+// snapshot, err := createBoltSnapshot(db, NewEventChannel([]Event{}), 0, config)
+// if err != nil {
+// return
+// }
+// defer common.RunIf(func() { snapshot.Delete() })(err)
+// return
+// }
 
-	if cur >= pos {
-		return nil
-	}
-
-	return tx.Bucket(segHeadsBucket).Put(d.Key(), stash.IntBytes(pos))
+func deleteLog(db stash.Stash, id uuid.UUID) error {
+	return nil
 }
 
-func (d segmentDat) append(tx *bolt.Tx, e Event, term int, source uuid.UUID, seq int, kind int) (int, error) {
-	head, err := d.head(tx)
-	if err != nil {
-		return 0, err
-	}
-
-	index := head + 1
-	item := NewLogItem(index, e, term, source, seq, kind)
-	bucket := tx.Bucket(segItemsBucket)
-	if err := bucket.Put(d.Key().ChildInt(index).Raw(), item.Bytes()); err != nil {
-		return index, err
-	}
-
-	if err := d.setHead(tx, index); err != nil {
-		return 0, err
-	}
-
-	return index, nil
-}
-
-func (d segmentDat) insert(tx *bolt.Tx, batch []LogItem) (int, error) {
-
-	head, err := d.head(tx)
-	if err != nil {
-		return 0, err
-	}
-
-	if len(batch) == 0 {
-		return head, nil
-	}
-
-	bucket := tx.Bucket(segItemsBucket)
-
-	prev := d.prevIndex
-	for _, i := range batch {
-		if i.Index > head+1 {
-			return 0, errors.Wrapf(OutOfBoundsError, "Illegal index [%v]. Item index is greater than head+1. Head [%v]", i.Index, head)
-		}
-
-		if prev > d.prevIndex && i.Index != prev+1 {
-			return 0, errors.Wrapf(OutOfBoundsError, "Illegal index [%v]. Items must be inserted contiguously. Prev [%v]", i.Index, prev)
-		}
-
-		if err := bucket.Put(d.Key().ChildInt(i.Index).Raw(), i.Bytes()); err != nil {
-			return 0, err
-		}
-
-		prev = i.Index
-		if i.Index > head {
-			head = i.Index
-		}
-	}
-
-	if err := d.setHead(tx, head); err != nil {
-		return 0, err
-	}
-
-	return head, nil
-}
-
-func deleteSegmentItems(db stash.Stash, id uuid.UUID) (err error) {
+func deleteLogItems(db stash.Stash, id uuid.UUID) (err error) {
 	prefix := stash.UUID(id)
 
 	for contd := true; contd; {
 		err = db.Update(func(tx *bolt.Tx) error {
-			events := tx.Bucket(segItemsBucket)
+			events := tx.Bucket(logItemBucket)
 			cursor := events.Cursor()
 
 			dead := make([][]byte, 0, 1024)
@@ -794,16 +585,15 @@ type boltSnapshot struct {
 }
 
 func createEmptyBoltSnapshot(db *bolt.DB, config []byte) (*boltSnapshot, error) {
-	return createBoltSnapshot(db, NewEventChannel([]Event{}), 0, config)
+	return createBoltSnapshot(db, -1, -1, NewEventChannel([]Event{}), 0, config)
 }
 
-func createBoltSnapshot(db *bolt.DB, ch <-chan Event, size int, config []byte) (*boltSnapshot, error) {
-	raw := snapshotDat{uuid.NewV1(), size, config}
+func createBoltSnapshot(db *bolt.DB, lastIndex int, lastTerm int, ch <-chan Event, size int, config []byte) (*boltSnapshot, error) {
+	raw := snapshotDat{uuid.NewV1(), lastIndex, lastTerm, size, config}
 	err := storeSnapshotEvents(db, raw.id, size, ch)
 	if err != nil {
 		return nil, err
 	}
-	defer common.RunIf(func() { raw.Delete(db) })(err)
 
 	err = db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(snapshotsBucket).Put(raw.Key(), raw.Bytes())
@@ -831,6 +621,10 @@ func openBoltSnapshot(db *bolt.DB, id uuid.UUID) (*boltSnapshot, error) {
 	return &boltSnapshot{db, raw}, nil
 }
 
+func openRawBoltSnapshot(tx *bolt.Tx, id uuid.UUID) (snapshotDat, bool, error) {
+	return parseSnapshot(tx.Bucket(snapshotsBucket).Get(stash.UUID(id)))
+}
+
 func (b *boltSnapshot) Id() uuid.UUID {
 	return b.raw.id
 }
@@ -843,25 +637,70 @@ func (b *boltSnapshot) Config() []byte {
 	return b.raw.config
 }
 
-func (b *boltSnapshot) Scan(beg int, end int) ([]Event, error) {
-	return b.raw.Scan(b.db, beg, end)
+func (b *boltSnapshot) LastIndex() int {
+	return b.raw.maxIndex
+}
+
+func (b *boltSnapshot) LastTerm() int {
+	return b.raw.maxTerm
+}
+
+func (b *boltSnapshot) Key() stash.Key {
+	return stash.UUID(b.raw.id)
 }
 
 func (b *boltSnapshot) Delete() error {
-	return b.raw.Delete(b.db)
+	err := b.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(snapshotsBucket).Delete(b.Key())
+	})
+
+	return common.Or(err, deleteSnapshotEvents(b.db, b.Id()))
+}
+
+func (b *boltSnapshot) Scan(start int, end int) (batch []Event, err error) {
+	batch = make([]Event, 0, end-start+1)
+	err = b.db.View(func(tx *bolt.Tx) error {
+		cursor := tx.Bucket(snapshotEventsBucket).Cursor()
+
+		var cur int
+		end = common.Min(end, b.Size()-1)
+		cur = start
+		for k, v := cursor.Seek(b.Key().ChildInt(start).Raw()); v != nil; k, v = cursor.Next() {
+			if cur > end {
+				return nil
+			}
+
+			if !b.Key().ChildInt(cur).Equals(k) {
+				return errors.Wrapf(AccessError, "Snapshot deleted [%v]", b.Id()) // already deleted
+			}
+
+			batch = append(batch, Event(v))
+			cur++
+		}
+		return nil
+	})
+
+	if len(batch) != end-start+1 {
+		return nil, errors.Wrapf(AccessError, "Snapshot deleted [%v]", b.Id()) // already deleted
+	}
+	return
 }
 
 // pure data impl.
 type snapshotDat struct {
-	id     uuid.UUID
-	size   int
-	config []byte
+	id       uuid.UUID
+	maxIndex int
+	maxTerm  int
+	size     int
+	config   []byte
 }
 
 func readSnapshot(r scribe.Reader) (interface{}, error) {
 	var ret snapshotDat
 	var err error
 	err = r.ReadUUID("id", &ret.id)
+	err = r.ReadInt("maxIndex", &ret.maxIndex)
+	err = r.ReadInt("maxTerm", &ret.maxTerm)
 	err = r.ReadInt("size", &ret.size)
 	err = r.ReadBytes("config", &ret.config)
 	return ret, err
@@ -887,6 +726,8 @@ func parseSnapshot(bytes []byte) (snapshotDat, bool, error) {
 
 func (d snapshotDat) Write(w scribe.Writer) {
 	w.WriteUUID("id", d.id)
+	w.WriteInt("maxIndex", d.maxIndex)
+	w.WriteInt("maxTerm", d.maxTerm)
 	w.WriteInt("size", d.size)
 	w.WriteBytes("config", d.config)
 }
@@ -899,50 +740,8 @@ func (d snapshotDat) String() string {
 	return fmt.Sprintf("Snapshot(%v)", d.id.String()[0:8])
 }
 
-func (d snapshotDat) Config() []byte {
-	return d.config
-}
-
 func (d snapshotDat) Key() stash.Key {
 	return stash.UUID(d.id)
-}
-
-func (d snapshotDat) Delete(db *bolt.DB) error {
-	// delete the ref first.
-	err := db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(snapshotsBucket).Delete(stash.UUID(d.id))
-	})
-
-	return common.Or(err, deleteSnapshotEvents(db, d.id))
-}
-
-func (d snapshotDat) Scan(db *bolt.DB, start int, end int) (batch []Event, err error) {
-	batch = make([]Event, 0, end-start+1)
-	err = db.View(func(tx *bolt.Tx) error {
-		cursor := tx.Bucket(snapshotEventsBucket).Cursor()
-
-		var cur int
-		end = common.Min(end, d.size-1)
-		cur = start
-		for k, v := cursor.Seek(d.Key().ChildInt(start).Raw()); v != nil; k, v = cursor.Next() {
-			if cur > end {
-				return nil
-			}
-
-			if !d.Key().ChildInt(cur).Equals(k) {
-				return errors.Wrapf(AccessError, "Snapshot deleted [%v]", d.id) // already deleted
-			}
-
-			batch = append(batch, Event(v))
-			cur++
-		}
-		return nil
-	})
-
-	if len(batch) != end-start+1 {
-		return nil, errors.Wrapf(AccessError, "Snapshot deleted [%v]", d.id) // already deleted
-	}
-	return
 }
 
 func storeSnapshotEvents(db *bolt.DB, id uuid.UUID, num int, ch <-chan Event) (err error) {
@@ -959,8 +758,7 @@ func storeSnapshotEvents(db *bolt.DB, id uuid.UUID, num int, ch <-chan Event) (e
 			chunk = append(chunk, e)
 		}
 
-		err := storeSnapshotSegment(db, id, chunkStart, chunk)
-		if err != nil {
+		if err := storeSnapshotSegment(db, id, chunkStart, chunk); err != nil {
 			return err
 		}
 	}

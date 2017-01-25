@@ -36,6 +36,9 @@ type replica struct {
 	// the peer representing the local instance
 	Self peer
 
+	// the current cluster configuration
+	Config roster
+
 	// the core database
 	Db stash.Stash
 
@@ -44,10 +47,6 @@ type replica struct {
 
 	// the current term.
 	term term
-
-	// the other peers. (currently static list)
-	cluster     []peer
-	clusterLock *sync.RWMutex
 
 	// the current seq position
 	seq concurrent.AtomicCounter
@@ -107,14 +106,17 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 		return nil, errors.Wrapf(err, "Host")
 	}
 
-	store.New(id, []byte{})
-
+	if raw == nil {
+		raw, err = store.New(id, []byte{})
+		if err != nil {
+			return nil, errors.Wrapf(err, "Host")
+		}
+	}
 
 	log, err := openEventLog(logger, raw)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
 	}
-
 
 	r := &replica{
 		Ctx:             ctx,
@@ -151,47 +153,50 @@ func (r *replica) Close() error {
 func (h *replica) start() error {
 
 	// retrieve the term from the durable store
-	term, err := h.terms.Get(h.Self.id)
+	term, err := h.terms.Get(h.Self.Id)
 	if err != nil {
 		return err
 	}
 
 	// set the term from durable storage.
-	h.Term(term.Num, term.Leader, term.VotedFor)
-
-	// retrieve the latest snapshot
-	snapshot, err := h.Log.Snapshot()
-	if err != nil {
-		return errors.Wrapf(err, "Error retrieving latest snapshot for peer [%v]", h.Self.id)
-	}
-
-	// set the cluster from durable config.
-	peers, err := snapshot.Config()
-	if err != nil {
-		return errors.Wrap(err, "error parsing config from snapshot")
-	}
-
-	h.SetCluster(peers)
-
-	// start listening to the log for configuration changes.
-	l, err := h.Log.ListenAppends(snapshot.PrevIndex+1, 256)
-	if err != nil {
-		return errors.Wrap(err, "Error registering listener")
+	if err := h.Term(term.Num, term.Leader, term.VotedFor); err != nil {
+		return err
 	}
 
 	go func() {
-		defer l.Close()
-
-		for i, e := l.Next(); e == nil; i, e = l.Next() {
-			if i.Kind != Config {
-				peers, err := parsePeers(i.Event, []peer{h.Self})
-				if err != nil {
-					h.Logger.Error("Error parsing configuration [%v]", peers)
-					continue
-				}
-
-				h.SetCluster(peers)
-			}
+		for {
+			// snapshot, err := h.Log.Snapshot()
+			// if err != nil {
+				// return
+			// }
+//
+			// peers, err := parsePeers(snapshot.Config(), []peer{h.Self})
+			// if err != nil {
+				// return
+			// }
+//
+			// h.Config.Update(peers)
+//
+			// l, err := h.Log.ListenAppends(snapshot.PrevIndex+1, 256)
+			// if err != nil {
+				// return
+			// }
+//
+			// for i, e := l.Next(); e == nil; i, e = l.Next() {
+				// if i.Kind != Config {
+					// peers, err := parsePeers(i.Event, []peer{h.Self})
+					// if err != nil {
+						// h.Logger.Error("Error parsing configuration [%v]", peers)
+						// continue
+					// }
+//
+					// h.Config.Update(peers)
+				// }
+			// }
+//
+			// if cause := errors.Cause(err); cause == ClosedError {
+				// return
+			// }
 		}
 	}()
 
@@ -219,31 +224,23 @@ func (h *replica) CurrentTerm() term {
 }
 
 func (h *replica) Cluster() []peer {
-	h.clusterLock.RLock()
-	defer h.clusterLock.RUnlock()
-	return append([]peer{}, h.cluster...)
-}
-
-func (h *replica) SetCluster(peers []peer) {
-	h.clusterLock.Lock()
-	defer h.clusterLock.Unlock()
-	h.cluster = peers
+	return h.Config.Get()
 }
 
 func (h *replica) Peer(id uuid.UUID) (peer, bool) {
 	for _, p := range h.Cluster() {
-		if p.id == id {
+		if p.Id == id {
 			return p, true
 		}
 	}
 	return peer{}, false
 }
 
-func (h *replica) Peers() []peer {
+func (h *replica) Others() []peer {
 	cluster := h.Cluster()
 	others := make([]peer, 0, len(cluster))
 	for _, p := range cluster {
-		if p.id != h.Self.id {
+		if p.Id != h.Self.Id {
 			others = append(others, p)
 		}
 	}
@@ -255,7 +252,7 @@ func (h *replica) Majority() int {
 }
 
 func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
-	peers := h.Peers()
+	peers := h.Others()
 
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
@@ -369,7 +366,7 @@ func (h *replica) Append(event Event, kind int) (LogItem, error) {
 	seq := int(h.seq.Inc())
 
 	for atmpt := 0; atmpt < 10; atmpt++ {
-		item, err := h.LocalAppend(event, h.Self.id, seq, kind)
+		item, err := h.LocalAppend(event, h.Self.Id, seq, kind)
 		if err == nil {
 			return item, nil
 		}

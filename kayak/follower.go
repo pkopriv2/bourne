@@ -286,5 +286,5 @@ func newLeaderConnectionPool(r *replica) net.ConnectionPool {
 		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.Leader, r.Cluster()))
 	}
 
-	return net.NewConnectionPool("tcp", leader.addr, 10, 2*time.Second)
+	return leader.NewPool(r.Ctx)
 }
