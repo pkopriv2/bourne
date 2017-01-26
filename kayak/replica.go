@@ -78,6 +78,9 @@ type replica struct {
 	// append requests (from local state machine)
 	LocalAppends chan machineAppend
 
+	// append requests (from local state machine)
+	RosterUpdates chan updateRoster
+
 	// closing utilities
 	closed chan struct{}
 	closer chan struct{}
@@ -135,6 +138,7 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 		RemoteAppends:   make(chan machineAppend),
 		LocalAppends:    make(chan machineAppend),
 		Snapshots:       make(chan installSnapshot),
+		RosterUpdates:   make(chan updateRoster),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
 		RequestTimeout:  10 * time.Second,
 		closed:          make(chan struct{}),
@@ -230,7 +234,7 @@ func (h *replica) CurrentTerm() term {
 }
 
 func (h *replica) Cluster() []peer {
-	all, _ :=  h.Roster.Get()
+	all, _ := h.Roster.Get()
 	return all
 }
 
@@ -275,6 +279,33 @@ func (h *replica) Broadcast(fn func(c *client) response) <-chan response {
 		}(p)
 	}
 	return ret
+}
+
+func (h *replica) AddPeer(peer peer) (bool, error) {
+	return h.UpdateRoster(peer, true)
+}
+
+func (h *replica) DelPeer(peer peer) (bool, error) {
+	return h.UpdateRoster(peer, false)
+}
+
+func (h *replica) UpdateRoster(peer peer, join bool) (bool, error) {
+	req := updateRoster{peer, join, make(chan struct {
+			bool
+			error
+		}, 1)}
+
+	select {
+	case <-h.closed:
+		return false, ClosedError
+	case h.RosterUpdates <- req:
+		select {
+		case <-h.closed:
+			return false, ClosedError
+		case r := <-req.ack:
+			return r.bool, r.error
+		}
+	}
 }
 
 func (h *replica) InstallSnapshot(snapshotId uuid.UUID, id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, prevConfig []byte, offset int, events []Event) (response, error) {
@@ -370,6 +401,7 @@ func (h *replica) LocalAppend(event Event, source uuid.UUID, seq int, kind int) 
 }
 
 func (h *replica) Append(event Event, kind int) (LogItem, error) {
+	// return h.LocalAppend(event, h.Self.Id, 0, kind)
 	seq := int(h.seq.Inc())
 
 	for atmpt := 0; atmpt < 10; atmpt++ {
@@ -466,6 +498,29 @@ type installSnapshot struct {
 
 func (a installSnapshot) Reply(term int, success bool) {
 	a.ack <- response{term, success}
+}
+
+type updateRoster struct {
+	peer peer
+	join bool
+	ack  chan struct {
+		bool
+		error
+	}
+}
+
+func (a updateRoster) Fail(err error) {
+	a.ack <- struct {
+		bool
+		error
+	}{false, err}
+}
+
+func (a updateRoster) Reply(success bool) {
+	a.ack <- struct {
+		bool
+		error
+	}{success, nil}
 }
 
 // Client append request.  Requests are put onto the internal member

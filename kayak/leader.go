@@ -109,6 +109,20 @@ func (l *leader) start() {
 		}
 	}()
 
+	// Roster routine
+	go func() {
+		for {
+			select {
+			case <-l.replica.closed:
+				return
+			case <-l.closed:
+				return
+			case roster := <-l.replica.RosterUpdates:
+				l.handleRosterUpdate(roster)
+			}
+		}
+	}()
+
 	// Main routine
 	go func() {
 		for {
@@ -165,6 +179,23 @@ func (c *leader) handleLocalAppend(append machineAppend) {
 
 func (c *leader) handleInstallSnapshot(snapshot installSnapshot) {
 	snapshot.Reply(c.term.Num, false)
+}
+
+func (c *leader) handleRosterUpdate(update updateRoster) {
+	// TODO: start log syncer before adding config change.
+
+	all := c.replica.Cluster()
+	if update.join {
+		all = addPeer(all, update.peer)
+	} else {
+		all = delPeer(all, update.peer)
+	}
+
+	if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
+		update.Fail(e)
+	} else {
+		update.Reply(true)
+	}
 }
 
 func (c *leader) handleRequestVote(vote requestVote) {

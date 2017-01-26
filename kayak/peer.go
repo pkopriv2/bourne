@@ -45,11 +45,54 @@ func (c roster) Close() {
 	c.ver.Close()
 }
 
+func hasPeer(peers []peer, p peer) bool {
+	for _, cur := range peers {
+		if cur.Id == p.Id {
+			return true
+		}
+	}
+	return false
+}
+
+func findPeer(peers []peer, p peer) int {
+	for i, cur := range peers {
+		if cur.Id == p.Id {
+			return i
+		}
+	}
+	return -1
+}
+
+func addPeer(cur []peer, p peer) []peer {
+	if hasPeer(cur, p) {
+		return cur
+	}
+
+	return append(cur, p)
+}
+
+func delPeer(cur []peer, p peer) []peer {
+	index := findPeer(cur, p)
+	if index == -1 {
+		return cur
+	}
+
+	return append(cur[:index], cur[index+1:]...)
+}
+
+func clusterBytes(cluster peers) []byte {
+	return cluster.Bytes()
+}
+
 // replicated configuration
 type peers []peer
 
 func (p peers) Write(w scribe.Writer) {
 	w.WriteMessage("peers", p)
+}
+
+func (p peers) Bytes() []byte {
+	return scribe.Write(p).Bytes()
 }
 
 func readPeers(r scribe.Reader) (p []peer, e error) {

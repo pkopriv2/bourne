@@ -10,16 +10,20 @@ import (
 
 // server endpoints
 const (
-	actReplicate   = "kayak.replica.replicate"
-	actRequestVote = "kayak.replica.requestVote"
-	actAppend      = "kayak.client.append"
+	actReplicate       = "kayak.replica.replicate"
+	actRequestVote     = "kayak.replica.requestVote"
+	actAppend          = "kayak.replica.append"
+	actInstallSnapshot = "kayak.replica.snapshot"
+	actUpdateRoster    = "kayak.replica.roster"
 )
 
 // Meta messages
 var (
-	metaReplicate   = serverNewMeta(actReplicate)
-	metaRequestVote = serverNewMeta(actRequestVote)
-	metaAppend      = serverNewMeta(actAppend)
+	metaReplicate       = serverNewMeta(actReplicate)
+	metaRequestVote     = serverNewMeta(actRequestVote)
+	metaAppend          = serverNewMeta(actAppend)
+	metaInstallSnapshot = serverNewMeta(actInstallSnapshot)
+	metaUpdateRoster    = serverNewMeta(actUpdateRoster)
 )
 
 type server struct {
@@ -293,6 +297,10 @@ func (a installSnapshotRequest) Write(w scribe.Writer) {
 	w.WriteBool("done", a.done)
 }
 
+func (r installSnapshotRequest) Request() net.Request {
+	return net.NewRequest(metaInstallSnapshot, scribe.Write(r))
+}
+
 func readIntallSnapshotRequest(r scribe.Reader) (ret installSnapshotRequest, err error) {
 	err = common.Or(err, r.ReadUUID("snapshotId", &ret.snapshotId))
 	err = common.Or(err, r.ReadUUID("leaderId", &ret.leaderId))
@@ -307,20 +315,21 @@ func readIntallSnapshotRequest(r scribe.Reader) (ret installSnapshotRequest, err
 }
 
 type updateRosterRequest struct {
-	serverId   uuid.UUID
-	serverAddr uuid.UUID
-	join       bool
+	peer peer
+	join bool
+}
+
+func (u updateRosterRequest) Request() net.Request {
+	return net.NewRequest(metaUpdateRoster, scribe.Write(u))
 }
 
 func (u updateRosterRequest) Write(w scribe.Writer) {
-	w.WriteUUID("serverId", u.serverId)
-	w.WriteUUID("serverAddr", u.serverAddr)
+	w.WriteMessage("peer", u.peer)
 	w.WriteBool("join", u.join)
 }
 
 func readUpdateRosterRequest(r scribe.Reader) (ret updateRosterRequest, err error) {
-	err = common.Or(err, r.ReadUUID("serverId", &ret.serverId))
-	err = common.Or(err, r.ReadUUID("serverAddr", &ret.serverAddr))
+	err = common.Or(err, r.ParseMessage("peer", &ret.peer, peerParser))
 	err = common.Or(err, r.ReadBool("join", &ret.join))
 	return
 }

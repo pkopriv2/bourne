@@ -18,6 +18,15 @@ func (c *client) Close() error {
 	return c.raw.Close()
 }
 
+// func (c *client) UpdateRoster(peer peer, join bool) (bool, error) {
+	// resp, err := c.raw.Send(replicateRequest{id, term, batch, logIndex, logTerm, commit}.Request())
+	// if err != nil {
+		// return response{}, errors.Wrapf(err, "Error sending replicate [prevIndex=%v,term=%v,num=%v]", logIndex, logTerm, len(batch))
+	// }
+//
+	// return readResponseResponse(resp)
+// }
+
 func (c *client) Replicate(id uuid.UUID, term int, logIndex int, logTerm int, batch []LogItem, commit int) (response, error) {
 	resp, err := c.raw.Send(replicateRequest{id, term, batch, logIndex, logTerm, commit}.Request())
 	if err != nil {

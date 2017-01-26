@@ -25,19 +25,12 @@ func TestHost_Close(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
-//
-// // func TestHost_Cluster_ConvergeSinglePeers(t *testing.T) {
-// // ctx := common.NewContext(common.NewEmptyConfig())
-// // defer ctx.Close()
-// // cluster := StartTestCluster(ctx, 2)
-// // assert.NotNil(t, Converge(cluster))
-// // }
-//
+
 // func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// defer ctx.Close()
-// cluster := StartTestCluster(ctx, 2)
-// assert.NotNil(t, Converge(cluster))
+	// ctx := common.NewContext(common.NewEmptyConfig())
+	// defer ctx.Close()
+	// cluster := StartTestCluster(ctx, 2)
+	// assert.NotNil(t, Converge(cluster))
 // }
 //
 // func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {

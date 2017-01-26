@@ -120,6 +120,20 @@ func (c *follower) start() {
 				}
 			}
 		}()
+
+		// Roster routine
+		go func() {
+			for {
+				select {
+				case <-c.replica.closed:
+					return
+				case <-c.closed:
+					return
+				case roster := <-c.replica.RosterUpdates:
+					c.handleRosterUpdate(roster)
+				}
+			}
+		}()
 	}
 
 	// Main routine
@@ -174,6 +188,31 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 
 func (c *follower) handleRemoteAppend(append machineAppend) {
 	append.Fail(NotLeaderError)
+}
+
+func (c *follower) handleRosterUpdate(update updateRoster) {
+	timeout := c.replica.RequestTimeout / 2
+
+	err := c.proxyPool.SubmitTimeout(timeout, func() {
+		cl := c.clientPool.TakeTimeout(timeout)
+		if cl == nil {
+			update.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
+			return
+		}
+
+		// i, e := newClient(cl).Append(append.Event, append.Source, append.Seq, append.Kind)
+		// if e == nil {
+			// c.clientPool.Return(cl)
+			// update.Reply(true)
+		// } else {
+			// c.clientPool.Fail(cl)
+		// }
+//
+		// append.Return(i, e)
+	})
+	if err != nil {
+		update.Fail(err)
+	}
 }
 
 func (c *follower) handleInstallSnapshot(snapshot installSnapshot) {
