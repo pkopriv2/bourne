@@ -15,9 +15,10 @@ type roster struct {
 	ver *ref
 }
 
-func (c roster) Wait(next int) (int, []peer, bool) {
-	ver, ok := c.ver.WaitForChange(next)
-	return ver, c.Get(), ok
+func (c roster) Wait(next int) ([]peer, int, bool) {
+	_, ok := c.ver.WaitForChange(next)
+	peers, ver := c.Get()
+	return peers, ver, ok
 }
 
 func (c roster) Notify() {
@@ -32,9 +33,9 @@ func (c roster) Update(peers []peer) {
 }
 
 // not taking copy as it is assumed that array is immutable
-func (c roster) Get() (peers []peer) {
+func (c roster) Get() (peers []peer, ver int) {
 	c.ver.Update(func(cur int) int {
-		peers = c.raw
+		peers, ver = c.raw, cur
 		return cur
 	})
 	return

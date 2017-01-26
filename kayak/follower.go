@@ -9,6 +9,8 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
+// Each spawner is responsible for accepting a repica and starting the
+// the corresponding machine.
 type followerSpawner struct {
 	in        chan *replica
 	candidate chan<- *replica
@@ -195,15 +197,15 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
-	max, err := c.replica.Log.Max()
+	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
 		vote.reply(c.replica.term.Num, false)
 		return
 	}
 
-	c.logger.Debug("Current log max: %v", max)
+	c.logger.Debug("Current log max: %v", maxIndex)
 	if vote.term == c.replica.term.Num {
-		if c.replica.term.VotedFor == nil && vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
+		if c.replica.term.VotedFor == nil && vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 			c.logger.Debug("Voting for candidate [%v]", vote.id)
 			vote.reply(c.replica.term.Num, true)
 			c.replica.Term(c.replica.term.Num, nil, &vote.id) // correct?
@@ -218,7 +220,7 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
+	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.logger.Debug("Voting for candidate [%v]", vote.id)
 		vote.reply(vote.term, true)
 		c.replica.Term(vote.term, nil, &vote.id)
@@ -248,7 +250,7 @@ func (c *follower) handleReplication(append replicateEvents) {
 
 	// if this is a heartbeat, bail out
 	c.replica.Log.Commit(append.commit)
-	if append.prevLogIndex == -1 && len(append.items) == 0 {
+	if len(append.items) == 0 {
 		append.reply(append.term, true)
 		return
 	}
@@ -257,17 +259,17 @@ func (c *follower) handleReplication(append replicateEvents) {
 
 	// consistency check
 	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); !ok || err != nil {
-		// head := c.replica.Log.Head()
-		// act, _, _ := c.replica.Log.Get(append.prevLogIndex)
-		// prev := c.replica.Log.Active().raw.prevIndex
-		//
-		// c.logger.Error("Consistency check failed(%v): %v, Actual: %v, Head: %v, Prev: %v", err, append, act, head, prev)
+		c.logger.Error("Consistency check failed(%v)", err)
+
+		// FIXME: This will cause anyone listening to head to
+		// have to recreate state!
+		c.replica.Log.Truncate(append.prevLogIndex + 1)
 		append.reply(append.term, false)
 		return
 	}
 
 	// insert items.
-	if _, err := c.replica.Log.Insert(append.items); err != nil {
+	if err := c.replica.Log.Insert(append.items); err != nil {
 		c.logger.Error("Error inserting batch: %v", err)
 		append.reply(append.term, false)
 		return

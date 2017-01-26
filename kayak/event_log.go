@@ -28,29 +28,18 @@ type eventLog struct {
 }
 
 func openEventLog(logger common.Logger, log StoredLog) (*eventLog, error) {
-	return nil, nil
-	// cur, err := log.Active()
-	// if err != nil {
-	// return nil, errors.Wrapf(err, "Unable to retrieve latest segment for log [%v]", log.Id())
-	// }
-	//
-	// commit, err := log.GetCommit()
-	// if err != nil {
-	// return nil, errors.Wrapf(err, "Unable to retrieve commit for log [%v]", log.Id())
-	// }
-	//
-	// head, err := cur.Head()
-	// if err != nil {
-	// return nil, errors.Wrapf(err, "Unable to retrieve head position for segment [%v]", log.Id())
-	// }
-	//
-	// return &eventLog{
-	// logger: logger.Fmt("EventLog"),
-	// active: cur,
-	// head:   newRef(head),
-	// commit: newRef(commit),
-	// closed: make(chan struct{}),
-	// closer: make(chan struct{}, 1)}, nil
+	head, _, err := log.Last()
+	if err != nil {
+		return nil, errors.Wrapf(err, "Unable to retrieve head position for segment [%v]", log.Id())
+	}
+
+	return &eventLog{
+		logger: logger.Fmt("EventLog"),
+		raw:    log,
+		head:   newRef(head),
+		commit: newRef(-1),
+		closed: make(chan struct{}),
+		closer: make(chan struct{}, 1)}, nil
 }
 
 func (e *eventLog) Close() error {
@@ -84,92 +73,93 @@ func (e *eventLog) Committed() (pos int) {
 }
 
 func (e *eventLog) Commit(pos int) (new int, err error) {
+	var head int
 	new = e.commit.Update(func(cur int) int {
-		if cur >= pos {
+		head, _, err = e.raw.Last()
+		if err != nil {
 			return cur
 		}
 
+		return common.Max(cur, common.Min(pos, head))
+	})
+	return
+}
+
+func (e *eventLog) Get(index int) (LogItem, bool, error) {
+	return e.raw.Get(index)
+}
+
+func (e *eventLog) Scan(start int, end int) ([]LogItem, error) {
+	return e.raw.Scan(start, end)
+}
+
+func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind int) (LogItem, error) {
+	item, err := e.raw.Append(evt, term, source, seq, kind)
+	if err != nil {
+		return item, err
+	}
+
+	e.head.Update(func(cur int) int {
+		return common.Max(cur, item.Index)
+	})
+
+	return item, nil
+}
+
+func (e *eventLog) Insert(batch []LogItem) error {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	if err := e.raw.Insert(batch); err != nil {
+		return err
+	}
+
+	e.head.Update(func(cur int) int {
+		return common.Max(cur, batch[len(batch)-1].Index)
+	})
+	return nil
+}
+
+func (e *eventLog) Truncate(from int) (err error) {
+	e.head.Update(func(cur int) int {
+		if from >= cur {
+			return cur
+		}
+
+		err = e.raw.Truncate(from)
 		if err != nil {
 			return cur
 		} else {
-			return pos
+			return 0 // Moved all the way back to zero!
 		}
 	})
 	return
 }
 
-func (e *eventLog) Get(index int) (i LogItem, o bool, f error) {
-	return
-}
-
-func (e *eventLog) Scan(start int, end int) (r []LogItem, f error) {
-	return
-}
-
-func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind int) (h int, f error) {
-	return
-}
-
-func (e *eventLog) Insert(batch []LogItem) (h int, f error) {
-	return
-}
-
 func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (err error) {
 	e.logger.Info("Compacting log until [%v] with a snapshot of [%v] events", until, snapshotSize)
-
-	// cur := e.Active()
-//
-	// // Go ahead and compact the majority of the segment. (writes can still happen.)
-	// new, err := cur.Compact(until, snapshot, snapshotSize, config)
-	// if err != nil {
-		// return errors.Wrapf(err, "Error compacting current segment [%v]", cur)
-	// }
-//
-	// defer cur.Delete()
-//
-	// // Swap existing with new.
-	// e.UpdateActive(func(cur StoredSegment) StoredSegment {
-		// ok, err := e.raw.Swap(cur, new)
-		// if err != nil || !ok {
-			// return cur
-		// }
-		// return new
-	// })
+	_, err = e.raw.Compact(until, snapshot, snapshotSize, config)
 	return
+}
+
+func (e *eventLog) Snapshot() (StoredSnapshot, error) {
+	return e.raw.Snapshot()
 }
 
 // only called from followers.
 func (e *eventLog) Assert(index int, term int) (ok bool, err error) {
-	// var item LogItem
-	// e.UseActive(func(s StoredSegment) {
-		// item, ok, err = e.Get(index)
-		// if !ok || err != nil {
-			// return
-		// }
-//
-		// ok = item.Term == term
-		// return
-	// })
-	return
+	var item LogItem
+	item, ok, err = e.Get(index)
+	if !ok || err != nil {
+		return
+	}
+
+	return item.Term == term, nil
 }
 
-func (e *eventLog) Max() (i LogItem, f error) {
-	// var head int
-	// var ok bool
-	// e.UseActive(func(s StoredSegment) {
-		// head, f = s.Head()
-		// if f != nil {
-			// i = LogItem{Index: -1, Term: -1}
-			// return
-		// }
-//
-		// i, ok, f = s.Get(head)
-		// if f != nil || !ok {
-			// i = LogItem{Index: -1, Term: -1}
-			// return
-		// }
-	// })
-	return
+func (e *eventLog) Last() (int, int, error) {
+	return e.raw.Last()
 }
 
 func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
@@ -269,6 +259,7 @@ func (l *refListener) start(from int) {
 				return
 			}
 
+			// FIXME: Can still miss truncations
 			if next < cur {
 				l.shutdown(errors.Wrapf(OutOfBoundsError, "Log truncated to [%v] was [%v]", next, cur))
 				return

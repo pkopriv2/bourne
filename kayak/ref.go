@@ -21,11 +21,11 @@ func (c *ref) WaitForChange(cur int) (val int, alive bool) {
 		return cur, false
 	}
 
-	for val, alive = c.val, !c.dead; val != cur; val, alive = c.val, !c.dead {
+	for val, alive = c.val, !c.dead; val != cur && alive; val, alive = c.val, !c.dead {
 		c.lock.Wait()
-		if c.dead {
-			return cur, false
-		}
+		// if c.dead {
+		// return cur, false
+		// }
 	}
 	return
 }

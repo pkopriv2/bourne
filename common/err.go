@@ -19,6 +19,7 @@ func (t TimeoutError) Error() string {
 	return fmt.Sprintf("Timeout[%v]: %v", t.timeout, t.msg)
 }
 
+// FIXME: Remove this! this is broken
 func RunIf(fn func()) func(v interface{}) {
 	return func(v interface{}) {
 		val := reflect.ValueOf(v)

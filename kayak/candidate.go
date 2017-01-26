@@ -89,14 +89,14 @@ func (c *candidate) Close() error {
 
 func (c *candidate) start() {
 
-	max, err := c.replica.Log.Max()
+	maxIndex, maxTerm, err := c.replica.Log.Last()
 	ballots := c.replica.Broadcast(func(cl *client) response {
-		c.logger.Debug("Sending ballots: %v", max)
+		c.logger.Debug("Sending ballots: %v", maxIndex)
 		if err != nil {
 			return response{c.replica.term.Num, false}
 		}
 
-		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.Num, max.Index, max.Term)
+		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.Num, maxIndex, maxTerm)
 		if err != nil {
 			return response{c.replica.term.Num, false}
 		} else {
@@ -162,13 +162,13 @@ func (c *candidate) handleRequestVote(vote requestVote) {
 		return
 	}
 
-	max, err := c.replica.Log.Max()
+	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
 		vote.reply(c.replica.term.Num, false)
 		return
 	}
 
-	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
+	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.logger.Debug("Voting for candidate [%v]", vote.id.String()[:8])
 		vote.reply(vote.term, true)
 		c.replica.Term(vote.term, nil, &vote.id)

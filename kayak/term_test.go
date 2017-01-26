@@ -93,7 +93,7 @@ func OpenTestStash(ctx common.Context) *bolt.DB {
 }
 
 func OpenTestTermStash(ctx common.Context) *termStore {
-	ret, err := openTermStorage(OpenTestStash(ctx))
+	ret, err := openTermStore(OpenTestStash(ctx))
 	if err != nil {
 		panic(err)
 	}

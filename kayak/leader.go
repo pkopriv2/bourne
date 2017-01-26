@@ -1,13 +1,11 @@
 package kayak
 
 import (
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
-	uuid "github.com/satori/go.uuid"
 )
 
 type leaderSpawner struct {
@@ -54,13 +52,11 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
 	logger.Info("Becoming leader")
 
-	// syncer := newLogSyncer(replica, logger)
-
 	closed := make(chan struct{})
 	l := &leader{
-		logger:   logger,
-		follower: follower,
-		// syncer:     syncer,
+		logger:     logger,
+		follower:   follower,
+		syncer:     newLogSyncer(logger, replica),
 		proxyPool:  concurrent.NewWorkPool(10),
 		appendPool: concurrent.NewWorkPool(10),
 		term:       replica.CurrentTerm(),
@@ -181,13 +177,13 @@ func (c *leader) handleRequestVote(vote requestVote) {
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
-	max, err := c.replica.Log.Max()
+	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
 		vote.reply(vote.term, false)
 		return
 	}
 
-	if vote.maxLogIndex >= max.Index && vote.maxLogTerm >= max.Term {
+	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.replica.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
 	} else {
@@ -238,233 +234,4 @@ func (c *leader) broadcastHeartbeat() {
 			return
 		}
 	}
-}
-
-type peerSyncer struct {
-	main *logSyncer
-	peer peer
-
-	prevIndex int
-	prevTerm  int
-
-	closed chan struct{}
-	closer chan struct{}
-}
-//
-// func (s *peerSyncer) start() {
-	// logger := s.main.logger.Fmt("Syncer(%v)", s.peer)
-	// logger.Info("Starting peer synchronizer")
-//
-	// var cl *client
-	// go func() {
-		// defer logger.Info("Shutting down")
-		// defer common.RunIf(func() { cl.Close() })(cl)
-		// var err error
-//
-		// // snapshot the local log
-		// max, err := s.main.root.Log.Max()
-		// if err != nil {
-			// // FIXME! Better error handling here.
-			// return
-		// }
-//
-		// // the sync'er needs to be unaffected by segment
-		// // compactions.
-		// for {
-			// next, ok := s.main.root.Log.head.WaitForChange(max.Index + 1)
-			// if !ok || s.Closed() {
-				// return
-			// }
-//
-			// // loop until this peer is completely caught up to head!
-			// for max.Index < next {
-				// if s.Closed() {
-					// return
-				// }
-//
-				// logger.Debug("Currently [%v/%v]", max.Index, next)
-//
-				// // might have to reinitialize client after each batch.
-				// if cl == nil {
-					// cl, err = p.Client(s.main.root.Ctx)
-					// if err != nil {
-						// return
-					// }
-				// }
-//
-				// // scan a full batch of events.
-				// batch, err := s.root.Log.Scan(max.Index+1, max.Index+1+256)
-				// if err != nil {
-					// s.shutdown(err)
-					// return
-				// }
-//
-				// // send the append request.
-				// resp, err := cl.Replicate(s.root.Id, s.root.term.Num, max.Index, max.Term, batch, s.root.Log.Committed())
-				// if err != nil {
-					// logger.Error("Unable to append events [%v]", err)
-					// cl = nil
-					// continue
-				// }
-//
-				// // make sure we're still a leader.
-				// if resp.term > s.root.term.Num {
-					// logger.Error("No longer leader.")
-					// s.shutdown(NotLeaderError)
-					// return
-				// }
-//
-				// // if it was successful, progress the peer's index and term
-				// if resp.success {
-					// max = batch[len(batch)-1]
-					// s.SetPrevIndexAndTerm(p.Id, max.Index, max.Term)
-					// continue
-				// }
-//
-				// // consistency check failed, start moving backwards one index at a time.
-				// // TODO: Install snapshot
-//
-				// max, ok, err = s.root.Log.Get(max.Index - 1)
-				// if err != nil {
-					// s.shutdown(err)
-					// return
-				// }
-//
-				// if ok {
-					// s.SetPrevIndexAndTerm(p.Id, max.Index, max.Term)
-				// } else {
-					// s.SetPrevIndexAndTerm(p.Id, -1, -1)
-				// }
-			// }
-//
-			// logger.Debug("Sync'ed to [%v]", next)
-		// }
-	// }()
-//
-// }
-
-// the log syncer should be rebuilt every time a leader comes to power.
-type logSyncer struct {
-
-	// the primary member instance. (guaranteed to be immutable)
-	root *replica
-
-	// the logger (injected by parent.  do not use root's logger)
-	logger common.Logger
-
-	// tracks index of last consumer item
-	prevIndices map[uuid.UUID]int
-
-	// tracks term of last consumer item
-	prevTerms map[uuid.UUID]int
-
-	// Used to access/update peer states.
-	prevLock sync.Mutex
-
-	// used to indicate whether a catastrophic failure has occurred
-	failure error
-
-	// the closing channel.  Independent of leader.
-	closed chan struct{}
-	closer chan struct{}
-}
-
-func newLogSyncer(inst *replica, logger common.Logger) *logSyncer {
-	s := &logSyncer{
-		root:        inst,
-		logger:      logger.Fmt("Syncer"),
-		prevIndices: make(map[uuid.UUID]int),
-		prevTerms:   make(map[uuid.UUID]int),
-		closed:      make(chan struct{}),
-		closer:      make(chan struct{}, 1),
-	}
-
-	// for _, p := range s.root.Others() {
-		// // s.sync(p)
-	// }
-
-	return s
-}
-
-func (l *logSyncer) Closed() bool {
-	select {
-	default:
-		return false
-	case <-l.closed:
-		return true
-	}
-}
-
-func (l *logSyncer) Close() error {
-	return l.shutdown(nil)
-}
-
-func (l *logSyncer) shutdown(err error) error {
-	select {
-	case <-l.closed:
-		return l.failure
-	case l.closer <- struct{}{}:
-	}
-
-	l.failure = err
-	close(l.closed)
-	l.root.Log.head.Notify()
-	return err
-}
-
-func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (item LogItem, err error) {
-	var term = s.root.term.Num
-	var head int
-
-	committed := make(chan struct{}, 1)
-	go func() {
-		// append
-		head, err = s.root.Log.Append(event, term, source, seq, kind)
-		if err != nil {
-			s.shutdown(err)
-			return
-		}
-
-		// wait for majority.
-		majority := s.root.Majority() - 1
-		for done := make(map[uuid.UUID]struct{}); len(done) < majority; {
-			for _, p := range s.root.Others() {
-				if _, ok := done[p.Id]; ok {
-					continue
-				}
-
-				index, term := s.GetPrevIndexAndTerm(p.Id)
-				if index >= head && term == s.root.term.Num {
-					done[p.Id] = struct{}{}
-				}
-			}
-
-			if s.Closed() {
-				return
-			}
-		}
-
-		s.root.Log.Commit(head) // commutative, so safe in the event of out of order commits.
-		committed <- struct{}{}
-	}()
-
-	select {
-	case <-s.closed:
-		return LogItem{}, common.Or(s.failure, ClosedError)
-	case <-committed:
-		return LogItem{head, event, term, source, seq, kind}, nil
-	}
-}
-
-func (s *logSyncer) GetPrevIndexAndTerm(id uuid.UUID) (int, int) {
-	s.prevLock.Lock()
-	defer s.prevLock.Unlock()
-	return s.prevIndices[id], s.prevTerms[id]
-}
-
-func (s *logSyncer) SetPrevIndexAndTerm(id uuid.UUID, idx int, term int) {
-	s.prevLock.Lock()
-	defer s.prevLock.Unlock()
-	s.prevIndices[id] = idx
-	s.prevTerms[id] = term
 }

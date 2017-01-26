@@ -37,7 +37,7 @@ type replica struct {
 	Self peer
 
 	// the current cluster configuration
-	Config roster
+	Roster roster
 
 	// the core database
 	Db stash.Stash
@@ -84,7 +84,7 @@ type replica struct {
 }
 
 func newReplica(ctx common.Context, logger common.Logger, addr string, store LogStore, db *bolt.DB) (*replica, error) {
-	termStore, err := openTermStorage(db)
+	termStore, err := openTermStore(db)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
 	}
@@ -95,19 +95,23 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 	}
 
 	if !ok {
-		id := uuid.NewV1()
+		id = uuid.NewV1()
 		if err := termStore.SetId(addr, id); err != nil {
 			return nil, errors.Wrapf(err, "Host")
 		}
 	}
 
-	raw, err := store.Get(id)
+	self := peer{id, addr}
+	logger = logger.Fmt("%v", self)
+
+	raw, err := store.Get(self.Id)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
 	}
 
 	if raw == nil {
-		raw, err = store.New(id, []byte{})
+		raw, err = store.New(self.Id, []byte{})
+
 		if err != nil {
 			return nil, errors.Wrapf(err, "Host")
 		}
@@ -121,7 +125,7 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 	r := &replica{
 		Ctx:             ctx,
 		Id:              id,
-		Self:            peer{id, addr},
+		Self:            self,
 		Logger:          logger,
 		terms:           termStore,
 		Log:             log,
@@ -163,40 +167,42 @@ func (h *replica) start() error {
 		return err
 	}
 
+	// start the config loop
 	go func() {
 		for {
-			// snapshot, err := h.Log.Snapshot()
-			// if err != nil {
-				// return
-			// }
-//
-			// peers, err := parsePeers(snapshot.Config(), []peer{h.Self})
-			// if err != nil {
-				// return
-			// }
-//
-			// h.Config.Update(peers)
-//
-			// l, err := h.Log.ListenAppends(snapshot.PrevIndex+1, 256)
-			// if err != nil {
-				// return
-			// }
-//
-			// for i, e := l.Next(); e == nil; i, e = l.Next() {
-				// if i.Kind != Config {
-					// peers, err := parsePeers(i.Event, []peer{h.Self})
-					// if err != nil {
-						// h.Logger.Error("Error parsing configuration [%v]", peers)
-						// continue
-					// }
-//
-					// h.Config.Update(peers)
-				// }
-			// }
-//
-			// if cause := errors.Cause(err); cause == ClosedError {
-				// return
-			// }
+			snapshot, err := h.Log.Snapshot()
+			if err != nil {
+				return
+			}
+
+			peers, err := parsePeers(snapshot.Config(), []peer{h.Self})
+			if err != nil {
+				return
+			}
+
+			h.Roster.Update(peers)
+
+			l, err := h.Log.ListenAppends(snapshot.LastIndex()+1, 256)
+			if err != nil {
+				return
+			}
+
+			for i, e := l.Next(); e == nil; i, e = l.Next() {
+				if i.Kind != Config {
+					peers, err := parsePeers(i.Event, []peer{h.Self})
+					if err != nil {
+						h.Logger.Error("Error parsing configuration [%v]", peers)
+						continue
+					}
+
+					h.Logger.Info("Handling membersip change.")
+					h.Roster.Update(peers)
+				}
+			}
+
+			if cause := errors.Cause(err); cause != OutOfBoundsError {
+				return
+			}
 		}
 	}()
 
@@ -224,7 +230,8 @@ func (h *replica) CurrentTerm() term {
 }
 
 func (h *replica) Cluster() []peer {
-	return h.Config.Get()
+	all, _ :=  h.Roster.Get()
+	return all
 }
 
 func (h *replica) Peer(id uuid.UUID) (peer, bool) {

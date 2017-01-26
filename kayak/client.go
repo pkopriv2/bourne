@@ -28,7 +28,7 @@ func (c *client) Replicate(id uuid.UUID, term int, logIndex int, logTerm int, ba
 }
 
 func (c *client) Append(e Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
-	resp, err := c.raw.Send(appendEventRequest{e,source, seq, kind}.Request())
+	resp, err := c.raw.Send(appendEventRequest{e, source, seq, kind}.Request())
 	if err != nil {
 		return LogItem{}, errors.Wrapf(err, "Error sending client append: %v", e)
 	}

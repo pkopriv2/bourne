@@ -307,9 +307,9 @@ func readIntallSnapshotRequest(r scribe.Reader) (ret installSnapshotRequest, err
 }
 
 type updateRosterRequest struct {
-	serverId     uuid.UUID
-	serverAddr   uuid.UUID
-	join         bool
+	serverId   uuid.UUID
+	serverAddr uuid.UUID
+	join       bool
 }
 
 func (u updateRosterRequest) Write(w scribe.Writer) {

@@ -1,11 +1,11 @@
 package kayak
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
@@ -312,11 +312,10 @@ func ParseItem(bytes []byte) (LogItem, error) {
 
 // Storage apis,errors
 var (
-	FormatError      = errors.New("Kayak:Format")
-	AccessError      = errors.New("Kayak:Access")
+	InvariantError   = errors.New("Kayak:Invariant")
 	EndOfStreamError = errors.New("Kayak:EndOfStream")
 	OutOfBoundsError = errors.New("Kayak:OutOfBounds")
-	SwapError        = errors.New("Kayak:Swap")
+	CompactionError  = errors.New("Kayak:Compaction")
 )
 
 type LogStore interface {

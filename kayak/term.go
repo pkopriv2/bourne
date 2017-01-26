@@ -28,7 +28,7 @@ type termStore struct {
 	db *bolt.DB
 }
 
-func openTermStorage(db *bolt.DB) (*termStore, error) {
+func openTermStore(db *bolt.DB) (*termStore, error) {
 	err := db.Update(func(tx *bolt.Tx) error {
 		return initBoltTermBucket(tx)
 	})
@@ -59,7 +59,6 @@ func (t *termStore) SetId(addr string, id uuid.UUID) error {
 		return tx.Bucket(termIdBucket).Put([]byte(addr), id.Bytes())
 	})
 }
-
 
 func (t *termStore) Get(id uuid.UUID) (term term, err error) {
 	err = t.db.View(func(tx *bolt.Tx) error {

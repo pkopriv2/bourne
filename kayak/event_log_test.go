@@ -1,60 +1,74 @@
 package kayak
 
-// func OpenTestBoltEventLog(ctx common.Context) *eventLog {
-// store := NewBoltStore(OpenTestLogStash(ctx))
-// raw, err := store.New(uuid.NewV1(), []byte{})
-// if err != nil {
-// panic(err)
-// }
-//
-// log, err := openEventLog(ctx.Logger(), raw)
-// if err != nil {
-// panic(err)
-// }
-// return log
-// }
-//
-// func TestEventLog_Empty(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// defer ctx.Close()
-//
-// log := OpenTestBoltEventLog(ctx)
-// assert.Equal(t, -1, log.Committed())
-// assert.Equal(t, -1, log.Head())
-//
-// snapshot, err := log.Snapshot()
-// assert.Nil(t, err)
-// assert.Equal(t, 0, snapshot.Size())
-// // assert.Equal(t, []byte{}, snapshot.Config())
-// }
-//
-// func TestEventLog_Append_SingleBatch_SingleItem(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// defer ctx.Close()
-//
-// log := OpenTestBoltEventLog(ctx)
-//
-// exp := LogItem{Index: 0, Term: 1, Event: Event{0}}
-// head, err := log.Append(exp.Event, exp.Term, exp.Source, exp.Seq, exp.Kind)
-// assert.Nil(t, err)
-// assert.Equal(t, 0, head)
-//
-// batch, err := log.Scan(0, 100)
-// assert.Nil(t, err)
-// assert.Equal(t, []LogItem{exp}, batch)
-// assert.Equal(t, -1, log.Committed())
-// }
-//
-// func TestEventLog_Insert_GreaterThanHead(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// defer ctx.Close()
-//
-// log := OpenTestBoltEventLog(ctx)
-//
-// exp := LogItem{Index: 1, Term: 1, Event: Event{0}}
-// _, err := log.Insert([]LogItem{exp})
-// assert.Equal(t, OutOfBoundsError, errors.Cause(err))
-// }
+import (
+	"testing"
+
+	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
+	uuid "github.com/satori/go.uuid"
+	"github.com/stretchr/testify/assert"
+)
+
+func OpenTestBoltLogStore(ctx common.Context) LogStore {
+	return NewBoltStore(OpenTestLogStash(ctx))
+}
+
+func OpenTestBoltEventLog(ctx common.Context) *eventLog {
+	store := NewBoltStore(OpenTestLogStash(ctx))
+	raw, err := store.New(uuid.NewV1(), []byte{})
+	if err != nil {
+		panic(err)
+	}
+
+	log, err := openEventLog(ctx.Logger(), raw)
+	if err != nil {
+		panic(err)
+	}
+	return log
+}
+
+func TestEventLog_Empty(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	log := OpenTestBoltEventLog(ctx)
+	assert.Equal(t, -1, log.Committed())
+	assert.Equal(t, -1, log.Head())
+
+	snapshot, err := log.Snapshot()
+	assert.Nil(t, err)
+	assert.Equal(t, 0, snapshot.Size())
+}
+
+func TestEventLog_Append_Single(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	log := OpenTestBoltEventLog(ctx)
+
+	exp := LogItem{Index: 0, Term: 1, Event: Event{0}}
+	head, err := log.Append(exp.Event, exp.Term, exp.Source, exp.Seq, exp.Kind)
+	assert.Nil(t, err)
+	assert.Equal(t, 0, head.Index)
+
+	batch, err := log.Scan(0, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []LogItem{exp}, batch)
+	assert.Equal(t, -1, log.Committed())
+	assert.Equal(t, 0, log.Head())
+}
+
+func TestEventLog_Insert_Single(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	log := OpenTestBoltEventLog(ctx)
+
+	exp := LogItem{Index: 1, Term: 1, Event: Event{0}}
+	err := log.Insert([]LogItem{exp})
+	assert.Equal(t, OutOfBoundsError, errors.Cause(err))
+}
+
 //
 //
 // func TestEventLog_Insert_SingleBatch_SingleItem(t *testing.T) {

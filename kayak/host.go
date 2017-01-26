@@ -17,13 +17,17 @@ type host struct {
 }
 
 func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *host, err error) {
-	root := ctx.Logger().Fmt("Kayak: %v", self)
+	root := ctx.Logger().Fmt("Kayak")
 
 	core, err := newReplicatedLog(ctx, root, self, store, db)
 	if err != nil {
 		return nil, err
 	}
-	defer common.RunIf(func() { core.Close() })(err)
+	defer func() {
+		if err != nil {
+			core.Close()
+		}
+	}()
 
 	_, port, err := net.SplitAddr(self)
 	if err != nil {
@@ -34,7 +38,6 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 	if err != nil {
 		return nil, err
 	}
-	defer common.RunIf(func() { server.Close() })(err) // paranoia of future me
 
 	h = &host{
 		core:   core,
