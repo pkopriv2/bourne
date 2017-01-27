@@ -33,7 +33,7 @@ func becomeFollower(replica *replica) {
 
 	l := &follower{
 		logger:     logger,
-		control:    replica.Ctx.Control().Child(),
+		control:    replica.Ctx.Control().Sub(),
 		proxyPool:  concurrent.NewWorkPool(16),
 		appendPool: concurrent.NewWorkPool(16),
 		clientPool: clientPool,
@@ -44,23 +44,14 @@ func becomeFollower(replica *replica) {
 	l.start()
 }
 
-// func (l *follower) transition(ch chan<- *replica) {
-// select {
-// case <-l.closed:
-// case ch <- l.replica:
-// }
-//
-// l.Close()
-// }
-
 func (c *follower) start() {
 	// If any config has changed, just restart the follower...
-	_,ver := c.replica.Roster.Get()
+	_, ver := c.replica.Roster.Get()
 	go func() {
 		defer c.control.Close()
 
-		_,_,ok := c.replica.Roster.Wait(ver)
-		if c.control.IsClosed() || ! ok {
+		_, _, ok := c.replica.Roster.Wait(ver)
+		if c.control.IsClosed() || !ok {
 			return
 		}
 
@@ -71,18 +62,19 @@ func (c *follower) start() {
 	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
 	if leader := c.replica.Leader(); leader != nil {
 		go func() {
+			defer c.control.Close()
 			for {
 				select {
 				case <-c.replica.closed:
 					return
 				case <-c.control.Closed():
 					return
-				case append := <-c.replica.LocalAppends:
-					c.handleLocalAppend(append)
-				case append := <-c.replica.RemoteAppends:
-					c.handleRemoteAppend(append)
-				case roster := <-c.replica.RosterUpdates:
-					c.handleRosterUpdate(roster)
+				case req := <-c.replica.LocalAppends:
+					c.handleLocalAppend(req)
+				case req := <-c.replica.RemoteAppends:
+					c.handleRemoteAppend(req)
+				case req := <-c.replica.RosterUpdates:
+					c.handleRosterUpdate(req)
 				}
 			}
 		}()
@@ -100,12 +92,12 @@ func (c *follower) start() {
 				return
 			case <-c.replica.closed:
 				return
-			case append := <-c.replica.Replications:
-				c.handleReplication(append)
-			case ballot := <-c.replica.VoteRequests:
-				c.handleRequestVote(ballot)
-			case snapshot := <-c.replica.Snapshots:
-				c.handleInstallSnapshot(snapshot)
+			case req := <-c.replica.Replications:
+				c.handleReplication(req)
+			case req := <-c.replica.VoteRequests:
+				c.handleRequestVote(req)
+			case req := <-c.replica.Snapshots:
+				c.handleInstallSnapshot(req)
 			case <-electionTimer.C:
 				c.logger.Info("Waited too long for heartbeat.")
 				becomeCandidate(c.replica)
@@ -115,13 +107,15 @@ func (c *follower) start() {
 	}()
 }
 
-func (c *follower) handleLocalAppend(append machineAppend) {
+func (c *follower) handleLocalAppend(req stdRequest) {
+	append := req.Body().(appendEvent)
+
 	timeout := c.replica.RequestTimeout / 2
 
 	err := c.proxyPool.SubmitTimeout(timeout, func() {
 		cl := c.clientPool.TakeTimeout(timeout)
 		if cl == nil {
-			append.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
+			req.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
 			return
 		}
 
@@ -131,19 +125,19 @@ func (c *follower) handleLocalAppend(append machineAppend) {
 		} else {
 			c.clientPool.Fail(cl)
 		}
-		append.Return(i, e)
+		req.Return(i, e)
 	})
 	if err != nil {
-		append.Fail(err)
+		req.Fail(err)
 	}
 }
 
-func (c *follower) handleRemoteAppend(append machineAppend) {
-	append.Fail(NotLeaderError)
+func (c *follower) handleRemoteAppend(req stdRequest) {
+	req.Fail(NotLeaderError)
 }
 
-func (c *follower) handleRosterUpdate(update rosterUpdate) {
-	update.Fail(NotLeaderError)
+func (c *follower) handleRosterUpdate(req stdRequest) {
+	req.Fail(NotLeaderError)
 	// timeout := c.replica.RequestTimeout / 2
 	//
 	// err := c.proxyPool.SubmitTimeout(timeout, func() {
@@ -166,32 +160,28 @@ func (c *follower) handleRosterUpdate(update rosterUpdate) {
 	// }
 }
 
-func (c *follower) handleInstallSnapshot(snapshot installSnapshot) {
-	// handle: previous term vote.  (immediately decline.)
-	if snapshot.term < c.replica.term.Num {
-		snapshot.Reply(c.replica.term.Num, false)
-		return
-	}
-
-	// storeDurableSnapshotSegment(snapshot.snapshotId, snapshot.batchOffset, snapshot.batch)
-	snapshot.Reply(c.term.Num, false)
+func (c *follower) handleInstallSnapshot(req stdRequest) {
+	snapshot := req.Body().(installSnapshot)
+	req.Reply(response{snapshot.term, false})
 }
 
-func (c *follower) handleRequestVote(vote requestVote) {
+func (c *follower) handleRequestVote(req stdRequest) {
+	vote := req.Body().(requestVote)
+
 	c.logger.Debug("Handling request vote [%v]", vote)
 
 	// FIXME: Lots of duplicates here....condense down
 
 	// handle: previous term vote.  (immediately decline.)
 	if vote.term < c.replica.term.Num {
-		vote.reply(c.replica.term.Num, false)
+		req.Reply(response{c.replica.term.Num, false})
 		return
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-		vote.reply(c.replica.term.Num, false)
+		req.Reply(response{c.replica.term.Num, false})
 		return
 	}
 
@@ -199,7 +189,7 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	if vote.term == c.replica.term.Num {
 		if c.replica.term.VotedFor == nil && vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 			c.logger.Debug("Voting for candidate [%v]", vote.id)
-			vote.reply(c.replica.term.Num, true)
+			req.Reply(response{c.replica.term.Num, true})
 			c.replica.Term(c.replica.term.Num, nil, &vote.id) // correct?
 			becomeFollower(c.replica)
 			c.control.Close()
@@ -207,7 +197,7 @@ func (c *follower) handleRequestVote(vote requestVote) {
 		}
 
 		c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
-		vote.reply(c.replica.term.Num, false)
+		req.Reply(response{c.replica.term.Num, false})
 		becomeCandidate(c.replica)
 		c.control.Close()
 		return
@@ -216,7 +206,7 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.logger.Debug("Voting for candidate [%v]", vote.id)
-		vote.reply(vote.term, true)
+		req.Reply(response{vote.term, true})
 		c.replica.Term(vote.term, nil, &vote.id)
 		becomeFollower(c.replica)
 		c.control.Close()
@@ -224,22 +214,24 @@ func (c *follower) handleRequestVote(vote requestVote) {
 	}
 
 	c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
-	vote.reply(vote.term, false)
+	req.Reply(response{vote.term, false})
 	c.replica.Term(vote.term, nil, nil)
 	becomeCandidate(c.replica)
 	c.control.Close()
 }
 
-func (c *follower) handleReplication(append replicateEvents) {
+func (c *follower) handleReplication(req stdRequest) {
+	append := req.Body().(replicateEvents)
+
 	if append.term < c.replica.term.Num {
-		append.reply(c.replica.term.Num, false)
+		req.Reply(response{c.replica.term.Num, false})
 		return
 	}
 
-	c.logger.Info("Handling replication: %v", append)
+	// c.logger.Info("Handling replication: %v", append)
 	if append.term > c.replica.term.Num || c.replica.term.Leader == nil {
 		c.logger.Info("New leader detected [%v]", append.id)
-		append.reply(append.term, false)
+		req.Reply(response{append.term, false})
 		c.replica.Term(append.term, &append.id, &append.id)
 		becomeFollower(c.replica)
 		c.control.Close()
@@ -249,7 +241,7 @@ func (c *follower) handleReplication(append replicateEvents) {
 	// if this is a heartbeat, bail out
 	c.replica.Log.Commit(append.commit)
 	if len(append.items) == 0 {
-		append.reply(append.term, true)
+		req.Reply(response{append.term, true})
 		return
 	}
 
@@ -258,33 +250,20 @@ func (c *follower) handleReplication(append replicateEvents) {
 	// consistency check
 	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); !ok || err != nil {
 		c.logger.Error("Consistency check failed(%v)", err)
+		c.replica.Log.Truncate(append.prevLogIndex + 1)
 
 		// FIXME: This will cause anyone listening to head to
 		// have to recreate state!
-		append.reply(append.term, false)
+		req.Reply(response{append.term, false})
 		return
 	}
 
 	// insert items.
-	c.replica.Log.Truncate(append.prevLogIndex + 1)
 	if err := c.replica.Log.Insert(append.items); err != nil {
 		c.logger.Error("Error inserting batch: %v", err)
-		append.reply(append.term, false)
+		req.Reply(response{append.term, false})
 		return
 	}
 
-	append.reply(append.term, true)
+	req.Reply(response{append.term, true})
 }
-
-// func newLeaderConnectionPool(r *replica) net.ConnectionPool {
-// if r.term.Leader == nil {
-// return nil
-// }
-//
-// leader, found := r.Peer(*r.term.Leader)
-// if !found {
-// panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.Leader, r.Cluster()))
-// }
-//
-// return leader.NewPool(r.Ctx)
-// }

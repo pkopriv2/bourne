@@ -84,10 +84,10 @@ func (c *candidate) start() {
 				return
 			case <-c.replica.closed:
 				return
-			case append := <-c.replica.Replications:
-				c.handleAppendEvents(append)
-			case ballot := <-c.replica.VoteRequests:
-				c.handleRequestVote(ballot)
+			case req := <-c.replica.Replications:
+				c.handleAppendEvents(req)
+			case req := <-c.replica.VoteRequests:
+				c.handleRequestVote(req)
 			case <-timer.C:
 				c.logger.Info("Unable to acquire necessary votes [%v/%v]", numVotes, needed)
 				timer := time.NewTimer(c.replica.ElectionTimeout)
@@ -113,22 +113,24 @@ func (c *candidate) start() {
 	}()
 }
 
-func (c *candidate) handleRequestVote(vote requestVote) {
-	c.logger.Debug("Handling request vote: %v", vote)
+func (c *candidate) handleRequestVote(req stdRequest) {
+	vote := req.Body().(requestVote)
+
+	c.logger.Debug("Handling stdRequest vote: %v", vote)
 	if vote.term <= c.term.Num {
-		vote.reply(c.term.Num, false)
+		req.Reply(response{c.term.Num, false})
 		return
 	}
 
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-		vote.reply(c.replica.term.Num, false)
+		req.Reply(response{c.replica.term.Num, false})
 		return
 	}
 
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.logger.Debug("Voting for candidate [%v]", vote.id.String()[:8])
-		vote.reply(vote.term, true)
+		req.Reply(response{vote.term, true})
 		c.replica.Term(vote.term, nil, &vote.id)
 		becomeFollower(c.replica)
 		c.Close()
@@ -136,18 +138,20 @@ func (c *candidate) handleRequestVote(vote requestVote) {
 	}
 
 	c.logger.Debug("Rejecting candidate vote [%v]", vote.id.String()[:8])
-	vote.reply(vote.term, false)
+	req.Reply(response{vote.term, false})
 	c.replica.Term(vote.term, nil, nil)
 }
 
-func (c *candidate) handleAppendEvents(append replicateEvents) {
+func (c *candidate) handleAppendEvents(req stdRequest) {
+	append := req.Body().(replicateEvents)
+
 	if append.term < c.term.Num {
-		append.reply(c.term.Num, false)
+		req.Reply(response{c.term.Num, false})
 		return
 	}
 
 	// append.term is >= term.  use it from now on.
-	append.reply(append.term, false)
+	req.Reply(response{c.term.Num, false})
 	c.replica.Term(append.term, &append.id, &append.id)
 	becomeFollower(c.replica)
 	c.Close()

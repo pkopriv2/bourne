@@ -14,6 +14,51 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+
+type stdRequest struct {
+	val interface{}
+	reply chan interface{}
+	err  chan error
+}
+
+func newStdRequest(val interface{}) stdRequest{
+	return stdRequest{val, make(chan interface{}, 1), make(chan error, 1)}
+}
+
+func (r stdRequest) Body() interface{} {
+	return r.val
+}
+
+func (r stdRequest) Reply(val interface{}) {
+	r.reply<-val
+}
+
+func (r stdRequest) Fail(err error) {
+	r.err<-err
+}
+
+func (r stdRequest)	Return(val interface{}, err error) {
+	if err != nil {
+		r.err<-err
+	} else {
+		r.reply<-val
+	}
+}
+
+func (r stdRequest) Response() (interface{}, error) {
+	select {
+	case err := <-r.err:
+		return nil, err
+	case val := <-r.reply:
+		return val, nil
+	}
+}
+
+type stdResponse struct {
+	Val interface{}
+	Err error
+}
+
 // The replica is the state container for a member of a cluster.  The
 // replica is managed by a single member of the replicated log state machine
 // network.  However, the replica is also a machine itself.  Consumers can
@@ -63,23 +108,22 @@ type replica struct {
 	terms *termStore
 
 	// request vote events.
-	VoteRequests chan requestVote
+	VoteRequests chan stdRequest
 
 	// append requests (presumably from leader)
-	Replications chan replicateEvents
+	Replications chan stdRequest
 
 	// snapshot install (presumably from leader)
-	Snapshots chan installSnapshot
+	Snapshots chan stdRequest
 
 	// append requests (from clients)
-	RemoteAppends chan machineAppend
+	RemoteAppends chan stdRequest
 
 	// append requests (from local state machine)
-	LocalAppends chan machineAppend
+	LocalAppends chan stdRequest
 
 	// append requests (from local state machine)
-	RosterUpdates chan rosterUpdate
-
+	RosterUpdates chan stdRequest
 
 	// closing utilities
 	closed chan struct{}
@@ -134,12 +178,12 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 		Log:             log,
 		Db:              db,
 		Roster:          newRoster([]peer{self}),
-		Replications:    make(chan replicateEvents),
-		VoteRequests:    make(chan requestVote),
-		RemoteAppends:   make(chan machineAppend),
-		LocalAppends:    make(chan machineAppend),
-		Snapshots:       make(chan installSnapshot),
-		RosterUpdates:   make(chan rosterUpdate),
+		Replications:    make(chan stdRequest),
+		VoteRequests:    make(chan stdRequest),
+		RemoteAppends:   make(chan stdRequest),
+		LocalAppends:    make(chan stdRequest),
+		Snapshots:       make(chan stdRequest),
+		RosterUpdates:   make(chan stdRequest),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
 		RequestTimeout:  10 * time.Second,
 		closed:          make(chan struct{}),
@@ -177,16 +221,16 @@ func (h *replica) start() error {
 		for {
 			// snapshot, err := h.Log.Snapshot()
 			// if err != nil {
-				// h.Logger.Error("Error getting snapshot: %+v", err)
-				// return
+			// h.Logger.Error("Error getting snapshot: %+v", err)
+			// return
 			// }
-//
+			//
 			// peers, err := parsePeers(snapshot.Config(), []peer{h.Self})
 			// if err != nil {
-				// h.Logger.Error("Error parsing config: %+v", err)
-				// return
+			// h.Logger.Error("Error parsing config: %+v", err)
+			// return
 			// }
-//
+			//
 			// h.Roster.Set(peers)
 
 			l, err := h.Log.ListenAppends(0, 256)
@@ -196,7 +240,7 @@ func (h *replica) start() error {
 			}
 
 			h.Logger.Info("Registered config listener.")
-			for i, e := l.Next();; i, e = l.Next() {
+			for i, e := l.Next(); ; i, e = l.Next() {
 				if e != nil {
 					h.Logger.Error("Error parsing configuration [%v]", e)
 					break
@@ -309,243 +353,90 @@ func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	return ret
 }
 
+func (h *replica) sendRequest(ch chan<- stdRequest, val interface{}) (interface{}, error) {
+	timer := time.NewTimer(h.RequestTimeout)
+	req := newStdRequest(val)
+	select {
+	case <-h.closed:
+		return nil, ClosedError
+	case <-timer.C:
+		return nil, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+	case ch <- req:
+		select {
+		case <-h.closed:
+			return nil, ClosedError
+		case r := <-req.reply:
+			return r, nil
+		case e := <-req.err:
+			return nil, e
+		case <-timer.C:
+			return nil, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		}
+	}
+}
+
+func (h *replica) UpdateRoster(update rosterUpdate) error {
+	_, err := h.sendRequest(h.RosterUpdates, update)
+	return err
+}
+
 func (h *replica) AddPeer(peer peer) error {
-	return h.UpdateRoster(peer, true)
+	return h.UpdateRoster(rosterUpdate{peer, true})
 }
 
 func (h *replica) DelPeer(peer peer) error {
-	return h.UpdateRoster(peer, false)
+	return h.UpdateRoster(rosterUpdate{peer, false})
 }
 
-func (h *replica) UpdateRoster(peer peer, join bool) error {
-	req := rosterUpdate{peer, join, make(chan error, 1)}
-
-	select {
-	case <-h.closed:
-		return ClosedError
-	case h.RosterUpdates <- req:
-		select {
-		case <-h.closed:
-			return ClosedError
-		case r := <-req.ack:
-			return r
-		}
+func (h *replica) InstallSnapshot(snapshot installSnapshot) (response, error) {
+	val, err := h.sendRequest(h.Snapshots, snapshot)
+	if err != nil {
+		return response{}, err
 	}
+	return val.(response), nil
 }
 
-func (h *replica) InstallSnapshot(snapshotId uuid.UUID, id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, prevConfig []byte, offset int, events []Event) (response, error) {
-	req := installSnapshot{
-		snapshotId, id, term, prevLogIndex, prevLogTerm, prevConfig, offset, events, make(chan response, 1)}
-
-		select {
-		case <-h.closed:
-			return response{}, ClosedError
-		case h.Snapshots <- req:
-			select {
-			case <-h.closed:
-				return response{}, ClosedError
-			case r := <-req.ack:
-				return r, nil
-			}
-		}
+func (h *replica) Replicate(replicate replicateEvents) (response, error) {
+	val, err := h.sendRequest(h.Replications, replicate)
+	if err != nil {
+		return response{}, err
 	}
+	return val.(response), nil
+}
 
-	func (h *replica) Replicate(id uuid.UUID, term int, prevLogIndex int, prevLogTerm int, items []LogItem, commit int) (response, error) {
-		append := replicateEvents{
-			id, term, prevLogIndex, prevLogTerm, items, commit, make(chan response, 1)}
+func (h *replica) RequestVote(vote requestVote) (response, error) {
+	val, err := h.sendRequest(h.VoteRequests, vote)
+	if err != nil {
+		return response{}, err
+	}
+	return val.(response), nil
+}
 
-			select {
-			case <-h.closed:
-				return response{}, ClosedError
-			case h.Replications <- append:
-				select {
-				case <-h.closed:
-					return response{}, ClosedError
-				case r := <-append.ack:
-					return r, nil
-				}
-			}
-		}
+func (h *replica) RemoteAppend(append appendEvent) (LogItem, error) {
+	val, err := h.sendRequest(h.RemoteAppends, append)
+	if err != nil {
+		return LogItem{}, err
+	}
+	return val.(LogItem), nil
+}
 
-		func (h *replica) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
-			req := requestVote{id, term, logIndex, logTerm, make(chan response, 1)}
+func (h *replica) LocalAppend(append appendEvent) (LogItem, error) {
+	val, err := h.sendRequest(h.LocalAppends, append)
+	if err != nil {
+		return LogItem{}, err
+	}
+	return val.(LogItem), nil
+}
 
-			select {
-			case <-h.closed:
-				return response{}, ClosedError
-			case h.VoteRequests <- req:
-				select {
-				case <-h.closed:
-					return response{}, ClosedError
-				case r := <-req.ack:
-					return r, nil
-				}
-			}
-		}
+func (h *replica) Append(event Event, kind int) (LogItem, error) {
+	return h.LocalAppend(appendEvent{event, h.Self.Id, 0, kind})
+}
 
-		func (h *replica) RemoteAppend(event Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
-			append := machineAppend{event, source, seq, kind, make(chan machineAppendResponse, 1)}
+func (h *replica) Listen(start int, buf int) (Listener, error) {
+	return h.Log.ListenCommits(start, buf)
+}
 
-			timer := time.NewTimer(h.RequestTimeout)
-			select {
-			case <-h.closed:
-				return LogItem{}, ClosedError
-			case <-timer.C:
-				return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
-			case h.RemoteAppends <- append:
-				select {
-				case <-h.closed:
-					return LogItem{}, ClosedError
-				case r := <-append.ack:
-					return r.Item, r.Err
-				case <-timer.C:
-					return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
-				}
-			}
-		}
+func majority(num int) int {
+	return int(math.Ceil(float64(num) / float64(2)))
+}
 
-		func (h *replica) LocalAppend(event Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
-			append := machineAppend{event, source, seq, kind, make(chan machineAppendResponse, 1)}
-
-			timer := time.NewTimer(h.RequestTimeout)
-			select {
-			case <-h.closed:
-				return LogItem{}, ClosedError
-			case <-timer.C:
-				return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
-			case h.LocalAppends <- append:
-				select {
-				case <-h.closed:
-					return LogItem{}, ClosedError
-				case r := <-append.ack:
-					return r.Item, r.Err
-				case <-timer.C:
-					return LogItem{}, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
-				}
-			}
-		}
-
-		func (h *replica) Append(event Event, kind int) (LogItem, error) {
-			return h.LocalAppend(event, h.Self.Id, 0, kind)
-		}
-
-		func (h *replica) Listen(start int, buf int) (Listener, error) {
-			return h.Log.ListenCommits(start, buf)
-		}
-
-		func majority(num int) int {
-			return int(math.Ceil(float64(num) / float64(2)))
-		}
-
-		// Internal append events request.  Requests are put onto the internal member
-		// channel and consumed by the currently active sub-machine.
-		//
-		// Append events ONLY come from members who are leaders. (Or think they are leaders)
-		type replicateEvents struct {
-			id           uuid.UUID
-			term         int
-			prevLogIndex int
-			prevLogTerm  int
-			items        []LogItem
-			commit       int
-			ack          chan response
-		}
-
-		func (a replicateEvents) String() string {
-			return fmt.Sprintf("Replicate(id=%v,prevIndex=%v,prevTerm=%v,commit=%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, a.commit, len(a.items))
-		}
-
-		func (a replicateEvents) reply(term int, success bool) {
-			a.ack <- response{term, success}
-		}
-
-		// Internal request vote.  Requests are put onto the internal member
-		// channel and consumed by the currently active sub-machine.
-		//
-		// Request votes ONLY come from members who are candidates.
-		type requestVote struct {
-			id          uuid.UUID
-			term        int
-			maxLogIndex int
-			maxLogTerm  int
-			ack         chan response
-		}
-
-		func (r requestVote) String() string {
-			return fmt.Sprintf("RequestVote(id=%v,idx=%v,term=%v)", r.id.String()[:8], r.maxLogIndex, r.maxLogTerm)
-		}
-
-		func (r requestVote) reply(term int, success bool) {
-			r.ack <- response{term, success}
-		}
-
-		// Client append request.  Requests are put onto the internal member
-		// channel and consumed by the currently active sub-machine.
-		//
-		// These come from active clients.
-		type machineAppend struct {
-			Event  Event
-			Source uuid.UUID
-			Seq    int
-			Kind   int
-			ack    chan machineAppendResponse
-		}
-
-		func (a machineAppend) Return(item LogItem, err error) {
-			a.ack <- machineAppendResponse{Item: item, Err: err}
-		}
-
-		func (a machineAppend) Fail(err error) {
-			a.ack <- machineAppendResponse{Err: err}
-		}
-
-		type installSnapshot struct {
-			snapshotId   uuid.UUID
-			leaderId     uuid.UUID
-			term         int
-			prevLogIndex int
-			prevLogTerm  int
-			prevConfig   []byte
-			batchOffset  int
-			batch        []Event
-			ack          chan response
-		}
-
-		func (a installSnapshot) Reply(term int, success bool) {
-			a.ack <- response{term, success}
-		}
-
-		type rosterUpdate struct {
-			peer peer
-			join bool
-			ack  chan error
-		}
-
-		func (a rosterUpdate) Fail(err error) {
-			a.ack <- err
-		}
-
-		func (a rosterUpdate) Ack() {
-			a.ack <- nil
-		}
-
-		// Client append request.  Requests are put onto the internal member
-		// channel and consumed by the currently active sub-machine.
-		//
-		// These come from active clients.
-		type machineAppendResponse struct {
-			Item LogItem
-			Err  error
-		}
-
-		// Internal response type.  These are returned through the
-		// request 'ack'/'response' channels by the currently active
-		// sub-machine component.
-		type response struct {
-			term    int
-			success bool
-		}
-
-		// func (r *response) Write(scribe.Writer) {
-		// panic("not implemented")
-		// }

@@ -1,7 +1,6 @@
 package kayak
 
 import (
-	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -31,42 +30,46 @@ func (c *rpcClient) Peers() ([]peer, error) {
 }
 
 func (c *rpcClient) UpdateRoster(peer peer, join bool) error {
-	resp, err := c.raw.Send(updateRosterRequest{peer, join}.Request())
-	if err != nil {
-		return err
-	}
-
-	return readRosterUpdateResponse(resp)
+	return nil
+	// resp, err := c.raw.Send(rosterUpdate{peer, join}.Request())
+	// if err != nil {
+	// return err
+	// }
+	//
+	// return readRosterUpdateResponse(resp)
 }
 
 func (c *rpcClient) Replicate(id uuid.UUID, term int, logIndex int, logTerm int, batch []LogItem, commit int) (response, error) {
-	resp, err := c.raw.Send(replicateRequest{id, term, batch, logIndex, logTerm, commit}.Request())
-	if err != nil {
-		return response{}, errors.Wrapf(err, "Error sending replicate [prevIndex=%v,term=%v,num=%v]", logIndex, logTerm, len(batch))
-	}
-
-	return readResponseResponse(resp)
+	return response{}, nil
+	// resp, err := c.raw.Send(replicateEvents{id, term, batch, logIndex, logTerm, commit}.Request())
+	// if err != nil {
+	// return response{}, errors.Wrapf(err, "Error sending replicate [prevIndex=%v,term=%v,num=%v]", logIndex, logTerm, len(batch))
+	// }
+	//
+	// return readResponseResponse(resp)
 }
 
 func (c *rpcClient) Append(e Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
-	resp, err := c.raw.Send(appendEventRequest{e, source, seq, kind}.Request())
-	if err != nil {
-		return LogItem{}, err
-	}
-
-	res, err := readNetAppendEventResponse(resp)
-	if err != nil {
-		return LogItem{}, errors.Wrapf(err, "Error receiving append response: %v", e)
-	}
-
-	return LogItem{res.index, e, res.term, source, seq, kind}, nil
+	return LogItem{}, nil
+	// resp, err := c.raw.Send(appendEventRequest{e, source, seq, kind}.Request())
+	// if err != nil {
+	// return LogItem{}, err
+	// }
+	//
+	// res, err := readNetAppendEventResponse(resp)
+	// if err != nil {
+	// return LogItem{}, errors.Wrapf(err, "Error receiving append response: %v", e)
+	// }
+	//
+	// return LogItem{res.index, e, res.term, source, seq, kind}, nil
 }
 
 func (c *rpcClient) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
-	resp, err := c.raw.Send(requestVoteRequest{id, term, logIndex, logTerm}.Request())
-	if err != nil {
-		return response{}, errors.Wrapf(err, "Error sending request vote")
-	}
-
-	return readResponseResponse(resp)
+	return response{}, nil
+	// resp, err := c.raw.Send(requestVoteRequest{id, term, logIndex, logTerm}.Request())
+	// if err != nil {
+	// return response{}, errors.Wrapf(err, "Error sending request vote")
+	// }
+	//
+	// return readResponseResponse(resp)
 }

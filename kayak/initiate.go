@@ -17,7 +17,7 @@ func becomeInitiate(replica *replica) {
 	l := &initiate{
 		logger:  logger,
 		replica: replica,
-		control: replica.Ctx.Control().Child(),
+		control: replica.Ctx.Control().Sub(),
 	}
 
 	l.start()
@@ -35,25 +35,26 @@ func (l *initiate) start() {
 				return
 			case <-l.control.Closed():
 				return
-			case events := <-l.replica.Replications:
-				l.handleReplication(events)
-			case ballot := <-l.replica.VoteRequests:
-				l.handleRequestVote(ballot)
+			case req := <-l.replica.Replications:
+				l.handleReplication(req)
+			case req := <-l.replica.VoteRequests:
+				l.handleRequestVote(req)
 			}
 		}
 	}()
 }
 
-func (c *initiate) handleRosterUpdate(update rosterUpdate) {
-	update.Fail(NotLeaderError)
+func (c *initiate) handleRequestVote(req stdRequest) {
+	vote := req.Body().(requestVote)
+	req.Reply(response{vote.term, true})
+	c.replica.Term(vote.term, nil, nil)
+	becomeFollower(c.replica)
+	c.control.Close()
 }
 
-func (c *initiate) handleRequestVote(vote requestVote) {
-	vote.reply(vote.term, false)
-}
-
-func (c *initiate) handleReplication(append replicateEvents) {
-	append.reply(append.term, false)
+func (c *initiate) handleReplication(req stdRequest) {
+	append := req.Body().(replicateEvents)
+	req.Reply(response{append.term, false})
 	c.replica.Term(append.term, &append.id, &append.id)
 	becomeFollower(c.replica)
 	c.control.Close()

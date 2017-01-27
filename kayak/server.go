@@ -71,12 +71,12 @@ func (s *server) Status(req net.Request) net.Response {
 }
 
 func (s *server) UpdateRoster(req net.Request) net.Response {
-	update, err := readUpdateRosterRequest(req.Body())
+	update, err := readRosterUpdate(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return net.NewErrorResponse(s.self.UpdateRoster(update.peer, update.join))
+	return net.NewErrorResponse(s.self.UpdateRoster(update))
 }
 
 func (s *server) InstallSnapshot(req net.Request) net.Response {
@@ -84,40 +84,40 @@ func (s *server) InstallSnapshot(req net.Request) net.Response {
 }
 
 func (s *server) Replicate(req net.Request) net.Response {
-	append, err := readReplicateRequest(req.Body())
+	replicate, err := readReplicateEvents(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	resp, err := s.self.Replicate(append.id, append.term, append.prevLogIndex, append.prevLogTerm, append.items, append.commit)
+	resp, err := s.self.Replicate(replicate)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return newResponseResponse(resp)
+	return resp.Response()
 }
 
 func (s *server) RequestVote(req net.Request) net.Response {
-	rv, err := readRequestVoteRequest(req.Body())
+	voteRequest, err := readRequestVote(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	resp, err := s.self.RequestVote(rv.id, rv.term, rv.maxLogIndex, rv.maxLogTerm)
+	resp, err := s.self.RequestVote(voteRequest)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return newResponseResponse(resp)
+	return resp.Response()
 }
 
 func (s *server) Append(req net.Request) net.Response {
-	append, err := readAppendEventRequest(req.Body())
+	append, err := readAppendEvent(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	item, err := s.self.RemoteAppend(append.event, append.source, append.seq, append.kind)
+	item, err := s.self.RemoteAppend(append)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

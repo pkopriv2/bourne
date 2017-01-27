@@ -6,7 +6,7 @@ type Control interface {
 	Closed() <-chan struct{}
 	IsClosed() bool
 	Failure() error
-	Child() Control
+	Sub() Control
 }
 
 type control struct {
@@ -69,6 +69,6 @@ func (c *control) Failure() error {
 	return c.failure
 }
 
-func (c *control) Child() Control {
+func (c *control) Sub() Control {
 	return NewControl(c)
 }

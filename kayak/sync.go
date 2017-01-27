@@ -2,7 +2,6 @@ package kayak
 
 import (
 	"sync"
-	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
@@ -35,7 +34,7 @@ func newLogSyncer(logger common.Logger, self *replica) *logSyncer {
 		self:    self,
 		term:    self.CurrentTerm(),
 		logger:  logger,
-		control: self.Ctx.Control().Child(),
+		control: self.Ctx.Control().Sub(),
 		syncers: make(map[uuid.UUID]*peerSyncer),
 	}
 
@@ -72,6 +71,7 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 		}
 	}
 
+	s.logger.Info("Roster Change: %v", active)
 	s.SetSyncers(active)
 }
 
@@ -180,7 +180,7 @@ func newPeerSyncer(logger common.Logger, control common.Control, self *replica, 
 		term:      term,
 		prevIndex: -1,
 		prevTerm:  -1,
-		control:   control.Child(),
+		control:   control.Sub(),
 	}
 	sync.start()
 	return sync
@@ -203,6 +203,7 @@ func (l *peerSyncer) SetPrevIndexAndTerm(index int, term int) {
 // no need to worry about truncations here...however, we do need to worry about compactions interrupting
 // syncing.
 func (s *peerSyncer) start() {
+	s.logger.Info("Starting")
 	go func() {
 		defer s.logger.Info("Shutting down")
 
@@ -220,15 +221,14 @@ func (s *peerSyncer) start() {
 			return
 		}
 
-		prev, ok, err := s.self.Log.Get(last-1)
+		prev, ok, err := s.self.Log.Get(last - 1)
 		if err != nil {
 			s.control.Fail(err)
 			return
 		}
 
-		if ! ok {
+		if !ok {
 			prev = LogItem{Index: -1, Term: -1}
-			// Install snapshot!
 		}
 
 		for {
@@ -243,7 +243,7 @@ func (s *peerSyncer) start() {
 					return
 				}
 
-				s.logger.Debug("Currently (%v/%v)", prev.Index, next)
+				s.logger.Debug("Currently [%v/%v]", prev.Index, next)
 
 				// might have to reinitialize client after each batch.
 				if cl == nil {
@@ -285,8 +285,7 @@ func (s *peerSyncer) start() {
 
 				// consistency check failed, start moving backwards one index at a time.
 				// TODO: Install snapshot
-
-				prev, ok, err = s.self.Log.Get(prev.Index - 1)
+				prev, ok, err = s.self.Log.Get(prev.Index - 1024)
 				if err != nil {
 					s.control.Fail(err)
 					return
@@ -300,7 +299,7 @@ func (s *peerSyncer) start() {
 				// INSTALL SNAPSHOT
 				s.SetPrevIndexAndTerm(-1, -1)
 				prev = LogItem{Index: -1, Term: -1}
-				time.Sleep(1000 * time.Millisecond)
+				// time.Sleep(1000 * time.Millisecond)
 				break
 			}
 

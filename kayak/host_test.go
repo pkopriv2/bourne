@@ -31,8 +31,7 @@ func TestHost_Close(t *testing.T) {
 	host1.becomeFollower()
 	host2.becomeInitiate()
 
-	assert.Nil(t, host1.core.UpdateRoster(host2.core.Self, true))
-
+	assert.Nil(t, host1.core.UpdateRoster(rosterUpdate{host2.core.Self, true}))
 	time.Sleep(100 * time.Second)
 }
 
