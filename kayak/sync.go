@@ -74,6 +74,7 @@ func (l *logSyncer) shutdown(err error) error {
 
 func (s *logSyncer) handleRosterChange(peers []peer) {
 	cur, active := s.Syncers(), make(map[uuid.UUID]*peerSyncer)
+	s.logger.Info("Roster Change: %v", peers)
 
 	// Add any missing
 	for _, p := range peers {
@@ -101,8 +102,6 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 }
 
 func (s *logSyncer) start() {
-	s.logger.Info("Starting log synchronizer")
-
 	peers, ver := s.self.Roster.Get()
 	s.handleRosterChange(peers)
 
@@ -113,7 +112,6 @@ func (s *logSyncer) start() {
 			if s.Closed() || !ok {
 				return
 			}
-
 			s.handleRosterChange(peers)
 		}
 	}()
@@ -277,8 +275,9 @@ func (s *peerSyncer) start() {
 			return
 		}
 
+		// prevIndex--
 		for {
-			next, ok := s.log.head.WaitForChange(prevIndex + 1)
+			next, ok := s.log.head.WaitUntil(prevIndex + 1)
 			if !ok || s.Closed() {
 				return
 			}

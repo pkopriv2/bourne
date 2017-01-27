@@ -20,17 +20,17 @@ func newRoster(init []peer) *roster {
 	return &roster{raw: init, ver: newRef(0)}
 }
 
-func (c roster) Wait(next int) ([]peer, int, bool) {
-	_, ok := c.ver.WaitForChange(next)
+func (c *roster) Wait(next int) ([]peer, int, bool) {
+	_, ok := c.ver.Wait(next)
 	peers, ver := c.Get()
 	return peers, ver, ok
 }
 
-func (c roster) Notify() {
+func (c *roster) Notify() {
 	c.ver.Notify()
 }
 
-func (c roster) Set(peers []peer) {
+func (c *roster) Set(peers []peer) {
 	c.ver.Update(func(cur int) int {
 		c.raw = peers
 		return cur + 1
@@ -38,7 +38,7 @@ func (c roster) Set(peers []peer) {
 }
 
 // not taking copy as it is assumed that array is immutable
-func (c roster) Get() (peers []peer, ver int) {
+func (c *roster) Get() (peers []peer, ver int) {
 	c.ver.Update(func(cur int) int {
 		peers, ver = c.raw, cur
 		return cur
@@ -46,7 +46,7 @@ func (c roster) Get() (peers []peer, ver int) {
 	return
 }
 
-func (c roster) Close() {
+func (c *roster) Close() {
 	c.ver.Close()
 }
 

@@ -1,6 +1,8 @@
 package kayak
 
 import (
+	"fmt"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
@@ -253,8 +255,7 @@ func (l *refListener) start(from int) {
 		defer l.Close()
 
 		for cur := from; ; {
-
-			next, ok := l.pos.WaitForChange(cur)
+			next, ok := l.pos.WaitUntil(cur)
 			if !ok || l.isClosed() {
 				return
 			}
@@ -269,6 +270,10 @@ func (l *refListener) start(from int) {
 
 				// scan the next batch
 				batch, err := l.log.Scan(cur, common.Min(next, cur+l.buf))
+				if err != nil {
+				fmt.Println("Items: ", err)
+
+				}
 
 				// start emitting
 				for _, i := range batch {

@@ -14,7 +14,7 @@ func newRef(val int) *ref {
 	return &ref{val, &sync.Cond{L: &sync.Mutex{}}, false}
 }
 
-func (c *ref) WaitForChange(cur int) (val int, alive bool) {
+func (c *ref) Wait(cur int) (val int, alive bool) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	if c.dead {
@@ -23,9 +23,19 @@ func (c *ref) WaitForChange(cur int) (val int, alive bool) {
 
 	for val, alive = c.val, !c.dead; val == cur && alive; val, alive = c.val, !c.dead {
 		c.lock.Wait()
-		// if c.dead {
-		// return cur, false
-		// }
+	}
+	return
+}
+
+func (c *ref) WaitUntil(cur int) (val int, alive bool) {
+	c.lock.L.Lock()
+	defer c.lock.L.Unlock()
+	if c.dead {
+		return cur, false
+	}
+
+	for val, alive = c.val, !c.dead; val < cur && alive; val, alive = c.val, !c.dead {
+		c.lock.Wait()
 	}
 	return
 }
@@ -43,16 +53,13 @@ func (c *ref) Close() {
 
 func (c *ref) Update(fn func(int) int) int {
 	c.lock.L.Lock()
+	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
-	bef := c.val
 	c.val = fn(c.val)
-	if bef != c.val {
-		defer c.lock.Broadcast()
-	}
 	return c.val
 }
 
-func (c *ref) Set(pos int) (new int) {
+func (c *ref) Set(pos int) int {
 	return c.Update(func(int) int {
 		return pos
 	})

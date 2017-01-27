@@ -175,19 +175,19 @@ func (h *replica) start() error {
 	// start the config loop
 	go func() {
 		for {
-			snapshot, err := h.Log.Snapshot()
-			if err != nil {
-				h.Logger.Error("Error getting snapshot: %+v", err)
-				return
-			}
-
-			peers, err := parsePeers(snapshot.Config(), []peer{h.Self})
-			if err != nil {
-				h.Logger.Error("Error parsing config: %+v", err)
-				return
-			}
-
-			h.Roster.Set(peers)
+			// snapshot, err := h.Log.Snapshot()
+			// if err != nil {
+				// h.Logger.Error("Error getting snapshot: %+v", err)
+				// return
+			// }
+//
+			// peers, err := parsePeers(snapshot.Config(), []peer{h.Self})
+			// if err != nil {
+				// h.Logger.Error("Error parsing config: %+v", err)
+				// return
+			// }
+//
+			// h.Roster.Set(peers)
 
 			l, err := h.Log.ListenAppends(0, 256)
 			if err != nil {
@@ -196,8 +196,11 @@ func (h *replica) start() error {
 			}
 
 			h.Logger.Info("Registered config listener.")
-			for i, e := l.Next(); e == nil; i, e = l.Next() {
-				h.Logger.Info("Appended [%v]", i)
+			for i, e := l.Next();; i, e = l.Next() {
+				if e != nil {
+					h.Logger.Error("Error parsing configuration [%v]", e)
+					break
+				}
 				if i.Kind == Config {
 					peers, err := parsePeers(i.Event, []peer{h.Self})
 					if err != nil {
@@ -205,14 +208,17 @@ func (h *replica) start() error {
 						continue
 					}
 
-					h.Logger.Info("Handling membersip change.")
-					// h.Roster.Set(peers)
+					h.Logger.Info("Appended [%v]", i, e)
+					h.Roster.Set(peers)
 				}
 			}
 
-			if cause := errors.Cause(err); cause != OutOfBoundsError {
-				return
-			}
+			h.Logger.Error("Shutting down config manager [%v]", err)
+
+			// if cause := errors.Cause(err); cause != OutOfBoundsError {
+			// h.Logger.Error("Shutting down config manager [%v]", err)
+			// return
+			// }
 		}
 	}()
 
