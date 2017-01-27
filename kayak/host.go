@@ -10,8 +10,8 @@ import (
 // a host simply binds a network service with the core log machine.
 type host struct {
 	logger common.Logger
-	core   *replicatedLog
 	server net.Server
+	core   *replica
 	closed chan struct{}
 	closer chan struct{}
 }
@@ -19,7 +19,7 @@ type host struct {
 func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *host, err error) {
 	root := ctx.Logger().Fmt("Kayak")
 
-	core, err := newReplicatedLog(ctx, root, self, store, db)
+	core, err := newReplica(ctx, root, self, store, db)
 	if err != nil {
 		return nil, err
 	}
@@ -49,24 +49,32 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 	return
 }
 
+func (h *host) becomeFollower() {
+	becomeFollower(h.core)
+}
+
+func (h *host) becomeInitiate() {
+	becomeInitiate(h.core)
+}
+
 func (h *host) Id() uuid.UUID {
-	return h.core.replica.Id
+	return h.core.Id
 }
 
 func (h *host) Context() common.Context {
-	return h.core.replica.Ctx
+	return h.core.Ctx
 }
 
 func (h *host) Self() peer {
-	return h.core.Self()
+	return h.core.Self
 }
 
 func (h *host) Peers() []peer {
-	return h.core.Peers()
+	return h.core.Others()
 }
 
 func (h *host) Log() *eventLog {
-	return h.core.Log()
+	return h.core.Log
 }
 
 func (h *host) Append(e Event) (LogItem, error) {
@@ -74,8 +82,8 @@ func (h *host) Append(e Event) (LogItem, error) {
 	// return h.core.Append(e, )
 }
 
-func (h *host) Client() (*client, error) {
-	return h.core.Self().Client(h.Context())
+func (h *host) Client() (*rpcClient, error) {
+	return h.Self().Client(h.Context())
 }
 
 func (h *host) Listen(from int, buf int) (Listener, error) {

@@ -1,7 +1,6 @@
 package kayak
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
@@ -9,38 +8,9 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-// Each spawner is responsible for accepting a repica and starting the
-// the corresponding machine.
-type followerSpawner struct {
-	in        chan *replica
-	candidate chan<- *replica
-	closed    chan struct{}
-}
-
-func newFollowerSpawner(in chan *replica, candidate chan<- *replica, closed chan struct{}) *followerSpawner {
-	ret := &followerSpawner{in, candidate, closed}
-	ret.start()
-	return ret
-}
-
-func (c *followerSpawner) start() {
-	go func() {
-		for {
-			select {
-			case <-c.closed:
-				return
-			case replica := <-c.in:
-				spawnFollower(c.in, c.candidate, replica)
-			}
-		}
-	}()
-}
-
 // The follower machine.  This
 type follower struct {
 	logger       common.Logger
-	in           chan<- *replica
-	candidate    chan<- *replica
 	term         term
 	replica      *replica
 	proxyPool    concurrent.WorkPool
@@ -52,20 +22,18 @@ type follower struct {
 	closer chan struct{}
 }
 
-func spawnFollower(in chan<- *replica, candidate chan<- *replica, replica *replica) {
+func becomeFollower(replica *replica) {
 	logger := replica.Logger.Fmt("Follower(%v)", replica.CurrentTerm())
 	logger.Info("Becoming follower")
 
-	conns := newLeaderConnectionPool(replica)
+	leader := replica.Leader()
 	var clientPool net.ClientPool
-	if conns != nil {
-		clientPool = net.NewClientPool(replica.Ctx, logger, conns)
+	if leader != nil {
+		clientPool = net.NewClientPool(replica.Ctx, logger, leader.Pool(replica.Ctx))
 	}
 
 	l := &follower{
 		logger:     logger,
-		in:         in,
-		candidate:  candidate,
 		proxyPool:  concurrent.NewWorkPool(16),
 		appendPool: concurrent.NewWorkPool(16),
 		clientPool: clientPool,
@@ -78,14 +46,14 @@ func spawnFollower(in chan<- *replica, candidate chan<- *replica, replica *repli
 	l.start()
 }
 
-func (l *follower) transition(ch chan<- *replica) {
-	select {
-	case <-l.closed:
-	case ch <- l.replica:
-	}
-
-	l.Close()
-}
+// func (l *follower) transition(ch chan<- *replica) {
+// select {
+// case <-l.closed:
+// case ch <- l.replica:
+// }
+//
+// l.Close()
+// }
 
 func (l *follower) Close() error {
 	select {
@@ -117,18 +85,6 @@ func (c *follower) start() {
 					c.handleLocalAppend(append)
 				case append := <-c.replica.RemoteAppends:
 					c.handleRemoteAppend(append)
-				}
-			}
-		}()
-
-		// Roster routine
-		go func() {
-			for {
-				select {
-				case <-c.replica.closed:
-					return
-				case <-c.closed:
-					return
 				case roster := <-c.replica.RosterUpdates:
 					c.handleRosterUpdate(roster)
 				}
@@ -156,7 +112,8 @@ func (c *follower) start() {
 				c.handleInstallSnapshot(snapshot)
 			case <-electionTimer.C:
 				c.logger.Info("Waited too long for heartbeat.")
-				c.transition(c.candidate)
+				becomeCandidate(c.replica)
+				c.Close()
 				return
 			}
 		}
@@ -190,29 +147,28 @@ func (c *follower) handleRemoteAppend(append machineAppend) {
 	append.Fail(NotLeaderError)
 }
 
-func (c *follower) handleRosterUpdate(update updateRoster) {
-	timeout := c.replica.RequestTimeout / 2
-
-	err := c.proxyPool.SubmitTimeout(timeout, func() {
-		cl := c.clientPool.TakeTimeout(timeout)
-		if cl == nil {
-			update.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
-			return
-		}
-
-		// i, e := newClient(cl).Append(append.Event, append.Source, append.Seq, append.Kind)
-		// if e == nil {
-			// c.clientPool.Return(cl)
-			// update.Reply(true)
-		// } else {
-			// c.clientPool.Fail(cl)
-		// }
-//
-		// append.Return(i, e)
-	})
-	if err != nil {
-		update.Fail(err)
-	}
+func (c *follower) handleRosterUpdate(update rosterUpdate) {
+	update.Fail(NotLeaderError)
+	// timeout := c.replica.RequestTimeout / 2
+	//
+	// err := c.proxyPool.SubmitTimeout(timeout, func() {
+	// cl := c.clientPool.TakeTimeout(timeout)
+	// if cl == nil {
+	// update.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
+	// return
+	// }
+	//
+	// if e := newClient(cl).UpdateRoster(update.peer, update.join); e != nil {
+	// c.clientPool.Fail(cl)
+	// update.Fail(e)
+	// } else {
+	// c.clientPool.Return(cl)
+	// update.Ack()
+	// }
+	// })
+	// if err != nil {
+	// update.Fail(err)
+	// }
 }
 
 func (c *follower) handleInstallSnapshot(snapshot installSnapshot) {
@@ -228,6 +184,8 @@ func (c *follower) handleInstallSnapshot(snapshot installSnapshot) {
 
 func (c *follower) handleRequestVote(vote requestVote) {
 	c.logger.Debug("Handling request vote [%v]", vote)
+
+	// FIXME: Lots of duplicates here....condense down
 
 	// handle: previous term vote.  (immediately decline.)
 	if vote.term < c.replica.term.Num {
@@ -248,13 +206,15 @@ func (c *follower) handleRequestVote(vote requestVote) {
 			c.logger.Debug("Voting for candidate [%v]", vote.id)
 			vote.reply(c.replica.term.Num, true)
 			c.replica.Term(c.replica.term.Num, nil, &vote.id) // correct?
-			c.transition(c.in)
+			becomeFollower(c.replica)
+			c.Close()
 			return
 		}
 
 		c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
 		vote.reply(c.replica.term.Num, false)
-		c.transition(c.candidate)
+		becomeCandidate(c.replica)
+		c.Close()
 		return
 	}
 
@@ -263,14 +223,16 @@ func (c *follower) handleRequestVote(vote requestVote) {
 		c.logger.Debug("Voting for candidate [%v]", vote.id)
 		vote.reply(vote.term, true)
 		c.replica.Term(vote.term, nil, &vote.id)
-		c.transition(c.in)
+		becomeFollower(c.replica)
+		c.Close()
 		return
 	}
 
 	c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
 	vote.reply(vote.term, false)
 	c.replica.Term(vote.term, nil, nil)
-	c.transition(c.candidate)
+	becomeCandidate(c.replica)
+	c.Close()
 }
 
 func (c *follower) handleReplication(append replicateEvents) {
@@ -283,7 +245,8 @@ func (c *follower) handleReplication(append replicateEvents) {
 		c.logger.Info("New leader detected [%v]", append.id)
 		append.reply(append.term, false)
 		c.replica.Term(append.term, &append.id, &append.id)
-		c.transition(c.in)
+		becomeFollower(c.replica)
+		c.Close()
 		return
 	}
 
@@ -317,15 +280,15 @@ func (c *follower) handleReplication(append replicateEvents) {
 	append.reply(append.term, true)
 }
 
-func newLeaderConnectionPool(r *replica) net.ConnectionPool {
-	if r.term.Leader == nil {
-		return nil
-	}
-
-	leader, found := r.Peer(*r.term.Leader)
-	if !found {
-		panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.Leader, r.Cluster()))
-	}
-
-	return leader.NewPool(r.Ctx)
-}
+// func newLeaderConnectionPool(r *replica) net.ConnectionPool {
+// if r.term.Leader == nil {
+// return nil
+// }
+//
+// leader, found := r.Peer(*r.term.Leader)
+// if !found {
+// panic(fmt.Sprintf("Unknown member [%v]: %v", r.term.Leader, r.Cluster()))
+// }
+//
+// return leader.NewPool(r.Ctx)
+// }

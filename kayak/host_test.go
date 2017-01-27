@@ -1,9 +1,6 @@
 package kayak
 
 import (
-	"os"
-	"runtime"
-	"runtime/pprof"
 	"testing"
 	"time"
 
@@ -12,25 +9,38 @@ import (
 )
 
 func TestHost_Close(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	before := runtime.NumGoroutine()
-	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-	host := StartTestSeedHost(ctx, ":9390")
-	assert.Nil(t, host.Close())
-	time.Sleep(100 * time.Millisecond)
-	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-	after := runtime.NumGoroutine()
-	assert.Equal(t, before, after)
+	// before := runtime.NumGoroutine()
+	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+	// host := StartTestSeedHost(ctx, ":9390")
+
+	// assert.Equal(t, before, after)
+	// time.Sleep(100*time.Second)
+	// assert.Nil(t, host.Close())
+	// time.Sleep(100 * time.Millisecond)
+	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+	// after := runtime.NumGoroutine()
+	host1 := NewTestSeedHost(ctx, "localhost:9390")
+	host2 := NewTestSeedHost(ctx, "localhost:9391")
+
+	host1.becomeFollower()
+	host2.becomeInitiate()
+
+	assert.Nil(t, host1.core.UpdateRoster(host2.core.Self, true))
+
+	time.Sleep(100 * time.Second)
 }
 
-
 // func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {
-	// ctx := common.NewContext(common.NewEmptyConfig())
-	// defer ctx.Close()
-	// cluster := StartTestCluster(ctx, 2)
-	// assert.NotNil(t, Converge(cluster))
+// ctx := common.NewContext(common.NewEmptyConfig())
+// defer ctx.Close()
+// cluster := StartTestCluster(ctx, 2)
+// assert.NotNil(t, Converge(cluster))
 // }
 //
 // func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
@@ -339,7 +349,7 @@ func TestHost_Close(t *testing.T) {
 // }
 // }
 //
-func StartTestSeedHost(ctx common.Context, addr string) *host {
+func NewTestSeedHost(ctx common.Context, addr string) *host {
 	db := OpenTestLogStash(ctx)
 	host, err := newHost(ctx, addr, NewBoltStore(db), db)
 	if err != nil {

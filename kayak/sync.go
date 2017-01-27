@@ -95,10 +95,14 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 		}
 	}
 
+	s.logger.Info("Roster Change: Before: %v", cur)
+	s.logger.Info("Roster Change: After: %v", active)
 	s.SetSyncers(active)
 }
 
 func (s *logSyncer) start() {
+	s.logger.Info("Starting log synchronizer")
+
 	peers, ver := s.self.Roster.Get()
 	s.handleRosterChange(peers)
 
@@ -259,7 +263,7 @@ func (s *peerSyncer) start() {
 	go func() {
 		defer s.logger.Info("Shutting down")
 
-		var cl *client
+		var cl *rpcClient
 		defer func() {
 			if cl != nil {
 				cl.Close()

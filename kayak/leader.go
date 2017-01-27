@@ -8,35 +8,8 @@ import (
 	"github.com/pkopriv2/bourne/concurrent"
 )
 
-type leaderSpawner struct {
-	ctx      common.Context
-	in       chan *replica
-	follower chan<- *replica
-	closed   chan struct{}
-}
-
-func newLeaderSpawner(ctx common.Context, in chan *replica, follower chan<- *replica, closed chan struct{}) *leaderSpawner {
-	ret := &leaderSpawner{ctx, in, follower, closed}
-	ret.start()
-	return ret
-}
-
-func (c *leaderSpawner) start() {
-	go func() {
-		for {
-			select {
-			case <-c.closed:
-				return
-			case i := <-c.in:
-				spawnLeader(c.follower, i)
-			}
-		}
-	}()
-}
-
 type leader struct {
 	logger     common.Logger
-	follower   chan<- *replica
 	syncer     *logSyncer
 	proxyPool  concurrent.WorkPool
 	appendPool concurrent.WorkPool
@@ -46,7 +19,7 @@ type leader struct {
 	closer     chan struct{}
 }
 
-func spawnLeader(follower chan<- *replica, replica *replica) {
+func becomeLeader(replica *replica) {
 	replica.Term(replica.CurrentTerm().Num, &replica.Id, &replica.Id)
 
 	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
@@ -55,7 +28,6 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 	closed := make(chan struct{})
 	l := &leader{
 		logger:     logger,
-		follower:   follower,
 		syncer:     newLogSyncer(logger, replica),
 		proxyPool:  concurrent.NewWorkPool(10),
 		appendPool: concurrent.NewWorkPool(10),
@@ -66,15 +38,6 @@ func spawnLeader(follower chan<- *replica, replica *replica) {
 	}
 
 	l.start()
-}
-
-func (l *leader) transition(ch chan<- *replica) {
-	select {
-	case <-l.closed:
-	case ch <- l.replica:
-	}
-
-	l.Close()
 }
 
 func (l *leader) Close() error {
@@ -125,6 +88,7 @@ func (l *leader) start() {
 
 	// Main routine
 	go func() {
+		defer l.Close()
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
 			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
@@ -133,7 +97,6 @@ func (l *leader) start() {
 			case <-l.closed:
 				return
 			case <-l.replica.closed:
-				l.Close()
 				return
 			case append := <-l.replica.LocalAppends:
 				l.handleLocalAppend(append)
@@ -148,7 +111,7 @@ func (l *leader) start() {
 			case <-l.syncer.closed:
 				l.logger.Error("Sync'er closed: %v", l.syncer.failure)
 				if l.syncer.failure == NotLeaderError {
-					l.transition(l.follower)
+					becomeFollower(l.replica)
 					return
 				}
 				return
@@ -181,7 +144,7 @@ func (c *leader) handleInstallSnapshot(snapshot installSnapshot) {
 	snapshot.Reply(c.term.Num, false)
 }
 
-func (c *leader) handleRosterUpdate(update updateRoster) {
+func (c *leader) handleRosterUpdate(update rosterUpdate) {
 	// TODO: start log syncer before adding config change.
 
 	all := c.replica.Cluster()
@@ -191,10 +154,11 @@ func (c *leader) handleRosterUpdate(update updateRoster) {
 		all = delPeer(all, update.peer)
 	}
 
+	c.logger.Info("Setting cluster config [%v]", all)
 	if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
 		update.Fail(e)
 	} else {
-		update.Reply(true)
+		update.Ack()
 	}
 }
 
@@ -214,6 +178,8 @@ func (c *leader) handleRequestVote(vote requestVote) {
 		return
 	}
 
+	defer c.Close()
+
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.replica.Term(vote.term, nil, &vote.id)
 		vote.reply(vote.term, true)
@@ -222,7 +188,7 @@ func (c *leader) handleRequestVote(vote requestVote) {
 		vote.reply(vote.term, false)
 	}
 
-	c.transition(c.follower)
+	becomeFollower(c.replica)
 }
 
 func (c *leader) handleReplication(append replicateEvents) {
@@ -231,13 +197,14 @@ func (c *leader) handleReplication(append replicateEvents) {
 		return
 	}
 
+	defer c.Close()
 	c.replica.Term(append.term, &append.id, &append.id)
 	append.reply(append.term, false)
-	c.transition(c.follower)
+	becomeFollower(c.replica)
 }
 
 func (c *leader) broadcastHeartbeat() {
-	ch := c.replica.Broadcast(func(cl *client) response {
+	ch := c.replica.Broadcast(func(cl *rpcClient) response {
 		resp, err := cl.Replicate(c.replica.Id, c.term.Num, -1, -1, []LogItem{}, c.replica.Log.Committed())
 		if err != nil {
 			return response{c.term.Num, false}
@@ -254,14 +221,16 @@ func (c *leader) broadcastHeartbeat() {
 		case resp := <-ch:
 			if resp.term > c.term.Num {
 				c.replica.Term(resp.term, nil, c.term.VotedFor)
-				c.transition(c.follower)
+				becomeFollower(c.replica)
+				c.Close()
 				return
 			}
 
 			i++
 		case <-timer.C:
 			c.replica.Term(c.term.Num, nil, c.term.VotedFor)
-			c.transition(c.follower)
+			becomeFollower(c.replica)
+			c.Close()
 			return
 		}
 	}

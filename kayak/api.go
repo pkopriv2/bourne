@@ -14,8 +14,9 @@ import (
 var (
 	ClosedError    = errors.New("Kayak:Closed")
 	NotLeaderError = errors.New("Kayak:NotLeader")
-	NoLeaderError  = errors.New("Kayak:NoLeader")
-	NotPeerError   = errors.New("Kayak:NotPeer")
+	NotMemberError = errors.New("Kayak:NotMember")
+	// NoLeaderError  = errors.New("Kayak:NoLeader")
+	// NotPeerError   = errors.New("Kayak:NotPeer")
 )
 
 func Start(ctx common.Context, app Machine, self string) error {
@@ -130,12 +131,12 @@ type Machine interface {
 	// Consumers may choose to return from this method at any time.  If
 	// the returned error is nil, the log shuts down and returns from
 	// the main kayak.Run() method.  If the returned value is not nil,
-	// the machine is automatically restarted with the latest snapshot.
+	// the machine is automatically restarted.
 	//
-	// Consumers wishing to terminate the log permanently should close
-	// the log directly and return from the main loop.  Any errors
-	// returned at that time are returned from the main kayak.Run()
-	// loop.
+	// // Consumers wishing to terminate the log permanently should close
+	// // the log directly and return from the main loop.  Any errors
+	// // returned at that time are returned from the main kayak.Run()
+	// // loop.
 	//
 	// FIXME: Better semantics around exiting!
 	Run(log Log, sync Sync) error
@@ -325,7 +326,6 @@ type LogStore interface {
 
 type StoredLog interface {
 	Id() uuid.UUID
-	// Active() (StoredSegment, error)
 	Last() (int, int, error)
 	Truncate(start int) error
 	Scan(beg int, end int) ([]LogItem, error)

@@ -62,7 +62,7 @@ func (t *termStore) SetId(addr string, id uuid.UUID) error {
 
 func (t *termStore) Get(id uuid.UUID) (term term, err error) {
 	err = t.db.View(func(tx *bolt.Tx) error {
-		term, _, err = parseTerm(tx.Bucket(termBucket).Get(stash.UUID(id)))
+		term, _, err = parseTermBytes(tx.Bucket(termBucket).Get(stash.UUID(id)))
 		return err
 	})
 	return
@@ -87,47 +87,6 @@ type term struct {
 	VotedFor *uuid.UUID
 }
 
-func readTerm(r scribe.Reader) (t term, e error) {
-	e = r.ReadInt("num", &t.Num)
-	if e != nil {
-		return
-	}
-
-	var votedFor uuid.UUID
-	if err := r.ReadUUID("votedFor", &votedFor); err != nil {
-		if _, ok := err.(*scribe.MissingFieldError); !ok {
-			return t, err
-		}
-	} else {
-		t.VotedFor = &votedFor
-	}
-
-	var leader uuid.UUID
-	if err := r.ReadUUID("leader", &leader); err != nil {
-		if _, ok := err.(*scribe.MissingFieldError); !ok {
-			return t, err
-		}
-	} else {
-		t.Leader = &leader
-	}
-
-	return
-}
-
-func parseTerm(bytes []byte) (t term, o bool, e error) {
-	if bytes == nil {
-		return
-	}
-
-	var msg scribe.Message
-	msg, e = scribe.Parse(bytes)
-	if e != nil {
-		return
-	}
-
-	t, e = readTerm(msg)
-	return
-}
 
 func (t term) Write(w scribe.Writer) {
 	w.WriteInt("num", t.Num)
@@ -160,4 +119,51 @@ func (t term) String() string {
 	}
 
 	return fmt.Sprintf("(num=%v,l=%v,v=%v)", t.Num, leaderStr, votedForStr)
+}
+
+func termParser(r scribe.Reader) (interface{}, error) {
+	return readTermMessage(r)
+}
+
+func readTermMessage(r scribe.Reader) (t term, e error) {
+	e = r.ReadInt("num", &t.Num)
+	if e != nil {
+		return
+	}
+
+	var votedFor uuid.UUID
+	if err := r.ReadUUID("votedFor", &votedFor); err != nil {
+		if _, ok := err.(*scribe.MissingFieldError); !ok {
+			return t, err
+		}
+	} else {
+		t.VotedFor = &votedFor
+	}
+
+	var leader uuid.UUID
+	if err := r.ReadUUID("leader", &leader); err != nil {
+		if _, ok := err.(*scribe.MissingFieldError); !ok {
+			return t, err
+		}
+	} else {
+		t.Leader = &leader
+	}
+
+	return
+}
+
+
+func parseTermBytes(bytes []byte) (t term, o bool, e error) {
+	if bytes == nil {
+		return
+	}
+
+	var msg scribe.Message
+	msg, e = scribe.Parse(bytes)
+	if e != nil {
+		return
+	}
+
+	t, e = readTermMessage(msg)
+	return
 }

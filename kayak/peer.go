@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
@@ -13,6 +14,10 @@ import (
 type roster struct {
 	raw []peer
 	ver *ref
+}
+
+func newRoster(init []peer) *roster {
+	return &roster{raw: init, ver: newRef(0)}
 }
 
 func (c roster) Wait(next int) ([]peer, int, bool) {
@@ -25,7 +30,7 @@ func (c roster) Notify() {
 	c.ver.Notify()
 }
 
-func (c roster) Update(peers []peer) {
+func (c roster) Set(peers []peer) {
 	c.ver.Update(func(cur int) int {
 		c.raw = peers
 		return cur + 1
@@ -84,11 +89,15 @@ func clusterBytes(cluster peers) []byte {
 	return cluster.Bytes()
 }
 
+func clusterMessage(cluster peers) scribe.Message {
+	return scribe.Write(cluster)
+}
+
 // replicated configuration
 type peers []peer
 
 func (p peers) Write(w scribe.Writer) {
-	w.WriteMessage("peers", p)
+	w.WriteMessages("peers", p)
 }
 
 func (p peers) Bytes() []byte {
@@ -107,7 +116,7 @@ func parsePeers(bytes []byte, def []peer) (p []peer, e error) {
 
 	msg, err := scribe.Parse(bytes)
 	if err != nil {
-		return def, err
+		return def, errors.Wrapf(err, "Error parsing message bytes.")
 	}
 
 	return readPeers(msg)
@@ -127,23 +136,23 @@ func (p peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
 }
 
-func (p peer) NewPool(ctx common.Context) net.ConnectionPool {
+func (p peer) Pool(ctx common.Context) net.ConnectionPool {
 	return net.NewConnectionPool("tcp", p.Addr, 10, 2*time.Second)
 }
 
-func (p peer) Client(ctx common.Context) (*client, error) {
+func (p peer) Client(ctx common.Context) (*rpcClient, error) {
 	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.Addr)
 	if err != nil {
 		return nil, err
 	}
 
-	return &client{raw}, nil
+	return &rpcClient{raw}, nil
 }
 
-func (p peer) Connect(ctx common.Context, cancel <-chan struct{}) (*client, error) {
+func (p peer) Connect(ctx common.Context, cancel <-chan struct{}) (*rpcClient, error) {
 	// exponential backoff up to 2^6 seconds.
 	for timeout := 1 * time.Second; ; {
-		ch := make(chan *client)
+		ch := make(chan *rpcClient)
 		go func() {
 			cl, err := p.Client(ctx)
 			if err == nil && cl != nil {

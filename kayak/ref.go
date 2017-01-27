@@ -21,7 +21,7 @@ func (c *ref) WaitForChange(cur int) (val int, alive bool) {
 		return cur, false
 	}
 
-	for val, alive = c.val, !c.dead; val != cur && alive; val, alive = c.val, !c.dead {
+	for val, alive = c.val, !c.dead; val == cur && alive; val, alive = c.val, !c.dead {
 		c.lock.Wait()
 		// if c.dead {
 		// return cur, false
@@ -43,18 +43,19 @@ func (c *ref) Close() {
 
 func (c *ref) Update(fn func(int) int) int {
 	c.lock.L.Lock()
-	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
+	bef := c.val
 	c.val = fn(c.val)
+	if bef != c.val {
+		defer c.lock.Broadcast()
+	}
 	return c.val
 }
 
 func (c *ref) Set(pos int) (new int) {
-	c.lock.L.Lock()
-	defer c.lock.Broadcast()
-	defer c.lock.L.Unlock()
-	c.val = pos
-	return c.val
+	return c.Update(func(int) int {
+		return pos
+	})
 }
 
 func (c *ref) Get() (pos int) {
