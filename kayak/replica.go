@@ -254,12 +254,15 @@ func (h *replica) Leader() *peer {
 	if term := h.CurrentTerm(); term.Leader != nil {
 		peer, found := h.Peer(*term.Leader)
 		if !found {
-			panic(fmt.Sprintf("Unknown member [%v]: %v", term.Leader, h.Cluster()))
+			return nil
+			// panic(fmt.Sprintf("Unknown member [%v]: %v", term.Leader, h.Cluster()))
+		} else {
+			return &peer
+
 		}
-		return &peer
-	} else {
-		return nil
 	}
+
+	return nil
 }
 
 func (h *replica) Peer(id uuid.UUID) (peer, bool) {

@@ -108,9 +108,9 @@ func (l *leader) start() {
 				l.handleRequestVote(ballot)
 			case <-timer.C:
 				l.broadcastHeartbeat()
-			case <-l.syncer.closed:
-				l.logger.Error("Sync'er closed: %v", l.syncer.failure)
-				if l.syncer.failure == NotLeaderError {
+			case <-l.syncer.control.Closed():
+				l.logger.Error("Sync'er closed: %v", l.syncer.control.Failure())
+				if fail := l.syncer.control.Failure(); fail == NotLeaderError {
 					becomeFollower(l.replica)
 					return
 				}

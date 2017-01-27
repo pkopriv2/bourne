@@ -150,14 +150,22 @@ func (e *eventLog) Snapshot() (StoredSnapshot, error) {
 }
 
 // only called from followers.
-func (e *eventLog) Assert(index int, term int) (ok bool, err error) {
-	var item LogItem
-	item, ok, err = e.Get(index)
-	if !ok || err != nil {
-		return
+func (e *eventLog) Assert(index int, term int) (bool, error) {
+	item, ok, err := e.Get(index)
+	if err != nil {
+		return false, err
 	}
 
-	return item.Term == term, nil
+	if ok {
+		return item.Term == term, nil
+	}
+
+	s, err := e.Snapshot()
+	if err != nil {
+		return false, err
+	}
+
+	return s.LastIndex() == index && s.LastTerm() == term, nil
 }
 
 func (e *eventLog) Last() (int, int, error) {

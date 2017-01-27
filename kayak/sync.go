@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"sync"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
@@ -19,18 +20,14 @@ type logSyncer struct {
 	// the logger (injected by parent.  do not use root's logger)
 	logger common.Logger
 
+	// the core syncer lifecycle
+	control common.Control
+
 	// used to determine peer sync state
 	syncers map[uuid.UUID]*peerSyncer
 
 	// Used to access/update peer states.
 	syncersLock sync.Mutex
-
-	// used to indicate whether a catastrophic failure has occurred
-	failure error
-
-	// the closing channel.  Independent of leader.
-	closed chan struct{}
-	closer chan struct{}
 }
 
 func newLogSyncer(logger common.Logger, self *replica) *logSyncer {
@@ -38,38 +35,17 @@ func newLogSyncer(logger common.Logger, self *replica) *logSyncer {
 		self:    self,
 		term:    self.CurrentTerm(),
 		logger:  logger,
+		control: self.Ctx.Control().Child(),
 		syncers: make(map[uuid.UUID]*peerSyncer),
-		closed:  make(chan struct{}),
-		closer:  make(chan struct{}, 1),
 	}
 
 	s.start()
 	return s
 }
 
-func (l *logSyncer) Closed() bool {
-	select {
-	default:
-		return false
-	case <-l.closed:
-		return true
-	}
-}
-
 func (l *logSyncer) Close() error {
-	return l.shutdown(nil)
-}
-
-func (l *logSyncer) shutdown(err error) error {
-	select {
-	case <-l.closed:
-		return l.failure
-	case l.closer <- struct{}{}:
-	}
-
-	l.failure = err
-	close(l.closed)
-	return err
+	l.control.Close()
+	return nil
 }
 
 func (s *logSyncer) handleRosterChange(peers []peer) {
@@ -85,19 +61,17 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 		if sync, ok := cur[p.Id]; ok {
 			active[p.Id] = sync
 		} else {
-			active[p.Id] = newPeerSyncer(s.logger, s.self, s.term, p)
+			active[p.Id] = newPeerSyncer(s.logger, s.control, s.self, s.term, p)
 		}
 	}
 
 	// Remove any missing
 	for id, sync := range cur {
 		if _, ok := active[id]; !ok {
-			sync.shutdown(nil)
+			sync.control.Close()
 		}
 	}
 
-	s.logger.Info("Roster Change: Before: %v", cur)
-	s.logger.Info("Roster Change: After: %v", active)
 	s.SetSyncers(active)
 }
 
@@ -109,7 +83,7 @@ func (s *logSyncer) start() {
 	go func() {
 		for {
 			peers, ver, ok = s.self.Roster.Wait(ver)
-			if s.Closed() || !ok {
+			if s.control.IsClosed() || !ok {
 				return
 			}
 			s.handleRosterChange(peers)
@@ -123,7 +97,7 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 		// append
 		item, err = s.self.Log.Append(event, s.term.Num, source, seq, kind)
 		if err != nil {
-			s.shutdown(err)
+			s.control.Fail(err)
 			return
 		}
 
@@ -146,7 +120,7 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 				}
 			}
 
-			if s.Closed() {
+			if s.control.IsClosed() {
 				return
 			}
 		}
@@ -156,8 +130,8 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 	}()
 
 	select {
-	case <-s.closed:
-		return LogItem{}, common.Or(s.failure, ClosedError)
+	case <-s.control.Closed():
+		return LogItem{}, common.Or(s.control.Failure(), ClosedError)
 	case <-committed:
 		return item, nil
 	}
@@ -187,58 +161,29 @@ func (s *logSyncer) SetSyncers(syncers map[uuid.UUID]*peerSyncer) {
 
 //
 type peerSyncer struct {
-	logger common.Logger
-
-	self *replica
-	peer peer
-	term term
-
-	log *eventLog
+	logger  common.Logger
+	control common.Control
+	peer    peer
+	term    term
+	self    *replica
 
 	prevIndex int
 	prevTerm  int
-	prevLock  *sync.RWMutex
-
-	failure error
-	closed  chan struct{}
-	closer  chan struct{}
+	prevLock  sync.RWMutex
 }
 
-func newPeerSyncer(logger common.Logger, self *replica, term term, peer peer) *peerSyncer {
+func newPeerSyncer(logger common.Logger, control common.Control, self *replica, term term, peer peer) *peerSyncer {
 	sync := &peerSyncer{
 		logger:    logger.Fmt("Sync(%v)", peer),
 		self:      self,
 		peer:      peer,
 		term:      term,
-		log:       self.Log,
 		prevIndex: -1,
 		prevTerm:  -1,
-		closed:    make(chan struct{}),
-		closer:    make(chan struct{}, 1),
+		control:   control.Child(),
 	}
 	sync.start()
 	return sync
-}
-
-func (l *peerSyncer) shutdown(err error) error {
-	select {
-	case <-l.closed:
-		return l.failure
-	case l.closer <- struct{}{}:
-	}
-
-	l.failure = err
-	close(l.closed)
-	return err
-}
-
-func (l *peerSyncer) Closed() bool {
-	select {
-	default:
-		return false
-	case <-l.closed:
-		return true
-	}
 }
 
 func (l *peerSyncer) GetPrevIndexAndTerm() (int, int) {
@@ -269,44 +214,57 @@ func (s *peerSyncer) start() {
 		}()
 
 		// Start syncing at last index
-		prevIndex, prevTerm, err := s.log.Last()
+		last, _, err := s.self.Log.Last()
 		if err != nil {
-			s.shutdown(err)
+			s.control.Fail(err)
 			return
 		}
 
-		// prevIndex--
+		prev, ok, err := s.self.Log.Get(last-1)
+		if err != nil {
+			s.control.Fail(err)
+			return
+		}
+
+		if ! ok {
+			prev = LogItem{Index: -1, Term: -1}
+			// Install snapshot!
+		}
+
 		for {
-			next, ok := s.log.head.WaitUntil(prevIndex + 1)
-			if !ok || s.Closed() {
+			next, ok := s.self.Log.head.WaitUntil(prev.Index + 1)
+			if !ok || s.control.IsClosed() {
 				return
 			}
 
 			// loop until this peer is completely caught up to head!
-			for prevIndex < next {
-				if s.Closed() {
+			for prev.Index < next {
+				if s.control.IsClosed() {
 					return
 				}
 
-				s.logger.Debug("Currently (%v/%v)", prevIndex, next)
+				s.logger.Debug("Currently (%v/%v)", prev.Index, next)
 
 				// might have to reinitialize client after each batch.
 				if cl == nil {
-					cl, err = s.peer.Connect(s.self.Ctx, s.closed)
+					cl, err = s.peer.Connect(s.self.Ctx, s.control.Closed())
 					if err != nil {
 						return
 					}
 				}
 
 				// scan a full batch of events.
-				batch, err := s.log.Scan(prevIndex+1, prevIndex+1+256)
+				batch, err := s.self.Log.Scan(prev.Index+1, prev.Index+1+256)
 				if err != nil {
-					s.shutdown(err)
+					s.logger.Error("Error scanning batch: %v", batch)
+					s.control.Fail(err)
 					return
 				}
 
+				s.logger.Info("BATCH: %v", batch)
+
 				// send the append request.
-				resp, err := cl.Replicate(s.self.Id, s.term.Num, prevIndex, prevTerm, batch, s.log.Committed())
+				resp, err := cl.Replicate(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed())
 				if err != nil {
 					s.logger.Error("Unable to append events [%v]", err)
 					cl = nil
@@ -316,35 +274,36 @@ func (s *peerSyncer) start() {
 				// make sure we're still a leader.
 				if resp.term > s.term.Num {
 					s.logger.Error("No longer leader.")
-					s.shutdown(NotLeaderError)
+					s.control.Fail(NotLeaderError)
 					return
 				}
 
 				// if it was successful, progress the peer's index and term
 				if resp.success {
 					prev := batch[len(batch)-1]
-					prevIndex, prevTerm = prev.Index, prevTerm
-					s.SetPrevIndexAndTerm(prevIndex, prevTerm)
+					s.SetPrevIndexAndTerm(prev.Index, prev.Term)
 					continue
 				}
 
 				// consistency check failed, start moving backwards one index at a time.
 				// TODO: Install snapshot
 
-				prev, ok, err := s.log.Get(prevIndex - 1)
+				prev, ok, err = s.self.Log.Get(prev.Index - 1)
 				if err != nil {
-					s.shutdown(err)
+					s.control.Fail(err)
 					return
 				}
 
 				if ok {
-					prevIndex, prevTerm = prev.Index, prevTerm
-					s.SetPrevIndexAndTerm(prevIndex, prevTerm)
+					s.SetPrevIndexAndTerm(prev.Index, prev.Term)
 					continue
 				}
 
 				// INSTALL SNAPSHOT
 				s.SetPrevIndexAndTerm(-1, -1)
+				prev = LogItem{Index: -1, Term: -1}
+				time.Sleep(1000 * time.Millisecond)
+				break
 			}
 
 			s.logger.Debug("Sync'ed to [%v]", next)

@@ -8,16 +8,18 @@ type Context interface {
 	Env() Env
 	Config() Config
 	Logger() Logger
+	Control() Control
 }
 
 type ctx struct {
-	config Config
-	logger Logger
-	env *env
+	config  Config
+	logger  Logger
+	control Control
+	env     *env
 }
 
 func NewContext(config Config) Context {
-	return &ctx{config: config, logger: NewStandardLogger(config), env: NewEnv()}
+	return &ctx{config: config, logger: NewStandardLogger(config), env: NewEnv(), control: NewControl(nil)}
 }
 
 func (c *ctx) Close() error {
@@ -32,10 +34,14 @@ func (c *ctx) Config() Config {
 	return c.config
 }
 
+func (c *ctx) Control() Control {
+	return c.control
+}
+
 func (c *ctx) Logger() Logger {
 	return c.logger
 }
 
-func (c *ctx) FormatLogger(fmt string, args...interface{}) Logger {
+func (c *ctx) FormatLogger(fmt string, args ...interface{}) Logger {
 	return formatLogger(c.logger, fmt, args...)
 }

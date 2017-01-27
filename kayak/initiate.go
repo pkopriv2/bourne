@@ -6,9 +6,8 @@ import (
 
 type initiate struct {
 	logger  common.Logger
+	control common.Control
 	replica *replica
-	closed  chan struct{}
-	closer  chan struct{}
 }
 
 func becomeInitiate(replica *replica) {
@@ -18,34 +17,23 @@ func becomeInitiate(replica *replica) {
 	l := &initiate{
 		logger:  logger,
 		replica: replica,
-		closed:  make(chan struct{}),
-		closer:  make(chan struct{}, 1),
+		control: replica.Ctx.Control().Child(),
 	}
 
 	l.start()
 }
 
-func (l *initiate) Close() error {
-	select {
-	case <-l.closed:
-		return ClosedError
-	case l.closer <- struct{}{}:
-	}
-
-	close(l.closed)
-	return nil
-}
-
 func (l *initiate) start() {
 	// Main routine
 	go func() {
-		defer l.Close()
+		defer l.control.Close()
+		defer l.logger.Info("Shutting down.")
 
 		for {
 			select {
-			case <-l.closed:
-				return
 			case <-l.replica.closed:
+				return
+			case <-l.control.Closed():
 				return
 			case events := <-l.replica.Replications:
 				l.handleReplication(events)
@@ -66,4 +54,7 @@ func (c *initiate) handleRequestVote(vote requestVote) {
 
 func (c *initiate) handleReplication(append replicateEvents) {
 	append.reply(append.term, false)
+	c.replica.Term(append.term, &append.id, &append.id)
+	becomeFollower(c.replica)
+	c.control.Close()
 }
