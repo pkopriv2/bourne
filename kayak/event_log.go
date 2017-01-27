@@ -125,7 +125,7 @@ func (e *eventLog) Insert(batch []LogItem) error {
 
 func (e *eventLog) Truncate(from int) (err error) {
 	e.head.Update(func(cur int) int {
-		if from >= cur {
+		if from > cur {
 			return cur
 		}
 
@@ -133,7 +133,7 @@ func (e *eventLog) Truncate(from int) (err error) {
 		if err != nil {
 			return cur
 		} else {
-			return 0 // Moved all the way back to zero!
+			return from-1
 		}
 	})
 	return

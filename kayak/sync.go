@@ -261,8 +261,6 @@ func (s *peerSyncer) start() {
 					return
 				}
 
-				s.logger.Info("BATCH: %v", batch)
-
 				// send the append request.
 				resp, err := cl.Replicate(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed())
 				if err != nil {
@@ -280,7 +278,7 @@ func (s *peerSyncer) start() {
 
 				// if it was successful, progress the peer's index and term
 				if resp.success {
-					prev := batch[len(batch)-1]
+					prev = batch[len(batch)-1]
 					s.SetPrevIndexAndTerm(prev.Index, prev.Term)
 					continue
 				}

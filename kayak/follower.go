@@ -261,12 +261,12 @@ func (c *follower) handleReplication(append replicateEvents) {
 
 		// FIXME: This will cause anyone listening to head to
 		// have to recreate state!
-		c.replica.Log.Truncate(append.prevLogIndex + 1)
 		append.reply(append.term, false)
 		return
 	}
 
 	// insert items.
+	c.replica.Log.Truncate(append.prevLogIndex + 1)
 	if err := c.replica.Log.Insert(append.items); err != nil {
 		c.logger.Error("Error inserting batch: %v", err)
 		append.reply(append.term, false)

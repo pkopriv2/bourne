@@ -529,7 +529,7 @@ func (b *boltLog) truncate(tx *bolt.Tx, from int) (int, error) {
 	}
 
 	if err := b.setMaxIndex(tx, newMax); err != nil {
-		return 0, errors.Wrapf(err, "Error setting min index [%v]", newMax)
+		return 0, errors.Wrapf(err, "Error setting max index [%v]", newMax)
 	}
 
 	return newMax, nil
