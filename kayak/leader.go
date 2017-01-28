@@ -36,25 +36,19 @@ func becomeLeader(replica *replica) {
 		replica:    replica,
 	}
 
+	ctx.Control().OnClose(func(error) {
+		l.ctrl.Close()
+		l.proxyPool.Close()
+		l.appendPool.Close()
+		l.syncer.Close()
+	})
+
 	l.start()
 }
 
 func (l *leader) start() {
 	// Establish leadership
 	l.broadcastHeartbeat()
-
-	// Close routine.
-	go func() {
-		select {
-		case <-l.ctrl.Closed():
-		case <-l.replica.ctrl.Closed():
-		}
-
-		l.ctrl.Close()
-		l.proxyPool.Close()
-		l.appendPool.Close()
-		l.syncer.Close()
-	}()
 
 	// Proxy routine.
 	go func() {
