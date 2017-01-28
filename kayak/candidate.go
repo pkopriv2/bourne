@@ -7,40 +7,29 @@ import (
 )
 
 type candidate struct {
+	ctx     common.Context
+	ctrl    common.Control
 	logger  common.Logger
 	term    term
 	replica *replica
-	closed  chan struct{}
-	closer  chan struct{}
 }
 
 func becomeCandidate(replica *replica) {
 	// increment term and vote for self.
 	replica.Term(replica.term.Num+1, nil, &replica.Id)
 
-	logger := replica.Logger.Fmt("Candidate(%v)", replica.CurrentTerm())
-	logger.Info("Becoming candidate")
+	ctx := replica.Ctx.Sub("Candidate(%v)", replica.CurrentTerm())
+	ctx.Logger().Info("Becoming candidate")
 
 	l := &candidate{
-		logger:  logger,
+		ctx:     ctx,
+		logger:  ctx.Logger(),
+		ctrl:    ctx.Control(),
 		term:    replica.CurrentTerm(),
 		replica: replica,
-		closed:  make(chan struct{}),
-		closer:  make(chan struct{}, 1),
 	}
 
 	l.start()
-}
-
-func (c *candidate) Close() error {
-	select {
-	case <-c.closed:
-		return ClosedError
-	case c.closer <- struct{}{}:
-	}
-
-	close(c.closed)
-	return nil
 }
 
 func (c *candidate) start() {
@@ -61,7 +50,7 @@ func (c *candidate) start() {
 	})
 
 	go func() {
-		defer c.Close()
+		defer c.ctrl.Close()
 
 		// set the election timer.
 		c.logger.Info("Setting timer [%v]", c.replica.ElectionTimeout)
@@ -75,14 +64,12 @@ func (c *candidate) start() {
 				c.logger.Info("Acquired majority [%v] votes.", needed)
 				c.replica.Term(c.replica.term.Num, &c.replica.Id, &c.replica.Id)
 				becomeLeader(c.replica)
-				c.Close()
+				c.ctrl.Close()
 				return
 			}
 
 			select {
-			case <-c.closed:
-				return
-			case <-c.replica.closed:
+			case <-c.ctrl.Closed():
 				return
 			case req := <-c.replica.Replications:
 				c.handleAppendEvents(req)
@@ -92,7 +79,7 @@ func (c *candidate) start() {
 				c.logger.Info("Unable to acquire necessary votes [%v/%v]", numVotes, needed)
 				timer := time.NewTimer(c.replica.ElectionTimeout)
 				select {
-				case <-c.closed:
+				case <-c.ctrl.Closed():
 					return
 				case <-timer.C:
 					becomeCandidate(c.replica)
@@ -133,7 +120,7 @@ func (c *candidate) handleRequestVote(req stdRequest) {
 		req.Reply(response{vote.term, true})
 		c.replica.Term(vote.term, nil, &vote.id)
 		becomeFollower(c.replica)
-		c.Close()
+		c.ctrl.Close()
 		return
 	}
 
@@ -154,5 +141,5 @@ func (c *candidate) handleAppendEvents(req stdRequest) {
 	req.Reply(response{c.term.Num, false})
 	c.replica.Term(append.term, &append.id, &append.id)
 	becomeFollower(c.replica)
-	c.Close()
+	c.ctrl.Close()
 }

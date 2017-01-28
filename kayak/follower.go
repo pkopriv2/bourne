@@ -10,8 +10,9 @@ import (
 
 // The follower machine.  This
 type follower struct {
+	ctx          common.Context
 	logger       common.Logger
-	control      common.Control
+	ctrl         common.Control
 	term         term
 	replica      *replica
 	proxyPool    concurrent.WorkPool
@@ -22,18 +23,18 @@ type follower struct {
 }
 
 func becomeFollower(replica *replica) {
-	logger := replica.Logger.Fmt("Follower(%v)", replica.CurrentTerm())
-	logger.Info("Becoming follower")
+	ctx := replica.Ctx.Sub("Follower(%v)", replica.CurrentTerm())
+	ctx.Logger().Info("Becoming follower")
 
-	leader := replica.Leader()
 	var clientPool net.ClientPool
-	if leader != nil {
-		clientPool = net.NewClientPool(replica.Ctx, logger, leader.Pool(replica.Ctx))
+	if leader := replica.Leader(); leader != nil {
+		clientPool = net.NewClientPool(ctx, ctx.Logger(), leader.Pool(replica.Ctx))
 	}
 
 	l := &follower{
-		logger:     logger,
-		control:    replica.Ctx.Control().Sub(),
+		ctx:        ctx,
+		logger:     ctx.Logger(),
+		ctrl:       ctx.Control(),
 		proxyPool:  concurrent.NewWorkPool(16),
 		appendPool: concurrent.NewWorkPool(16),
 		clientPool: clientPool,
@@ -48,10 +49,10 @@ func (c *follower) start() {
 	// If any config has changed, just restart the follower...
 	_, ver := c.replica.Roster.Get()
 	go func() {
-		defer c.control.Close()
+		defer c.ctrl.Close()
 
 		_, _, ok := c.replica.Roster.Wait(ver)
-		if c.control.IsClosed() || !ok {
+		if c.ctrl.IsClosed() || !ok {
 			return
 		}
 
@@ -62,12 +63,10 @@ func (c *follower) start() {
 	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
 	if leader := c.replica.Leader(); leader != nil {
 		go func() {
-			defer c.control.Close()
+			defer c.ctrl.Close()
 			for {
 				select {
-				case <-c.replica.closed:
-					return
-				case <-c.control.Closed():
+				case <-c.ctrl.Closed():
 					return
 				case req := <-c.replica.LocalAppends:
 					c.handleLocalAppend(req)
@@ -82,15 +81,13 @@ func (c *follower) start() {
 
 	// Main routine
 	go func() {
-		defer c.control.Close()
+		defer c.ctrl.Close()
 		for {
 			electionTimer := time.NewTimer(c.replica.ElectionTimeout)
 			c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
 
 			select {
-			case <-c.control.Closed():
-				return
-			case <-c.replica.closed:
+			case <-c.ctrl.Closed():
 				return
 			case req := <-c.replica.Replications:
 				c.handleReplication(req)
@@ -192,14 +189,14 @@ func (c *follower) handleRequestVote(req stdRequest) {
 			req.Reply(response{c.replica.term.Num, true})
 			c.replica.Term(c.replica.term.Num, nil, &vote.id) // correct?
 			becomeFollower(c.replica)
-			c.control.Close()
+			c.ctrl.Close()
 			return
 		}
 
 		c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
 		req.Reply(response{c.replica.term.Num, false})
 		becomeCandidate(c.replica)
-		c.control.Close()
+		c.ctrl.Close()
 		return
 	}
 
@@ -209,7 +206,7 @@ func (c *follower) handleRequestVote(req stdRequest) {
 		req.Reply(response{vote.term, true})
 		c.replica.Term(vote.term, nil, &vote.id)
 		becomeFollower(c.replica)
-		c.control.Close()
+		c.ctrl.Close()
 		return
 	}
 
@@ -217,7 +214,7 @@ func (c *follower) handleRequestVote(req stdRequest) {
 	req.Reply(response{vote.term, false})
 	c.replica.Term(vote.term, nil, nil)
 	becomeCandidate(c.replica)
-	c.control.Close()
+	c.ctrl.Close()
 }
 
 func (c *follower) handleReplication(req stdRequest) {
@@ -228,13 +225,13 @@ func (c *follower) handleReplication(req stdRequest) {
 		return
 	}
 
-	// c.logger.Info("Handling replication: %v", append)
+	c.logger.Info("Handling replication: %v", append)
 	if append.term > c.replica.term.Num || c.replica.term.Leader == nil {
 		c.logger.Info("New leader detected [%v]", append.id)
 		req.Reply(response{append.term, false})
 		c.replica.Term(append.term, &append.id, &append.id)
 		becomeFollower(c.replica)
-		c.control.Close()
+		c.ctrl.Close()
 		return
 	}
 

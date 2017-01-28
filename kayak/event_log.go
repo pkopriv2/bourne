@@ -1,16 +1,14 @@
 package kayak
 
 import (
-	"fmt"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
 type eventLog struct {
-
-	// logger
+	ctx    common.Context
+	ctrl   common.Control
 	logger common.Logger
 
 	// the stored log.
@@ -21,49 +19,39 @@ type eventLog struct {
 
 	// index of last item committed.(initialized to -1)
 	commit *ref
-
-	// closing utilities.
-	closed chan struct{}
-
-	// closing lock.  (a buffered channel of 1 entry.)
-	closer chan struct{}
 }
 
-func openEventLog(logger common.Logger, log StoredLog) (*eventLog, error) {
+func openEventLog(ctx common.Context, log StoredLog) (*eventLog, error) {
 	head, _, err := log.Last()
 	if err != nil {
 		return nil, errors.Wrapf(err, "Unable to retrieve head position for segment [%v]", log.Id())
 	}
 
+	ctx = ctx.Sub("EventLog")
+
+	headRef := newRef(head)
+	ctx.Control().OnClose(func(error) {
+		ctx.Logger().Info("Closing head ref")
+		headRef.Close()
+	})
+
+	commitRef := newRef(-1)
+	ctx.Control().OnClose(func(error) {
+		ctx.Logger().Info("Closing commit ref")
+		commitRef.Close()
+	})
+
 	return &eventLog{
-		logger: logger.Fmt("EventLog"),
+		ctx:    ctx,
+		ctrl:   ctx.Control(),
+		logger: ctx.Logger(),
 		raw:    log,
-		head:   newRef(head),
-		commit: newRef(-1),
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1)}, nil
+		head:   headRef,
+		commit: commitRef}, nil
 }
 
 func (e *eventLog) Close() error {
-	select {
-	case <-e.closed:
-		return ClosedError
-	case e.closer <- struct{}{}:
-	}
-
-	close(e.closed)
-	e.commit.Close()
-	e.head.Close()
-	return nil
-}
-
-func (e *eventLog) Closed() bool {
-	select {
-	case <-e.closed:
-		return true
-	default:
-		return false
-	}
+	return e.ctrl.Close()
 }
 
 func (e *eventLog) Head() int {
@@ -133,7 +121,7 @@ func (e *eventLog) Truncate(from int) (err error) {
 		if err != nil {
 			return cur
 		} else {
-			return from-1
+			return from - 1
 		}
 	})
 	return
@@ -173,7 +161,7 @@ func (e *eventLog) Last() (int, int, error) {
 }
 
 func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
-	if e.Closed() {
+	if e.ctrl.IsClosed() {
 		return nil, ClosedError
 	}
 
@@ -181,7 +169,7 @@ func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
 }
 
 func (e *eventLog) ListenAppends(from int, buf int) (Listener, error) {
-	if e.Closed() {
+	if e.ctrl.IsClosed() {
 		return nil, ClosedError
 	}
 
@@ -228,32 +216,21 @@ func (s *snapshot) Events(cancel <-chan struct{}) <-chan Event {
 }
 
 type refListener struct {
-	log *eventLog
-	pos *ref
-	buf int
-	ch  chan struct {
-		LogItem
-		error
-	}
-
-	failure error
-	closed  chan struct{}
-	closer  chan struct{}
+	log  *eventLog
+	pos  *ref
+	buf  int
+	ch   chan LogItem
+	ctrl common.Control
 }
 
 func newRefListener(log *eventLog, pos *ref, from int, buf int) *refListener {
-	ch := make(chan struct {
-		LogItem
-		error
-	}, buf)
-
 	l := &refListener{
-		log:    log,
-		pos:    pos,
-		buf:    buf,
-		ch:     ch,
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1)}
+		log:  log,
+		pos:  pos,
+		buf:  buf,
+		ch:   make(chan LogItem, buf),
+		ctrl: common.NewControl(nil),
+	}
 	l.start(from)
 	return l
 }
@@ -264,13 +241,13 @@ func (l *refListener) start(from int) {
 
 		for cur := from; ; {
 			next, ok := l.pos.WaitUntil(cur)
-			if !ok || l.isClosed() {
+			if !ok || l.ctrl.IsClosed() || l.log.ctrl.IsClosed() {
 				return
 			}
 
 			// FIXME: Can still miss truncations
 			if next < cur {
-				l.shutdown(errors.Wrapf(OutOfBoundsError, "Log truncated to [%v] was [%v]", next, cur))
+				l.ctrl.Fail(errors.Wrapf(OutOfBoundsError, "Log truncated to [%v] was [%v]", next, cur))
 				return
 			}
 
@@ -279,27 +256,18 @@ func (l *refListener) start(from int) {
 				// scan the next batch
 				batch, err := l.log.Scan(cur, common.Min(next, cur+l.buf))
 				if err != nil {
-				fmt.Println("Items: ", err)
 
 				}
 
 				// start emitting
 				for _, i := range batch {
-					tuple := struct {
-						LogItem
-						error
-					}{i, err}
-
 					select {
-					case <-l.log.closed:
+					case <-l.log.ctrl.Closed():
 						return
-					case <-l.closed:
+					case <-l.ctrl.Closed():
 						return
-					case l.ch <- tuple:
-						if err != nil {
-							l.shutdown(err)
-							return
-						}
+					case l.ch <- i:
+						return
 					}
 				}
 
@@ -310,39 +278,17 @@ func (l *refListener) start(from int) {
 	}()
 }
 
-func (l *refListener) isClosed() bool {
+func (p *refListener) Next() (LogItem, bool, error) {
 	select {
-	default:
-		return false
-	case <-l.closed:
-		return true
-	}
-}
-
-func (p *refListener) Next() (LogItem, error) {
-	select {
-	case <-p.closed:
-		return LogItem{}, common.Or(p.failure, ClosedError)
+	case <-p.ctrl.Closed():
+		return LogItem{}, false, p.ctrl.Failure()
 	case i := <-p.ch:
-		return i.LogItem, i.error
+		return i, true, nil
 	}
 }
 
 func (l *refListener) Close() error {
-	return l.shutdown(nil)
-}
-
-func (l *refListener) shutdown(cause error) error {
-	select {
-	case <-l.closed:
-		return ClosedError
-	case l.closer <- struct{}{}:
-	}
-
-	l.failure = cause
-	close(l.closed)
-	l.pos.Notify()
-	return nil
+	return l.ctrl.Close()
 }
 
 type filteredListener struct {
@@ -354,11 +300,11 @@ func newFilteredListener(raw Listener) *filteredListener {
 	return &filteredListener{raw, make(map[uuid.UUID]int)}
 }
 
-func (p *filteredListener) Next() (LogItem, error) {
+func (p *filteredListener) Next() (LogItem, bool, error) {
 	for {
-		next, err := p.raw.Next()
-		if err != nil {
-			return next, err
+		next, ok, err := p.raw.Next()
+		if err != nil || !ok {
+			return next, ok, err
 		}
 
 		cur := p.seq[next.Source]
@@ -367,7 +313,7 @@ func (p *filteredListener) Next() (LogItem, error) {
 		}
 
 		p.seq[next.Source] = next.Seq
-		return next, nil
+		return next, true, nil
 	}
 }
 

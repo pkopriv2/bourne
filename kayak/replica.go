@@ -10,54 +10,8 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
 	uuid "github.com/satori/go.uuid"
 )
-
-
-type stdRequest struct {
-	val interface{}
-	reply chan interface{}
-	err  chan error
-}
-
-func newStdRequest(val interface{}) stdRequest{
-	return stdRequest{val, make(chan interface{}, 1), make(chan error, 1)}
-}
-
-func (r stdRequest) Body() interface{} {
-	return r.val
-}
-
-func (r stdRequest) Reply(val interface{}) {
-	r.reply<-val
-}
-
-func (r stdRequest) Fail(err error) {
-	r.err<-err
-}
-
-func (r stdRequest)	Return(val interface{}, err error) {
-	if err != nil {
-		r.err<-err
-	} else {
-		r.reply<-val
-	}
-}
-
-func (r stdRequest) Response() (interface{}, error) {
-	select {
-	case err := <-r.err:
-		return nil, err
-	case val := <-r.reply:
-		return val, nil
-	}
-}
-
-type stdResponse struct {
-	Val interface{}
-	Err error
-}
 
 // The replica is the state container for a member of a cluster.  The
 // replica is managed by a single member of the replicated log state machine
@@ -71,10 +25,13 @@ type replica struct {
 	// configuration used to build this instance.
 	Ctx common.Context
 
-	// the core member logger
-	Logger common.Logger
+	// the control (de-normalized from Ctx.Logger())
+	logger common.Logger
 
-	// // the unique id of this member. (copied for brevity from self)
+	// the control (de-normalized from Ctx.Control())
+	ctrl common.Control
+
+	// the unique id of this member. (copied for brevity from self)
 	Id uuid.UUID
 
 	// the peer representing the local instance
@@ -91,9 +48,9 @@ type replica struct {
 
 	// the current term.
 	term term
-
-	// the current seq position
-	seq concurrent.AtomicCounter
+	//
+	// // the current seq position
+	// seq concurrent.AtomicCounter
 
 	// the election timeout.  (heartbeat: = timeout / 5)
 	ElectionTimeout time.Duration
@@ -124,13 +81,9 @@ type replica struct {
 
 	// append requests (from local state machine)
 	RosterUpdates chan stdRequest
-
-	// closing utilities
-	closed chan struct{}
-	closer chan struct{}
 }
 
-func newReplica(ctx common.Context, logger common.Logger, addr string, store LogStore, db *bolt.DB) (*replica, error) {
+func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*replica, error) {
 	termStore, err := openTermStore(db)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
@@ -149,8 +102,8 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 	}
 
 	self := peer{id, addr}
-	logger = logger.Fmt("%v", self)
-	logger.Info("Starting replica.")
+	ctx = ctx.Sub("%v", self)
+	ctx.Logger().Info("Starting replica.")
 
 	raw, err := store.Get(self.Id)
 	if err != nil {
@@ -164,16 +117,21 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 		}
 	}
 
-	log, err := openEventLog(logger, raw)
+	log, err := openEventLog(ctx, raw)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
 	}
 
+	ctx.Control().OnClose(func(cause error) {
+		log.Close()
+	})
+
 	r := &replica{
 		Ctx:             ctx,
+		logger:          ctx.Logger(),
+		ctrl:            ctx.Control(),
 		Id:              id,
 		Self:            self,
-		Logger:          logger,
 		terms:           termStore,
 		Log:             log,
 		Db:              db,
@@ -186,25 +144,12 @@ func newReplica(ctx common.Context, logger common.Logger, addr string, store Log
 		RosterUpdates:   make(chan stdRequest),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
 		RequestTimeout:  10 * time.Second,
-		closed:          make(chan struct{}),
-		closer:          make(chan struct{}, 1),
 	}
+
 	return r, r.start()
 }
 
-func (r *replica) Close() error {
-	select {
-	case <-r.closed:
-		return ClosedError
-	case r.closer <- struct{}{}:
-	}
-
-	close(r.closed)
-	return r.Log.Close()
-}
-
 func (h *replica) start() error {
-
 	// retrieve the term from the durable store
 	term, err := h.terms.Get(h.Self.Id)
 	if err != nil {
@@ -216,56 +161,7 @@ func (h *replica) start() error {
 		return err
 	}
 
-	// start the config loop
-	go func() {
-		for {
-			// snapshot, err := h.Log.Snapshot()
-			// if err != nil {
-			// h.Logger.Error("Error getting snapshot: %+v", err)
-			// return
-			// }
-			//
-			// peers, err := parsePeers(snapshot.Config(), []peer{h.Self})
-			// if err != nil {
-			// h.Logger.Error("Error parsing config: %+v", err)
-			// return
-			// }
-			//
-			// h.Roster.Set(peers)
-
-			l, err := h.Log.ListenAppends(0, 256)
-			if err != nil {
-				h.Logger.Error("Error starting listener: %+v", err)
-				return
-			}
-
-			h.Logger.Info("Registered config listener.")
-			for i, e := l.Next(); ; i, e = l.Next() {
-				if e != nil {
-					h.Logger.Error("Error parsing configuration [%v]", e)
-					break
-				}
-				if i.Kind == Config {
-					peers, err := parsePeers(i.Event, []peer{h.Self})
-					if err != nil {
-						h.Logger.Error("Error parsing configuration [%v]", peers)
-						continue
-					}
-
-					h.Logger.Info("Appended [%v]", i, e)
-					h.Roster.Set(peers)
-				}
-			}
-
-			h.Logger.Error("Shutting down config manager [%v]", err)
-
-			// if cause := errors.Cause(err); cause != OutOfBoundsError {
-			// h.Logger.Error("Shutting down config manager [%v]", err)
-			// return
-			// }
-		}
-	}()
-
+	listenRosterChanges(h)
 	return nil
 }
 
@@ -279,7 +175,7 @@ func (h *replica) Term(num int, leader *uuid.UUID, vote *uuid.UUID) error {
 	h.lock.Lock()
 	defer h.lock.Unlock()
 	h.term = term{num, leader, vote}
-	h.Logger.Info("Durably storing updated term [%v]", h.term)
+	h.logger.Info("Durably storing updated term [%v]", h.term)
 	return h.terms.Save(h.Id, h.term)
 }
 
@@ -335,7 +231,7 @@ func (h *replica) Majority() int {
 
 func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	peers := h.Others()
-	h.Logger.Info("Broadcasting heartbeat: %v", peers)
+	h.logger.Info("Broadcasting heartbeat: %v", peers)
 
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
@@ -357,13 +253,13 @@ func (h *replica) sendRequest(ch chan<- stdRequest, val interface{}) (interface{
 	timer := time.NewTimer(h.RequestTimeout)
 	req := newStdRequest(val)
 	select {
-	case <-h.closed:
+	case <-h.ctrl.Closed():
 		return nil, ClosedError
 	case <-timer.C:
 		return nil, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
 	case ch <- req:
 		select {
-		case <-h.closed:
+		case <-h.ctrl.Closed():
 			return nil, ClosedError
 		case r := <-req.reply:
 			return r, nil
@@ -440,3 +336,46 @@ func majority(num int) int {
 	return int(math.Ceil(float64(num) / float64(2)))
 }
 
+type stdRequest struct {
+	val   interface{}
+	reply chan interface{}
+	err   chan error
+}
+
+func newStdRequest(val interface{}) stdRequest {
+	return stdRequest{val, make(chan interface{}, 1), make(chan error, 1)}
+}
+
+func (r stdRequest) Body() interface{} {
+	return r.val
+}
+
+func (r stdRequest) Reply(val interface{}) {
+	r.reply <- val
+}
+
+func (r stdRequest) Fail(err error) {
+	r.err <- err
+}
+
+func (r stdRequest) Return(val interface{}, err error) {
+	if err != nil {
+		r.err <- err
+	} else {
+		r.reply <- val
+	}
+}
+
+func (r stdRequest) Response() (interface{}, error) {
+	select {
+	case err := <-r.err:
+		return nil, err
+	case val := <-r.reply:
+		return val, nil
+	}
+}
+
+// type stdResponse struct {
+// Val interface{}
+// Err error
+// }

@@ -9,52 +9,57 @@ import (
 
 // a host simply binds a network service with the core log machine.
 type host struct {
-	logger common.Logger
+	ctx    common.Context
 	server net.Server
 	core   *replica
-	closed chan struct{}
-	closer chan struct{}
 }
 
 func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *host, err error) {
-	root := ctx.Logger().Fmt("Kayak")
+	ctx = ctx.Sub("Kayak")
 
-	core, err := newReplica(ctx, root, self, store, db)
+	core, err := newReplica(ctx, self, store, db)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if err != nil {
-			core.Close()
+			core.ctrl.Fail(err)
 		}
 	}()
 
+	// FIXME: Refactor net.Server to accept addrs instead of ports.
 	_, port, err := net.SplitAddr(self)
 	if err != nil {
 		return nil, err
 	}
 
-	server, err := newServer(ctx, root, port, core)
+	server, err := newServer(ctx, ctx.Logger(), port, core)
 	if err != nil {
 		return nil, err
 	}
 
+	ctx.Control().OnClose(func(cause error) {
+		server.Close()
+	})
+
 	h = &host{
+		ctx:    ctx,
 		core:   core,
 		server: server,
-		logger: root,
-		closed: make(chan struct{}),
-		closer: make(chan struct{}, 1),
 	}
 	return
 }
 
-func (h *host) becomeFollower() {
+func (h *host) Start() {
 	becomeFollower(h.core)
 }
 
-func (h *host) becomeInitiate() {
-	becomeInitiate(h.core)
+func (h *host) Join(addr string) {
+	// becomeInitiate(h.core)
+}
+
+func (h *host) Close() error {
+	return h.ctx.Control().Close()
 }
 
 func (h *host) Id() uuid.UUID {
@@ -88,22 +93,6 @@ func (h *host) Client() (*rpcClient, error) {
 
 func (h *host) Listen(from int, buf int) (Listener, error) {
 	return h.core.Listen(from, buf)
-}
-
-func (h *host) Close() error {
-	select {
-	case <-h.closed:
-		return ClosedError
-	case h.closer <- struct{}{}:
-	}
-
-	h.logger.Info("Closing")
-
-	var err error
-	err = common.Or(err, h.server.Close())
-	err = common.Or(err, h.core.Close())
-	close(h.closed)
-	return err
 }
 
 func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {

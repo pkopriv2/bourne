@@ -9,6 +9,34 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// Basic status/health information
+func newStatusRequest() net.Request {
+	return net.NewEmptyRequest(metaStatus)
+}
+
+type status struct {
+	id     uuid.UUID
+	term   term
+	config []peer
+}
+
+func (u status) Response() net.Response {
+	return net.NewStandardResponse(scribe.Write(u))
+}
+
+func (u status) Write(w scribe.Writer) {
+	w.WriteUUID("id", u.id)
+	w.WriteMessage("term", u.term)
+	w.WriteMessages("config", u.config)
+}
+
+func readStatusResponse(r scribe.Reader) (ret status, err error) {
+	err = common.Or(err, r.ReadUUID("id", &ret.id))
+	err = common.Or(err, r.ParseMessage("term", &ret.term, termParser))
+	err = common.Or(err, r.ParseMessages("config", &ret.config, peerParser))
+	return
+}
+
 // Internal append events request.  Requests are put onto the internal member
 // channel and consumed by the currently active sub-machine.
 //
@@ -20,6 +48,14 @@ type replicateEvents struct {
 	prevLogTerm  int
 	items        []LogItem
 	commit       int
+}
+
+func newHeartBeat(id uuid.UUID, term int, commit int) replicateEvents {
+	return replicateEvents{id, term, -1, -1, []LogItem{}, commit}
+}
+
+func newReplicateEvents(id uuid.UUID, term int, prevIndex int, prevTerm int, items []LogItem, commit int) replicateEvents {
+	return replicateEvents{id, term, prevIndex, prevTerm, items, commit}
 }
 
 func (a replicateEvents) String() string {
@@ -209,7 +245,6 @@ func readRosterUpdateResponse(res net.Response) error {
 	return res.Error()
 }
 
-
 // Internal response type.  These are returned through the
 // request 'ack'/'response' channels by the currently active
 // sub-machine component.
@@ -234,38 +269,3 @@ func readResponse(r scribe.Reader) (ret response, err error) {
 }
 
 // Status request rpc types
-func newStatusRequest() net.Request {
-	return net.NewEmptyRequest(metaStatus)
-}
-
-type statusResponse struct {
-	id     uuid.UUID
-	term   term
-	config []peer
-}
-
-func (u statusResponse) Response() net.Response {
-	return net.NewStandardResponse(scribe.Write(u))
-}
-
-func (u statusResponse) Write(w scribe.Writer) {
-	w.WriteUUID("id", u.id)
-	w.WriteMessage("term", u.term)
-	w.WriteMessage("config", peers(u.config))
-}
-
-func readStatusResponse(r scribe.Reader) (ret statusResponse, err error) {
-	err = common.Or(err, r.ReadUUID("id", &ret.id))
-	err = common.Or(err, r.ParseMessage("term", &ret.term, termParser))
-	err = common.Or(err, r.ParseMessage("config", &ret.config, peerParser))
-	return
-}
-
-func readNetStatusResponse(res net.Response) (statusResponse, error) {
-	if err := res.Error(); err != nil {
-		return statusResponse{}, err
-	}
-
-	return readStatusResponse(res.Body())
-}
-

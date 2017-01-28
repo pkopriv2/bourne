@@ -9,8 +9,9 @@ import (
 )
 
 type leader struct {
+	ctx        common.Context
 	logger     common.Logger
-	control    common.Control
+	ctrl       common.Control
 	syncer     *logSyncer
 	proxyPool  concurrent.WorkPool
 	appendPool concurrent.WorkPool
@@ -21,13 +22,14 @@ type leader struct {
 func becomeLeader(replica *replica) {
 	replica.Term(replica.CurrentTerm().Num, &replica.Id, &replica.Id)
 
-	logger := replica.Logger.Fmt("Leader(%v)", replica.CurrentTerm())
-	logger.Info("Becoming leader")
+	ctx := replica.Ctx.Sub("Leader(%v)", replica.CurrentTerm())
+	ctx.Logger().Info("Becoming leader")
 
 	l := &leader{
-		logger:     logger,
-		control:    replica.Ctx.Control().Sub(),
-		syncer:     newLogSyncer(logger, replica),
+		ctx:        ctx,
+		logger:     ctx.Logger(),
+		ctrl:       ctx.Control(),
+		syncer:     newLogSyncer(ctx, replica),
 		proxyPool:  concurrent.NewWorkPool(10),
 		appendPool: concurrent.NewWorkPool(10),
 		term:       replica.CurrentTerm(),
@@ -44,11 +46,11 @@ func (l *leader) start() {
 	// Close routine.
 	go func() {
 		select {
-		case <-l.control.Closed():
-		case <-l.replica.closed:
+		case <-l.ctrl.Closed():
+		case <-l.replica.ctrl.Closed():
 		}
 
-		l.control.Close()
+		l.ctrl.Close()
 		l.proxyPool.Close()
 		l.appendPool.Close()
 		l.syncer.Close()
@@ -58,9 +60,7 @@ func (l *leader) start() {
 	go func() {
 		for {
 			select {
-			case <-l.replica.closed:
-				return
-			case <-l.control.Closed():
+			case <-l.ctrl.Closed():
 				return
 			case req := <-l.replica.RemoteAppends:
 				l.handleRemoteAppend(req)
@@ -72,9 +72,7 @@ func (l *leader) start() {
 	go func() {
 		for {
 			select {
-			case <-l.replica.closed:
-				return
-			case <-l.control.Closed():
+			case <-l.ctrl.Closed():
 				return
 			case req := <-l.replica.RosterUpdates:
 				l.handleRosterUpdate(req)
@@ -84,15 +82,13 @@ func (l *leader) start() {
 
 	// Main routine
 	go func() {
-		defer l.control.Close()
+		defer l.ctrl.Close()
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
 			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
-			case <-l.control.Closed():
-				return
-			case <-l.replica.closed:
+			case <-l.ctrl.Closed():
 				return
 			case req := <-l.replica.LocalAppends:
 				l.handleLocalAppend(req)
@@ -180,7 +176,7 @@ func (c *leader) handleRequestVote(req stdRequest) {
 		return
 	}
 
-	defer c.control.Close()
+	defer c.ctrl.Close()
 
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.replica.Term(vote.term, nil, &vote.id)
@@ -201,7 +197,7 @@ func (c *leader) handleReplication(req stdRequest) {
 		return
 	}
 
-	defer c.control.Close()
+	defer c.ctrl.Close()
 	c.replica.Term(append.term, &append.id, &append.id)
 	req.Reply(response{append.term, false})
 	becomeFollower(c.replica)
@@ -209,7 +205,7 @@ func (c *leader) handleReplication(req stdRequest) {
 
 func (c *leader) broadcastHeartbeat() {
 	ch := c.replica.Broadcast(func(cl *rpcClient) response {
-		resp, err := cl.Replicate(c.replica.Id, c.term.Num, -1, -1, []LogItem{}, c.replica.Log.Committed())
+		resp, err := cl.Replicate(newHeartBeat(c.replica.Id, c.term.Num, c.replica.Log.Committed()))
 		if err != nil {
 			return response{c.term.Num, false}
 		} else {
@@ -220,13 +216,13 @@ func (c *leader) broadcastHeartbeat() {
 	timer := time.NewTimer(c.replica.ElectionTimeout)
 	for i := 0; i < c.replica.Majority()-1; {
 		select {
-		case <-c.control.Closed():
+		case <-c.ctrl.Closed():
 			return
 		case resp := <-ch:
 			if resp.term > c.term.Num {
 				c.replica.Term(resp.term, nil, c.term.VotedFor)
 				becomeFollower(c.replica)
-				c.control.Close()
+				c.ctrl.Close()
 				return
 			}
 
@@ -234,7 +230,7 @@ func (c *leader) broadcastHeartbeat() {
 		case <-timer.C:
 			c.replica.Term(c.term.Num, nil, c.term.VotedFor)
 			becomeFollower(c.replica)
-			c.control.Close()
+			c.ctrl.Close()
 			return
 		}
 	}

@@ -1,6 +1,7 @@
 package kayak
 
 import (
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -21,32 +22,39 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (c *rpcClient) Id() (uuid.UUID, error) {
-	return uuid.UUID{}, nil
-}
+func (c *rpcClient) Status() (status, error) {
+	resp, err := c.raw.Send(newStatusRequest())
+	if err != nil {
+		return status{}, err
+	}
 
-func (c *rpcClient) Peers() ([]peer, error) {
-	return nil, nil
+	if err := resp.Error(); err != nil {
+		return status{}, err
+	}
+
+	return readStatusResponse(resp.Body())
 }
 
 func (c *rpcClient) UpdateRoster(peer peer, join bool) error {
-	return nil
-	// resp, err := c.raw.Send(rosterUpdate{peer, join}.Request())
-	// if err != nil {
-	// return err
-	// }
-	//
-	// return readRosterUpdateResponse(resp)
+	resp, err := c.raw.Send(rosterUpdate{peer, join}.Request())
+	if err != nil {
+		return err
+	}
+
+	return resp.Error()
 }
 
-func (c *rpcClient) Replicate(id uuid.UUID, term int, logIndex int, logTerm int, batch []LogItem, commit int) (response, error) {
-	return response{}, nil
-	// resp, err := c.raw.Send(replicateEvents{id, term, batch, logIndex, logTerm, commit}.Request())
-	// if err != nil {
-	// return response{}, errors.Wrapf(err, "Error sending replicate [prevIndex=%v,term=%v,num=%v]", logIndex, logTerm, len(batch))
-	// }
-	//
-	// return readResponseResponse(resp)
+func (c *rpcClient) Replicate(r replicateEvents) (response, error) {
+	resp, err := c.raw.Send(r.Request())
+	if err != nil {
+		return response{}, errors.Wrapf(err, "Error sending replicate events: %v", r)
+	}
+
+	if err := resp.Error(); err != nil {
+		return response{}, err
+	}
+
+	return readResponse(resp.Body())
 }
 
 func (c *rpcClient) Append(e Event, source uuid.UUID, seq int, kind int) (LogItem, error) {

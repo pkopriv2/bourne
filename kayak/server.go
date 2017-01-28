@@ -35,7 +35,7 @@ type server struct {
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, logger common.Logger, port string, self *replica) (net.Server, error) {
-	server := &server{ctx: ctx, logger: logger.Fmt("Server"), self: self}
+	server := &server{ctx: ctx, logger: logger.Fmt("Server(%v)", port), self: self}
 	return net.NewTcpServer(ctx, server.logger, port, serverInitHandler(server))
 }
 

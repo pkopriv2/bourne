@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"sync"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
@@ -9,18 +10,20 @@ import (
 
 // the log syncer should be rebuilt every time a leader comes to power.
 type logSyncer struct {
-
-	// the primary replica instance. ()
-	self *replica
-
-	// the current term (extracted as the term can be changed by the leader machine)
-	term term
+	// the context (injected by parent and spawned)
+	ctx common.Context
 
 	// the logger (injected by parent.  do not use root's logger)
 	logger common.Logger
 
 	// the core syncer lifecycle
 	control common.Control
+
+	// the primary replica instance. ()
+	self *replica
+
+	// the current term (extracted as the term can be changed by the leader machine)
+	term term
 
 	// used to determine peer sync state
 	syncers map[uuid.UUID]*peerSyncer
@@ -29,12 +32,15 @@ type logSyncer struct {
 	syncersLock sync.Mutex
 }
 
-func newLogSyncer(logger common.Logger, self *replica) *logSyncer {
+func newLogSyncer(ctx common.Context, self *replica) *logSyncer {
+	ctx = ctx.Sub("Syncer")
+
 	s := &logSyncer{
+		ctx:     ctx,
+		logger:  ctx.Logger(),
+		control: ctx.Control(),
 		self:    self,
 		term:    self.CurrentTerm(),
-		logger:  logger,
-		control: self.Ctx.Control().Sub(),
 		syncers: make(map[uuid.UUID]*peerSyncer),
 	}
 
@@ -49,7 +55,6 @@ func (l *logSyncer) Close() error {
 
 func (s *logSyncer) handleRosterChange(peers []peer) {
 	cur, active := s.Syncers(), make(map[uuid.UUID]*peerSyncer)
-	s.logger.Info("Roster Change: %v", peers)
 
 	// Add any missing
 	for _, p := range peers {
@@ -60,7 +65,7 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 		if sync, ok := cur[p.Id]; ok {
 			active[p.Id] = sync
 		} else {
-			active[p.Id] = newPeerSyncer(s.logger, s.control, s.self, s.term, p)
+			active[p.Id] = newPeerSyncer(s.ctx, s.self, s.term, p)
 		}
 	}
 
@@ -71,7 +76,7 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 		}
 	}
 
-	s.logger.Info("Roster Change: %v", active)
+	s.logger.Info("Setting roster: %v", active)
 	s.SetSyncers(active)
 }
 
@@ -161,26 +166,27 @@ func (s *logSyncer) SetSyncers(syncers map[uuid.UUID]*peerSyncer) {
 
 //
 type peerSyncer struct {
-	logger  common.Logger
-	control common.Control
-	peer    peer
-	term    term
-	self    *replica
-
+	logger    common.Logger
+	control   common.Control
+	peer      peer
+	term      term
+	self      *replica
 	prevIndex int
 	prevTerm  int
 	prevLock  sync.RWMutex
 }
 
-func newPeerSyncer(logger common.Logger, control common.Control, self *replica, term term, peer peer) *peerSyncer {
+func newPeerSyncer(ctx common.Context, self *replica, term term, peer peer) *peerSyncer {
+	ctx = ctx.Sub("Sync(%v)", peer)
+
 	sync := &peerSyncer{
-		logger:    logger.Fmt("Sync(%v)", peer),
+		logger:    ctx.Logger(),
+		control:   ctx.Control(),
 		self:      self,
 		peer:      peer,
 		term:      term,
 		prevIndex: -1,
 		prevTerm:  -1,
-		control:   control.Sub(),
 	}
 	sync.start()
 	return sync
@@ -249,6 +255,7 @@ func (s *peerSyncer) start() {
 				if cl == nil {
 					cl, err = s.peer.Connect(s.self.Ctx, s.control.Closed())
 					if err != nil {
+						s.control.Fail(err)
 						return
 					}
 				}
@@ -261,8 +268,10 @@ func (s *peerSyncer) start() {
 					return
 				}
 
+				s.logger.Debug("Sending batch (%v): %v", prev.Index+1, len(batch))
+
 				// send the append request.
-				resp, err := cl.Replicate(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed())
+				resp, err := cl.Replicate(newReplicateEvents(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed()))
 				if err != nil {
 					s.logger.Error("Unable to append events [%v]", err)
 					cl = nil
@@ -283,6 +292,7 @@ func (s *peerSyncer) start() {
 					continue
 				}
 
+				s.logger.Error("Consistency check failed")
 				// consistency check failed, start moving backwards one index at a time.
 				// TODO: Install snapshot
 				prev, ok, err = s.self.Log.Get(prev.Index - 1024)
@@ -299,7 +309,7 @@ func (s *peerSyncer) start() {
 				// INSTALL SNAPSHOT
 				s.SetPrevIndexAndTerm(-1, -1)
 				prev = LogItem{Index: -1, Term: -1}
-				// time.Sleep(1000 * time.Millisecond)
+				time.Sleep(1000 * time.Millisecond)
 				break
 			}
 

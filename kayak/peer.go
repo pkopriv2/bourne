@@ -11,6 +11,31 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+func listenRosterChanges(h *replica) {
+	go func() {
+		defer h.logger.Info("No longer listening for roster changes")
+
+		for {
+			h.logger.Info("Reloading roster changes")
+			peers, from, err := reloadRoster(h.Log)
+			if err != nil {
+				h.ctrl.Fail(err)
+				return
+			}
+
+			h.Roster.Set(peers)
+			if err := listenForRosterChanges(h, from); err != nil {
+				if cause := errors.Cause(err); cause != OutOfBoundsError {
+					return
+				}
+				continue
+			}
+			return
+		}
+	}()
+}
+
+
 type roster struct {
 	raw []peer
 	ver *ref
@@ -21,7 +46,7 @@ func newRoster(init []peer) *roster {
 }
 
 func (c *roster) Wait(next int) ([]peer, int, bool) {
-	_, ok := c.ver.Wait(next)
+	_, ok := c.ver.WaitExceeds(next)
 	peers, ver := c.Get()
 	return peers, ver, ok
 }
@@ -109,14 +134,14 @@ func readPeers(r scribe.Reader) (p []peer, e error) {
 	return
 }
 
-func parsePeers(bytes []byte, def []peer) (p []peer, e error) {
+func parsePeers(bytes []byte) (p []peer, e error) {
 	if bytes == nil {
-		return def, nil
+		return nil, nil
 	}
 
 	msg, err := scribe.Parse(bytes)
 	if err != nil {
-		return def, errors.Wrapf(err, "Error parsing message bytes.")
+		return nil, errors.Wrapf(err, "Error parsing message bytes.")
 	}
 
 	return readPeers(msg)
@@ -189,4 +214,43 @@ func peerParser(r scribe.Reader) (interface{}, error) {
 	e = common.Or(e, r.ReadUUID("id", &p.Id))
 	e = common.Or(e, r.ReadString("addr", &p.Addr))
 	return p, e
+}
+
+// Roster listener stuff.
+func reloadRoster(log *eventLog) ([]peer, int, error) {
+	snapshot, err := log.Snapshot()
+	if err != nil {
+		return nil, 0, errors.Wrapf(err, "Error getting snapshot")
+	}
+
+	peers, err := parsePeers(snapshot.Config())
+	if err != nil {
+		return nil, 0, errors.Wrapf(err, "Error parsing config")
+	}
+	return peers, snapshot.LastIndex(), nil
+}
+
+func listenForRosterChanges(h *replica, start int) error {
+	l, err := h.Log.ListenAppends(start, 256)
+	if err != nil {
+		return errors.Wrapf(err, "RosterListener: Error registering listener")
+	}
+
+	h.logger.Info("Registered config listener.")
+	i, o, e := l.Next()
+	for ; o ; i, o, e = l.Next() {
+
+		if i.Kind == Config {
+			peers, err := parsePeers(i.Event)
+			if err != nil {
+				h.logger.Error("Error parsing configuration [%v]", peers)
+				continue
+			}
+
+			h.logger.Info("Updating roster: %v", peers)
+			h.Roster.Set(peers)
+		}
+	}
+
+	return e
 }

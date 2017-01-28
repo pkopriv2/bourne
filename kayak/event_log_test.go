@@ -20,7 +20,7 @@ func OpenTestBoltEventLog(ctx common.Context) *eventLog {
 		panic(err)
 	}
 
-	log, err := openEventLog(ctx.Logger(), raw)
+	log, err := openEventLog(ctx, raw)
 	if err != nil {
 		panic(err)
 	}

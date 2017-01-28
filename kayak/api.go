@@ -234,7 +234,7 @@ type Listener interface {
 	// to machine state, then it's probably best to just rebuild the machine.
 	//
 	// This method is not safe for concurrent access.
-	Next() (LogItem, error)
+	Next() (LogItem, bool, error)
 }
 
 type LogItem struct {
