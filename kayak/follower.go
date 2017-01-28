@@ -49,6 +49,7 @@ func (c *follower) start() {
 	// If any config has changed, just restart the follower...
 	_, ver := c.replica.Roster.Get()
 	go func() {
+		defer c.logger.Info("Closing config watcher.")
 		defer c.ctrl.Close()
 
 		_, _, ok := c.replica.Roster.Wait(ver)

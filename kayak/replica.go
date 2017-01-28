@@ -121,9 +121,13 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
 	}
-
 	ctx.Control().OnClose(func(cause error) {
 		log.Close()
+	})
+
+	roster := newRoster([]peer{self})
+	ctx.Control().OnClose(func(cause error) {
+		roster.Close()
 	})
 
 	r := &replica{
@@ -135,7 +139,7 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 		terms:           termStore,
 		Log:             log,
 		Db:              db,
-		Roster:          newRoster([]peer{self}),
+		Roster:          roster,
 		Replications:    make(chan stdRequest),
 		VoteRequests:    make(chan stdRequest),
 		RemoteAppends:   make(chan stdRequest),

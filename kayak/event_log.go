@@ -252,11 +252,15 @@ func (l *refListener) start(from int) {
 			}
 
 			for cur <= next {
+				if l.ctrl.IsClosed() || l.log.ctrl.IsClosed() {
+					return
+				}
 
 				// scan the next batch
 				batch, err := l.log.Scan(cur, common.Min(next, cur+l.buf))
 				if err != nil {
-
+					l.ctrl.Fail(err)
+					return
 				}
 
 				// start emitting
@@ -267,7 +271,6 @@ func (l *refListener) start(from int) {
 					case <-l.ctrl.Closed():
 						return
 					case l.ch <- i:
-						return
 					}
 				}
 
