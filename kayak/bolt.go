@@ -63,6 +63,11 @@ func (s *boltStore) New(id uuid.UUID, config []byte) (StoredLog, error) {
 	return createBoltLog(s.db, id, config)
 }
 
+func (s *boltStore) NewSnapshot(lastIndex int, lastTerm int, ch <-chan Event, size int, config []byte) (StoredSnapshot, error) {
+	return createBoltSnapshot(s.db, lastIndex, lastTerm, ch, size, config)
+}
+
+
 // Parent log abstraction
 type boltLog struct {
 	db *bolt.DB
@@ -119,6 +124,10 @@ func initBoltLog(tx *bolt.Tx, id uuid.UUID, snapshotId uuid.UUID) error {
 
 func (b *boltLog) Id() uuid.UUID {
 	return b.id
+}
+
+func (b *boltLog) Store() (LogStore, error) {
+	return &boltStore{b.db}, nil
 }
 
 func (b *boltLog) Min() (m int, e error) {
@@ -227,45 +236,28 @@ func (b *boltLog) Snapshot() (s StoredSnapshot, e error) {
 	return
 }
 
-func (b *boltLog) Compact(until int, ch <-chan Event, size int, config []byte) (s StoredSnapshot, err error) {
+func (b *boltLog) Install(s StoredSnapshot) (bool, error) {
 	cur, err := b.Snapshot()
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-
-	i, ok, err := b.Get(until)
-	if err != nil || !ok {
-		return nil, common.Or(err, errors.Wrapf(CompactionError, "Cannot compact until [%v]. It doesn't exist.", until))
-	}
-
-	// store the snapshot (done concurrently)
-	s, err = createBoltSnapshot(b.db, i.Index, i.Term, ch, size, config)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			s.Delete()
-		}
-	}()
-
 	// swap it.
 	err = b.db.Update(func(tx *bolt.Tx) error {
 		return b.swapSnapshot(tx, cur.(*boltSnapshot).raw, s.(*boltSnapshot).raw)
 	})
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	// finally, truncate (safe to do concurrently)
-	err = b.Prune(until)
+	err = b.Prune(s.LastIndex())
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	// cur is useless, regardless of whether the delete succeeds
 	defer cur.Delete()
-	return s, nil
+	return true, nil
 }
 
 func (b *boltLog) maxIndex(tx *bolt.Tx) (int, error) {

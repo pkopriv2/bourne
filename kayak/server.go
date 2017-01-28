@@ -79,11 +79,21 @@ func (s *server) UpdateRoster(req net.Request) net.Response {
 }
 
 func (s *server) InstallSnapshot(req net.Request) net.Response {
-	return nil
+	snapshot, err := readInstallSnapshot(req.Body())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	resp, err := s.self.InstallSnapshot(snapshot)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return resp.Response()
 }
 
 func (s *server) Replicate(req net.Request) net.Response {
-	replicate, err := readReplicateEvents(req.Body())
+	replicate, err := readReplicate(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

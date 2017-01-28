@@ -68,13 +68,9 @@ func (h *host) Join(addr string) error {
 		return errors.Wrapf(err, "Unable to retrieve status from [%v]", addr)
 	}
 
-	all := addPeer(status.config, h.core.Self)
-	h.core.logger.Info("Setting config: %v", all)
-	h.core.Roster.Set(all)
+	h.core.Term(status.term.Num, nil, nil)
+	cl.UpdateRoster(h.core.Self, true)
 	becomeFollower(h.core)
-	if err := cl.UpdateRoster(h.core.Self, true); err != nil {
-		return errors.Wrapf(err, "Error while updating roster")
-	}
 	return nil
 }
 

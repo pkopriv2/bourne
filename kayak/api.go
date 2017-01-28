@@ -15,6 +15,7 @@ var (
 	ClosedError    = errors.New("Kayak:Closed")
 	NotLeaderError = errors.New("Kayak:NotLeader")
 	NotMemberError = errors.New("Kayak:NotMember")
+	TimeoutError   = errors.New("Kayak:Timeout")
 	// NoLeaderError  = errors.New("Kayak:NoLeader")
 	// NotPeerError   = errors.New("Kayak:NotPeer")
 )
@@ -334,20 +335,26 @@ var (
 	CompactionError  = errors.New("Kayak:Compaction")
 )
 
+// TODO: Complete the api so that we can have command line utilities for interacting
+// with nodes.
+
 type LogStore interface {
 	Get(id uuid.UUID) (StoredLog, error)
 	New(uuid.UUID, []byte) (StoredLog, error)
+
+	NewSnapshot(int, int, <-chan Event, int, []byte) (StoredSnapshot, error)
 }
 
 type StoredLog interface {
 	Id() uuid.UUID
+	Store() (LogStore, error)
 	Last() (int, int, error)
 	Truncate(start int) error
 	Scan(beg int, end int) ([]LogItem, error)
 	Append(Event, int, uuid.UUID, int, Kind) (LogItem, error)
 	Get(index int) (LogItem, bool, error)
 	Insert([]LogItem) error
-	Compact(until int, ch <-chan Event, size int, config []byte) (StoredSnapshot, error)
+	Install(StoredSnapshot) (bool, error)
 	Snapshot() (StoredSnapshot, error)
 }
 

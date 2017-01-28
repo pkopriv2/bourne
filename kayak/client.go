@@ -54,7 +54,7 @@ func (c *rpcClient) UpdateRoster(peer peer, join bool) error {
 	return resp.Error()
 }
 
-func (c *rpcClient) Replicate(r replicateEvents) (response, error) {
+func (c *rpcClient) Replicate(r replicate) (response, error) {
 	resp, err := c.raw.Send(r.Request())
 	if err != nil {
 		return response{}, errors.Wrapf(err, "Error sending replicate events: %v", r)
@@ -82,12 +82,28 @@ func (c *rpcClient) Append(e Event, source uuid.UUID, seq int, kind Kind) (LogIt
 	// return LogItem{res.index, e, res.term, source, seq, kind}, nil
 }
 
-func (c *rpcClient) RequestVote(id uuid.UUID, term int, logIndex int, logTerm int) (response, error) {
-	return response{}, nil
-	// resp, err := c.raw.Send(requestVoteRequest{id, term, logIndex, logTerm}.Request())
-	// if err != nil {
-	// return response{}, errors.Wrapf(err, "Error sending request vote")
-	// }
-	//
-	// return readResponseResponse(resp)
+func (c *rpcClient) InstallSnapshot(snapshot installSnapshot) (response, error) {
+	resp, err := c.raw.Send(snapshot.Request())
+	if err != nil {
+		return response{}, errors.Wrapf(err, "Error sending snapshot: %v", snapshot)
+	}
+
+	if err := resp.Error(); err != nil {
+		return response{}, err
+	}
+
+	return readResponse(resp.Body())
+}
+
+func (c *rpcClient) RequestVote(vote requestVote) (response, error) {
+	resp, err := c.raw.Send(vote.Request())
+	if err != nil {
+		return response{}, errors.Wrapf(err, "Error sending request vote: %v", vote)
+	}
+
+	if err := resp.Error(); err != nil {
+		return response{}, err
+	}
+
+	return readResponse(resp.Body())
 }

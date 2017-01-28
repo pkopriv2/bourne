@@ -235,14 +235,12 @@ func (h *replica) Majority() int {
 
 func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	peers := h.Others()
-	h.logger.Info("Broadcasting heartbeat: %v", peers)
-
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
 			cl, err := p.Client(h.Ctx)
 			if cl == nil || err != nil {
-				ret <- response{h.term.Num, false}
+				ret <- newResponse(h.term.Num, false)
 				return
 			}
 
@@ -296,8 +294,8 @@ func (h *replica) InstallSnapshot(snapshot installSnapshot) (response, error) {
 	return val.(response), nil
 }
 
-func (h *replica) Replicate(replicate replicateEvents) (response, error) {
-	val, err := h.sendRequest(h.Replications, replicate)
+func (h *replica) Replicate(r replicate) (response, error) {
+	val, err := h.sendRequest(h.Replications, r)
 	if err != nil {
 		return response{}, err
 	}

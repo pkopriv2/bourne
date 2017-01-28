@@ -6,6 +6,12 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// FIXME: Split snapshot creating from the
+
+// NOTE: With regard to error handling, there are specific error causes that consumers
+// will be looking for.  Therefore, do NOT decorate any errors that are the result
+// of the StoredLog operation.
+
 type eventLog struct {
 	ctx    common.Context
 	ctrl   common.Control
@@ -127,12 +133,6 @@ func (e *eventLog) Truncate(from int) (err error) {
 	return
 }
 
-func (e *eventLog) Compact(until int, snapshot <-chan Event, snapshotSize int, config []byte) (err error) {
-	e.logger.Info("Compacting log until [%v] with a snapshot of [%v] events", until, snapshotSize)
-	_, err = e.raw.Compact(until, snapshot, snapshotSize, config)
-	return
-}
-
 func (e *eventLog) Snapshot() (StoredSnapshot, error) {
 	return e.raw.Snapshot()
 }
@@ -154,6 +154,19 @@ func (e *eventLog) Assert(index int, term int) (bool, error) {
 	}
 
 	return s.LastIndex() == index && s.LastTerm() == term, nil
+}
+
+func (e *eventLog) NewSnapshot(lastIndex int, lastTerm int, ch <-chan Event, size int, config []byte) (StoredSnapshot, error) {
+	store, err := e.raw.Store()
+	if err != nil {
+		return nil, err
+	}
+
+	return store.NewSnapshot(lastIndex, lastTerm, ch, size, config)
+}
+
+func (e *eventLog) Install(snapshot StoredSnapshot) (bool, error) {
+	return e.raw.Install(snapshot)
 }
 
 func (e *eventLog) Last() (int, int, error) {

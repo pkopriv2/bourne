@@ -23,7 +23,7 @@ type control struct {
 	failure error
 }
 
-func NewControl(parent *control) *control {
+func NewControl(parent Control) *control {
 	l := &control{
 		closes: concurrent.NewList(8),
 		closed: make(chan struct{}),

@@ -13,8 +13,6 @@ import (
 
 func listenRosterChanges(h *replica) {
 	go func() {
-		defer h.logger.Info("No longer listening for roster changes")
-
 		for {
 			h.logger.Info("Reloading roster changes")
 			peers, until, err := reloadRoster(h.Log)
@@ -243,7 +241,6 @@ func listenForRosterChanges(h *replica, start int) error {
 	i, o, e := l.Next()
 	for ; o ; i, o, e = l.Next() {
 
-		h.logger.Info("Item: %v", i)
 		if i.Kind == Config {
 			peers, err := parsePeers(i.Event)
 			if err != nil {

@@ -36,17 +36,16 @@ func (c *candidate) start() {
 
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-
+		c.ctrl.Fail(err)
+		becomeFollower(c.replica)
+		return
 	}
-	ballots := c.replica.Broadcast(func(cl *rpcClient) response {
-		c.logger.Debug("Sending ballots: (t=%v,mi=%v,mt=%v)", c.term.Num, maxIndex, maxTerm)
-		if err != nil {
-			return response{c.replica.term.Num, false}
-		}
 
-		resp, err := cl.RequestVote(c.replica.Id, c.term.Num, maxIndex, maxTerm)
+	c.logger.Debug("Sending ballots: (t=%v,mi=%v,mt=%v)", c.term.Num, maxIndex, maxTerm)
+	ballots := c.replica.Broadcast(func(cl *rpcClient) response {
+		resp, err := cl.RequestVote(requestVote{c.replica.Id, c.term.Num, maxIndex, maxTerm})
 		if err != nil {
-			return response{c.replica.term.Num, false}
+			return newResponse(c.replica.term.Num, false)
 		} else {
 			return resp
 		}
@@ -108,19 +107,19 @@ func (c *candidate) handleRequestVote(req stdRequest) {
 
 	c.logger.Debug("Handling stdRequest vote: %v", vote)
 	if vote.term <= c.term.Num {
-		req.Ack(response{c.term.Num, false})
+		req.Ack(newResponse(c.term.Num, false))
 		return
 	}
 
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-		req.Ack(response{c.replica.term.Num, false})
+		req.Ack(newResponse(c.replica.term.Num, false))
 		return
 	}
 
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.logger.Debug("Voting for candidate [%v]", vote.id.String()[:8])
-		req.Ack(response{vote.term, true})
+		req.Ack(newResponse(vote.term, true))
 		c.replica.Term(vote.term, nil, &vote.id)
 		becomeFollower(c.replica)
 		c.ctrl.Close()
@@ -128,20 +127,20 @@ func (c *candidate) handleRequestVote(req stdRequest) {
 	}
 
 	c.logger.Debug("Rejecting candidate vote [%v]", vote.id.String()[:8])
-	req.Ack(response{vote.term, false})
+	req.Ack(newResponse(vote.term, false))
 	c.replica.Term(vote.term, nil, nil)
 }
 
 func (c *candidate) handleAppendEvents(req stdRequest) {
-	append := req.Body().(replicateEvents)
+	append := req.Body().(replicate)
 
 	if append.term < c.term.Num {
-		req.Ack(response{c.term.Num, false})
+		req.Ack(newResponse(c.term.Num, false))
 		return
 	}
 
 	// append.term is >= term.  use it from now on.
-	req.Ack(response{c.term.Num, false})
+	req.Ack(newResponse(c.term.Num, false))
 	c.replica.Term(append.term, &append.id, &append.id)
 	becomeFollower(c.replica)
 	c.ctrl.Close()

@@ -2,8 +2,8 @@ package kayak
 
 import (
 	"sync"
-	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
@@ -205,6 +205,46 @@ func (l *peerSyncer) SetPrevIndexAndTerm(index int, term int) {
 	l.prevTerm = term
 }
 
+func (l *peerSyncer) InstallSnapshot(cl *rpcClient, snapshot StoredSnapshot) (bool, error) {
+	size := snapshot.Size()
+	for i := 0; i < size; {
+		beg := i
+		end := common.Min(size-1, i+256)
+
+		batch, err := snapshot.Scan(beg, end)
+		if err != nil {
+			return false, errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
+		}
+
+		segment := installSnapshot{
+			l.self.Id,
+			l.term.Num,
+			snapshot.Config(),
+			size,
+			snapshot.LastIndex(),
+			snapshot.LastTerm(),
+			beg,
+			batch}
+
+		resp, err := cl.InstallSnapshot(segment)
+		if err != nil {
+			return false, errors.Wrapf(err, "Error sending snapshot segment: %v", segment)
+		}
+
+		if resp.term > l.term.Num {
+			return false, NotLeaderError
+		}
+
+		if ! resp.success {
+			return false, nil
+		}
+
+		i += len(batch)
+	}
+
+	return true, nil
+}
+
 // Per raft: A leader never overwrites or deletes entries in its log; it only appends new entries. §3.5
 // no need to worry about truncations here...however, we do need to worry about compactions interrupting
 // syncing.
@@ -221,20 +261,20 @@ func (s *peerSyncer) start() {
 		}()
 
 		// Start syncing at last index
-		last, _, err := s.self.Log.Last()
+		lastIndex, lastTerm, err := s.self.Log.Last()
 		if err != nil {
 			s.control.Fail(err)
 			return
 		}
 
-		prev, ok, err := s.self.Log.Get(last - 1)
+		prev, ok, err := s.self.Log.Get(lastIndex - 1)
 		if err != nil {
 			s.control.Fail(err)
 			return
 		}
 
 		if !ok {
-			prev = LogItem{Index: -1, Term: -1}
+			prev = LogItem{Index: lastIndex, Term: lastTerm}
 		}
 
 		for {
@@ -249,7 +289,7 @@ func (s *peerSyncer) start() {
 					return
 				}
 
-				s.logger.Debug("Currently [%v/%v]", prev.Index, next)
+				s.logger.Debug("Position [%v/%v]", prev.Index, next)
 
 				// might have to reinitialize client after each batch.
 				if cl == nil {
@@ -271,7 +311,7 @@ func (s *peerSyncer) start() {
 				// s.logger.Debug("Sending batch (%v): %v", prev.Index+1, len(batch))
 
 				// send the append request.
-				resp, err := cl.Replicate(newReplicateEvents(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed()))
+				resp, err := cl.Replicate(newReplication(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed()))
 				if err != nil {
 					s.logger.Error("Unable to append events [%v]", err)
 					cl = nil
@@ -280,7 +320,6 @@ func (s *peerSyncer) start() {
 
 				// make sure we're still a leader.
 				if resp.term > s.term.Num {
-					s.logger.Error("No longer leader.")
 					s.control.Fail(NotLeaderError)
 					return
 				}
@@ -292,28 +331,49 @@ func (s *peerSyncer) start() {
 					continue
 				}
 
-				s.logger.Error("Consistency check failed")
-				// consistency check failed, start moving backwards one index at a time.
-				// TODO: Install snapshot
-				prev, ok, err = s.self.Log.Get(prev.Index - 1024)
+				s.logger.Error("Consistency check failed. Received hint [%v]", resp.hint)
+				prev, ok, err = s.self.Log.Get(common.Min(resp.hint, prev.Index-1))
 				if err != nil {
 					s.control.Fail(err)
 					return
 				}
 
 				if ok {
+					s.logger.Error("Consistency check failed. Moved to [%v]", prev.Index)
 					s.SetPrevIndexAndTerm(prev.Index, prev.Term)
 					continue
 				}
 
-				// INSTALL SNAPSHOT
-				s.SetPrevIndexAndTerm(-1, -1)
-				prev = LogItem{Index: -1, Term: -1}
-				time.Sleep(1000 * time.Millisecond)
-				break
+				s.logger.Info("Too far behind. Installing snapshot.")
+
+				// Okay, we're now into snapshot territory
+				snapshot, err := s.self.Log.Snapshot()
+				if err != nil {
+					s.control.Fail(err)
+					return
+				}
+
+				ok, err := s.InstallSnapshot(cl, snapshot)
+				if err != nil {
+					s.control.Fail(err)
+					return
+				}
+
+				if ok {
+					prev = LogItem{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}
+					continue
+				}
+
+				lastIndex, lastTerm, err := s.self.Log.Last()
+				if err != nil {
+					s.control.Fail(err)
+					return
+				}
+
+				prev = LogItem{Index: lastIndex, Term: lastTerm}
 			}
 
-			s.logger.Debug("Sync'ed to [%v]", next)
+			s.logger.Debug("Sync'ed to [%v]", prev.Index)
 		}
 	}()
 }

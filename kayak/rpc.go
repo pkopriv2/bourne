@@ -41,7 +41,7 @@ func readStatusResponse(r scribe.Reader) (ret status, err error) {
 // channel and consumed by the currently active sub-machine.
 //
 // Append events ONLY come from members who are leaders. (Or think they are leaders)
-type replicateEvents struct {
+type replicate struct {
 	id           uuid.UUID
 	term         int
 	prevLogIndex int
@@ -50,19 +50,19 @@ type replicateEvents struct {
 	commit       int
 }
 
-func newHeartBeat(id uuid.UUID, term int, commit int) replicateEvents {
-	return replicateEvents{id, term, -1, -1, []LogItem{}, commit}
+func newHeartBeat(id uuid.UUID, term int, commit int) replicate {
+	return replicate{id, term, -1, -1, []LogItem{}, commit}
 }
 
-func newReplicateEvents(id uuid.UUID, term int, prevIndex int, prevTerm int, items []LogItem, commit int) replicateEvents {
-	return replicateEvents{id, term, prevIndex, prevTerm, items, commit}
+func newReplication(id uuid.UUID, term int, prevIndex int, prevTerm int, items []LogItem, commit int) replicate {
+	return replicate{id, term, prevIndex, prevTerm, items, commit}
 }
 
-func (a replicateEvents) String() string {
+func (a replicate) String() string {
 	return fmt.Sprintf("Replicate(id=%v,prevIndex=%v,prevTerm=%v,commit=%v,items=%v)", a.id.String()[:8], a.prevLogIndex, a.prevLogTerm, a.commit, len(a.items))
 }
 
-func (a replicateEvents) Write(w scribe.Writer) {
+func (a replicate) Write(w scribe.Writer) {
 	w.WriteUUID("id", a.id)
 	w.WriteInt("term", a.term)
 	w.WriteMessages("items", a.items)
@@ -71,11 +71,11 @@ func (a replicateEvents) Write(w scribe.Writer) {
 	w.WriteInt("commit", a.commit)
 }
 
-func (r replicateEvents) Request() net.Request {
+func (r replicate) Request() net.Request {
 	return net.NewRequest(metaReplicate, scribe.Write(r))
 }
 
-func readReplicateEvents(r scribe.Reader) (ret replicateEvents, err error) {
+func readReplicate(r scribe.Reader) (ret replicate, err error) {
 	err = common.Or(err, r.ReadUUID("id", &ret.id))
 	err = common.Or(err, r.ReadInt("term", &ret.term))
 	err = common.Or(err, r.ReadInt("prevLogTerm", &ret.prevLogTerm))
@@ -175,23 +175,22 @@ func readAppendEventResponse(r scribe.Reader) (ret appendEventResponse, err erro
 }
 
 type installSnapshot struct {
-	snapshotId   uuid.UUID
-	leaderId     uuid.UUID
-	term         int
-	prevLogIndex int
-	prevLogTerm  int
-	prevConfig   []byte
-	batchOffset  int
-	batch        []Event
+	leaderId    uuid.UUID
+	term        int
+	config      []byte
+	size        int
+	maxIndex    int
+	maxTerm     int
+	batchOffset int
+	batch       []Event
 }
 
 func (a installSnapshot) Write(w scribe.Writer) {
-	w.WriteUUID("snapshotId", a.snapshotId)
 	w.WriteUUID("leaderId", a.leaderId)
 	w.WriteInt("term", a.term)
-	w.WriteInt("prevLogIndex", a.prevLogIndex)
-	w.WriteInt("prevLogTerm", a.prevLogTerm)
-	w.WriteBytes("prevConfig", a.prevConfig)
+	w.WriteBytes("config", a.config)
+	w.WriteInt("maxIndex", a.maxIndex)
+	w.WriteInt("maxTerm", a.maxTerm)
 	w.WriteInt("batchOffset", a.batchOffset)
 	w.WriteMessages("batch", a.batch)
 }
@@ -200,16 +199,18 @@ func (r installSnapshot) Request() net.Request {
 	return net.NewRequest(metaInstallSnapshot, scribe.Write(r))
 }
 
-func readIntallSnapshot(r scribe.Reader) (ret installSnapshot, err error) {
-	err = common.Or(err, r.ReadUUID("snapshotId", &ret.snapshotId))
+func (i installSnapshot) String() string {
+	return fmt.Sprintf("InstallSnapshot(id=%v,maxIndex=%v,maxTerm=%v,offset=%v,events=%v)", i.leaderId.String()[:8], i.maxIndex, i.maxTerm, i.batchOffset, len(i.batch))
+}
+
+func readInstallSnapshot(r scribe.Reader) (ret installSnapshot, err error) {
 	err = common.Or(err, r.ReadUUID("leaderId", &ret.leaderId))
 	err = common.Or(err, r.ReadInt("term", &ret.term))
-	err = common.Or(err, r.ReadInt("prevLogTerm", &ret.prevLogTerm))
-	err = common.Or(err, r.ReadInt("prevLogIndex", &ret.prevLogIndex))
-	err = common.Or(err, r.ReadBytes("prevConfig", &ret.prevConfig))
+	err = common.Or(err, r.ReadBytes("config", &ret.config))
+	err = common.Or(err, r.ReadInt("maxIndex", &ret.maxIndex))
+	err = common.Or(err, r.ReadInt("maxTerm", &ret.maxTerm))
 	err = common.Or(err, r.ReadInt("batchOffset", &ret.batchOffset))
 	err = common.Or(err, r.ParseMessages("batch", &ret.batch, eventParser))
-	// err = common.Or(err, r.ReadBool("done", &ret.done))
 	return
 }
 
@@ -251,11 +252,23 @@ func readRosterUpdateResponse(res net.Response) error {
 type response struct {
 	term    int
 	success bool
+
+	// used for fast agreement during initial join.
+	hint int
+}
+
+func newResponse(term int, success bool) response {
+	return response{term, success, 0}
+}
+
+func newResponseWithHint(term int, success bool, hint int) response {
+	return response{term, success, hint}
 }
 
 func (r response) Write(w scribe.Writer) {
-	w.WriteInt("term", r.term)
 	w.WriteBool("success", r.success)
+	w.WriteInt("term", r.term)
+	w.WriteInt("hint", r.hint)
 }
 
 func (r response) Response() net.Response {
@@ -263,8 +276,9 @@ func (r response) Response() net.Response {
 }
 
 func readResponse(r scribe.Reader) (ret response, err error) {
-	err = common.Or(err, r.ReadInt("term", &ret.term))
 	err = common.Or(err, r.ReadBool("success", &ret.success))
+	err = common.Or(err, r.ReadInt("term", &ret.term))
+	err = common.Or(err, r.ReadInt("hint", &ret.hint))
 	return
 }
 

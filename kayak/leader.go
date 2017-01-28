@@ -96,21 +96,23 @@ func (l *leader) start() {
 				l.broadcastHeartbeat()
 			case <-l.syncer.ctrl.Closed():
 				l.logger.Error("Sync'er closed: %v", l.syncer.ctrl.Failure())
-				if fail := l.syncer.ctrl.Failure(); fail == NotLeaderError {
+
+				fail := l.syncer.ctrl.Failure()
+				if fail == NotLeaderError {
 					becomeFollower(l.replica)
 					return
+				} else {
+					l.replica.ctrl.Fail(fail)
+					return
 				}
-				return
 			}
 		}
 	}()
 }
 
 func (c *leader) handleRemoteAppend(req stdRequest) {
-	append := req.Body().(appendEvent)
-
 	err := c.proxyPool.Submit(func() {
-		req.Return(c.replica.LocalAppend(append))
+		req.Return(c.replica.LocalAppend(req.Body().(appendEvent)))
 	})
 
 	if err != nil {
@@ -119,10 +121,8 @@ func (c *leader) handleRemoteAppend(req stdRequest) {
 }
 
 func (c *leader) handleLocalAppend(req stdRequest) {
-	append := req.Body().(appendEvent)
-
 	err := c.appendPool.SubmitTimeout(1000*time.Millisecond, func() {
-		req.Return(c.syncer.Append(append))
+		req.Return(c.syncer.Append(req.Body().(appendEvent)))
 	})
 
 	if err != nil {
@@ -150,10 +150,10 @@ func (c *leader) handleRosterUpdate(req stdRequest) {
 	// sync := c.syncer.Syncer(update.peer.Id)
 	// prev, _ := sync.GetPrevIndexAndTerm()
 	// for {
-		// idx, _ := sync.GetPrevIndexAndTerm()
+	// idx, _ := sync.GetPrevIndexAndTerm()
 	// }
 	// for i := 0; i < 10240; i++ {
-		// c.replica.Append(Event{0, 1}, 0)
+	// c.replica.Append(Event{0, 1}, 0)
 	// }
 
 	c.logger.Info("Setting cluster config [%v]", all)
@@ -170,14 +170,14 @@ func (c *leader) handleRequestVote(req stdRequest) {
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
 	if vote.term <= c.term.Num {
-		req.Ack(response{c.term.Num, false})
+		req.Ack(newResponse(c.term.Num, false))
 		return
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-		req.Ack(response{vote.term, false})
+		req.Ack(newResponse(vote.term, false))
 		return
 	}
 
@@ -185,26 +185,26 @@ func (c *leader) handleRequestVote(req stdRequest) {
 
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.replica.Term(vote.term, nil, &vote.id)
-		req.Ack(response{vote.term, true})
+		req.Ack(newResponse(vote.term, true))
 	} else {
 		c.replica.Term(vote.term, nil, nil)
-		req.Ack(response{vote.term, false})
+		req.Ack(newResponse(vote.term, false))
 	}
 
 	becomeFollower(c.replica)
 }
 
 func (c *leader) handleReplication(req stdRequest) {
-	append := req.Body().(replicateEvents)
+	append := req.Body().(replicate)
 
 	if append.term <= c.term.Num {
-		req.Ack(response{c.term.Num, false})
+		req.Ack(newResponse(c.term.Num, false))
 		return
 	}
 
 	defer c.ctrl.Close()
 	c.replica.Term(append.term, &append.id, &append.id)
-	req.Ack(response{append.term, false})
+	req.Ack(newResponse(append.term, false))
 	becomeFollower(c.replica)
 }
 
@@ -212,7 +212,7 @@ func (c *leader) broadcastHeartbeat() {
 	ch := c.replica.Broadcast(func(cl *rpcClient) response {
 		resp, err := cl.Replicate(newHeartBeat(c.replica.Id, c.term.Num, c.replica.Log.Committed()))
 		if err != nil {
-			return response{c.term.Num, false}
+			return newResponse(c.term.Num, false)
 		} else {
 			return resp
 		}

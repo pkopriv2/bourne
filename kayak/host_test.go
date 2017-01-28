@@ -29,6 +29,12 @@ func TestHost_Close(t *testing.T) {
 	host2 := NewTestSeedHost(ctx, "localhost:9391")
 
 	host1.Start()
+
+	for i := 0; i < 10240; i++ {
+		host1.core.logger.Info("Appending: %v", i)
+		host1.core.Append(Event{0,1}, Std)
+	}
+
 	time.Sleep(2 * time.Second)
 	// host1.Close()
 	assert.Nil(t, host2.Join(host1.core.Self.Addr))
