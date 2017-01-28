@@ -160,7 +160,7 @@ func (c *follower) handleRosterUpdate(req stdRequest) {
 
 func (c *follower) handleInstallSnapshot(req stdRequest) {
 	snapshot := req.Body().(installSnapshot)
-	req.Reply(response{snapshot.term, false})
+	req.Ack(response{snapshot.term, false})
 }
 
 func (c *follower) handleRequestVote(req stdRequest) {
@@ -172,14 +172,14 @@ func (c *follower) handleRequestVote(req stdRequest) {
 
 	// handle: previous term vote.  (immediately decline.)
 	if vote.term < c.replica.term.Num {
-		req.Reply(response{c.replica.term.Num, false})
+		req.Ack(response{c.replica.term.Num, false})
 		return
 	}
 
 	// handle: current term vote.  (accept if no vote and if candidate log is as long as ours)
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-		req.Reply(response{c.replica.term.Num, false})
+		req.Ack(response{c.replica.term.Num, false})
 		return
 	}
 
@@ -187,7 +187,7 @@ func (c *follower) handleRequestVote(req stdRequest) {
 	if vote.term == c.replica.term.Num {
 		if c.replica.term.VotedFor == nil && vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 			c.logger.Debug("Voting for candidate [%v]", vote.id)
-			req.Reply(response{c.replica.term.Num, true})
+			req.Ack(response{c.replica.term.Num, true})
 			c.replica.Term(c.replica.term.Num, nil, &vote.id) // correct?
 			becomeFollower(c.replica)
 			c.ctrl.Close()
@@ -195,7 +195,7 @@ func (c *follower) handleRequestVote(req stdRequest) {
 		}
 
 		c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
-		req.Reply(response{c.replica.term.Num, false})
+		req.Ack(response{c.replica.term.Num, false})
 		becomeCandidate(c.replica)
 		c.ctrl.Close()
 		return
@@ -204,7 +204,7 @@ func (c *follower) handleRequestVote(req stdRequest) {
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.logger.Debug("Voting for candidate [%v]", vote.id)
-		req.Reply(response{vote.term, true})
+		req.Ack(response{vote.term, true})
 		c.replica.Term(vote.term, nil, &vote.id)
 		becomeFollower(c.replica)
 		c.ctrl.Close()
@@ -212,7 +212,7 @@ func (c *follower) handleRequestVote(req stdRequest) {
 	}
 
 	c.logger.Debug("Rejecting candidate vote [%v]", vote.id)
-	req.Reply(response{vote.term, false})
+	req.Ack(response{vote.term, false})
 	c.replica.Term(vote.term, nil, nil)
 	becomeCandidate(c.replica)
 	c.ctrl.Close()
@@ -222,14 +222,14 @@ func (c *follower) handleReplication(req stdRequest) {
 	append := req.Body().(replicateEvents)
 
 	if append.term < c.replica.term.Num {
-		req.Reply(response{c.replica.term.Num, false})
+		req.Ack(response{c.replica.term.Num, false})
 		return
 	}
 
 	c.logger.Info("Handling replication: %v", append)
 	if append.term > c.replica.term.Num || c.replica.term.Leader == nil {
 		c.logger.Info("New leader detected [%v]", append.id)
-		req.Reply(response{append.term, false})
+		req.Ack(response{append.term, false})
 		c.replica.Term(append.term, &append.id, &append.id)
 		becomeFollower(c.replica)
 		c.ctrl.Close()
@@ -239,7 +239,7 @@ func (c *follower) handleReplication(req stdRequest) {
 	// if this is a heartbeat, bail out
 	c.replica.Log.Commit(append.commit)
 	if len(append.items) == 0 {
-		req.Reply(response{append.term, true})
+		req.Ack(response{append.term, true})
 		return
 	}
 
@@ -251,7 +251,7 @@ func (c *follower) handleReplication(req stdRequest) {
 
 		// FIXME: This will cause anyone listening to head to
 		// have to recreate state!
-		req.Reply(response{append.term, false})
+		req.Ack(response{append.term, false})
 		return
 	}
 
@@ -259,9 +259,9 @@ func (c *follower) handleReplication(req stdRequest) {
 	c.replica.Log.Truncate(append.prevLogIndex + 1)
 	if err := c.replica.Log.Insert(append.items); err != nil {
 		c.logger.Error("Error inserting batch: %v", err)
-		req.Reply(response{append.term, false})
+		req.Ack(response{append.term, false})
 		return
 	}
 
-	req.Reply(response{append.term, true})
+	req.Ack(response{append.term, true})
 }

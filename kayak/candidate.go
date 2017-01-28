@@ -108,19 +108,19 @@ func (c *candidate) handleRequestVote(req stdRequest) {
 
 	c.logger.Debug("Handling stdRequest vote: %v", vote)
 	if vote.term <= c.term.Num {
-		req.Reply(response{c.term.Num, false})
+		req.Ack(response{c.term.Num, false})
 		return
 	}
 
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-		req.Reply(response{c.replica.term.Num, false})
+		req.Ack(response{c.replica.term.Num, false})
 		return
 	}
 
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.logger.Debug("Voting for candidate [%v]", vote.id.String()[:8])
-		req.Reply(response{vote.term, true})
+		req.Ack(response{vote.term, true})
 		c.replica.Term(vote.term, nil, &vote.id)
 		becomeFollower(c.replica)
 		c.ctrl.Close()
@@ -128,7 +128,7 @@ func (c *candidate) handleRequestVote(req stdRequest) {
 	}
 
 	c.logger.Debug("Rejecting candidate vote [%v]", vote.id.String()[:8])
-	req.Reply(response{vote.term, false})
+	req.Ack(response{vote.term, false})
 	c.replica.Term(vote.term, nil, nil)
 }
 
@@ -136,12 +136,12 @@ func (c *candidate) handleAppendEvents(req stdRequest) {
 	append := req.Body().(replicateEvents)
 
 	if append.term < c.term.Num {
-		req.Reply(response{c.term.Num, false})
+		req.Ack(response{c.term.Num, false})
 		return
 	}
 
 	// append.term is >= term.  use it from now on.
-	req.Reply(response{c.term.Num, false})
+	req.Ack(response{c.term.Num, false})
 	c.replica.Term(append.term, &append.id, &append.id)
 	becomeFollower(c.replica)
 	c.ctrl.Close()

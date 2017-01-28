@@ -255,21 +255,36 @@ type LogItem struct {
 	Seq int
 
 	// Internal Only: Used for system level events (e.g. config, noop, etc...)
-	Kind int
+	Kind Kind
 }
 
-func NewLogItem(i int, e Event, t int, s uuid.UUID, seq int, k int) LogItem {
+func NewLogItem(i int, e Event, t int, s uuid.UUID, seq int, k Kind) LogItem {
 	return LogItem{i, e, t, s, seq, k}
 }
 
+type Kind int
+
+func (k Kind) String() string {
+	switch k {
+	default:
+		return "Unknown"
+	case Std:
+		return "Std"
+	case NoOp:
+		return "NoOp"
+	case Config:
+		return "Config"
+	}
+}
+
 var (
-	Std    = 0
-	NoOp   = 1
-	Config = 2
+	Std    Kind = 0
+	NoOp   Kind = 1
+	Config Kind = 2
 )
 
 func (l LogItem) String() string {
-	return fmt.Sprintf("Item(idx=%v,term=%v,size=%v)", l.Index, l.Term, len(l.Event))
+	return fmt.Sprintf("Item(idx=%v,term=%v,kind=%v,size=%v)", l.Index, l.Term, l.Kind, len(l.Event))
 }
 
 func (l LogItem) Write(w scribe.Writer) {
@@ -278,7 +293,7 @@ func (l LogItem) Write(w scribe.Writer) {
 	w.WriteInt("term", l.Term)
 	w.WriteUUID("source", l.Source)
 	w.WriteInt("seq", l.Seq)
-	w.WriteInt("kind", l.Kind)
+	w.WriteInt("kind", int(l.Kind))
 }
 
 func (l LogItem) Bytes() []byte {
@@ -293,7 +308,7 @@ func ReadLogItem(r scribe.Reader) (interface{}, error) {
 	err = common.Or(err, r.ReadBytes("event", (*[]byte)(&item.Event)))
 	err = common.Or(err, r.ReadUUID("source", &item.Source))
 	err = common.Or(err, r.ReadInt("seq", &item.Seq))
-	err = common.Or(err, r.ReadInt("kind", &item.Kind))
+	err = common.Or(err, r.ReadInt("kind", (*int)(&item.Kind)))
 	return item, err
 }
 
@@ -329,7 +344,7 @@ type StoredLog interface {
 	Last() (int, int, error)
 	Truncate(start int) error
 	Scan(beg int, end int) ([]LogItem, error)
-	Append(Event, int, uuid.UUID, int, int) (LogItem, error)
+	Append(Event, int, uuid.UUID, int, Kind) (LogItem, error)
 	Get(index int) (LogItem, bool, error)
 	Insert([]LogItem) error
 	Compact(until int, ch <-chan Event, size int, config []byte) (StoredSnapshot, error)

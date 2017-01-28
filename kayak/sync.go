@@ -17,7 +17,7 @@ type logSyncer struct {
 	logger common.Logger
 
 	// the core syncer lifecycle
-	control common.Control
+	ctrl common.Control
 
 	// the primary replica instance. ()
 	self *replica
@@ -38,7 +38,7 @@ func newLogSyncer(ctx common.Context, self *replica) *logSyncer {
 	s := &logSyncer{
 		ctx:     ctx,
 		logger:  ctx.Logger(),
-		control: ctx.Control(),
+		ctrl:    ctx.Control(),
 		self:    self,
 		term:    self.CurrentTerm(),
 		syncers: make(map[uuid.UUID]*peerSyncer),
@@ -49,7 +49,7 @@ func newLogSyncer(ctx common.Context, self *replica) *logSyncer {
 }
 
 func (l *logSyncer) Close() error {
-	l.control.Close()
+	l.ctrl.Close()
 	return nil
 }
 
@@ -88,7 +88,7 @@ func (s *logSyncer) start() {
 	go func() {
 		for {
 			peers, ver, ok = s.self.Roster.Wait(ver)
-			if s.control.IsClosed() || !ok {
+			if s.ctrl.IsClosed() || !ok {
 				return
 			}
 			s.handleRosterChange(peers)
@@ -96,13 +96,13 @@ func (s *logSyncer) start() {
 	}()
 }
 
-func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (item LogItem, err error) {
+func (s *logSyncer) Append(append appendEvent) (item LogItem, err error) {
 	committed := make(chan struct{}, 1)
 	go func() {
 		// append
-		item, err = s.self.Log.Append(event, s.term.Num, source, seq, kind)
+		item, err = s.self.Log.Append(append.Event, s.term.Num, append.Source, append.Seq, append.Kind)
 		if err != nil {
-			s.control.Fail(err)
+			s.ctrl.Fail(err)
 			return
 		}
 
@@ -125,7 +125,7 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 				}
 			}
 
-			if s.control.IsClosed() {
+			if s.ctrl.IsClosed() {
 				return
 			}
 		}
@@ -135,8 +135,8 @@ func (s *logSyncer) Append(event Event, source uuid.UUID, seq int, kind int) (it
 	}()
 
 	select {
-	case <-s.control.Closed():
-		return LogItem{}, common.Or(s.control.Failure(), ClosedError)
+	case <-s.ctrl.Closed():
+		return LogItem{}, common.Or(s.ctrl.Failure(), ClosedError)
 	case <-committed:
 		return item, nil
 	}
@@ -268,7 +268,7 @@ func (s *peerSyncer) start() {
 					return
 				}
 
-				s.logger.Debug("Sending batch (%v): %v", prev.Index+1, len(batch))
+				// s.logger.Debug("Sending batch (%v): %v", prev.Index+1, len(batch))
 
 				// send the append request.
 				resp, err := cl.Replicate(newReplicateEvents(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed()))

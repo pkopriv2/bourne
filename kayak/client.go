@@ -67,7 +67,7 @@ func (c *rpcClient) Replicate(r replicateEvents) (response, error) {
 	return readResponse(resp.Body())
 }
 
-func (c *rpcClient) Append(e Event, source uuid.UUID, seq int, kind int) (LogItem, error) {
+func (c *rpcClient) Append(e Event, source uuid.UUID, seq int, kind Kind) (LogItem, error) {
 	return LogItem{}, nil
 	// resp, err := c.raw.Send(appendEventRequest{e, source, seq, kind}.Request())
 	// if err != nil {

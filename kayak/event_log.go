@@ -83,7 +83,7 @@ func (e *eventLog) Scan(start int, end int) ([]LogItem, error) {
 	return e.raw.Scan(start, end)
 }
 
-func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind int) (LogItem, error) {
+func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind Kind) (LogItem, error) {
 	item, err := e.raw.Append(evt, term, source, seq, kind)
 	if err != nil {
 		return item, err
@@ -240,7 +240,7 @@ func (l *refListener) start(from int) {
 		defer l.Close()
 
 		for cur := from; ; {
-			next, ok := l.pos.WaitExceeds(cur)
+			next, ok := l.pos.WaitUntil(cur)
 			if !ok || l.ctrl.IsClosed() || l.log.ctrl.IsClosed() {
 				return
 			}

@@ -24,6 +24,7 @@ func listenRosterChanges(h *replica) {
 			}
 
 			h.Roster.Set(peers)
+
 			if err := listenForRosterChanges(h, until+1); err != nil {
 				h.logger.Info("Error while listening for roster changes: %v", err)
 				if cause := errors.Cause(err); cause != OutOfBoundsError {
@@ -232,15 +233,17 @@ func reloadRoster(log *eventLog) ([]peer, int, error) {
 }
 
 func listenForRosterChanges(h *replica, start int) error {
+	h.logger.Info("Listening for roster changes from [%v]", start)
+
 	l, err := h.Log.ListenAppends(start, 256)
 	if err != nil {
 		return errors.Wrapf(err, "RosterListener: Error registering listener")
 	}
 
-	h.logger.Info("Registered config listener.")
 	i, o, e := l.Next()
 	for ; o ; i, o, e = l.Next() {
 
+		h.logger.Info("Item: %v", i)
 		if i.Kind == Config {
 			peers, err := parsePeers(i.Event)
 			if err != nil {

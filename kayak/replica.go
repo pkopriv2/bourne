@@ -328,7 +328,7 @@ func (h *replica) LocalAppend(append appendEvent) (LogItem, error) {
 	return val.(LogItem), nil
 }
 
-func (h *replica) Append(event Event, kind int) (LogItem, error) {
+func (h *replica) Append(event Event, kind Kind) (LogItem, error) {
 	return h.LocalAppend(appendEvent{event, h.Self.Id, 0, kind})
 }
 
@@ -337,8 +337,8 @@ func (h *replica) Listen(start int, buf int) (Listener, error) {
 }
 
 func majority(num int) int {
-	if num % 2 == 0 {
-		return 1 + (num/2)
+	if num%2 == 0 {
+		return 1 + (num / 2)
 	} else {
 		return int(math.Ceil(float64(num) / float64(2)))
 	}
@@ -358,7 +358,7 @@ func (r stdRequest) Body() interface{} {
 	return r.val
 }
 
-func (r stdRequest) Reply(val interface{}) {
+func (r stdRequest) Ack(val interface{}) {
 	r.reply <- val
 }
 

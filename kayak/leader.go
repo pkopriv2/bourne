@@ -100,9 +100,9 @@ func (l *leader) start() {
 				l.handleRequestVote(req)
 			case <-timer.C:
 				l.broadcastHeartbeat()
-			case <-l.syncer.control.Closed():
-				l.logger.Error("Sync'er closed: %v", l.syncer.control.Failure())
-				if fail := l.syncer.control.Failure(); fail == NotLeaderError {
+			case <-l.syncer.ctrl.Closed():
+				l.logger.Error("Sync'er closed: %v", l.syncer.ctrl.Failure())
+				if fail := l.syncer.ctrl.Failure(); fail == NotLeaderError {
 					becomeFollower(l.replica)
 					return
 				}
@@ -128,7 +128,7 @@ func (c *leader) handleLocalAppend(req stdRequest) {
 	append := req.Body().(appendEvent)
 
 	err := c.appendPool.SubmitTimeout(1000*time.Millisecond, func() {
-		req.Return(c.syncer.Append(append.Event, append.Source, append.Seq, append.Kind))
+		req.Return(c.syncer.Append(append))
 	})
 
 	if err != nil {
@@ -152,15 +152,21 @@ func (c *leader) handleRosterUpdate(req stdRequest) {
 	}
 
 	c.syncer.handleRosterChange(all)
-	for i := 0; i < 100; i++ {
-		c.replica.Append(Event{0,1}, 0)
-	}
+	// TODO: Check sync status.
+	// sync := c.syncer.Syncer(update.peer.Id)
+	// prev, _ := sync.GetPrevIndexAndTerm()
+	// for {
+		// idx, _ := sync.GetPrevIndexAndTerm()
+	// }
+	// for i := 0; i < 10240; i++ {
+		// c.replica.Append(Event{0, 1}, 0)
+	// }
 
 	c.logger.Info("Setting cluster config [%v]", all)
 	if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
 		req.Fail(e)
 	} else {
-		req.Reply(true)
+		req.Ack(true)
 	}
 }
 
@@ -170,14 +176,14 @@ func (c *leader) handleRequestVote(req stdRequest) {
 
 	// handle: previous or current term vote.  (immediately decline.  already leader)
 	if vote.term <= c.term.Num {
-		req.Reply(response{c.term.Num, false})
+		req.Ack(response{c.term.Num, false})
 		return
 	}
 
 	// handle: future term vote.  (move to new term.  only accept if candidate log is long enough)
 	maxIndex, maxTerm, err := c.replica.Log.Last()
 	if err != nil {
-		req.Reply(response{vote.term, false})
+		req.Ack(response{vote.term, false})
 		return
 	}
 
@@ -185,10 +191,10 @@ func (c *leader) handleRequestVote(req stdRequest) {
 
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.replica.Term(vote.term, nil, &vote.id)
-		req.Reply(response{vote.term, true})
+		req.Ack(response{vote.term, true})
 	} else {
 		c.replica.Term(vote.term, nil, nil)
-		req.Reply(response{vote.term, false})
+		req.Ack(response{vote.term, false})
 	}
 
 	becomeFollower(c.replica)
@@ -198,13 +204,13 @@ func (c *leader) handleReplication(req stdRequest) {
 	append := req.Body().(replicateEvents)
 
 	if append.term <= c.term.Num {
-		req.Reply(response{c.term.Num, false})
+		req.Ack(response{c.term.Num, false})
 		return
 	}
 
 	defer c.ctrl.Close()
 	c.replica.Term(append.term, &append.id, &append.id)
-	req.Reply(response{append.term, false})
+	req.Ack(response{append.term, false})
 	becomeFollower(c.replica)
 }
 
