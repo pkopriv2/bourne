@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
@@ -12,6 +13,15 @@ type Client struct {
 
 type rpcClient struct {
 	raw net.Client
+}
+
+func connect(ctx common.Context, addr string) (*rpcClient, error) {
+	cl, err := net.NewTcpClient(ctx, ctx.Logger(), addr)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Unable to connect to [%v]", addr)
+	}
+
+	return newClient(cl), nil
 }
 
 func newClient(raw net.Client) *rpcClient {

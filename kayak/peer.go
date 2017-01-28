@@ -17,14 +17,15 @@ func listenRosterChanges(h *replica) {
 
 		for {
 			h.logger.Info("Reloading roster changes")
-			peers, from, err := reloadRoster(h.Log)
+			peers, until, err := reloadRoster(h.Log)
 			if err != nil {
 				h.ctrl.Fail(err)
 				return
 			}
 
 			h.Roster.Set(peers)
-			if err := listenForRosterChanges(h, from); err != nil {
+			if err := listenForRosterChanges(h, until+1); err != nil {
+				h.logger.Info("Error while listening for roster changes: %v", err)
 				if cause := errors.Cause(err); cause != OutOfBoundsError {
 					return
 				}

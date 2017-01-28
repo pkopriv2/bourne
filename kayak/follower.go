@@ -248,7 +248,6 @@ func (c *follower) handleReplication(req stdRequest) {
 	// consistency check
 	if ok, err := c.replica.Log.Assert(append.prevLogIndex, append.prevLogTerm); !ok || err != nil {
 		c.logger.Error("Consistency check failed(%v)", err)
-		c.replica.Log.Truncate(append.prevLogIndex + 1)
 
 		// FIXME: This will cause anyone listening to head to
 		// have to recreate state!
@@ -257,6 +256,7 @@ func (c *follower) handleReplication(req stdRequest) {
 	}
 
 	// insert items.
+	c.replica.Log.Truncate(append.prevLogIndex + 1)
 	if err := c.replica.Log.Insert(append.items); err != nil {
 		c.logger.Error("Error inserting batch: %v", err)
 		req.Reply(response{append.term, false})

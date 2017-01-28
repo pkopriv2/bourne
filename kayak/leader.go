@@ -85,7 +85,7 @@ func (l *leader) start() {
 		defer l.ctrl.Close()
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
+			// l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.ctrl.Closed():
@@ -149,6 +149,11 @@ func (c *leader) handleRosterUpdate(req stdRequest) {
 		c.syncer.handleRosterChange(all)
 	} else {
 		all = delPeer(all, update.peer)
+	}
+
+	c.syncer.handleRosterChange(all)
+	for i := 0; i < 100; i++ {
+		c.replica.Append(Event{0,1}, 0)
 	}
 
 	c.logger.Info("Setting cluster config [%v]", all)

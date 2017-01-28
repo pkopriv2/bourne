@@ -240,7 +240,7 @@ func (l *refListener) start(from int) {
 		defer l.Close()
 
 		for cur := from; ; {
-			next, ok := l.pos.WaitUntil(cur)
+			next, ok := l.pos.WaitExceeds(cur)
 			if !ok || l.ctrl.IsClosed() || l.log.ctrl.IsClosed() {
 				return
 			}

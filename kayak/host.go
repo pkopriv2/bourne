@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"github.com/boltdb/bolt"
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
@@ -50,12 +51,29 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 	return
 }
 
-func (h *host) Start() {
+func (h *host) Start() error {
 	becomeFollower(h.core)
+	return nil
 }
 
-func (h *host) Join(addr string) {
-	// becomeInitiate(h.core)
+func (h *host) Join(addr string) error {
+	cl, err := connect(h.ctx, addr)
+	if err != nil {
+		return errors.Wrapf(err, "Error while joining cluster [%v]", addr)
+	}
+	defer cl.Close()
+
+	status, err := cl.Status()
+	if err != nil {
+		return errors.Wrapf(err, "Unable to retrieve status from [%v]", addr)
+	}
+
+	h.core.Roster.Set(status.config)
+	becomeFollower(h.core)
+	if err := cl.UpdateRoster(h.core.Self, true); err != nil {
+		return errors.Wrapf(err, "Error while updating roster")
+	}
+	return nil
 }
 
 func (h *host) Close() error {

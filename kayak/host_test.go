@@ -1,9 +1,6 @@
 package kayak
 
 import (
-	"os"
-	"runtime"
-	"runtime/pprof"
 	"testing"
 	"time"
 
@@ -18,26 +15,26 @@ func TestHost_Close(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	before := runtime.NumGoroutine()
-	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-	host := NewTestSeedHost(ctx, "localhost:9390")
-	host.Start()
-	time.Sleep(3 * time.Second)
-	assert.Nil(t, host.Close())
-	time.Sleep(1 * time.Second)
-	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-	after := runtime.NumGoroutine()
-	assert.Equal(t, before, after)
-	// host1 := NewTestSeedHost(ctx, "localhost:9390")
-	// host2 := NewTestSeedHost(ctx, "localhost:9391")
+	// before := runtime.NumGoroutine()
+	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+	// host := NewTestSeedHost(ctx, "localhost:9390")
+	// host.Start()
+	// time.Sleep(3 * time.Second)
+	// assert.Nil(t, host.Close())
+	// time.Sleep(1 * time.Second)
+	// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+	// after := runtime.NumGoroutine()
+	// assert.Equal(t, before, after)
+	host1 := NewTestSeedHost(ctx, "localhost:9390")
+	host2 := NewTestSeedHost(ctx, "localhost:9391")
 
-	// host1.Start()
-	// time.Sleep(2*time.Second)
+	host1.Start()
+	time.Sleep(2 * time.Second)
 	// host1.Close()
-	// host2.Join(host1.core.Self.Addr)
+	assert.Nil(t, host2.Join(host1.core.Self.Addr))
 
 	// assert.Nil(t, host1.core.UpdateRoster(rosterUpdate{host2.core.Self, true}))
-	// time.Sleep(100 * time.Second)
+	time.Sleep(100 * time.Second)
 }
 
 // func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {

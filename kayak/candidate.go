@@ -35,13 +35,16 @@ func becomeCandidate(replica *replica) {
 func (c *candidate) start() {
 
 	maxIndex, maxTerm, err := c.replica.Log.Last()
+	if err != nil {
+
+	}
 	ballots := c.replica.Broadcast(func(cl *rpcClient) response {
-		c.logger.Debug("Sending ballots: %v", maxIndex)
+		c.logger.Debug("Sending ballots: (t=%v,mi=%v,mt=%v)", c.term.Num, maxIndex, maxTerm)
 		if err != nil {
 			return response{c.replica.term.Num, false}
 		}
 
-		resp, err := cl.RequestVote(c.replica.Id, c.replica.term.Num, maxIndex, maxTerm)
+		resp, err := cl.RequestVote(c.replica.Id, c.term.Num, maxIndex, maxTerm)
 		if err != nil {
 			return response{c.replica.term.Num, false}
 		} else {

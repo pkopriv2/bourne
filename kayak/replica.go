@@ -111,7 +111,7 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 	}
 
 	if raw == nil {
-		raw, err = store.New(self.Id, clusterBytes([]peer{}))
+		raw, err = store.New(self.Id, clusterBytes([]peer{self}))
 		if err != nil {
 			return nil, errors.Wrapf(err, "Host")
 		}
@@ -337,7 +337,11 @@ func (h *replica) Listen(start int, buf int) (Listener, error) {
 }
 
 func majority(num int) int {
-	return int(math.Ceil(float64(num) / float64(2)))
+	if num % 2 == 0 {
+		return 1 + (num/2)
+	} else {
+		return int(math.Ceil(float64(num) / float64(2)))
+	}
 }
 
 type stdRequest struct {

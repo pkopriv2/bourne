@@ -66,8 +66,7 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) Status(req net.Request) net.Response {
-	return nil
-	// return statusResponse{s.self.Id, replica.CurrentTerm(), replica.Cluster()}.Response()
+	return status{s.self.Id, s.self.CurrentTerm(), s.self.Cluster()}.Response()
 }
 
 func (s *server) UpdateRoster(req net.Request) net.Response {
