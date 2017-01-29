@@ -79,7 +79,7 @@ func (l *leader) start() {
 		defer l.ctrl.Close()
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
+			// l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.ctrl.Closed():

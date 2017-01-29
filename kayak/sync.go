@@ -213,11 +213,81 @@ func (l *peerSyncer) SetPrevIndexAndTerm(index int, term int) {
 	l.prevTerm = term
 }
 
-func (l *peerSyncer) InstallSnapshot(cl *rpcClient, snapshot StoredSnapshot) (bool, error) {
+// returns the starting position for syncing a newly initialized sync'er
+func (s *peerSyncer) syncInit() (LogItem, error) {
+	// Start syncing at last index
+	lastIndex, lastTerm, err := s.self.Log.Last()
+	if err != nil {
+		return LogItem{}, err
+	}
+
+	prev, ok, err := s.self.Log.Get(lastIndex - 1)
+	if ok || err != nil {
+		return prev, err
+	}
+
+	return LogItem{Index: lastIndex, Term: lastTerm}, nil
+}
+
+// Sends a batch up to the horizon
+func (s *peerSyncer) sendBatch(cl *rpcClient, prev LogItem, horizon int) (*rpcClient, LogItem, bool, error) {
+	// scan a full batch of events.
+	batch, err := s.self.Log.Scan(prev.Index+1, common.Min(horizon, prev.Index+1+256))
+	if err != nil {
+		return cl, prev, false, err
+	}
+
+	// send the append request.
+	resp, err := cl.Replicate(newReplication(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed()))
+	if err != nil {
+		s.logger.Error("Unable to replicate batch [%v]", err)
+		return nil, prev, false, nil
+	}
+
+	// make sure we're still a leader.
+	if resp.term > s.term.Num {
+		return cl, prev, false, NotLeaderError
+	}
+
+	// if it was successful, progress the peer's index and term
+	if resp.success {
+		return cl, batch[len(batch)-1], true, nil
+	}
+
+	s.logger.Error("Consistency check failed. Received hint [%v]", resp.hint)
+	prev, ok, err := s.self.Log.Get(common.Min(resp.hint, prev.Index-1))
+	if ok || err != nil {
+		return cl, prev, true, err
+	} else {
+		return cl, prev, false, err
+	}
+}
+
+func (s *peerSyncer) installSnapshot(cl *rpcClient) (*rpcClient, LogItem, error) {
+	snapshot, err := s.self.Log.Snapshot()
+	if err != nil {
+		return cl, LogItem{}, err
+	}
+
+	cl, ok, err := s.sendSnapshot(cl, snapshot)
+	if err != nil {
+		return cl, LogItem{}, err
+	}
+
+	if ok {
+		return cl, LogItem{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}, nil
+	}
+
+	prev, err := s.syncInit()
+	return cl, prev, err
+}
+
+// sends the snapshot to the client
+func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) (*rpcClient, bool, error) {
 	size := snapshot.Size()
 	for i := 0; i < size; {
 		if l.control.IsClosed() {
-			return false, ClosedError
+			return cl, false, ClosedError
 		}
 
 		beg, end := i, common.Min(size-1, i+255)
@@ -225,7 +295,7 @@ func (l *peerSyncer) InstallSnapshot(cl *rpcClient, snapshot StoredSnapshot) (bo
 		l.logger.Info("Sending snapshot segment [%v,%v]", beg, end)
 		batch, err := snapshot.Scan(beg, end)
 		if err != nil {
-			return false, errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
+			return cl, false, errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
 		}
 
 		segment := installSnapshot{
@@ -240,21 +310,23 @@ func (l *peerSyncer) InstallSnapshot(cl *rpcClient, snapshot StoredSnapshot) (bo
 
 		resp, err := cl.InstallSnapshot(segment)
 		if err != nil {
-			return false, errors.Wrapf(err, "Error sending snapshot segment: %v", segment)
+			cl.Close()
+			l.logger.Error("Error sending segment: %v: %v", segment, err)
+			return nil, false, nil
 		}
 
 		if resp.term > l.term.Num {
-			return false, NotLeaderError
+			return cl, false, NotLeaderError
 		}
 
 		if !resp.success {
-			return false, nil
+			return cl, false, nil
 		}
 
 		i += len(batch)
 	}
 
-	return true, nil
+	return cl, true, nil
 }
 
 // Per raft: A leader never overwrites or deletes entries in its log; it only appends new entries. §3.5
@@ -273,21 +345,10 @@ func (s *peerSyncer) start() {
 			}
 		}()
 
-		// Start syncing at last index
-		lastIndex, lastTerm, err := s.self.Log.Last()
+		prev, err := s.syncInit()
 		if err != nil {
 			s.control.Fail(err)
 			return
-		}
-
-		prev, ok, err := s.self.Log.Get(lastIndex - 1)
-		if err != nil {
-			s.control.Fail(err)
-			return
-		}
-
-		if !ok {
-			prev = LogItem{Index: lastIndex, Term: lastTerm}
 		}
 
 		for {
@@ -306,6 +367,7 @@ func (s *peerSyncer) start() {
 
 				// might have to reinitialize client after each batch.
 				if cl == nil {
+					s.logger.Debug("Re-initializing client")
 					cl, err = s.peer.Connect(s.self.Ctx, s.control.Closed())
 					if err != nil {
 						s.control.Fail(err)
@@ -313,78 +375,27 @@ func (s *peerSyncer) start() {
 					}
 				}
 
-				// scan a full batch of events.
-				batch, err := s.self.Log.Scan(prev.Index+1, prev.Index+1+256)
-				if err != nil {
-					s.logger.Error("Error scanning batch: %v", batch)
-					s.control.Fail(err)
-					return
-				}
-
-				// s.logger.Debug("Sending batch (%v): %v", prev.Index+1, len(batch))
-
-				// send the append request.
-				resp, err := cl.Replicate(newReplication(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed()))
-				if err != nil {
-					s.logger.Error("Unable to append events [%v]", err)
-					cl = nil
-					continue
-				}
-
-				// make sure we're still a leader.
-				if resp.term > s.term.Num {
-					s.control.Fail(NotLeaderError)
-					return
-				}
-
-				// if it was successful, progress the peer's index and term
-				if resp.success {
-					prev = batch[len(batch)-1]
-					s.SetPrevIndexAndTerm(prev.Index, prev.Term)
-					continue
-				}
-
-				s.logger.Error("Consistency check failed. Received hint [%v]", resp.hint)
-				prev, ok, err = s.self.Log.Get(common.Min(resp.hint, prev.Index-1))
+				// send the batch
+				cl, prev, ok, err = s.sendBatch(cl, prev, next)
 				if err != nil {
 					s.control.Fail(err)
 					return
 				}
 
+				// if everything was ok, advance the index and term
 				if ok {
-					s.logger.Error("Consistency check failed. Moved to [%v]", prev.Index)
 					s.SetPrevIndexAndTerm(prev.Index, prev.Term)
 					continue
 				}
 
 				s.logger.Info("Too far behind. Installing snapshot.")
-
-				// Okay, we're now into snapshot territory
-				snapshot, err := s.self.Log.Snapshot()
+				cl, prev, err = s.installSnapshot(cl)
 				if err != nil {
 					s.control.Fail(err)
 					return
 				}
 
-				ok, err := s.InstallSnapshot(cl, snapshot)
-				if err != nil {
-					s.logger.Error("Error: %v", err)
-					s.control.Fail(err)
-					return
-				}
-
-				if ok {
-					prev = LogItem{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}
-					continue
-				}
-
-				lastIndex, lastTerm, err := s.self.Log.Last()
-				if err != nil {
-					s.control.Fail(err)
-					return
-				}
-
-				prev = LogItem{Index: lastIndex, Term: lastTerm}
+				s.SetPrevIndexAndTerm(prev.Index, prev.Term)
 			}
 
 			s.logger.Debug("Sync'ed to [%v]", prev.Index)
