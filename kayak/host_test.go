@@ -1,6 +1,7 @@
 package kayak
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 
 func TestHost_Close(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
@@ -30,17 +31,30 @@ func TestHost_Close(t *testing.T) {
 
 	host1.Start()
 
-	for i := 0; i < 10240; i++ {
-		host1.core.logger.Info("Appending: %v", i)
-		host1.core.Append(Event{0, 1}, Std)
-	}
+	go func() {
+		for i := 0; i < 50000; i++ {
+			// host1.core.logger.Debug("Appending: %v", i)
+			if i%1000 == 0 {
+				host1.core.logger.Info("Appending: %v", i)
+			}
+			host1.core.Append(Event{0, 1}, Std)
+		}
+	}()
 
-	item, ok, err := host1.core.Log.Get(5199)
+	go func() {
+		for i := 0; i < 100; i++ {
+			host1.core.logger.Info("Num go routines: %v", runtime.NumGoroutine())
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+
+	time.Sleep(2 * time.Second)
+	item, ok, err := host1.core.Log.Get(511)
 	assert.Nil(t, err)
 	assert.True(t, ok)
 
-	events := make([]Event, 0, 1024)
-	for i := 0; i < 1024; i++ {
+	events := make([]Event, 0, 50)
+	for i := 0; i < 50; i++ {
 		events = append(events, Event{0})
 	}
 
@@ -51,8 +65,7 @@ func TestHost_Close(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, ok)
 
-	time.Sleep(2 * time.Second)
-	// host1.Close()
+	time.Sleep(5 * time.Second)
 	assert.Nil(t, host2.Join(host1.core.Self.Addr))
 
 	// assert.Nil(t, host1.core.UpdateRoster(rosterUpdate{host2.core.Self, true}))
@@ -60,11 +73,12 @@ func TestHost_Close(t *testing.T) {
 }
 
 // func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// defer ctx.Close()
-// cluster := StartTestCluster(ctx, 2)
-// assert.NotNil(t, Converge(cluster))
+	// ctx := common.NewContext(common.NewEmptyConfig())
+	// defer ctx.Close()
+	// cluster := StartTestCluster(ctx, 2)
+	// assert.NotNil(t, Converge(cluster))
 // }
+//
 //
 // func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
 // ctx := common.NewContext(common.NewEmptyConfig())
@@ -381,148 +395,156 @@ func NewTestSeedHost(ctx common.Context, addr string) *host {
 	return host
 }
 
-//
+
 // func StartTestCluster(ctx common.Context, size int) []*host {
-// peers := make([]peer, 0, size)
-// for i := 0; i < size; i++ {
-// peers = append(peers, newPeer(net.NewAddr("localhost", strconv.Itoa(9300+i))))
-// }
+	// peers := make([]peer, 0, size)
+	// for i := 0; i < size; i++ {
+		// peers = append(peers, newPeer(net.NewAddr("localhost", strconv.Itoa(9300+i))))
+	// }
 //
-// stash := OpenTestStash(ctx)
+	// db := OpenTestLogStash(ctx)
 //
-// ctx.Logger().Info("Starting kayak cluster [%v]", peers)
-// hosts := make([]*host, 0, len(peers))
-// for i, p := range peers {
-// others := make([]peer, 0, len(peers)-1)
-// others = append(others, peers[:i]...)
-// others = append(others, peers[i+1:]...)
+	// zero := peers[0]
 //
-// host, err := newHost(ctx, p, others, stash)
-// if err != nil {
-// panic(err)
-// }
+	// hosts := make([]*host, 0, len(peers))
+	// host, err := newHost(ctx, p.Addr, NewBoltStore(db), db)
+	// if err != nil {
+		// panic(err)
+	// }
 //
-// hosts = append(hosts, host)
-// ctx.Env().OnClose(func() {
-// host.Close()
-// })
-// }
+	// others := append([]peer{}, peers[1:]...)
 //
-// return hosts
+//
+	// ctx.Logger().Info("Starting kayak cluster [%v]", peers)
+	// for i, p := range others {
+		// host, err := newHost(ctx, p.Addr, NewBoltStore(db), db)
+		// if err != nil {
+			// panic(err)
+		// }
+//
+		// hosts = append(hosts, host)
+		// ctx.Env().OnClose(func() {
+			// host.Close()
+		// })
+//
+		// host.Join(zero.Addr)
+	// }
+//
+	// return hosts
 // }
 //
 // func Converge(cluster []*host) *host {
-// var term int = 0
-// var leader *uuid.UUID
+	// var term int = 0
+	// var leader *uuid.UUID
 //
-// cancelled := make(chan struct{})
-// done, timeout := concurrent.NewBreaker(10*time.Second, func() {
-// SyncAll(cluster, func(h *host) bool {
-// select {
-// case <-cancelled:
-// return true
-// default:
-// }
+	// cancelled := make(chan struct{})
+	// done, timeout := concurrent.NewBreaker(10*time.Second, func() {
+		// SyncAll(cluster, func(h *host) bool {
+			// select {
+			// case <-cancelled:
+				// return true
+			// default:
+			// }
 //
-// copy := h.core.CurrentTerm()
-// if copy.num > term {
-// term = copy.num
-// }
+			// copy := h.core.CurrentTerm()
+			// if copy.num > term {
+				// term = copy.num
+			// }
 //
-// if copy.num == term && copy.leader != nil {
-// leader = copy.leader
-// }
+			// if copy.num == term && copy.leader != nil {
+				// leader = copy.leader
+			// }
 //
-// return leader != nil && copy.leader == leader && copy.num == term
-// })
-// })
+			// return leader != nil && copy.leader == leader && copy.num == term
+		// })
+	// })
 //
-// // data race...
+	// // data race...
 //
-// select {
-// case <-done:
-// return First(cluster, func(h *host) bool {
-// h.logger.Info("SEARCHING FOR LEADER: %v, %v", h.Id(), *leader)
-// return h.Id() == *leader
-// })
-// case <-timeout:
-// close(cancelled)
-// return nil
-// }
+	// select {
+	// case <-done:
+		// return First(cluster, func(h *host) bool {
+			// h.logger.Info("SEARCHING FOR LEADER: %v, %v", h.Id(), *leader)
+			// return h.Id() == *leader
+		// })
+	// case <-timeout:
+		// close(cancelled)
+		// return nil
+	// }
 // }
 //
 // func RemoveHost(cluster []*host, i int) []*host {
-// ret := make([]*host, 0, len(cluster)-1)
-// ret = append(ret, cluster[:i]...)
-// ret = append(ret, cluster[i+1:]...)
-// return ret
+	// ret := make([]*host, 0, len(cluster)-1)
+	// ret = append(ret, cluster[:i]...)
+	// ret = append(ret, cluster[i+1:]...)
+	// return ret
 // }
 //
 // func SyncMajority(cluster []*host, fn func(h *host) bool) {
-// done := make(map[uuid.UUID]struct{})
-// start := time.Now()
+	// done := make(map[uuid.UUID]struct{})
+	// start := time.Now()
 //
-// majority := majority(len(cluster))
-// for len(done) < majority {
-// for _, r := range cluster {
-// id := r.core.replica.Id
-// if _, ok := done[id]; ok {
-// continue
-// }
+	// majority := majority(len(cluster))
+	// for len(done) < majority {
+		// for _, r := range cluster {
+			// id := r.core.replica.Id
+			// if _, ok := done[id]; ok {
+				// continue
+			// }
 //
-// if fn(r) {
-// done[id] = struct{}{}
-// continue
-// }
+			// if fn(r) {
+				// done[id] = struct{}{}
+				// continue
+			// }
 //
-// if time.Now().Sub(start) > 10*time.Second {
-// r.core.replica.Logger.Info("Still not sync'ed")
-// }
-// }
-// <-time.After(250 * time.Millisecond)
-// }
+			// if time.Now().Sub(start) > 10*time.Second {
+				// r.core.replica.Logger.Info("Still not sync'ed")
+			// }
+		// }
+		// <-time.After(250 * time.Millisecond)
+	// }
 // }
 //
 // func SyncAll(cluster []*host, fn func(h *host) bool) {
-// done := make(map[uuid.UUID]struct{})
-// start := time.Now()
+	// done := make(map[uuid.UUID]struct{})
+	// start := time.Now()
 //
-// for len(done) < len(cluster) {
-// for _, r := range cluster {
-// id := r.core.replica.Id
-// if _, ok := done[id]; ok {
-// continue
-// }
+	// for len(done) < len(cluster) {
+		// for _, r := range cluster {
+			// id := r.core.replica.Id
+			// if _, ok := done[id]; ok {
+				// continue
+			// }
 //
-// if fn(r) {
-// done[id] = struct{}{}
-// continue
-// }
+			// if fn(r) {
+				// done[id] = struct{}{}
+				// continue
+			// }
 //
-// if time.Now().Sub(start) > 10*time.Second {
-// r.core.replica.Logger.Info("Still not sync'ed")
-// }
-// }
-// <-time.After(250 * time.Millisecond)
-// }
+			// if time.Now().Sub(start) > 10*time.Second {
+				// r.core.replica.Logger.Info("Still not sync'ed")
+			// }
+		// }
+		// <-time.After(250 * time.Millisecond)
+	// }
 // }
 //
 // func First(cluster []*host, fn func(h *host) bool) *host {
-// for _, h := range cluster {
-// if fn(h) {
-// return h
-// }
-// }
+	// for _, h := range cluster {
+		// if fn(h) {
+			// return h
+		// }
+	// }
 //
-// return nil
+	// return nil
 // }
 //
 // func Index(cluster []*host, fn func(h *host) bool) int {
-// for i, h := range cluster {
-// if fn(h) {
-// return i
-// }
-// }
+	// for i, h := range cluster {
+		// if fn(h) {
+			// return i
+		// }
+	// }
 //
-// return -1
+	// return -1
 // }

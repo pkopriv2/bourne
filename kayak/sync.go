@@ -363,7 +363,7 @@ func (s *peerSyncer) start() {
 					return
 				}
 
-				s.logger.Debug("Position [%v/%v]", prev.Index, next)
+				// s.logger.Debug("Position [%v/%v]", prev.Index, next)
 
 				// might have to reinitialize client after each batch.
 				if cl == nil {
@@ -380,6 +380,11 @@ func (s *peerSyncer) start() {
 				if err != nil {
 					s.control.Fail(err)
 					return
+				}
+
+				// any network errors, start this iteration over
+				if cl == nil {
+					continue
 				}
 
 				// if everything was ok, advance the index and term

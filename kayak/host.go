@@ -69,9 +69,14 @@ func (h *host) Join(addr string) error {
 	}
 
 	h.core.Term(status.term.Num, nil, nil)
-	cl.UpdateRoster(h.core.Self, true)
 	becomeFollower(h.core)
-	return nil
+
+	if err := cl.UpdateRoster(h.core.Self, true); err != nil {
+		h.core.ctrl.Fail(err)
+		return err
+	} else {
+		return nil
+	}
 }
 
 func (h *host) Close() error {

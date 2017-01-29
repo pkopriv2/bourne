@@ -121,17 +121,12 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
 	}
-	ctx.Control().OnClose(func(cause error) {
-		log.Close()
-	})
 
 	roster := newRoster([]peer{self})
 	ctx.Control().OnClose(func(cause error) {
-		roster.Close()
-	})
-
-	ctx.Control().OnClose(func(cause error) {
 		ctx.Logger().Info("Replica shutting down [%v]", cause)
+		log.Close()
+		roster.Close()
 	})
 
 	r := &replica{

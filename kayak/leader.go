@@ -1,6 +1,7 @@
 package kayak
 
 import (
+	"math"
 	"time"
 
 	"github.com/pkg/errors"
@@ -103,6 +104,10 @@ func (l *leader) start() {
 	}()
 }
 
+func (c *leader) handleInstallSnapshot(req stdRequest) {
+	req.Fail(NotMemberError)
+}
+
 func (c *leader) handleRemoteAppend(req stdRequest) {
 	err := c.proxyPool.Submit(func() {
 		req.Return(c.replica.LocalAppend(req.Body().(appendEvent)))
@@ -123,32 +128,73 @@ func (c *leader) handleLocalAppend(req stdRequest) {
 	}
 }
 
-func (c *leader) handleInstallSnapshot(req stdRequest) {
-	req.Fail(NotMemberError)
-}
-
 func (c *leader) handleRosterUpdate(req stdRequest) {
-	// TODO: start log syncer before adding config change.
 	update := req.Body().(rosterUpdate)
 
 	all := c.replica.Cluster()
 	if update.join {
 		all = addPeer(all, update.peer)
-		c.syncer.handleRosterChange(all)
 	} else {
 		all = delPeer(all, update.peer)
 	}
 
+	c.logger.Info("Updating roster: %v", update.peer)
+
+	// start sync'ing (even before the config change)
 	c.syncer.handleRosterChange(all)
-	// TODO: Check sync status.
-	// sync := c.syncer.Syncer(update.peer.Id)
-	// prev, _ := sync.GetPrevIndexAndTerm()
-	// for {
-	// idx, _ := sync.GetPrevIndexAndTerm()
-	// }
-	// for i := 0; i < 10240; i++ {
-	// c.replica.Append(Event{0, 1}, 0)
-	// }
+
+	// grab the peer's sync'er
+	sync := c.syncer.Syncer(update.peer.Id)
+
+	// delta just calulcates distance from sync position to max
+	delta := func() (int, error) {
+		max, _, err := c.replica.Log.Last()
+		if err != nil {
+			return 0, err
+		}
+
+		idx, _ := sync.GetPrevIndexAndTerm()
+		return max - idx, nil
+	}
+
+	fail := func(e error) {
+		c.logger.Error("Failed: %v", e)
+		req.Fail(e)
+		becomeFollower(c.replica)
+		c.ctrl.Fail(e)
+	}
+
+	// watch the sync'er.
+	prevDelta := math.MaxInt32
+
+	score := 0
+	for rounds := 0; rounds < 10; rounds++ {
+		curDelta, err := delta()
+		if err != nil {
+			fail(err)
+			return
+		}
+
+		// This is totally arbitrary.
+		if curDelta < 1024 && score >= 3 {
+			break
+		}
+
+		if curDelta <= prevDelta {
+			score++
+		} else {
+			score--
+		}
+
+		sync.logger.Info("Delta [%v] after [%v] rounds.  Score: [%v]", curDelta, rounds+1, score)
+		time.Sleep(1 * time.Second)
+		prevDelta = curDelta
+	}
+
+	if score < 0 {
+		req.Fail(errors.Wrapf(TimeoutError, "Peer did not sync fast enough to be allowed in the cluster"))
+		return
+	}
 
 	c.logger.Info("Setting cluster config [%v]", all)
 	if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
@@ -175,8 +221,6 @@ func (c *leader) handleRequestVote(req stdRequest) {
 		return
 	}
 
-	defer c.ctrl.Close()
-
 	if vote.maxLogIndex >= maxIndex && vote.maxLogTerm >= maxTerm {
 		c.replica.Term(vote.term, nil, &vote.id)
 		req.Ack(newResponse(vote.term, true))
@@ -186,6 +230,7 @@ func (c *leader) handleRequestVote(req stdRequest) {
 	}
 
 	becomeFollower(c.replica)
+	c.ctrl.Close()
 }
 
 func (c *leader) handleReplication(req stdRequest) {
@@ -196,10 +241,10 @@ func (c *leader) handleReplication(req stdRequest) {
 		return
 	}
 
-	defer c.ctrl.Close()
 	c.replica.Term(append.term, &append.id, &append.id)
 	req.Ack(newResponse(append.term, false))
 	becomeFollower(c.replica)
+	c.ctrl.Close()
 }
 
 func (c *leader) broadcastHeartbeat() {

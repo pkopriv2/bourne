@@ -11,69 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-func listenRosterChanges(h *replica) {
-	go func() {
-		for {
-			h.logger.Info("Reloading roster changes")
-			peers, until, err := reloadRoster(h.Log)
-			if err != nil {
-				h.ctrl.Fail(err)
-				return
-			}
-
-			h.Roster.Set(peers)
-
-			if err := listenForRosterChanges(h, until+1); err != nil {
-				h.logger.Info("Error while listening for roster changes: %v", err)
-				if cause := errors.Cause(err); cause != OutOfBoundsError {
-					return
-				}
-				continue
-			}
-			return
-		}
-	}()
-}
-
-
-type roster struct {
-	raw []peer
-	ver *ref
-}
-
-func newRoster(init []peer) *roster {
-	return &roster{raw: init, ver: newRef(0)}
-}
-
-func (c *roster) Wait(next int) ([]peer, int, bool) {
-	_, ok := c.ver.WaitExceeds(next)
-	peers, ver := c.Get()
-	return peers, ver, ok
-}
-
-func (c *roster) Notify() {
-	c.ver.Notify()
-}
-
-func (c *roster) Set(peers []peer) {
-	c.ver.Update(func(cur int) int {
-		c.raw = peers
-		return cur + 1
-	})
-}
-
-// not taking copy as it is assumed that array is immutable
-func (c *roster) Get() (peers []peer, ver int) {
-	c.ver.Update(func(cur int) int {
-		peers, ver = c.raw, cur
-		return cur
-	})
-	return
-}
-
-func (c *roster) Close() {
-	c.ver.Close()
-}
 
 func hasPeer(peers []peer, p peer) bool {
 	for _, cur := range peers {
@@ -158,7 +95,8 @@ func newPeer(addr string) peer {
 }
 
 func (p peer) String() string {
-	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
+	// return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
+	return fmt.Sprintf("Peer(%v)", p.Addr)
 }
 
 func (p peer) Pool(ctx common.Context) net.ConnectionPool {
@@ -214,44 +152,4 @@ func peerParser(r scribe.Reader) (interface{}, error) {
 	e = common.Or(e, r.ReadUUID("id", &p.Id))
 	e = common.Or(e, r.ReadString("addr", &p.Addr))
 	return p, e
-}
-
-// Roster listener stuff.
-func reloadRoster(log *eventLog) ([]peer, int, error) {
-	snapshot, err := log.Snapshot()
-	if err != nil {
-		return nil, 0, errors.Wrapf(err, "Error getting snapshot")
-	}
-
-	peers, err := parsePeers(snapshot.Config())
-	if err != nil {
-		return nil, 0, errors.Wrapf(err, "Error parsing config")
-	}
-	return peers, snapshot.LastIndex(), nil
-}
-
-func listenForRosterChanges(h *replica, start int) error {
-	h.logger.Info("Listening for roster changes from [%v]", start)
-
-	l, err := h.Log.ListenAppends(start, 256)
-	if err != nil {
-		return errors.Wrapf(err, "RosterListener: Error registering listener")
-	}
-
-	i, o, e := l.Next()
-	for ; o ; i, o, e = l.Next() {
-
-		if i.Kind == Config {
-			peers, err := parsePeers(i.Event)
-			if err != nil {
-				h.logger.Error("Error parsing configuration [%v]", peers)
-				continue
-			}
-
-			h.logger.Info("Updating roster: %v", peers)
-			h.Roster.Set(peers)
-		}
-	}
-
-	return e
 }
