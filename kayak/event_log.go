@@ -166,7 +166,21 @@ func (e *eventLog) NewSnapshot(lastIndex int, lastTerm int, ch <-chan Event, siz
 }
 
 func (e *eventLog) Install(snapshot StoredSnapshot) (bool, error) {
-	return e.raw.Install(snapshot)
+	ok, err := e.raw.Install(snapshot)
+	if err != nil {
+		return false, err
+	}
+
+	last := snapshot.LastIndex()
+	e.head.Update(func(cur int) int {
+		if cur < last {
+			return last
+		} else {
+			return cur
+		}
+	})
+
+	return ok, err
 }
 
 func (e *eventLog) Last() (int, int, error) {

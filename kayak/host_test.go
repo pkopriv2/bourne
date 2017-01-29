@@ -32,8 +32,24 @@ func TestHost_Close(t *testing.T) {
 
 	for i := 0; i < 10240; i++ {
 		host1.core.logger.Info("Appending: %v", i)
-		host1.core.Append(Event{0,1}, Std)
+		host1.core.Append(Event{0, 1}, Std)
 	}
+
+	item, ok, err := host1.core.Log.Get(5199)
+	assert.Nil(t, err)
+	assert.True(t, ok)
+
+	events := make([]Event, 0, 1024)
+	for i := 0; i < 1024; i++ {
+		events = append(events, Event{0})
+	}
+
+	snapshot, err := host1.core.Log.NewSnapshot(item.Index, item.Term, NewEventChannel(events), len(events), clusterBytes(host1.core.Cluster()))
+	assert.Nil(t, err)
+
+	ok, err = host1.core.Log.Install(snapshot)
+	assert.Nil(t, err)
+	assert.True(t, ok)
 
 	time.Sleep(2 * time.Second)
 	// host1.Close()

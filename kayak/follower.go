@@ -140,37 +140,47 @@ func (c *follower) handleRosterUpdate(req stdRequest) {
 }
 
 func (c *follower) handleInstallSnapshot(req stdRequest) {
+	// OH MY GOD....THIS IS COMPLEX!  This can be mostly inlined in the main loop.
 	segment := req.Body().(installSnapshot)
 	if segment.term < c.term.Num {
-		req.Ack(newResponse(c.term.Num, true))
+		req.Ack(newResponse(c.term.Num, false))
 		return
 	}
 
 	c.logger.Info("Installing snapshot: %v", segment)
-
 	if segment.batchOffset != 0 {
 		req.Ack(newResponse(c.term.Num, false))
 		return
 	}
 
-	var snapshot StoredSnapshot
-	var err error
-
 	data := make(chan Event)
-	ctrl := c.ctx.Control().Sub()
-	go func() {
-		snapshot, err = c.replica.Log.NewSnapshot(
-			segment.maxIndex, segment.maxTerm, data, segment.size, segment.config)
-		ctrl.Close()
-	}()
+	resp := newStdRequest(nil)
+	go func(s installSnapshot) {
+		snapshot, err := c.replica.Log.NewSnapshot(s.maxIndex, s.maxTerm, data, s.size, s.config)
+		if err != nil {
+			c.logger.Error("Error creating snapshot: %v", err)
+			resp.Fail(err)
+			return
+		}
 
+		success, err := c.replica.Log.Install(snapshot)
+		if err != nil {
+			c.logger.Error("Error installing snapshot: %v", err)
+			resp.Fail(err)
+			return
+		}
+
+		resp.Ack(newResponse(c.term.Num, success))
+	}(segment)
+
+	defer close(data)
 	streamSegment := func(s installSnapshot) error {
 		timer := time.NewTimer(c.replica.RequestTimeout)
 		for i := 0; i < len(s.batch); i++ {
 			select {
 			case <-timer.C:
 				return errors.Wrapf(TimeoutError, "Timed out writing segment [%v]", c.replica.RequestTimeout)
-			case <-ctrl.Closed():
+			case <-c.ctrl.Closed():
 				return ClosedError
 			case data <- s.batch[i]:
 			}
@@ -184,7 +194,7 @@ func (c *follower) handleInstallSnapshot(req stdRequest) {
 	}
 
 	req.Ack(newResponse(c.term.Num, true))
-	for offset := len(segment.batch);; {
+	for offset := len(segment.batch); ; {
 		electionTimer := time.NewTimer(c.replica.ElectionTimeout)
 		c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
 
@@ -194,15 +204,22 @@ func (c *follower) handleInstallSnapshot(req stdRequest) {
 		case <-electionTimer.C:
 			c.logger.Info("Waited too long for snapshot.")
 			return
-		case req := <-c.replica.Snapshots:
-			segment = req.Body().(installSnapshot)
+		case req = <-c.replica.Replications:
+			c.handleReplication(req)
+			continue
+		case req = <-c.replica.VoteRequests:
+			c.handleRequestVote(req)
+			continue
+		case req = <-c.replica.Snapshots:
 		}
 
+		segment = req.Body().(installSnapshot)
 		if segment.batchOffset != offset {
 			req.Ack(newResponse(c.term.Num, false))
 			return
 		}
 
+		c.logger.Debug("Handling snapshot segment: [%v,%v]", offset, offset + len(segment.batch))
 		if err := streamSegment(segment); err != nil {
 			req.Fail(err)
 			return
@@ -214,13 +231,14 @@ func (c *follower) handleInstallSnapshot(req stdRequest) {
 			continue
 		}
 
-		success, err := c.replica.Log.Install(snapshot)
-		if err != nil {
-			req.Fail(err)
-			return
+		select {
+		case r := <-resp.reply:
+			req.Ack(r)
+		case e := <-resp.err:
+			req.Fail(e)
+		case <-c.ctrl.Closed():
+			req.Fail(ClosedError)
 		}
-
-		req.Ack(newResponse(c.term.Num, success))
 		return
 	}
 }

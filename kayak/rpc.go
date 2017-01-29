@@ -189,6 +189,7 @@ func (a installSnapshot) Write(w scribe.Writer) {
 	w.WriteUUID("leaderId", a.leaderId)
 	w.WriteInt("term", a.term)
 	w.WriteBytes("config", a.config)
+	w.WriteInt("size", a.size)
 	w.WriteInt("maxIndex", a.maxIndex)
 	w.WriteInt("maxTerm", a.maxTerm)
 	w.WriteInt("batchOffset", a.batchOffset)
@@ -200,13 +201,14 @@ func (r installSnapshot) Request() net.Request {
 }
 
 func (i installSnapshot) String() string {
-	return fmt.Sprintf("InstallSnapshot(id=%v,maxIndex=%v,maxTerm=%v,offset=%v,events=%v)", i.leaderId.String()[:8], i.maxIndex, i.maxTerm, i.batchOffset, len(i.batch))
+	return fmt.Sprintf("InstallSnapshot(id=%v,size=%v,maxIndex=%v,maxTerm=%v,offset=%v,events=%v)", i.leaderId.String()[:8], i.size, i.maxIndex, i.maxTerm, i.batchOffset, len(i.batch))
 }
 
 func readInstallSnapshot(r scribe.Reader) (ret installSnapshot, err error) {
 	err = common.Or(err, r.ReadUUID("leaderId", &ret.leaderId))
 	err = common.Or(err, r.ReadInt("term", &ret.term))
 	err = common.Or(err, r.ReadBytes("config", &ret.config))
+	err = common.Or(err, r.ReadInt("size", &ret.size))
 	err = common.Or(err, r.ReadInt("maxIndex", &ret.maxIndex))
 	err = common.Or(err, r.ReadInt("maxTerm", &ret.maxTerm))
 	err = common.Or(err, r.ReadInt("batchOffset", &ret.batchOffset))

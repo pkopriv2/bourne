@@ -79,7 +79,7 @@ func (l *leader) start() {
 		defer l.ctrl.Close()
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			// l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
+			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.ctrl.Closed():
@@ -96,15 +96,8 @@ func (l *leader) start() {
 				l.broadcastHeartbeat()
 			case <-l.syncer.ctrl.Closed():
 				l.logger.Error("Sync'er closed: %v", l.syncer.ctrl.Failure())
-
-				fail := l.syncer.ctrl.Failure()
-				if fail == NotLeaderError {
-					becomeFollower(l.replica)
-					return
-				} else {
-					l.replica.ctrl.Fail(fail)
-					return
-				}
+				becomeFollower(l.replica)
+				return
 			}
 		}
 	}()
@@ -131,6 +124,7 @@ func (c *leader) handleLocalAppend(req stdRequest) {
 }
 
 func (c *leader) handleInstallSnapshot(req stdRequest) {
+	req.Fail(NotMemberError)
 }
 
 func (c *leader) handleRosterUpdate(req stdRequest) {
@@ -233,6 +227,7 @@ func (c *leader) broadcastHeartbeat() {
 
 			i++
 		case <-timer.C:
+			c.logger.Error("Unable to retrieve enough heartbeat responses.")
 			c.replica.Term(c.term.Num, nil, c.term.VotedFor)
 			becomeFollower(c.replica)
 			c.ctrl.Close()

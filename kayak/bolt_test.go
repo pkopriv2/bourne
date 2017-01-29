@@ -348,7 +348,6 @@ func TestBoltLog_Prune_EqualToMin(t *testing.T) {
 	assert.Equal(t, []LogItem{item2, item3}, batch)
 }
 
-// Pruning is difficult!!  Wha
 func TestBoltLog_Prune_EqualToMax(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
@@ -392,65 +391,177 @@ func TestBoltLog_Prune_MultiBatch(t *testing.T) {
 	assert.Equal(t, 1023, max)
 }
 
-// func TestBoltLog_Compact_UntilGreaterThanMax(t *testing.T) {
-	// ctx := common.NewContext(common.NewEmptyConfig())
-	// defer ctx.Close()
-//
-	// db := OpenTestLogStash(ctx)
-	// log, err := createBoltLog(db, uuid.NewV1(), []byte{})
-	// assert.Nil(t, err)
-//
-	// _, err = log.Compact(1, NewEventChannel([]Event{}), 0, []byte{})
-	// assert.Equal(t, CompactionError, errors.Cause(err))
-// }
-//
-// func TestBoltLog_Compact_UntilEqualToMax(t *testing.T) {
-	// ctx := common.NewContext(common.NewEmptyConfig())
-	// defer ctx.Close()
-//
-	// db := OpenTestLogStash(ctx)
-	// log, err := createBoltLog(db, uuid.NewV1(), []byte{})
-	// assert.Nil(t, err)
-//
-	// item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	// item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	// item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	// assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
-//
-	// snapshot, err := log.Compact(2, NewEventChannel([]Event{Event{0}}), 1, []byte{})
-	// // assert.Nil(t, err)
-//
-	// assert.Equal(t, 2, snapshot.LastIndex())
-	// assert.Equal(t, 2, snapshot.LastTerm())
-//
-	// min, _ := log.Min()
-	// max, _ := log.Max()
-	// assert.Equal(t, -1, min)
-	// assert.Equal(t, -1, max)
-//
-	// copy, err := log.Snapshot()
-	// assert.Equal(t, 1, copy.Size())
-//
-	// events, err := copy.Scan(0, 0)
-	// assert.Equal(t, []Event{Event{0}}, events)
-// }
-//
-// func TestBoltLog_Compact_LessThanMin(t *testing.T) {
-	// ctx := common.NewContext(common.NewEmptyConfig())
-	// defer ctx.Close()
-//
-	// db := OpenTestLogStash(ctx)
-	// log, err := createBoltLog(db, uuid.NewV1(), []byte{})
-	// assert.Nil(t, err)
-//
-	// item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	// item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	// item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	// assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
-//
-	// _, err = log.Compact(1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
-	// assert.Nil(t, err)
-//
-	// _, err = log.Compact(0, NewEventChannel([]Event{Event{0}}), 1, []byte{})
-	// assert.Equal(t, CompactionError, errors.Cause(err))
-// }
+func TestBoltLog_InstallSnapshot_Empty_LessThanPrev(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
+	assert.Nil(t, err)
+
+	store, err := log.Store()
+	assert.Nil(t, err)
+
+	snapshot, err := store.NewSnapshot(-2, -2, NewEventChannel([]Event{Event{0}}), 1, []byte{})
+	assert.Nil(t, err)
+
+	success, err := log.Install(snapshot)
+	assert.Equal(t, CompactionError, errors.Cause(err))
+	assert.False(t, success)
+
+	maxIndex, maxTerm, err := log.Last()
+	assert.Nil(t, err)
+	assert.Equal(t, -1, -1, maxIndex, maxTerm)
+}
+
+func TestBoltLog_InstallSnapshot_Empty_EqualToPrev(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
+	assert.Nil(t, err)
+
+	store, err := log.Store()
+	assert.Nil(t, err)
+
+	snapshot, err := store.NewSnapshot(-1, -1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
+	assert.Nil(t, err)
+
+	success, err := log.Install(snapshot)
+	assert.Nil(t, err)
+	assert.True(t, success)
+
+	maxIndex, maxTerm, err := log.Last()
+	assert.Nil(t, err)
+	assert.Equal(t, -1, -1, maxIndex, maxTerm)
+}
+
+func TestBoltLog_InstallSnapshot_EqualToMin(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
+	assert.Nil(t, err)
+
+	store, err := log.Store()
+	assert.Nil(t, err)
+
+	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
+	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
+	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+
+	snapshot, err := store.NewSnapshot(0, 0, NewEventChannel([]Event{Event{0}}), 1, []byte{})
+	assert.Nil(t, err)
+
+	success, err := log.Install(snapshot)
+	assert.Nil(t, err)
+	assert.True(t, success)
+
+	batch, err := log.Scan(1, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []LogItem{item2, item3}, batch)
+
+	snapshot, err = store.NewSnapshot(1, 1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
+	assert.Nil(t, err)
+
+	success, err = log.Install(snapshot)
+	assert.Nil(t, err)
+	assert.True(t, success)
+
+	batch, err = log.Scan(2, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []LogItem{item3}, batch)
+
+	maxIndex, maxTerm, err := log.Last()
+	assert.Nil(t, err)
+	assert.Equal(t, 2, 2, maxIndex, maxTerm)
+}
+
+func TestBoltLog_InstallSnapshot_Middle(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
+	assert.Nil(t, err)
+
+	store, err := log.Store()
+	assert.Nil(t, err)
+
+	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
+	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
+	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+
+	snapshot, err := store.NewSnapshot(1, 1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
+	assert.Nil(t, err)
+
+	success, err := log.Install(snapshot)
+	assert.Nil(t, err)
+	assert.True(t, success)
+
+	batch, err := log.Scan(2, 100)
+	assert.Nil(t, err)
+	assert.Equal(t, []LogItem{item3}, batch)
+}
+
+func TestBoltLog_InstallSnapshot_EqualToMax(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
+	assert.Nil(t, err)
+
+	store, err := log.Store()
+	assert.Nil(t, err)
+
+	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
+	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
+	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+
+	snapshot, err := store.NewSnapshot(2, 2, NewEventChannel([]Event{Event{0}}), 1, []byte{})
+	assert.Nil(t, err)
+
+	success, err := log.Install(snapshot)
+	assert.Nil(t, err)
+	assert.True(t, success)
+
+	index, term, err := log.Last()
+	assert.Nil(t, err)
+	assert.Equal(t, index, 2)
+	assert.Equal(t, term, 2)
+}
+
+func TestBoltLog_InstallSnapshot_GreaterThanMax(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	db := OpenTestLogStash(ctx)
+	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
+	assert.Nil(t, err)
+
+	store, err := log.Store()
+	assert.Nil(t, err)
+
+	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
+	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
+	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+
+	snapshot, err := store.NewSnapshot(5, 5, NewEventChannel([]Event{Event{0}}), 1, []byte{})
+	assert.Nil(t, err)
+
+	success, err := log.Install(snapshot)
+	assert.Nil(t, err)
+	assert.True(t, success)
+
+	index, term, err := log.Last()
+	assert.Nil(t, err)
+	assert.Equal(t, index, 5)
+	assert.Equal(t, term, 5)
+}

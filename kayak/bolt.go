@@ -168,18 +168,16 @@ func (b *boltLog) Prune(until int) error {
 		return err
 	}
 
-	for min <= until {
-		tmpUntil := common.Min(min+256, until)
+	for min != -1 && min <= until {
+		min = common.Min(min+256, until)
 
 		err := b.db.Update(func(tx *bolt.Tx) (e error) {
-			min, e = b.prune(tx, tmpUntil)
+			min, e = b.prune(tx, min)
 			return e
 		})
 		if err != nil {
 			return err
 		}
-
-		min = tmpUntil + 1
 	}
 	return nil
 }
@@ -389,7 +387,7 @@ func (b *boltLog) insert(tx *bolt.Tx, batch []LogItem) error {
 
 	// Empty case
 	if max == -1 {
-		max, _, err := b.last(tx)
+		max, _, err = b.last(tx)
 		if err != nil {
 			return err
 		}
@@ -431,19 +429,14 @@ func (b *boltLog) prune(tx *bolt.Tx, until int) (int, error) {
 	}
 
 	if min == -1 || max == -1 {
-		return 0, errors.Wrapf(OutOfBoundsError, "Cannot prune empty log")
-	}
-
-	if until > max {
-		return 0, errors.Wrapf(OutOfBoundsError, "Cannot prune until [%v].  Max is currently [%v]", until, max)
+		return min, nil
 	}
 
 	if until < min {
-		return 0, errors.Wrapf(OutOfBoundsError, "Cannot prune until [%v].  Min is currently [%v]", until, min)
+		return min, nil
 	}
 
-	// FIXME: should we check that pruning doesn't extend beyond current snapshot?
-
+	until = common.Min(until, max)
 	batch, err := b.scan(tx, min, until)
 	if err != nil {
 		return 0, err
@@ -457,7 +450,7 @@ func (b *boltLog) prune(tx *bolt.Tx, until int) (int, error) {
 	}
 
 	newMin := until + 1
-	newMax := max
+	newMax := common.Max(until+1, max)
 	if until >= max {
 		newMin = -1
 		newMax = -1

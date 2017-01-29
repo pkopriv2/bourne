@@ -130,6 +130,10 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 		roster.Close()
 	})
 
+	ctx.Control().OnClose(func(cause error) {
+		ctx.Logger().Info("Replica shutting down [%v]", cause)
+	})
+
 	r := &replica{
 		Ctx:             ctx,
 		logger:          ctx.Logger(),
@@ -258,7 +262,7 @@ func (h *replica) sendRequest(ch chan<- stdRequest, val interface{}) (interface{
 	case <-h.ctrl.Closed():
 		return nil, ClosedError
 	case <-timer.C:
-		return nil, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+		return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to accept [%v]", h.RequestTimeout)
 	case ch <- req:
 		select {
 		case <-h.ctrl.Closed():
@@ -268,7 +272,7 @@ func (h *replica) sendRequest(ch chan<- stdRequest, val interface{}) (interface{
 		case e := <-req.err:
 			return nil, e
 		case <-timer.C:
-			return nil, common.NewTimeoutError(h.RequestTimeout, "ClientAppend")
+			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to respond [%v]", h.RequestTimeout)
 		}
 	}
 }

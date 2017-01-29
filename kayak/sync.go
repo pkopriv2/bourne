@@ -177,11 +177,19 @@ type peerSyncer struct {
 }
 
 func newPeerSyncer(ctx common.Context, self *replica, term term, peer peer) *peerSyncer {
-	ctx = ctx.Sub("Sync(%v)", peer)
+	sub := ctx.Sub("Sync(%v)", peer)
+	go func() {
+		select {
+		case <-sub.Control().Closed():
+			ctx.Control().Fail(sub.Control().Failure())
+		case <-ctx.Control().Closed():
+			return
+		}
+	}()
 
 	sync := &peerSyncer{
-		logger:    ctx.Logger(),
-		control:   ctx.Control(),
+		logger:    sub.Logger(),
+		control:   sub.Control(),
 		self:      self,
 		peer:      peer,
 		term:      term,
@@ -208,9 +216,13 @@ func (l *peerSyncer) SetPrevIndexAndTerm(index int, term int) {
 func (l *peerSyncer) InstallSnapshot(cl *rpcClient, snapshot StoredSnapshot) (bool, error) {
 	size := snapshot.Size()
 	for i := 0; i < size; {
-		beg := i
-		end := common.Min(size-1, i+256)
+		if l.control.IsClosed() {
+			return false, ClosedError
+		}
 
+		beg, end := i, common.Min(size-1, i+255)
+
+		l.logger.Info("Sending snapshot segment [%v,%v]", beg, end)
 		batch, err := snapshot.Scan(beg, end)
 		if err != nil {
 			return false, errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
@@ -235,7 +247,7 @@ func (l *peerSyncer) InstallSnapshot(cl *rpcClient, snapshot StoredSnapshot) (bo
 			return false, NotLeaderError
 		}
 
-		if ! resp.success {
+		if !resp.success {
 			return false, nil
 		}
 
@@ -251,6 +263,7 @@ func (l *peerSyncer) InstallSnapshot(cl *rpcClient, snapshot StoredSnapshot) (bo
 func (s *peerSyncer) start() {
 	s.logger.Info("Starting")
 	go func() {
+		defer s.control.Close()
 		defer s.logger.Info("Shutting down")
 
 		var cl *rpcClient
@@ -355,6 +368,7 @@ func (s *peerSyncer) start() {
 
 				ok, err := s.InstallSnapshot(cl, snapshot)
 				if err != nil {
+					s.logger.Error("Error: %v", err)
 					s.control.Fail(err)
 					return
 				}
