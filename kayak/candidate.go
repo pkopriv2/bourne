@@ -102,10 +102,10 @@ func (c *candidate) start() {
 	}()
 }
 
-func (c *candidate) handleRequestVote(req stdRequest) {
+func (c *candidate) handleRequestVote(req *common.Request) {
 	vote := req.Body().(requestVote)
 
-	c.logger.Debug("Handling stdRequest vote: %v", vote)
+	c.logger.Debug("Handling *common.Request vote: %v", vote)
 	if vote.term <= c.term.Num {
 		req.Ack(newResponse(c.term.Num, false))
 		return
@@ -131,7 +131,7 @@ func (c *candidate) handleRequestVote(req stdRequest) {
 	c.replica.Term(vote.term, nil, nil)
 }
 
-func (c *candidate) handleAppendEvents(req stdRequest) {
+func (c *candidate) handleAppendEvents(req *common.Request) {
 	append := req.Body().(replicate)
 
 	if append.term < c.term.Num {

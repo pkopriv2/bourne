@@ -6,7 +6,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
-	"github.com/pkopriv2/bourne/net"
 )
 
 // The follower machine.  This
@@ -19,7 +18,7 @@ type follower struct {
 	proxyPool    concurrent.WorkPool
 	snapshotPool concurrent.WorkPool
 	appendPool   concurrent.WorkPool
-	clientPool   net.ClientPool
+	clientPool   *rpcClientPool
 	// connPool     net.ConnectionPool
 }
 
@@ -27,9 +26,9 @@ func becomeFollower(replica *replica) {
 	ctx := replica.Ctx.Sub("Follower(%v)", replica.CurrentTerm())
 	ctx.Logger().Info("Becoming follower")
 
-	var clientPool net.ClientPool
+	var clientPool *rpcClientPool
 	if leader := replica.Leader(); leader != nil {
-		clientPool = net.NewClientPool(ctx, ctx.Logger(), leader.Pool(replica.Ctx))
+		clientPool = leader.Pool(ctx)
 	}
 
 	l := &follower{
@@ -43,25 +42,18 @@ func becomeFollower(replica *replica) {
 		replica:    replica,
 	}
 
+	ctx.Control().Defer(func(error) {
+		l.appendPool.Close()
+		l.proxyPool.Close()
+		if l.clientPool != nil {
+			l.clientPool.Close()
+		}
+	})
+
 	l.start()
 }
 
 func (c *follower) start() {
-	// If any config has changed, just restart the follower...
-	_, ver := c.replica.Roster.Get()
-	go func() {
-		defer c.logger.Info("Closing config watcher.")
-		defer c.ctrl.Close()
-
-		_, _, ok := c.replica.Roster.Wait(ver)
-		if c.ctrl.IsClosed() || !ok {
-			return
-		}
-
-		becomeFollower(c.replica)
-		return
-	}()
-
 	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
 	if leader := c.replica.Leader(); leader != nil {
 		go func() {
@@ -106,7 +98,7 @@ func (c *follower) start() {
 	}()
 }
 
-func (c *follower) handleLocalAppend(req stdRequest) {
+func (c *follower) handleLocalAppend(req *common.Request) {
 	append := req.Body().(appendEvent)
 
 	timeout := c.replica.RequestTimeout / 2
@@ -118,7 +110,7 @@ func (c *follower) handleLocalAppend(req stdRequest) {
 			return
 		}
 
-		i, e := newClient(cl).Append(append.Event, append.Source, append.Seq, append.Kind)
+		i, e := cl.Append(append.Event, append.Source, append.Seq, append.Kind)
 		if e == nil {
 			c.clientPool.Return(cl)
 		} else {
@@ -131,15 +123,15 @@ func (c *follower) handleLocalAppend(req stdRequest) {
 	}
 }
 
-func (c *follower) handleRemoteAppend(req stdRequest) {
+func (c *follower) handleRemoteAppend(req *common.Request) {
 	req.Fail(NotLeaderError)
 }
 
-func (c *follower) handleRosterUpdate(req stdRequest) {
+func (c *follower) handleRosterUpdate(req *common.Request) {
 	req.Fail(NotLeaderError)
 }
 
-func (c *follower) handleInstallSnapshot(req stdRequest) {
+func (c *follower) handleInstallSnapshot(req *common.Request) {
 	// OH MY GOD....THIS IS COMPLEX!  This can be mostly inlined in the main loop.
 	segment := req.Body().(installSnapshot)
 	if segment.term < c.term.Num {
@@ -154,7 +146,7 @@ func (c *follower) handleInstallSnapshot(req stdRequest) {
 	}
 
 	data := make(chan Event)
-	resp := newStdRequest(nil)
+	resp := common.NewRequest(nil)
 	go func(s installSnapshot) {
 		snapshot, err := c.replica.Log.NewSnapshot(s.maxIndex, s.maxTerm, data, s.size, s.config)
 		if err != nil {
@@ -219,7 +211,7 @@ func (c *follower) handleInstallSnapshot(req stdRequest) {
 			return
 		}
 
-		c.logger.Debug("Handling snapshot segment: [%v,%v]", offset, offset + len(segment.batch))
+		c.logger.Debug("Handling snapshot segment: [%v,%v]", offset, offset+len(segment.batch))
 		if err := streamSegment(segment); err != nil {
 			req.Fail(err)
 			return
@@ -232,9 +224,9 @@ func (c *follower) handleInstallSnapshot(req stdRequest) {
 		}
 
 		select {
-		case r := <-resp.reply:
+		case r := <-resp.Acked():
 			req.Ack(r)
-		case e := <-resp.err:
+		case e := <-resp.Failed():
 			req.Fail(e)
 		case <-c.ctrl.Closed():
 			req.Fail(ClosedError)
@@ -243,7 +235,7 @@ func (c *follower) handleInstallSnapshot(req stdRequest) {
 	}
 }
 
-func (c *follower) handleRequestVote(req stdRequest) {
+func (c *follower) handleRequestVote(req *common.Request) {
 	vote := req.Body().(requestVote)
 
 	c.logger.Debug("Handling request vote [%v]", vote)
@@ -298,7 +290,7 @@ func (c *follower) handleRequestVote(req stdRequest) {
 	c.ctrl.Close()
 }
 
-func (c *follower) handleReplication(req stdRequest) {
+func (c *follower) handleReplication(req *common.Request) {
 	append := req.Body().(replicate)
 
 	if append.term < c.term.Num {
@@ -309,6 +301,7 @@ func (c *follower) handleReplication(req stdRequest) {
 	hint, _, err := c.replica.Log.Last()
 	if err != nil {
 		req.Fail(err)
+		return
 	}
 
 	// c.logger.Debug("Handling replication: %v", append)

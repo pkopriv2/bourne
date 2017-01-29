@@ -65,22 +65,22 @@ type replica struct {
 	terms *termStore
 
 	// request vote events.
-	VoteRequests chan stdRequest
+	VoteRequests chan *common.Request
 
 	// append requests (presumably from leader)
-	Replications chan stdRequest
+	Replications chan *common.Request
 
 	// snapshot install (presumably from leader)
-	Snapshots chan stdRequest
+	Snapshots chan *common.Request
 
 	// append requests (from clients)
-	RemoteAppends chan stdRequest
+	RemoteAppends chan *common.Request
 
 	// append requests (from local state machine)
-	LocalAppends chan stdRequest
+	LocalAppends chan *common.Request
 
 	// append requests (from local state machine)
-	RosterUpdates chan stdRequest
+	RosterUpdates chan *common.Request
 }
 
 func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*replica, error) {
@@ -123,7 +123,7 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 	}
 
 	roster := newRoster([]peer{self})
-	ctx.Control().OnClose(func(cause error) {
+	ctx.Control().Defer(func(cause error) {
 		ctx.Logger().Info("Replica shutting down [%v]", cause)
 		log.Close()
 		roster.Close()
@@ -139,12 +139,12 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 		Log:             log,
 		Db:              db,
 		Roster:          roster,
-		Replications:    make(chan stdRequest),
-		VoteRequests:    make(chan stdRequest),
-		RemoteAppends:   make(chan stdRequest),
-		LocalAppends:    make(chan stdRequest),
-		Snapshots:       make(chan stdRequest),
-		RosterUpdates:   make(chan stdRequest),
+		Replications:    make(chan *common.Request),
+		VoteRequests:    make(chan *common.Request),
+		RemoteAppends:   make(chan *common.Request),
+		LocalAppends:    make(chan *common.Request),
+		Snapshots:       make(chan *common.Request),
+		RosterUpdates:   make(chan *common.Request),
 		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
 		RequestTimeout:  10 * time.Second,
 	}
@@ -250,9 +250,9 @@ func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	return ret
 }
 
-func (h *replica) sendRequest(ch chan<- stdRequest, val interface{}) (interface{}, error) {
+func (h *replica) sendRequest(ch chan<- *common.Request, val interface{}) (interface{}, error) {
 	timer := time.NewTimer(h.RequestTimeout)
-	req := newStdRequest(val)
+	req := common.NewRequest(val)
 	select {
 	case <-h.ctrl.Closed():
 		return nil, ClosedError
@@ -262,9 +262,9 @@ func (h *replica) sendRequest(ch chan<- stdRequest, val interface{}) (interface{
 		select {
 		case <-h.ctrl.Closed():
 			return nil, ClosedError
-		case r := <-req.reply:
+		case r := <-req.Acked():
 			return r, nil
-		case e := <-req.err:
+		case e := <-req.Failed():
 			return nil, e
 		case <-timer.C:
 			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to respond [%v]", h.RequestTimeout)
@@ -340,47 +340,3 @@ func majority(num int) int {
 		return int(math.Ceil(float64(num) / float64(2)))
 	}
 }
-
-type stdRequest struct {
-	val   interface{}
-	reply chan interface{}
-	err   chan error
-}
-
-func newStdRequest(val interface{}) stdRequest {
-	return stdRequest{val, make(chan interface{}, 1), make(chan error, 1)}
-}
-
-func (r stdRequest) Body() interface{} {
-	return r.val
-}
-
-func (r stdRequest) Ack(val interface{}) {
-	r.reply <- val
-}
-
-func (r stdRequest) Fail(err error) {
-	r.err <- err
-}
-
-func (r stdRequest) Return(val interface{}, err error) {
-	if err != nil {
-		r.err <- err
-	} else {
-		r.reply <- val
-	}
-}
-
-func (r stdRequest) Response() (interface{}, error) {
-	select {
-	case err := <-r.err:
-		return nil, err
-	case val := <-r.reply:
-		return val, nil
-	}
-}
-
-// type stdResponse struct {
-// Val interface{}
-// Err error
-// }

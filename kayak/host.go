@@ -17,16 +17,16 @@ type host struct {
 
 func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *host, err error) {
 	ctx = ctx.Sub("Kayak")
+	defer func() {
+		if err != nil {
+			ctx.Control().Fail(err)
+		}
+	}()
 
 	core, err := newReplica(ctx, self, store, db)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			core.ctrl.Fail(err)
-		}
-	}()
 
 	// FIXME: Refactor net.Server to accept addrs instead of ports.
 	_, port, err := net.SplitAddr(self)
@@ -39,7 +39,7 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 		return nil, err
 	}
 
-	ctx.Control().OnClose(func(cause error) {
+	ctx.Control().Defer(func(cause error) {
 		server.Close()
 	})
 
@@ -48,6 +48,10 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 		core:   core,
 		server: server,
 	}
+	core.ctrl.Defer(func(error) {
+		h.Close()
+	})
+
 	return
 }
 
@@ -72,6 +76,7 @@ func (h *host) Join(addr string) error {
 	becomeFollower(h.core)
 
 	if err := cl.UpdateRoster(h.core.Self, true); err != nil {
+		h.ctx.Logger().Error("Unable to join cluster [%v]", err)
 		h.core.ctrl.Fail(err)
 		return err
 	} else {

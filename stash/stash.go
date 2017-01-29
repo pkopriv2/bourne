@@ -83,7 +83,7 @@ func Open(ctx common.Context, path string) (stash Stash, err error) {
 }
 
 func closeOnClose(ctx common.Context, stash Stash) {
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		ctx.Logger().Debug("Closing stash [%v]", stash.Path())
 		stash.Close()
 	})
@@ -91,7 +91,7 @@ func closeOnClose(ctx common.Context, stash Stash) {
 
 func removeOnClose(ctx common.Context, stash Stash) {
 	path := stash.Path()
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		ctx.Logger().Debug("Removing context entry [%v]", path)
 		ctx.Env().Data().Remove(path)
 	})
@@ -99,7 +99,7 @@ func removeOnClose(ctx common.Context, stash Stash) {
 
 func deleteOnClose(ctx common.Context, stash Stash) {
 	path := stash.Path()
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		ctx.Logger().Debug("Deleting stash instance [%v]", path)
 		afero.NewOsFs().RemoveAll(path)
 	})

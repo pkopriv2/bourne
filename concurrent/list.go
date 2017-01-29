@@ -5,6 +5,7 @@ import "sync"
 type List interface {
 	All() []interface{}
 	Append(v interface{})
+	Prepend(v interface{})
 }
 
 type list struct {
@@ -26,6 +27,12 @@ func (s *list) Append(v interface{}) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	s.inner = append(s.inner, v)
+}
+
+func (s *list) Prepend(v interface{}) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.inner = append([]interface{}{v}, s.inner...)
 }
 
 func CopyList(orig []interface{}) []interface{} {

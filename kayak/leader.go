@@ -1,7 +1,6 @@
 package kayak
 
 import (
-	"math"
 	"time"
 
 	"github.com/pkg/errors"
@@ -37,7 +36,7 @@ func becomeLeader(replica *replica) {
 		replica:    replica,
 	}
 
-	ctx.Control().OnClose(func(error) {
+	ctx.Control().Defer(func(error) {
 		l.ctrl.Close()
 		l.proxyPool.Close()
 		l.appendPool.Close()
@@ -104,11 +103,11 @@ func (l *leader) start() {
 	}()
 }
 
-func (c *leader) handleInstallSnapshot(req stdRequest) {
+func (c *leader) handleInstallSnapshot(req *common.Request) {
 	req.Fail(NotMemberError)
 }
 
-func (c *leader) handleRemoteAppend(req stdRequest) {
+func (c *leader) handleRemoteAppend(req *common.Request) {
 	err := c.proxyPool.Submit(func() {
 		req.Return(c.replica.LocalAppend(req.Body().(appendEvent)))
 	})
@@ -118,7 +117,7 @@ func (c *leader) handleRemoteAppend(req stdRequest) {
 	}
 }
 
-func (c *leader) handleLocalAppend(req stdRequest) {
+func (c *leader) handleLocalAppend(req *common.Request) {
 	err := c.appendPool.SubmitTimeout(1000*time.Millisecond, func() {
 		req.Return(c.syncer.Append(req.Body().(appendEvent)))
 	})
@@ -128,83 +127,66 @@ func (c *leader) handleLocalAppend(req stdRequest) {
 	}
 }
 
-func (c *leader) handleRosterUpdate(req stdRequest) {
+func (c *leader) handleRosterUpdate(req *common.Request) {
 	update := req.Body().(rosterUpdate)
 
 	all := c.replica.Cluster()
-	if update.join {
-		all = addPeer(all, update.peer)
-	} else {
+	if !update.join {
 		all = delPeer(all, update.peer)
-	}
 
-	c.logger.Info("Updating roster: %v", update.peer)
-
-	// start sync'ing (even before the config change)
-	c.syncer.handleRosterChange(all)
-
-	// grab the peer's sync'er
-	sync := c.syncer.Syncer(update.peer.Id)
-
-	// delta just calulcates distance from sync position to max
-	delta := func() (int, error) {
-		max, _, err := c.replica.Log.Last()
-		if err != nil {
-			return 0, err
-		}
-
-		idx, _ := sync.GetPrevIndexAndTerm()
-		return max - idx, nil
-	}
-
-	fail := func(e error) {
-		c.logger.Error("Failed: %v", e)
-		req.Fail(e)
-		becomeFollower(c.replica)
-		c.ctrl.Fail(e)
-	}
-
-	// watch the sync'er.
-	prevDelta := math.MaxInt32
-
-	score := 0
-	for rounds := 0; rounds < 10; rounds++ {
-		curDelta, err := delta()
-		if err != nil {
-			fail(err)
+		c.logger.Info("Removing peer: %v", update.peer)
+		if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
+			req.Fail(e)
+			return
+		} else {
+			req.Ack(true)
 			return
 		}
-
-		// This is totally arbitrary.
-		if curDelta < 1024 && score >= 3 {
-			break
-		}
-
-		if curDelta <= prevDelta {
-			score++
-		} else {
-			score--
-		}
-
-		sync.logger.Info("Delta [%v] after [%v] rounds.  Score: [%v]", curDelta, rounds+1, score)
-		time.Sleep(1 * time.Second)
-		prevDelta = curDelta
 	}
 
-	if score < 0 {
-		req.Fail(errors.Wrapf(TimeoutError, "Peer did not sync fast enough to be allowed in the cluster"))
+	var err error
+	// var score int
+	defer func() {
+		if err != nil {
+			c.logger.Info("Error adding peer [%v].  Removing from sync'ers.", update.peer)
+			c.syncer.handleRosterChange(delPeer(all, update.peer))
+		}
+	}()
+
+	all = addPeer(all, update.peer)
+	c.syncer.handleRosterChange(all)
+
+	sync := c.syncer.Syncer(update.peer.Id)
+
+	// _, err := sync.heartbeat()
+	// if err != nil {
+		// req.Fail(err)
+		// return
+	// }
+
+	score, err := sync.score()
+	if err != nil {
+		req.Fail(err)
+		becomeFollower(c.replica)
+		c.ctrl.Fail(err)
 		return
 	}
 
-	c.logger.Info("Setting cluster config [%v]", all)
+	if score < 0 {
+		req.Fail(errors.Wrapf(TimeoutError, "Unable to merge peer: %v", update.peer))
+		return
+	}
+
 	if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
 		req.Fail(e)
+		return
 	} else {
 		req.Ack(true)
+		return
 	}
 }
 
-func (c *leader) handleRequestVote(req stdRequest) {
+func (c *leader) handleRequestVote(req *common.Request) {
 	vote := req.Body().(requestVote)
 	c.logger.Debug("Handling request vote: %v", vote)
 
@@ -233,7 +215,7 @@ func (c *leader) handleRequestVote(req stdRequest) {
 	c.ctrl.Close()
 }
 
-func (c *leader) handleReplication(req stdRequest) {
+func (c *leader) handleReplication(req *common.Request) {
 	append := req.Body().(replicate)
 
 	if append.term <= c.term.Num {

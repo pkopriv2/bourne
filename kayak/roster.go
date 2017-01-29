@@ -61,9 +61,15 @@ func (r *rosterManager) start() {
 			go func() {
 				l := newConfigListener(commits, ctrl)
 
+				member := false
+
 				peers, ok, err := l.Next()
 				for ; ok; peers, ok, err = l.Next() {
-					if ! hasPeer(peers, r.self.Self) {
+					if hasPeer(peers, r.self.Self) {
+						member = true
+					}
+
+					if member && ! hasPeer(peers, r.self.Self) {
 						r.logger.Info("No longer a member of the cluster [%v]", peers)
 						r.self.ctrl.Close()
 						ctrl.Close()

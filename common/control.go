@@ -12,7 +12,7 @@ type Control interface {
 	Closed() <-chan struct{}
 	IsClosed() bool
 	Failure() error
-	OnClose(func(error))
+	Defer(func(error))
 	Sub() Control
 }
 
@@ -83,8 +83,8 @@ func (c *control) Failure() error {
 	return c.failure
 }
 
-func (c *control) OnClose(fn func(error)) {
-	c.closes.Append(fn)
+func (c *control) Defer(fn func(error)) {
+	c.closes.Prepend(fn)
 }
 
 func (c *control) Sub() Control {

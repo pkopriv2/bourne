@@ -24,7 +24,7 @@ func NewContext(config Config) Context {
 }
 
 func (c *ctx) Close() error {
-	return c.env.Close()
+	return c.control.Close()
 }
 
 func (c *ctx) Env() Env {

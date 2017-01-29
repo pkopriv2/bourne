@@ -47,6 +47,20 @@ func delPeer(cur []peer, p peer) []peer {
 	return append(cur[:index], cur[index+1:]...)
 }
 
+func equalPeers(l []peer, r []peer) bool {
+	if len(l) != len(r) {
+		return false
+	}
+
+	for i, p := range l {
+		if p != r[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
 func clusterBytes(cluster peers) []byte {
 	return cluster.Bytes()
 }
@@ -95,12 +109,12 @@ func newPeer(addr string) peer {
 }
 
 func (p peer) String() string {
-	// return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
-	return fmt.Sprintf("Peer(%v)", p.Addr)
+	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
+	// return fmt.Sprintf("Peer(%v)", p.Addr)
 }
 
-func (p peer) Pool(ctx common.Context) net.ConnectionPool {
-	return net.NewConnectionPool("tcp", p.Addr, 10, 2*time.Second)
+func (p peer) Pool(ctx common.Context) *rpcClientPool {
+	return newRpcClientPool(ctx, net.NewClientPool(ctx, ctx.Logger(), net.NewConnectionPool("tcp", p.Addr, 10, 10*time.Second)))
 }
 
 func (p peer) Client(ctx common.Context) (*rpcClient, error) {

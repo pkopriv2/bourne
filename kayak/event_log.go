@@ -36,13 +36,13 @@ func openEventLog(ctx common.Context, log StoredLog) (*eventLog, error) {
 	ctx = ctx.Sub("EventLog")
 
 	headRef := newRef(head)
-	ctx.Control().OnClose(func(error) {
+	ctx.Control().Defer(func(error) {
 		ctx.Logger().Info("Closing head ref")
 		headRef.Close()
 	})
 
 	commitRef := newRef(-1)
-	ctx.Control().OnClose(func(error) {
+	ctx.Control().Defer(func(error) {
 		ctx.Logger().Info("Closing commit ref")
 		commitRef.Close()
 	})

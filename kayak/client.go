@@ -1,6 +1,8 @@
 package kayak
 
 import (
+	"time"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
@@ -51,7 +53,11 @@ func (c *rpcClient) UpdateRoster(peer peer, join bool) error {
 		return err
 	}
 
-	return resp.Error()
+	if err := resp.Error(); err != nil {
+		return err
+	} else {
+		return nil
+	}
 }
 
 func (c *rpcClient) Replicate(r replicate) (response, error) {
@@ -106,4 +112,38 @@ func (c *rpcClient) RequestVote(vote requestVote) (response, error) {
 	}
 
 	return readResponse(resp.Body())
+}
+
+type rpcClientPool struct {
+	ctx common.Context
+	raw net.ClientPool
+}
+
+func newRpcClientPool(ctx common.Context, raw net.ClientPool) *rpcClientPool {
+	return &rpcClientPool{ctx, raw}
+}
+
+func (c *rpcClientPool) Close() error {
+	return c.raw.Close()
+}
+
+func (c *rpcClientPool) Max() int {
+	return c.raw.Max()
+}
+
+func (c *rpcClientPool) TakeTimeout(dur time.Duration) *rpcClient {
+	raw := c.raw.TakeTimeout(dur)
+	if raw == nil {
+		return nil
+	}
+
+	return &rpcClient{raw}
+}
+
+func (c *rpcClientPool) Return(cl *rpcClient) {
+	c.raw.Return(cl.raw)
+}
+
+func (c *rpcClientPool) Fail(cl *rpcClient) {
+	c.raw.Fail(cl.raw)
 }
