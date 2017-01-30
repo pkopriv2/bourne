@@ -110,13 +110,13 @@ func (c *follower) handleLocalAppend(req *common.Request) {
 			return
 		}
 
-		i, e := cl.Append(append.Event, append.Source, append.Seq, append.Kind)
+		resp, e := cl.Append(append)
 		if e == nil {
 			c.clientPool.Return(cl)
 		} else {
 			c.clientPool.Fail(cl)
 		}
-		req.Return(i, e)
+		req.Return(LogItem{Index: resp.index, Term: resp.term, Event: append.Event, Source: append.Source, Seq: append.Seq, Kind: append.Kind }, e)
 	})
 	if err != nil {
 		req.Fail(err)
@@ -155,14 +155,14 @@ func (c *follower) handleInstallSnapshot(req *common.Request) {
 			return
 		}
 
-		success, err := c.replica.Log.Install(snapshot)
+		err = c.replica.Log.Install(snapshot)
 		if err != nil {
 			c.logger.Error("Error installing snapshot: %v", err)
 			resp.Fail(err)
 			return
 		}
 
-		resp.Ack(newResponse(c.term.Num, success))
+		resp.Ack(newResponse(c.term.Num, true))
 	}(segment)
 
 	defer close(data)
@@ -207,7 +207,7 @@ func (c *follower) handleInstallSnapshot(req *common.Request) {
 
 		segment = req.Body().(installSnapshot)
 		if segment.batchOffset != offset {
-			req.Ack(newResponse(c.term.Num, false))
+			req.Fail(errors.Wrapf(InvariantError, "Multithreaded snapshot installations not allowed."))
 			return
 		}
 
@@ -304,7 +304,7 @@ func (c *follower) handleReplication(req *common.Request) {
 		return
 	}
 
-	// c.logger.Debug("Handling replication: %v", append)
+	c.logger.Debug("Handling replication: %v", append)
 	if append.term > c.term.Num || c.term.Leader == nil {
 		c.logger.Info("New leader detected [%v]", append.id)
 		req.Ack(newResponseWithHint(append.term, false, hint))
@@ -330,7 +330,7 @@ func (c *follower) handleReplication(req *common.Request) {
 
 	// consistency check failed.
 	if !ok {
-		c.logger.Error("Consistency check failed. Responding with hint [%v]", hint)
+		c.logger.Debug("Consistency check failed. Responding with hint [%v]", hint)
 		req.Ack(newResponseWithHint(append.term, false, hint))
 		return
 	}

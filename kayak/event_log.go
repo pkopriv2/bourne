@@ -165,10 +165,10 @@ func (e *eventLog) NewSnapshot(lastIndex int, lastTerm int, ch <-chan Event, siz
 	return store.NewSnapshot(lastIndex, lastTerm, ch, size, config)
 }
 
-func (e *eventLog) Install(snapshot StoredSnapshot) (bool, error) {
-	ok, err := e.raw.Install(snapshot)
+func (e *eventLog) Install(snapshot StoredSnapshot) error {
+	err := e.raw.Install(snapshot)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	last := snapshot.LastIndex()
@@ -180,7 +180,21 @@ func (e *eventLog) Install(snapshot StoredSnapshot) (bool, error) {
 		}
 	})
 
-	return ok, err
+	return err
+}
+
+func (e *eventLog) Compact(until int, data <-chan Event, size int, config []byte) error {
+	item, ok, err := e.Get(until)
+	if err != nil || ! ok {
+		return errors.Wrapf(CompactionError, "Cannot compact until [%v].  It doesn't exist", until)
+	}
+
+	snapshot, err := e.NewSnapshot(item.Index, item.Term, data, size, config)
+	if err != nil {
+		return err
+	}
+
+	return e.raw.Install(snapshot)
 }
 
 func (e *eventLog) Last() (int, int, error) {

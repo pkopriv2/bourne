@@ -6,7 +6,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
-	uuid "github.com/satori/go.uuid"
 )
 
 type Client struct {
@@ -73,19 +72,17 @@ func (c *rpcClient) Replicate(r replicate) (response, error) {
 	return readResponse(resp.Body())
 }
 
-func (c *rpcClient) Append(e Event, source uuid.UUID, seq int, kind Kind) (LogItem, error) {
-	return LogItem{}, nil
-	// resp, err := c.raw.Send(appendEventRequest{e, source, seq, kind}.Request())
-	// if err != nil {
-	// return LogItem{}, err
-	// }
-	//
-	// res, err := readNetAppendEventResponse(resp)
-	// if err != nil {
-	// return LogItem{}, errors.Wrapf(err, "Error receiving append response: %v", e)
-	// }
-	//
-	// return LogItem{res.index, e, res.term, source, seq, kind}, nil
+func (c *rpcClient) Append(a appendEvent) (appendEventResponse, error) {
+	resp, err := c.raw.Send(a.Request())
+	if err != nil {
+		return appendEventResponse{}, err
+	}
+
+	if err := resp.Error(); err != nil {
+		return appendEventResponse{}, err
+	}
+
+	return readAppendEventResponse(resp.Body())
 }
 
 func (c *rpcClient) InstallSnapshot(snapshot installSnapshot) (response, error) {

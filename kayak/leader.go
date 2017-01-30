@@ -103,8 +103,32 @@ func (l *leader) start() {
 	}()
 }
 
+// leaders do not accept snapshot installations
 func (c *leader) handleInstallSnapshot(req *common.Request) {
-	req.Fail(NotMemberError)
+	snapshot := req.Body().(installSnapshot)
+	if snapshot.term <= c.term.Num {
+		req.Ack(newResponse(c.term.Num, false))
+		return
+	}
+
+	c.replica.Term(snapshot.term, &snapshot.leaderId, &snapshot.leaderId)
+	req.Ack(newResponse(snapshot.term, false))
+	becomeFollower(c.replica)
+	c.ctrl.Close()
+}
+
+// leaders do not accept replication requests
+func (c *leader) handleReplication(req *common.Request) {
+	append := req.Body().(replicate)
+	if append.term <= c.term.Num {
+		req.Ack(newResponse(c.term.Num, false))
+		return
+	}
+
+	c.replica.Term(append.term, &append.id, &append.id)
+	req.Ack(newResponse(append.term, false))
+	becomeFollower(c.replica)
+	c.ctrl.Close()
 }
 
 func (c *leader) handleRemoteAppend(req *common.Request) {
@@ -145,7 +169,6 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 	}
 
 	var err error
-	// var score int
 	defer func() {
 		if err != nil {
 			c.logger.Info("Error adding peer [%v].  Removing from sync'ers.", update.peer)
@@ -158,7 +181,7 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 
 	sync := c.syncer.Syncer(update.peer.Id)
 
-	// _, err := sync.heartbeat()
+	// _, err = sync.heartbeat()
 	// if err != nil {
 		// req.Fail(err)
 		// return
@@ -167,8 +190,10 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 	score, err := sync.score()
 	if err != nil {
 		req.Fail(err)
-		becomeFollower(c.replica)
-		c.ctrl.Fail(err)
+		if err != ClosedError {
+			becomeFollower(c.replica)
+			c.ctrl.Fail(err)
+		}
 		return
 	}
 
@@ -215,19 +240,6 @@ func (c *leader) handleRequestVote(req *common.Request) {
 	c.ctrl.Close()
 }
 
-func (c *leader) handleReplication(req *common.Request) {
-	append := req.Body().(replicate)
-
-	if append.term <= c.term.Num {
-		req.Ack(newResponse(c.term.Num, false))
-		return
-	}
-
-	c.replica.Term(append.term, &append.id, &append.id)
-	req.Ack(newResponse(append.term, false))
-	becomeFollower(c.replica)
-	c.ctrl.Close()
-}
 
 func (c *leader) broadcastHeartbeat() {
 	ch := c.replica.Broadcast(func(cl *rpcClient) response {

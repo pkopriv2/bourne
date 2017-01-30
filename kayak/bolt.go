@@ -234,28 +234,28 @@ func (b *boltLog) Snapshot() (s StoredSnapshot, e error) {
 	return
 }
 
-func (b *boltLog) Install(s StoredSnapshot) (bool, error) {
+func (b *boltLog) Install(s StoredSnapshot) (error) {
 	cur, err := b.Snapshot()
 	if err != nil {
-		return false, err
+		return err
 	}
 	// swap it.
 	err = b.db.Update(func(tx *bolt.Tx) error {
 		return b.swapSnapshot(tx, cur.(*boltSnapshot).raw, s.(*boltSnapshot).raw)
 	})
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	// finally, truncate (safe to do concurrently)
 	err = b.Prune(s.LastIndex())
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	// cur is useless, regardless of whether the delete succeeds
 	defer cur.Delete()
-	return true, nil
+	return nil
 }
 
 func (b *boltLog) maxIndex(tx *bolt.Tx) (int, error) {

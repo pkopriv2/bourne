@@ -343,6 +343,10 @@ func (s *peerSyncer) score() (int, error) {
 
 	// delta just calulcates distance from sync position to max
 	delta := func() (int, error) {
+		if s.ctrl.IsClosed() {
+			return 0, common.Or(ClosedError, s.ctrl.Failure())
+		}
+
 		max, _, err := s.self.Log.Last()
 		if err != nil {
 			return 0, err
@@ -440,12 +444,11 @@ func (s *peerSyncer) installSnapshot(cl *rpcClient) (*rpcClient, LogItem, error)
 		return cl, LogItem{}, err
 	}
 
-	cl, ok, err := s.sendSnapshot(cl, snapshot)
+	cl, err = s.sendSnapshot(cl, snapshot)
 	if err != nil {
 		return cl, LogItem{}, err
 	}
-
-	if ok {
+	if cl != nil {
 		return cl, LogItem{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}, nil
 	}
 
@@ -454,21 +457,9 @@ func (s *peerSyncer) installSnapshot(cl *rpcClient) (*rpcClient, LogItem, error)
 }
 
 // sends the snapshot to the client
-func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) (*rpcClient, bool, error) {
+func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) (*rpcClient, error) {
 	size := snapshot.Size()
-	for i := 0; i < size; {
-		if l.ctrl.IsClosed() {
-			return cl, false, ClosedError
-		}
-
-		beg, end := i, common.Min(size-1, i+255)
-
-		l.logger.Info("Sending snapshot segment [%v,%v]", beg, end)
-		batch, err := snapshot.Scan(beg, end)
-		if err != nil {
-			return cl, false, errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
-		}
-
+	sendSegment := func(cl *rpcClient, offset int, batch []Event) (*rpcClient, error) {
 		segment := installSnapshot{
 			l.self.Id,
 			l.term.Num,
@@ -476,26 +467,49 @@ func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) (*rpcC
 			size,
 			snapshot.LastIndex(),
 			snapshot.LastTerm(),
-			beg,
+			offset,
 			batch}
 
 		resp, err := cl.InstallSnapshot(segment)
 		if err != nil {
-			cl.Close()
-			l.logger.Error("Error sending segment: %v: %v", segment, err)
-			return nil, false, nil
+			return nil, err
 		}
 
-		if resp.term > l.term.Num {
-			return cl, false, NotLeaderError
+		if resp.term > l.term.Num || ! resp.success {
+			return cl, NotLeaderError
 		}
 
 		if !resp.success {
-			return cl, false, nil
+			return cl, NotLeaderError
+		}
+
+		return cl, nil
+	}
+
+	if size == 0 {
+		return sendSegment(cl, 0, []Event{})
+	}
+
+	for i := 0; i < size; {
+		if l.ctrl.IsClosed() {
+			return cl, ClosedError
+		}
+
+		beg, end := i, common.Min(size-1, i+255)
+
+		l.logger.Info("Sending snapshot segment [%v,%v]", beg, end)
+		batch, err := snapshot.Scan(beg, end)
+		if err != nil {
+			return cl, errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
+		}
+
+		cl, err = sendSegment(cl, beg, batch)
+		if cl == nil || err != nil {
+			return cl, err
 		}
 
 		i += len(batch)
 	}
 
-	return cl, true, nil
+	return cl, nil
 }

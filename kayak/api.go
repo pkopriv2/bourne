@@ -14,7 +14,7 @@ import (
 var (
 	ClosedError    = errors.New("Kayak:Closed")
 	NotLeaderError = errors.New("Kayak:NotLeader")
-	NotMemberError = errors.New("Kayak:NotMember")
+	NotSlaveError  = errors.New("Kayak:NotMember")
 	TimeoutError   = errors.New("Kayak:Timeout")
 	// NoLeaderError  = errors.New("Kayak:NoLeader")
 	// NotPeerError   = errors.New("Kayak:NotPeer")
@@ -354,7 +354,7 @@ type StoredLog interface {
 	Append(Event, int, uuid.UUID, int, Kind) (LogItem, error)
 	Get(index int) (LogItem, bool, error)
 	Insert([]LogItem) error
-	Install(StoredSnapshot) (bool, error)
+	Install(StoredSnapshot) error
 	Snapshot() (StoredSnapshot, error)
 }
 

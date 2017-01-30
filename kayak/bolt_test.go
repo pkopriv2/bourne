@@ -405,9 +405,7 @@ func TestBoltLog_InstallSnapshot_Empty_LessThanPrev(t *testing.T) {
 	snapshot, err := store.NewSnapshot(-2, -2, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
 
-	success, err := log.Install(snapshot)
-	assert.Equal(t, CompactionError, errors.Cause(err))
-	assert.False(t, success)
+	assert.Equal(t, CompactionError, errors.Cause(log.Install(snapshot)))
 
 	maxIndex, maxTerm, err := log.Last()
 	assert.Nil(t, err)
@@ -427,10 +425,7 @@ func TestBoltLog_InstallSnapshot_Empty_EqualToPrev(t *testing.T) {
 
 	snapshot, err := store.NewSnapshot(-1, -1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
-
-	success, err := log.Install(snapshot)
-	assert.Nil(t, err)
-	assert.True(t, success)
+	assert.Nil(t, log.Install(snapshot))
 
 	maxIndex, maxTerm, err := log.Last()
 	assert.Nil(t, err)
@@ -456,9 +451,8 @@ func TestBoltLog_InstallSnapshot_EqualToMin(t *testing.T) {
 	snapshot, err := store.NewSnapshot(0, 0, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
 
-	success, err := log.Install(snapshot)
+	assert.Nil(t, log.Install(snapshot))
 	assert.Nil(t, err)
-	assert.True(t, success)
 
 	batch, err := log.Scan(1, 100)
 	assert.Nil(t, err)
@@ -466,10 +460,7 @@ func TestBoltLog_InstallSnapshot_EqualToMin(t *testing.T) {
 
 	snapshot, err = store.NewSnapshot(1, 1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
-
-	success, err = log.Install(snapshot)
-	assert.Nil(t, err)
-	assert.True(t, success)
+	assert.Nil(t, log.Install(snapshot))
 
 	batch, err = log.Scan(2, 100)
 	assert.Nil(t, err)
@@ -499,9 +490,7 @@ func TestBoltLog_InstallSnapshot_Middle(t *testing.T) {
 	snapshot, err := store.NewSnapshot(1, 1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
 
-	success, err := log.Install(snapshot)
-	assert.Nil(t, err)
-	assert.True(t, success)
+	assert.Nil(t, log.Install(snapshot))
 
 	batch, err := log.Scan(2, 100)
 	assert.Nil(t, err)
@@ -527,9 +516,7 @@ func TestBoltLog_InstallSnapshot_EqualToMax(t *testing.T) {
 	snapshot, err := store.NewSnapshot(2, 2, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
 
-	success, err := log.Install(snapshot)
-	assert.Nil(t, err)
-	assert.True(t, success)
+	assert.Nil(t, log.Install(snapshot))
 
 	index, term, err := log.Last()
 	assert.Nil(t, err)
@@ -555,10 +542,7 @@ func TestBoltLog_InstallSnapshot_GreaterThanMax(t *testing.T) {
 
 	snapshot, err := store.NewSnapshot(5, 5, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
-
-	success, err := log.Install(snapshot)
-	assert.Nil(t, err)
-	assert.True(t, success)
+	assert.Nil(t, log.Install(snapshot))
 
 	index, term, err := log.Last()
 	assert.Nil(t, err)

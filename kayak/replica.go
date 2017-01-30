@@ -40,6 +40,9 @@ type replica struct {
 	// the current cluster configuration
 	Roster *roster
 
+	// the committed cluster configuration (used for snapshotting only)
+	ComittedRoster *roster
+
 	// the core database
 	Db *bolt.DB
 
@@ -331,6 +334,10 @@ func (h *replica) Append(event Event, kind Kind) (LogItem, error) {
 
 func (h *replica) Listen(start int, buf int) (Listener, error) {
 	return h.Log.ListenCommits(start, buf)
+}
+
+func (h *replica) Compact(until int, data <-chan Event, size int) error {
+	return h.Log.Compact(until, data, size, clusterBytes(h.Cluster()))
 }
 
 func majority(num int) int {

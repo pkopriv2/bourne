@@ -6,8 +6,8 @@ import (
 )
 
 type rosterManager struct {
-	logger  common.Logger
-	self *replica
+	logger common.Logger
+	self   *replica
 }
 
 func listenRosterChanges(r *replica) {
@@ -69,7 +69,7 @@ func (r *rosterManager) start() {
 						member = true
 					}
 
-					if member && ! hasPeer(peers, r.self.Self) {
+					if member && !hasPeer(peers, r.self.Self) {
 						r.logger.Info("No longer a member of the cluster [%v]", peers)
 						r.self.ctrl.Close()
 						ctrl.Close()
@@ -170,7 +170,7 @@ func (c *roster) Close() {
 }
 
 type configListener struct {
-	raw Listener
+	raw  Listener
 	ctrl common.Control
 }
 
