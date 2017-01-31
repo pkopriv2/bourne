@@ -296,9 +296,8 @@ func (s *peerSyncer) start() {
 					return
 				}
 
-				s.logger.Debug("Position [%v/%v]", prev.Index, next)
-
 				// might have to reinitialize client after each batch.
+				s.logger.Debug("Position [%v/%v]", prev.Index, next)
 				if cl == nil {
 					s.logger.Debug("Re-initializing client")
 					cl, err = s.peer.Connect(s.self.Ctx, s.ctrl.Closed())

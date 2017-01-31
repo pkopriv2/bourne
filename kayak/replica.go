@@ -238,9 +238,7 @@ func (h *replica) start() error {
 	}
 
 	listenRosterChanges(h)
-
 	go func() {
-		<-h.ctrl.Closed()
 		h.logger.Info("Replica closed: %v", h.ctrl.Failure())
 	}()
 	return nil

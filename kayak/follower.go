@@ -5,74 +5,49 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
 )
 
 // The follower machine.  This
 type follower struct {
-	ctx          common.Context
-	logger       common.Logger
-	ctrl         common.Control
-	term         term
-	replica      *replica
-	proxyPool    concurrent.WorkPool
-	snapshotPool concurrent.WorkPool
-	appendPool   concurrent.WorkPool
-	clientPool   *rpcClientPool
+	ctx     common.Context
+	logger  common.Logger
+	ctrl    common.Control
+	term    term
+	replica *replica
 }
 
 func becomeFollower(replica *replica) {
 	ctx := replica.Ctx.Sub("Follower(%v)", replica.CurrentTerm())
 	ctx.Logger().Info("Becoming follower")
-
-	var clientPool *rpcClientPool
-	if leader := replica.Leader(); leader != nil {
-		clientPool = leader.Pool(ctx)
-	}
-
 	l := &follower{
-		ctx:        ctx,
-		logger:     ctx.Logger(),
-		ctrl:       ctx.Control(),
-		proxyPool:  concurrent.NewWorkPool(16),
-		appendPool: concurrent.NewWorkPool(16),
-		clientPool: clientPool,
-		term:       replica.CurrentTerm(),
-		replica:    replica,
+		ctx:     ctx,
+		logger:  ctx.Logger(),
+		ctrl:    ctx.Control(),
+		term:    replica.CurrentTerm(),
+		replica: replica,
 	}
-
-	ctx.Control().Defer(func(error) {
-		l.appendPool.Close()
-		l.proxyPool.Close()
-		if l.clientPool != nil {
-			l.clientPool.Close()
-		}
-	})
-
 	l.start()
 }
 
 func (c *follower) start() {
-	// Proxy routine. (out of band to prevent deadlocks between state machine and replicated log)
-	if leader := c.replica.Leader(); leader != nil {
-		go func() {
-			defer c.ctrl.Close()
-			for {
-				select {
-				case <-c.ctrl.Closed():
-					return
-				case req := <-c.replica.LocalAppends:
-					c.handleLocalAppend(req)
-				case req := <-c.replica.RemoteAppends:
-					c.handleRemoteAppend(req)
-				case req := <-c.replica.RosterUpdates:
-					c.handleRosterUpdate(req)
-				case req := <-c.replica.Barrier:
-					c.handleReadBarrier(req)
-				}
+	// Proxy routine. (Out of band to allow replication requests through faster)
+	go func() {
+		defer c.ctrl.Close()
+		for {
+			select {
+			case <-c.ctrl.Closed():
+				return
+			case req := <-c.replica.LocalAppends:
+				c.handleLocalAppend(req)
+			case req := <-c.replica.RemoteAppends:
+				c.handleRemoteAppend(req)
+			case req := <-c.replica.RosterUpdates:
+				c.handleRosterUpdate(req)
+			case req := <-c.replica.Barrier:
+				c.handleReadBarrier(req)
 			}
-		}()
-	}
+		}
+	}()
 
 	// Main routine
 	go func() {
@@ -102,31 +77,6 @@ func (c *follower) start() {
 		}
 	}()
 }
-
-// func (c *follower) handleLocalAppend(req *common.Request) {
-// append := req.Body().(appendEvent)
-//
-// timeout := c.replica.RequestTimeout / 2
-//
-// err := c.proxyPool.SubmitTimeout(timeout, func() {
-// cl := c.clientPool.TakeTimeout(timeout)
-// if cl == nil {
-// req.Fail(common.NewTimeoutError(timeout, "Error retrieving connection from pool."))
-// return
-// }
-//
-// resp, e := cl.Append(append)
-// if e == nil {
-// c.clientPool.Return(cl)
-// } else {
-// c.clientPool.Fail(cl)
-// }
-// req.Return(LogItem{Index: resp.index, Term: resp.term, Event: append.Event, Source: append.Source, Seq: append.Seq, Kind: append.Kind }, e)
-// })
-// if err != nil {
-// req.Fail(err)
-// }
-// }
 
 func (c *follower) handleLocalAppend(req *common.Request) {
 	req.Fail(NotLeaderError)
@@ -222,7 +172,7 @@ func (c *follower) handleInstallSnapshot(req *common.Request, data chan<- Event,
 		req.Fail(ClosedError)
 	}
 
-	return nil,nil,0
+	return nil, nil, 0
 }
 
 func (c *follower) handleRequestVote(req *common.Request) {
