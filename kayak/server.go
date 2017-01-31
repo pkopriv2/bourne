@@ -4,27 +4,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/scribe"
-)
-
-// server endpoints
-const (
-	actStatus          = "kayak.replica.status"
-	actReplicate       = "kayak.replica.replicate"
-	actRequestVote     = "kayak.replica.requestVote"
-	actAppend          = "kayak.replica.append"
-	actInstallSnapshot = "kayak.replica.snapshot"
-	actUpdateRoster    = "kayak.replica.roster"
-)
-
-// Meta messages
-var (
-	metaStatus          = serverNewMeta(actStatus)
-	metaReplicate       = serverNewMeta(actReplicate)
-	metaRequestVote     = serverNewMeta(actRequestVote)
-	metaAppend          = serverNewMeta(actAppend)
-	metaInstallSnapshot = serverNewMeta(actInstallSnapshot)
-	metaUpdateRoster    = serverNewMeta(actUpdateRoster)
 )
 
 type server struct {
@@ -41,7 +20,7 @@ func newServer(ctx common.Context, logger common.Logger, port string, self *repl
 
 func serverInitHandler(s *server) func(net.Request) net.Response {
 	return func(req net.Request) net.Response {
-		action, err := serverReadMeta(req.Meta())
+		action, err := readMeta(req.Meta())
 		if err != nil {
 			return net.NewErrorResponse(errors.Wrap(err, "Error parsing action"))
 		}
@@ -132,17 +111,4 @@ func (s *server) Append(req net.Request) net.Response {
 	}
 
 	return appendEventResponse{item.Index, item.Term}.Response()
-}
-
-// Helper functions
-
-func serverNewMeta(action string) scribe.Message {
-	return scribe.Build(func(w scribe.Writer) {
-		w.WriteString("action", action)
-	})
-}
-
-func serverReadMeta(meta scribe.Reader) (ret string, err error) {
-	err = meta.ReadString("action", &ret)
-	return
 }

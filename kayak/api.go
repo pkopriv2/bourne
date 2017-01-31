@@ -11,21 +11,26 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// Core api errors
 var (
-	ClosedError    = errors.New("Kayak:Closed")
-	NotLeaderError = errors.New("Kayak:NotLeader")
-	NotSlaveError  = errors.New("Kayak:NotMember")
-	TimeoutError   = errors.New("Kayak:Timeout")
-	// NoLeaderError  = errors.New("Kayak:NoLeader")
-	// NotPeerError   = errors.New("Kayak:NotPeer")
+	ClosedError    = errors.New("Kayak:ClosedError")
+	NotLeaderError = errors.New("Kayak:NotLeaderError")
+	NotSlaveError  = errors.New("Kayak:NotMemberError")
+	NoLeaderError  = errors.New("Kayak:NoLeaderError")
+	TimeoutError   = errors.New("Kayak:TimeoutError")
 )
 
-func Start(ctx common.Context, app Machine, self string) error {
-	return nil
-}
+// Storage api errors
+var (
+	InvariantError   = errors.New("Kayak:InvariantError")
+	EndOfStreamError = errors.New("Kayak:EndOfStreamError")
+	OutOfBoundsError = errors.New("Kayak:OutOfBoundsError")
+	CompactionError  = errors.New("Kayak:CompactionError")
+)
 
-func Join(ctx common.Context, app Machine, self string, peer string) error {
-	return nil
+// Extracts out the raw errors.
+func ExtractError(err error) error {
+	return extractError(err)
 }
 
 // Events are the fundamental unit of replication.  This the primary
@@ -125,31 +130,36 @@ func eventParser(r scribe.Reader) (interface{}, error) {
 // The raft
 //
 //
-type Machine interface {
 
-	// Run invokes the machines main loop.
-	//
-	// Consumers may choose to return from this method at any time.  If
-	// the returned error is nil, the log shuts down and returns from
-	// the main kayak.Run() method.  If the returned value is not nil,
-	// the machine is automatically restarted.
-	//
-	// // Consumers wishing to terminate the log permanently should close
-	// // the log directly and return from the main loop.  Any errors
-	// // returned at that time are returned from the main kayak.Run()
-	// // loop.
-	//
-	// FIXME: Better semantics around exiting!
-	Run(log Log, sync Sync) error
+func Start(ctx common.Context, self string) (Host, error) {
+	return nil, nil
+}
+
+func Join(ctx common.Context, self string, peer string) (Host, error) {
+	return nil, nil
+}
+
+// The host
+type Host interface {
+	io.Closer
+
+	// Returns the log.
+	Log() (Log, error)
+
+	// Returns the cluster synchronizer.
+	Sync() (Sync, error)
 }
 
 // The log is a durable, replicated event sequence
 type Log interface {
 	io.Closer
 
-	// Returns the latest snaphot from the log.  Useful to rebuild
-	// internal machine state.
-	Snapshot() (until int, events <-chan Event, err error)
+	// Returns the current size of the log.
+	Size() int
+
+	// Returns the latest snaphot from the log.  Useful to rebuild internal
+	// machine state.
+	Snapshot() (EventStream, error)
 
 	// Listen generates a listener interested in log commits starting from
 	// and including the start index.
@@ -204,17 +214,17 @@ type Log interface {
 //
 type Sync interface {
 
-	// Ack tells the synchronizer that the index (and everything that preceded)
+	// Applied tells the synchronizer that the index (and everything that preceded)
 	// it has been applied to the state machine. This operation is commutative,
 	// meaning that if a lower index is applied after a later index, then
 	// only the latest is used for synchronization purposes.
-	Ack(index int)
+	Applied(index int, val interface{})
 
 	// Returns the current read-barrier for the cluster.
 	Barrier() (int, error)
 
 	// Sync waits for the machine to be caught up to the barrier.
-	Sync(timeout time.Duration, barrier int)
+	Sync(timeout time.Duration, barrier int) (interface{})
 }
 
 // A listener represents a stream of log items.
@@ -236,6 +246,17 @@ type Listener interface {
 	//
 	// This method is not safe for concurrent access.
 	Next() (LogItem, bool, error)
+}
+
+
+// A listener represents a stream of log items.
+type EventStream interface {
+	io.Closer
+
+	// Returns the next item in the log.
+	//
+	// This method is not safe for concurrent access.
+	Next() (Event, error)
 }
 
 type LogItem struct {
@@ -326,14 +347,6 @@ func ParseItem(bytes []byte) (LogItem, error) {
 
 	return raw.(LogItem), nil
 }
-
-// Storage apis,errors
-var (
-	InvariantError   = errors.New("Kayak:Invariant")
-	EndOfStreamError = errors.New("Kayak:EndOfStream")
-	OutOfBoundsError = errors.New("Kayak:OutOfBounds")
-	CompactionError  = errors.New("Kayak:Compaction")
-)
 
 // TODO: Complete the api so that we can have command line utilities for interacting
 // with nodes.

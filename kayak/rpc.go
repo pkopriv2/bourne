@@ -9,6 +9,39 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// server endpoints
+const (
+	actStatus          = "kayak.replica.status"
+	actReadBarrier     = "kayak.replica.read.barrier"
+	actReplicate       = "kayak.replica.replicate"
+	actRequestVote     = "kayak.replica.requestVote"
+	actAppend          = "kayak.replica.append"
+	actInstallSnapshot = "kayak.replica.snapshot"
+	actUpdateRoster    = "kayak.replica.roster"
+)
+
+// Meta messages
+var (
+	metaStatus          = newMeta(actStatus)
+	metaReadBarrier     = newMeta(actReadBarrier)
+	metaReplicate       = newMeta(actReplicate)
+	metaRequestVote     = newMeta(actRequestVote)
+	metaAppend          = newMeta(actAppend)
+	metaInstallSnapshot = newMeta(actInstallSnapshot)
+	metaUpdateRoster    = newMeta(actUpdateRoster)
+)
+
+func newMeta(action string) scribe.Message {
+	return scribe.Build(func(w scribe.Writer) {
+		w.WriteString("action", action)
+	})
+}
+
+func readMeta(meta scribe.Reader) (ret string, err error) {
+	err = meta.ReadString("action", &ret)
+	return
+}
+
 // Basic status/health information
 func newStatusRequest() net.Request {
 	return net.NewEmptyRequest(metaStatus)
@@ -35,6 +68,19 @@ func readStatusResponse(r scribe.Reader) (ret status, err error) {
 	err = common.Or(err, r.ParseMessage("term", &ret.term, termParser))
 	err = common.Or(err, r.ParseMessages("config", &ret.config, peerParser))
 	return
+}
+
+// Returns the current read barrier for the cluster
+func newReadBarrierRequest() net.Request {
+	return net.NewEmptyRequest(metaReadBarrier)
+}
+
+func newReadBarrierResponse(barrier int) net.Response {
+	return net.NewStandardResponse(scribe.NewIntMessage(barrier))
+}
+
+func readBarrierResponse(r scribe.Reader) (int, error) {
+	return scribe.ReadIntMessage(r)
 }
 
 // Internal append events request.  Requests are put onto the internal member

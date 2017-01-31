@@ -79,7 +79,7 @@ func (l *leader) start() {
 		defer l.ctrl.Close()
 		for {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			// l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
+			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.ctrl.Closed():
@@ -101,6 +101,9 @@ func (l *leader) start() {
 			}
 		}
 	}()
+
+	// Establish read barrier
+	l.replica.LocalAppend(appendEvent{Event{}, l.replica.Self.Id, 0, NoOp})
 }
 
 // leaders do not accept snapshot installations
@@ -181,19 +184,17 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 
 	sync := c.syncer.Syncer(update.peer.Id)
 
-	// _, err = sync.heartbeat()
-	// if err != nil {
-		// req.Fail(err)
-		// return
-	// }
+	_, err = sync.heartbeat()
+	if err != nil {
+		req.Fail(err)
+		return
+	}
 
 	score, err := sync.score()
 	if err != nil {
 		req.Fail(err)
-		if err != ClosedError {
-			becomeFollower(c.replica)
-			c.ctrl.Fail(err)
-		}
+		becomeFollower(c.replica)
+		c.ctrl.Fail(err)
 		return
 	}
 

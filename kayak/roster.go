@@ -84,14 +84,13 @@ func (r *rosterManager) start() {
 			case <-r.self.ctrl.Closed():
 				return
 			case <-ctrl.Closed():
-				if cause := errors.Cause(ctrl.Failure()); cause != OutOfBoundsError {
+				if cause := extractError(ctrl.Failure()); cause != OutOfBoundsError {
 					r.self.ctrl.Fail(err)
 					return
 				}
 			}
 		}
 	}()
-
 }
 
 func (r *rosterManager) reloadRoster() ([]peer, int, error) {

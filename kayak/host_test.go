@@ -1,6 +1,7 @@
 package kayak
 
 import (
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -196,9 +197,9 @@ func TestHost_Cluster_Follower_AppendMulti_WithLeaderFailure(t *testing.T) {
 	for i := 0; i < numThreads; i++ {
 		go func(i int) {
 			for j := 0; j < numItemsPerThread; j++ {
-				leader.core.logger.Info("Appending: %v", numThreads*i + j)
+				leader.core.logger.Info("Appending: %v", numThreads*i+j)
 
-				_, err := member.core.Append(Event(stash.Int(numThreads*i + j)), Std)
+				_, err := member.core.Append(Event(stash.Int(numThreads*i+j)), Std)
 				if err != nil {
 					failures.Inc()
 				}
@@ -246,8 +247,13 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 				return
 			case <-ticker.C:
 				for _, p := range cluster {
-					err := p.core.Compact(p.Log().Head()-10, NewEventChannel([]Event{Event(stash.Int(1))}), 1)
-					leader.core.logger.Info("Running compactions: %v", err)
+					events := make([]Event, 0, 1024)
+					for i := 0; i < 1024; i++ {
+						events = append(events, Event(stash.Int(1)))
+					}
+
+					err := p.core.Compact(p.core.Log.Committed(), NewEventChannel(events), len(events))
+					p.core.logger.Info("Running compactions: %v", err)
 				}
 			}
 		}
@@ -256,11 +262,13 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 	for i := 0; i < numThreads; i++ {
 		go func(i int) {
 			for j := 0; j < numItemsPerThread; j++ {
-				_, err := leader.core.Append(Event(stash.Int(i*j + j)), Std)
+				_, err := leader.core.Append(Event(stash.Int(i*j+j)), Std)
 				if err != nil {
 					// hrmm....(is this true anymore??)
-					panic(err)
+					panic(fmt.Sprintf("%+v", err))
 				}
+
+				// time.Sleep(500 * time.Millisecond)
 			}
 		}(i)
 	}
@@ -277,6 +285,7 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 		assert.FailNow(t, "Timed out waiting for majority to sync")
 	}
 }
+
 //
 // func extractIndices(items []LogItem) []int {
 // ret := make([]int, 0, len(items))

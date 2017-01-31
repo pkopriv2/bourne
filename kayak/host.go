@@ -61,28 +61,76 @@ func (h *host) Start() error {
 }
 
 func (h *host) Join(addr string) error {
+	var err error
+
+	becomeFollower(h.core)
+	defer func() {
+		if err != nil {
+			h.core.ctrl.Fail(err)
+			h.ctx.Logger().Error("Error joining: %v", err)
+		}
+	}()
+
+	for attmpt := 0; attmpt < 3; attmpt++ {
+		err = h.tryJoin(addr)
+		if err != nil {
+			h.ctx.Logger().Error("Attempt(%v): Error joining cluster: %v: %v", addr, attmpt, err)
+			continue
+		}
+
+		break
+	}
+
+	return err
+}
+
+func (h *host) Leave() error {
+	var err error
+	for attmpt := 0; attmpt < 3; attmpt++ {
+		err = h.tryLeave()
+		if err != nil {
+			h.ctx.Logger().Error("Attempt(%v): Error leaving cluster: %v", attmpt, err)
+			continue
+		}
+
+		break
+	}
+
+	h.ctx.Logger().Info("Shutting down: %v", err)
+	h.core.ctrl.Fail(err)
+	return err
+}
+
+func (h *host) tryJoin(addr string) error {
 	cl, err := connect(h.ctx, addr)
 	if err != nil {
-		return errors.Wrapf(err, "Error while joining cluster [%v]", addr)
+		return errors.Wrapf(err, "Error connecting to peer [%v]", addr)
 	}
 	defer cl.Close()
 
 	status, err := cl.Status()
 	if err != nil {
-		return errors.Wrapf(err, "Unable to retrieve status from [%v]", addr)
+		return errors.Wrapf(err, "Error joining cluster [%v]", addr)
 	}
 
 	h.core.Term(status.term.Num, nil, nil)
-	becomeFollower(h.core)
-
-	if err := cl.UpdateRoster(h.core.Self, true); err != nil {
-		h.ctx.Logger().Error("Unable to join cluster [%v]", err)
-		h.core.ctrl.Fail(err)
-		return err
-	} else {
-		return nil
-	}
+	return cl.UpdateRoster(h.core.Self, true)
 }
+
+func (h *host) tryLeave() error {
+	peer := h.core.Leader()
+	if peer == nil {
+		return NoLeaderError
+	}
+
+	cl, err := peer.Client(h.ctx)
+	if err != nil {
+		return err
+	}
+	defer cl.Close()
+	return cl.UpdateRoster(h.core.Self, false)
+}
+
 
 func (h *host) Close() error {
 	return h.ctx.Control().Close()

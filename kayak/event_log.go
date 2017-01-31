@@ -334,33 +334,3 @@ func (p *refListener) Next() (LogItem, bool, error) {
 func (l *refListener) Close() error {
 	return l.ctrl.Close()
 }
-
-type filteredListener struct {
-	raw Listener
-	seq map[uuid.UUID]int
-}
-
-func newFilteredListener(raw Listener) *filteredListener {
-	return &filteredListener{raw, make(map[uuid.UUID]int)}
-}
-
-func (p *filteredListener) Next() (LogItem, bool, error) {
-	for {
-		next, ok, err := p.raw.Next()
-		if err != nil || !ok {
-			return next, ok, err
-		}
-
-		cur := p.seq[next.Source]
-		if next.Seq <= cur {
-			continue
-		}
-
-		p.seq[next.Source] = next.Seq
-		return next, true, nil
-	}
-}
-
-func (l *filteredListener) Close() error {
-	return l.raw.Close()
-}

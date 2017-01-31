@@ -13,6 +13,75 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+type logClient struct {
+	ctrl common.Control
+	id   uuid.UUID
+	seq  int
+	self *replica
+}
+
+func newLogClient(self *replica) *logClient {
+	return &logClient{self.Ctx.Control().Sub(), uuid.NewV1(), 0, self}
+}
+
+func (c *logClient) Close() error {
+	return c.ctrl.Close()
+}
+
+func (c *logClient) Size() int {
+	panic("not implemented")
+}
+
+func (c *logClient) Listen(start int, buf int) (Listener, error) {
+	if c.ctrl.IsClosed() {
+		return nil, ClosedError
+	}
+
+	raw, err := c.self.Listen(start, buf)
+	if err != nil {
+		return nil, err
+	}
+
+	return newFilteredListener(raw), nil
+}
+
+func (c *logClient) Snapshot() (EventStream, error) {
+	if c.ctrl.IsClosed() {
+		return nil, ClosedError
+	}
+
+	snapshot, err := c.self.Log.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+
+	return streamSnapshot(c.ctrl, snapshot, 256), nil
+}
+
+func (c *logClient) Append(e Event) (LogItem, error) {
+	if c.ctrl.IsClosed() {
+		return LogItem{}, ClosedError
+	}
+
+	for ; c.seq < 1024; c.seq = c.seq + 1 {
+		item, err := c.self.Append(e, Std)
+		if err == nil {
+			return item, nil
+		}
+	}
+
+	defer c.Close()
+	return LogItem{}, ClosedError
+}
+
+func (c *logClient) Compact(until int, snapshot <-chan Event, size int) error {
+	if c.ctrl.IsClosed() {
+		return ClosedError
+	}
+
+	return c.self.Compact(until, snapshot, size)
+}
+
 // The replica is the state container for a member of a cluster.  The
 // replica is managed by a single member of the replicated log state machine
 // network.  However, the replica is also a machine itself.  Consumers can
@@ -51,9 +120,6 @@ type replica struct {
 
 	// the current term.
 	term term
-	//
-	// // the current seq position
-	// seq concurrent.AtomicCounter
 
 	// the election timeout.  (heartbeat: = timeout / 5)
 	ElectionTimeout time.Duration
@@ -66,6 +132,9 @@ type replica struct {
 
 	// the durable term store.
 	terms *termStore
+
+	// read barrier request
+	Barrier chan *common.Request
 
 	// request vote events.
 	VoteRequests chan *common.Request
@@ -110,19 +179,19 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 
 	raw, err := store.Get(self.Id)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Host")
+		return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
 	}
 
 	if raw == nil {
 		raw, err = store.New(self.Id, clusterBytes([]peer{self}))
 		if err != nil {
-			return nil, errors.Wrapf(err, "Host")
+			return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
 		}
 	}
 
 	log, err := openEventLog(ctx, raw)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Host")
+		return nil, errors.Wrapf(err, "Error opening event log")
 	}
 
 	roster := newRoster([]peer{self})
@@ -142,13 +211,14 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 		Log:             log,
 		Db:              db,
 		Roster:          roster,
+		Barrier:         make(chan *common.Request),
 		Replications:    make(chan *common.Request),
 		VoteRequests:    make(chan *common.Request),
 		RemoteAppends:   make(chan *common.Request),
 		LocalAppends:    make(chan *common.Request),
 		Snapshots:       make(chan *common.Request),
 		RosterUpdates:   make(chan *common.Request),
-		ElectionTimeout: time.Millisecond * time.Duration((rand.Intn(2000) + 1000)),
+		ElectionTimeout: time.Millisecond * time.Duration((2000 + rand.Intn(1000))),
 		RequestTimeout:  10 * time.Second,
 	}
 
@@ -168,6 +238,11 @@ func (h *replica) start() error {
 	}
 
 	listenRosterChanges(h)
+
+	go func() {
+		<-h.ctrl.Closed()
+		h.logger.Info("Replica closed: %v", h.ctrl.Failure())
+	}()
 	return nil
 }
 
@@ -253,14 +328,15 @@ func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	return ret
 }
 
-func (h *replica) sendRequest(ch chan<- *common.Request, val interface{}) (interface{}, error) {
-	timer := time.NewTimer(h.RequestTimeout)
+func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, val interface{}) (interface{}, error) {
+	timer := time.NewTimer(timeout)
+
 	req := common.NewRequest(val)
 	select {
 	case <-h.ctrl.Closed():
 		return nil, ClosedError
 	case <-timer.C:
-		return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to accept [%v]", h.RequestTimeout)
+		return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to accept [%v]", timeout)
 	case ch <- req:
 		select {
 		case <-h.ctrl.Closed():
@@ -270,14 +346,13 @@ func (h *replica) sendRequest(ch chan<- *common.Request, val interface{}) (inter
 		case e := <-req.Failed():
 			return nil, e
 		case <-timer.C:
-			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to respond [%v]", h.RequestTimeout)
+			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to respond [%v]", timeout)
 		}
 	}
 }
 
-func (h *replica) UpdateRoster(update rosterUpdate) error {
-	_, err := h.sendRequest(h.RosterUpdates, update)
-	return err
+func (h *replica) NewLogClient() *logClient {
+	return newLogClient(h)
 }
 
 func (h *replica) AddPeer(peer peer) error {
@@ -286,46 +361,6 @@ func (h *replica) AddPeer(peer peer) error {
 
 func (h *replica) DelPeer(peer peer) error {
 	return h.UpdateRoster(rosterUpdate{peer, false})
-}
-
-func (h *replica) InstallSnapshot(snapshot installSnapshot) (response, error) {
-	val, err := h.sendRequest(h.Snapshots, snapshot)
-	if err != nil {
-		return response{}, err
-	}
-	return val.(response), nil
-}
-
-func (h *replica) Replicate(r replicate) (response, error) {
-	val, err := h.sendRequest(h.Replications, r)
-	if err != nil {
-		return response{}, err
-	}
-	return val.(response), nil
-}
-
-func (h *replica) RequestVote(vote requestVote) (response, error) {
-	val, err := h.sendRequest(h.VoteRequests, vote)
-	if err != nil {
-		return response{}, err
-	}
-	return val.(response), nil
-}
-
-func (h *replica) RemoteAppend(append appendEvent) (LogItem, error) {
-	val, err := h.sendRequest(h.RemoteAppends, append)
-	if err != nil {
-		return LogItem{}, err
-	}
-	return val.(LogItem), nil
-}
-
-func (h *replica) LocalAppend(append appendEvent) (LogItem, error) {
-	val, err := h.sendRequest(h.LocalAppends, append)
-	if err != nil {
-		return LogItem{}, err
-	}
-	return val.(LogItem), nil
 }
 
 func (h *replica) Append(event Event, kind Kind) (LogItem, error) {
@@ -340,10 +375,98 @@ func (h *replica) Compact(until int, data <-chan Event, size int) error {
 	return h.Log.Compact(until, data, size, clusterBytes(h.Cluster()))
 }
 
+func (h *replica) UpdateRoster(update rosterUpdate) error {
+	_, err := h.sendRequest(h.RosterUpdates, 30*time.Second, update)
+	return err
+}
+
+func (h *replica) ReadBarrier() (response, error) {
+	val, err := h.sendRequest(h.Barrier, h.RequestTimeout, nil)
+	if err != nil {
+		return response{}, err
+	}
+	return val.(response), nil
+}
+
+func (h *replica) InstallSnapshot(snapshot installSnapshot) (response, error) {
+	val, err := h.sendRequest(h.Snapshots, h.RequestTimeout, snapshot)
+	if err != nil {
+		return response{}, err
+	}
+	return val.(response), nil
+}
+
+func (h *replica) Replicate(r replicate) (response, error) {
+	val, err := h.sendRequest(h.Replications, h.RequestTimeout, r)
+	if err != nil {
+		return response{}, err
+	}
+	return val.(response), nil
+}
+
+func (h *replica) RequestVote(vote requestVote) (response, error) {
+	val, err := h.sendRequest(h.VoteRequests, h.RequestTimeout, vote)
+	if err != nil {
+		return response{}, err
+	}
+	return val.(response), nil
+}
+
+func (h *replica) RemoteAppend(append appendEvent) (LogItem, error) {
+	val, err := h.sendRequest(h.RemoteAppends, h.RequestTimeout, append)
+	if err != nil {
+		return LogItem{}, err
+	}
+	return val.(LogItem), nil
+}
+
+func (h *replica) LocalAppend(append appendEvent) (LogItem, error) {
+	val, err := h.sendRequest(h.LocalAppends, h.RequestTimeout, append)
+	if err != nil {
+		return LogItem{}, err
+	}
+	return val.(LogItem), nil
+}
+
 func majority(num int) int {
 	if num%2 == 0 {
 		return 1 + (num / 2)
 	} else {
 		return int(math.Ceil(float64(num) / float64(2)))
 	}
+}
+
+type filteredListener struct {
+	raw Listener
+	seq map[uuid.UUID]int
+}
+
+func newFilteredListener(raw Listener) *filteredListener {
+	return &filteredListener{raw, make(map[uuid.UUID]int)}
+}
+
+func (p *filteredListener) Next() (LogItem, bool, error) {
+	for {
+		next, ok, err := p.raw.Next()
+		if err != nil || !ok {
+			return next, ok, err
+		}
+
+		cur := p.seq[next.Source]
+		if next.Seq <= cur || next.Seq > 1024 {
+			continue
+		}
+
+		if next.Seq >= 1024 {
+			delete(p.seq, next.Source)
+		} else {
+			p.seq[next.Source] = next.Seq
+		}
+
+		return next, true, nil
+	}
+}
+
+func (l *filteredListener) Close() error {
+	return l.raw.Close()
 }
