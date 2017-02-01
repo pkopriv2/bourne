@@ -92,15 +92,15 @@ type replicate struct {
 	term         int
 	prevLogIndex int
 	prevLogTerm  int
-	items        []LogItem
+	items        []Entry
 	commit       int
 }
 
 func newHeartBeat(id uuid.UUID, term int, commit int) replicate {
-	return replicate{id, term, -1, -1, []LogItem{}, commit}
+	return replicate{id, term, -1, -1, []Entry{}, commit}
 }
 
-func newReplication(id uuid.UUID, term int, prevIndex int, prevTerm int, items []LogItem, commit int) replicate {
+func newReplication(id uuid.UUID, term int, prevIndex int, prevTerm int, items []Entry, commit int) replicate {
 	return replicate{id, term, prevIndex, prevTerm, items, commit}
 }
 
@@ -126,7 +126,7 @@ func readReplicate(r scribe.Reader) (ret replicate, err error) {
 	err = common.Or(err, r.ReadInt("term", &ret.term))
 	err = common.Or(err, r.ReadInt("prevLogTerm", &ret.prevLogTerm))
 	err = common.Or(err, r.ReadInt("prevLogIndex", &ret.prevLogIndex))
-	err = common.Or(err, r.ParseMessages("items", &ret.items, ReadLogItem))
+	err = common.Or(err, r.ParseMessages("items", &ret.items, parseEntry))
 	err = common.Or(err, r.ReadInt("commit", &ret.commit))
 	return
 }

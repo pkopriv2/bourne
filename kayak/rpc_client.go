@@ -8,10 +8,6 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-type Client struct {
-	peers []string
-}
-
 type rpcClient struct {
 	raw net.Client
 }

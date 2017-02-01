@@ -46,14 +46,14 @@ func TestEventLog_Append_Single(t *testing.T) {
 
 	log := OpenTestBoltEventLog(ctx)
 
-	exp := LogItem{Index: 0, Term: 1, Event: Event{0}}
-	head, err := log.Append(exp.Event, exp.Term, exp.Source, exp.Seq, exp.Kind)
+	exp := Entry{Index: 0, Term: 1, Event: Event{0}}
+	head, err := log.Append(exp.Event, exp.Term, exp.Session, exp.Tx, exp.Kind)
 	assert.Nil(t, err)
 	assert.Equal(t, 0, head.Index)
 
 	batch, err := log.Scan(0, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{exp}, batch)
+	assert.Equal(t, []Entry{exp}, batch)
 	assert.Equal(t, -1, log.Committed())
 	assert.Equal(t, 0, log.Head())
 }
@@ -64,8 +64,8 @@ func TestEventLog_Insert_Single(t *testing.T) {
 
 	log := OpenTestBoltEventLog(ctx)
 
-	exp := LogItem{Index: 1, Term: 1, Event: Event{0}}
-	err := log.Insert([]LogItem{exp})
+	exp := Entry{Index: 1, Term: 1, Event: Event{0}}
+	err := log.Insert([]Entry{exp})
 	assert.Equal(t, OutOfBoundsError, errors.Cause(err))
 }
 

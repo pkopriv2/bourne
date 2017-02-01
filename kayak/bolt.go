@@ -67,7 +67,6 @@ func (s *boltStore) NewSnapshot(lastIndex int, lastTerm int, ch <-chan Event, si
 	return createBoltSnapshot(s.db, lastIndex, lastTerm, ch, size, config)
 }
 
-
 // Parent log abstraction
 type boltLog struct {
 	db *bolt.DB
@@ -182,7 +181,7 @@ func (b *boltLog) Prune(until int) error {
 	return nil
 }
 
-func (b *boltLog) Scan(beg int, end int) (i []LogItem, e error) {
+func (b *boltLog) Scan(beg int, end int) (i []Entry, e error) {
 	e = b.db.View(func(tx *bolt.Tx) error {
 		i, e = b.scan(tx, beg, end)
 		return e
@@ -190,7 +189,7 @@ func (b *boltLog) Scan(beg int, end int) (i []LogItem, e error) {
 	return
 }
 
-func (b *boltLog) Append(evt Event, t int, c uuid.UUID, s int, k Kind) (i LogItem, e error) {
+func (b *boltLog) Append(evt Event, t int, c uuid.UUID, s int, k Kind) (i Entry, e error) {
 	e = b.db.Update(func(tx *bolt.Tx) error {
 		i, e = b.append(tx, evt, t, c, s, k)
 		return e
@@ -198,7 +197,7 @@ func (b *boltLog) Append(evt Event, t int, c uuid.UUID, s int, k Kind) (i LogIte
 	return
 }
 
-func (b *boltLog) Get(index int) (i LogItem, o bool, e error) {
+func (b *boltLog) Get(index int) (i Entry, o bool, e error) {
 	e = b.db.View(func(tx *bolt.Tx) error {
 		i, o, e = b.get(tx, index)
 		return e
@@ -206,7 +205,7 @@ func (b *boltLog) Get(index int) (i LogItem, o bool, e error) {
 	return
 }
 
-func (b *boltLog) Insert(batch []LogItem) error {
+func (b *boltLog) Insert(batch []Entry) error {
 	return b.db.Update(func(tx *bolt.Tx) error {
 		return b.insert(tx, batch)
 	})
@@ -234,7 +233,7 @@ func (b *boltLog) Snapshot() (s StoredSnapshot, e error) {
 	return
 }
 
-func (b *boltLog) Install(s StoredSnapshot) (error) {
+func (b *boltLog) Install(s StoredSnapshot) error {
 	cur, err := b.Snapshot()
 	if err != nil {
 		return err
@@ -328,15 +327,15 @@ func (b *boltLog) swapSnapshot(tx *bolt.Tx, cur snapshotDat, new snapshotDat) er
 	return b.setSnapshotId(tx, new.id)
 }
 
-func (b *boltLog) get(tx *bolt.Tx, index int) (LogItem, bool, error) {
+func (b *boltLog) get(tx *bolt.Tx, index int) (Entry, bool, error) {
 	raw := tx.Bucket(logItemBucket).Get(stash.UUID(b.id).ChildInt(index))
 	if raw == nil {
-		return LogItem{}, false, nil
+		return Entry{}, false, nil
 	}
 
-	item, err := ParseItem(raw)
+	item, err := parseEntryBytes(raw)
 	if err != nil {
-		return LogItem{}, false, errors.Wrapf(InvariantError, "Error parsing item [%v]", index)
+		return Entry{}, false, errors.Wrapf(InvariantError, "Error parsing item [%v]", index)
 	}
 
 	return item, true, nil
@@ -365,17 +364,17 @@ func (b *boltLog) last(tx *bolt.Tx) (int, int, error) {
 	return raw.maxIndex, raw.maxTerm, nil
 }
 
-func (b *boltLog) append(tx *bolt.Tx, e Event, term int, source uuid.UUID, seq int, kind Kind) (LogItem, error) {
+func (b *boltLog) append(tx *bolt.Tx, e Event, term int, source uuid.UUID, seq int, kind Kind) (Entry, error) {
 	max, _, err := b.last(tx)
 	if err != nil {
-		return LogItem{}, err
+		return Entry{}, err
 	}
 
 	item := NewLogItem(max+1, e, term, source, seq, kind)
-	return item, b.insert(tx, []LogItem{item})
+	return item, b.insert(tx, []Entry{item})
 }
 
-func (b *boltLog) insert(tx *bolt.Tx, batch []LogItem) error {
+func (b *boltLog) insert(tx *bolt.Tx, batch []Entry) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -520,7 +519,7 @@ func (b *boltLog) truncate(tx *bolt.Tx, from int) (int, error) {
 	return newMax, nil
 }
 
-func (b *boltLog) scan(tx *bolt.Tx, beg int, end int) ([]LogItem, error) {
+func (b *boltLog) scan(tx *bolt.Tx, beg int, end int) ([]Entry, error) {
 	min, err := b.minIndex(tx)
 	if err != nil {
 		return nil, err
@@ -536,14 +535,14 @@ func (b *boltLog) scan(tx *bolt.Tx, beg int, end int) ([]LogItem, error) {
 	}
 
 	if min == -1 || max == -1 {
-		return []LogItem{}, nil
+		return []Entry{}, nil
 	}
 
 	end = common.Min(end, max)
 
-	cur, cursor, batch := beg, tx.Bucket(logItemBucket).Cursor(), make([]LogItem, 0, end-beg+1)
+	cur, cursor, batch := beg, tx.Bucket(logItemBucket).Cursor(), make([]Entry, 0, end-beg+1)
 	for _, v := cursor.Seek(stash.UUID(b.id).ChildInt(cur).Raw()); v != nil && cur <= end; _, v = cursor.Next() {
-		i, e := ParseItem(v)
+		i, e := parseEntryBytes(v)
 		if e != nil {
 			return nil, errors.Wrapf(InvariantError, "Error parsing item [%v]", cur)
 		}

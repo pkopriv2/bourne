@@ -13,75 +13,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-type logClient struct {
-	ctrl common.Control
-	id   uuid.UUID
-	seq  int
-	self *replica
-}
-
-func newLogClient(self *replica) *logClient {
-	return &logClient{self.Ctx.Control().Sub(), uuid.NewV1(), 0, self}
-}
-
-func (c *logClient) Close() error {
-	return c.ctrl.Close()
-}
-
-func (c *logClient) Size() int {
-	panic("not implemented")
-}
-
-func (c *logClient) Listen(start int, buf int) (Listener, error) {
-	if c.ctrl.IsClosed() {
-		return nil, ClosedError
-	}
-
-	raw, err := c.self.Listen(start, buf)
-	if err != nil {
-		return nil, err
-	}
-
-	return newFilteredListener(raw), nil
-}
-
-func (c *logClient) Snapshot() (EventStream, error) {
-	if c.ctrl.IsClosed() {
-		return nil, ClosedError
-	}
-
-	snapshot, err := c.self.Log.Snapshot()
-	if err != nil {
-		return nil, err
-	}
-
-	return streamSnapshot(c.ctrl, snapshot, 256), nil
-}
-
-func (c *logClient) Append(e Event) (LogItem, error) {
-	if c.ctrl.IsClosed() {
-		return LogItem{}, ClosedError
-	}
-
-	for ; c.seq < 1024; c.seq = c.seq + 1 {
-		item, err := c.self.Append(e, Std)
-		if err == nil {
-			return item, nil
-		}
-	}
-
-	defer c.Close()
-	return LogItem{}, ClosedError
-}
-
-func (c *logClient) Compact(until int, snapshot <-chan Event, size int) error {
-	if c.ctrl.IsClosed() {
-		return ClosedError
-	}
-
-	return c.self.Compact(until, snapshot, size)
-}
-
 // The replica is the state container for a member of a cluster.  The
 // replica is managed by a single member of the replicated log state machine
 // network.  However, the replica is also a machine itself.  Consumers can
@@ -127,6 +58,9 @@ type replica struct {
 	// the client timeout
 	RequestTimeout time.Duration
 
+	// the client timeout (the maximum distance between client appends)
+	ClientTtl int
+
 	// the event log.
 	Log *eventLog
 
@@ -163,13 +97,13 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 
 	id, ok, err := termStore.GetId(addr)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Host")
+		return nil, errors.Wrapf(err, "Error retrieving id for address [%v]", addr)
 	}
 
 	if !ok {
 		id = uuid.NewV1()
 		if err := termStore.SetId(addr, id); err != nil {
-			return nil, errors.Wrapf(err, "Host")
+			return nil, errors.Wrapf(err, "Error associating addr [%v] with id [%v]", addr, id)
 		}
 	}
 
@@ -349,8 +283,8 @@ func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 	}
 }
 
-func (h *replica) NewLogClient() *logClient {
-	return newLogClient(h)
+func (h *replica) Session(id uuid.UUID) (*session, error) {
+	return newSession(h, id)
 }
 
 func (h *replica) AddPeer(peer peer) error {
@@ -361,7 +295,7 @@ func (h *replica) DelPeer(peer peer) error {
 	return h.UpdateRoster(rosterUpdate{peer, false})
 }
 
-func (h *replica) Append(event Event, kind Kind) (LogItem, error) {
+func (h *replica) Append(event Event, kind Kind) (Entry, error) {
 	return h.LocalAppend(appendEvent{event, h.Self.Id, 0, kind})
 }
 
@@ -410,20 +344,20 @@ func (h *replica) RequestVote(vote requestVote) (response, error) {
 	return val.(response), nil
 }
 
-func (h *replica) RemoteAppend(append appendEvent) (LogItem, error) {
+func (h *replica) RemoteAppend(append appendEvent) (Entry, error) {
 	val, err := h.sendRequest(h.RemoteAppends, h.RequestTimeout, append)
 	if err != nil {
-		return LogItem{}, err
+		return Entry{}, err
 	}
-	return val.(LogItem), nil
+	return val.(Entry), nil
 }
 
-func (h *replica) LocalAppend(append appendEvent) (LogItem, error) {
+func (h *replica) LocalAppend(append appendEvent) (Entry, error) {
 	val, err := h.sendRequest(h.LocalAppends, h.RequestTimeout, append)
 	if err != nil {
-		return LogItem{}, err
+		return Entry{}, err
 	}
-	return val.(LogItem), nil
+	return val.(Entry), nil
 }
 
 func majority(num int) int {
@@ -432,39 +366,4 @@ func majority(num int) int {
 	} else {
 		return int(math.Ceil(float64(num) / float64(2)))
 	}
-}
-
-type filteredListener struct {
-	raw Listener
-	seq map[uuid.UUID]int
-}
-
-func newFilteredListener(raw Listener) *filteredListener {
-	return &filteredListener{raw, make(map[uuid.UUID]int)}
-}
-
-func (p *filteredListener) Next() (LogItem, bool, error) {
-	for {
-		next, ok, err := p.raw.Next()
-		if err != nil || !ok {
-			return next, ok, err
-		}
-
-		cur := p.seq[next.Source]
-		if next.Seq <= cur || next.Seq > 1024 {
-			continue
-		}
-
-		if next.Seq >= 1024 {
-			delete(p.seq, next.Source)
-		} else {
-			p.seq[next.Source] = next.Seq
-		}
-
-		return next, true, nil
-	}
-}
-
-func (l *filteredListener) Close() error {
-	return l.raw.Close()
 }

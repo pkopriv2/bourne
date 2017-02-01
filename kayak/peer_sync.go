@@ -64,6 +64,7 @@ func (s *logSyncer) spawnSyncer(p peer) *peerSyncer {
 		case <-sync.ctrl.Closed():
 			s.logger.Error("Syncer died: %+v", sync.ctrl.Failure())
 			if cause := extractError(sync.ctrl.Failure()); cause == nil || cause == NotLeaderError {
+				s.logger.Info("Shutting down log sync'er")
 				s.ctrl.Fail(sync.ctrl.Failure())
 				return
 			}
@@ -88,7 +89,7 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 			continue
 		}
 
-		if sync, ok := cur[p.Id]; ok && ! sync.ctrl.IsClosed() {
+		if sync, ok := cur[p.Id]; ok && !sync.ctrl.IsClosed() {
 			active[p.Id] = sync
 			continue
 		}
@@ -128,7 +129,7 @@ func (s *logSyncer) start() {
 	}()
 }
 
-func (s *logSyncer) Append(append appendEvent) (item LogItem, err error) {
+func (s *logSyncer) Append(append appendEvent) (item Entry, err error) {
 	committed := make(chan struct{}, 1)
 	go func() {
 		// append
@@ -168,7 +169,7 @@ func (s *logSyncer) Append(append appendEvent) (item LogItem, err error) {
 
 	select {
 	case <-s.ctrl.Closed():
-		return LogItem{}, common.Or(s.ctrl.Failure(), ClosedError)
+		return Entry{}, common.Or(s.ctrl.Failure(), ClosedError)
 	case <-committed:
 		return item, nil
 	}
@@ -402,10 +403,10 @@ func (s *peerSyncer) score() (int, error) {
 }
 
 // returns the starting position for syncing a newly initialized sync'er
-func (s *peerSyncer) syncInit() (LogItem, error) {
+func (s *peerSyncer) syncInit() (Entry, error) {
 	lastIndex, lastTerm, err := s.self.Log.Last()
 	if err != nil {
-		return LogItem{}, err
+		return Entry{}, err
 	}
 
 	prev, ok, err := s.self.Log.Get(lastIndex - 1)
@@ -413,11 +414,11 @@ func (s *peerSyncer) syncInit() (LogItem, error) {
 		return prev, err
 	}
 
-	return LogItem{Index: lastIndex, Term: lastTerm}, nil
+	return Entry{Index: lastIndex, Term: lastTerm}, nil
 }
 
 // Sends a batch up to the horizon
-func (s *peerSyncer) sendBatch(cl *rpcClient, prev LogItem, horizon int) (*rpcClient, LogItem, bool, error) {
+func (s *peerSyncer) sendBatch(cl *rpcClient, prev Entry, horizon int) (*rpcClient, Entry, bool, error) {
 	// scan a full batch of events.
 	batch, err := s.self.Log.Scan(prev.Index+1, common.Min(horizon, prev.Index+1+256))
 	if err != nil {
@@ -446,18 +447,18 @@ func (s *peerSyncer) sendBatch(cl *rpcClient, prev LogItem, horizon int) (*rpcCl
 	return cl, prev, ok, err
 }
 
-func (s *peerSyncer) installSnapshot(cl *rpcClient) (*rpcClient, LogItem, error) {
+func (s *peerSyncer) installSnapshot(cl *rpcClient) (*rpcClient, Entry, error) {
 	snapshot, err := s.self.Log.Snapshot()
 	if err != nil {
-		return cl, LogItem{}, err
+		return cl, Entry{}, err
 	}
 
 	cl, err = s.sendSnapshot(cl, snapshot)
 	if err != nil {
-		return cl, LogItem{}, err
+		return cl, Entry{}, err
 	}
 	if cl != nil {
-		return cl, LogItem{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}, nil
+		return cl, Entry{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}, nil
 	}
 
 	prev, err := s.syncInit()
@@ -483,7 +484,7 @@ func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) (*rpcC
 			return nil, err
 		}
 
-		if resp.term > l.term.Num || ! resp.success {
+		if resp.term > l.term.Num || !resp.success {
 			return cl, NotLeaderError
 		}
 

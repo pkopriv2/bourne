@@ -186,14 +186,14 @@ func TestBoltLog_Append_Single(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	exp := LogItem{Index: 0, Term: 1, Event: Event{0}}
-	item, err := log.Append(exp.Event, exp.Term, exp.Source, exp.Seq, exp.Kind)
+	exp := Entry{Index: 0, Term: 1, Event: Event{0}}
+	item, err := log.Append(exp.Event, exp.Term, exp.Session, exp.Tx, exp.Kind)
 	assert.Nil(t, err)
 	assert.Equal(t, exp, item)
 
 	batch, err := log.Scan(0, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{exp}, batch)
+	assert.Equal(t, []Entry{exp}, batch)
 }
 
 func TestBoltLog_Append_Multi(t *testing.T) {
@@ -204,12 +204,12 @@ func TestBoltLog_Append_Multi(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	exp1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	exp2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
+	exp1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	exp2 := Entry{Index: 1, Term: 1, Event: Event{1}}
 
-	item1, err := log.Append(exp1.Event, exp1.Term, exp1.Source, exp1.Seq, exp1.Kind)
+	item1, err := log.Append(exp1.Event, exp1.Term, exp1.Session, exp1.Tx, exp1.Kind)
 	assert.Nil(t, err)
-	item2, err := log.Append(exp2.Event, exp2.Term, exp2.Source, exp2.Seq, exp2.Kind)
+	item2, err := log.Append(exp2.Event, exp2.Term, exp2.Session, exp2.Tx, exp2.Kind)
 	assert.Nil(t, err)
 
 	assert.Equal(t, exp1, item1)
@@ -217,7 +217,7 @@ func TestBoltLog_Append_Multi(t *testing.T) {
 
 	batch, err := log.Scan(0, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{exp1, exp2}, batch)
+	assert.Equal(t, []Entry{exp1, exp2}, batch)
 }
 
 func TestBoltLog_Insert_OutOfBounds(t *testing.T) {
@@ -228,7 +228,7 @@ func TestBoltLog_Insert_OutOfBounds(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	err = log.Insert([]LogItem{LogItem{Index: 1, Term: 0, Event: Event{0}}})
+	err = log.Insert([]Entry{Entry{Index: 1, Term: 0, Event: Event{0}}})
 	assert.Equal(t, OutOfBoundsError, errors.Cause(err))
 }
 
@@ -240,13 +240,13 @@ func TestBoltLog_Insert_Multi(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	exp1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	exp2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	assert.Nil(t, log.Insert([]LogItem{exp1, exp2}))
+	exp1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	exp2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	assert.Nil(t, log.Insert([]Entry{exp1, exp2}))
 
 	batch, err := log.Scan(0, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{exp1, exp2}, batch)
+	assert.Equal(t, []Entry{exp1, exp2}, batch)
 }
 
 func TestBoltLog_Truncate_Empty(t *testing.T) {
@@ -267,9 +267,9 @@ func TestBoltLog_Truncate_GreaterThanMax(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2}))
 	assert.Equal(t, OutOfBoundsError, errors.Cause(log.Truncate(2)))
 }
 
@@ -281,10 +281,10 @@ func TestBoltLog_Truncate_EqualToMax(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 	assert.Nil(t, log.Truncate(2))
 
 	min, _ := log.Min()
@@ -295,7 +295,7 @@ func TestBoltLog_Truncate_EqualToMax(t *testing.T) {
 
 	batch, err := log.Scan(0, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{item1, item2}, batch)
+	assert.Equal(t, []Entry{item1, item2}, batch)
 }
 
 func TestBoltLog_Truncate_EqualToMin(t *testing.T) {
@@ -306,10 +306,10 @@ func TestBoltLog_Truncate_EqualToMin(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 	assert.Nil(t, log.Truncate(0))
 
 	min, _ := log.Min()
@@ -320,7 +320,7 @@ func TestBoltLog_Truncate_EqualToMin(t *testing.T) {
 
 	batch, err := log.Scan(-1, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{}, batch)
+	assert.Equal(t, []Entry{}, batch)
 }
 
 func TestBoltLog_Prune_EqualToMin(t *testing.T) {
@@ -331,10 +331,10 @@ func TestBoltLog_Prune_EqualToMin(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 	assert.Nil(t, log.Prune(0))
 
 	min, _ := log.Min()
@@ -345,7 +345,7 @@ func TestBoltLog_Prune_EqualToMin(t *testing.T) {
 
 	batch, err := log.Scan(1, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{item2, item3}, batch)
+	assert.Equal(t, []Entry{item2, item3}, batch)
 }
 
 func TestBoltLog_Prune_EqualToMax(t *testing.T) {
@@ -356,10 +356,10 @@ func TestBoltLog_Prune_EqualToMax(t *testing.T) {
 	log, err := createBoltLog(db, uuid.NewV1(), []byte{})
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 	assert.Nil(t, log.Prune(2))
 
 	min, _ := log.Min()
@@ -378,8 +378,8 @@ func TestBoltLog_Prune_MultiBatch(t *testing.T) {
 	assert.Nil(t, err)
 
 	for i := 0; i < 1024; i++ {
-		item := LogItem{Index: i, Term: 0, Event: Event{0}}
-		assert.Nil(t, log.Insert([]LogItem{item}))
+		item := Entry{Index: i, Term: 0, Event: Event{0}}
+		assert.Nil(t, log.Insert([]Entry{item}))
 	}
 
 	assert.Nil(t, log.Prune(1021))
@@ -443,10 +443,10 @@ func TestBoltLog_InstallSnapshot_EqualToMin(t *testing.T) {
 	store, err := log.Store()
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 
 	snapshot, err := store.NewSnapshot(0, 0, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
@@ -456,7 +456,7 @@ func TestBoltLog_InstallSnapshot_EqualToMin(t *testing.T) {
 
 	batch, err := log.Scan(1, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{item2, item3}, batch)
+	assert.Equal(t, []Entry{item2, item3}, batch)
 
 	snapshot, err = store.NewSnapshot(1, 1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
@@ -464,7 +464,7 @@ func TestBoltLog_InstallSnapshot_EqualToMin(t *testing.T) {
 
 	batch, err = log.Scan(2, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{item3}, batch)
+	assert.Equal(t, []Entry{item3}, batch)
 
 	maxIndex, maxTerm, err := log.Last()
 	assert.Nil(t, err)
@@ -482,10 +482,10 @@ func TestBoltLog_InstallSnapshot_Middle(t *testing.T) {
 	store, err := log.Store()
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 
 	snapshot, err := store.NewSnapshot(1, 1, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
@@ -494,7 +494,7 @@ func TestBoltLog_InstallSnapshot_Middle(t *testing.T) {
 
 	batch, err := log.Scan(2, 100)
 	assert.Nil(t, err)
-	assert.Equal(t, []LogItem{item3}, batch)
+	assert.Equal(t, []Entry{item3}, batch)
 }
 
 func TestBoltLog_InstallSnapshot_EqualToMax(t *testing.T) {
@@ -508,10 +508,10 @@ func TestBoltLog_InstallSnapshot_EqualToMax(t *testing.T) {
 	store, err := log.Store()
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 
 	snapshot, err := store.NewSnapshot(2, 2, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)
@@ -535,10 +535,10 @@ func TestBoltLog_InstallSnapshot_GreaterThanMax(t *testing.T) {
 	store, err := log.Store()
 	assert.Nil(t, err)
 
-	item1 := LogItem{Index: 0, Term: 0, Event: Event{0}}
-	item2 := LogItem{Index: 1, Term: 1, Event: Event{1}}
-	item3 := LogItem{Index: 2, Term: 2, Event: Event{2}}
-	assert.Nil(t, log.Insert([]LogItem{item1, item2, item3}))
+	item1 := Entry{Index: 0, Term: 0, Event: Event{0}}
+	item2 := Entry{Index: 1, Term: 1, Event: Event{1}}
+	item3 := Entry{Index: 2, Term: 2, Event: Event{2}}
+	assert.Nil(t, log.Insert([]Entry{item1, item2, item3}))
 
 	snapshot, err := store.NewSnapshot(5, 5, NewEventChannel([]Event{Event{0}}), 1, []byte{})
 	assert.Nil(t, err)

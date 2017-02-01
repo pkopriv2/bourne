@@ -9,31 +9,32 @@ import (
 type ObjectPool interface {
 	io.Closer
 	Max() int
-	Take() io.Closer
-	TakeTimeout(time.Duration) io.Closer
-	Return(io.Closer)
-	Fail(io.Closer)
+	Take() interface{}
+	TakeTimeout(time.Duration) interface{}
+	Return(interface{})
+	Fail(interface{})
 }
 
 type pool struct {
 	ctrl   Control
 	logger Logger
-	fn     func() (io.Closer, error)
+	fn     func() (interface{}, error)
 	raw    *list.List
 	max    int
-	take   chan io.Closer
-	ret    chan io.Closer
+	take   chan interface{}
+	ret    chan interface{}
 }
 
-func NewObjectPool(ctx Context, name string, fn func() (io.Closer, error), max int) ObjectPool {
+func NewObjectPool(ctx Context, name string, fn func() (interface{}, error), max int) ObjectPool {
 	ctx = ctx.Sub("ObjectPool(%v)", name)
 	p := &pool{
-		ctrl: ctx.Control(),
-		fn:   fn,
-		max:  max,
-		raw:  list.New(),
-		take: make(chan io.Closer),
-		ret:  make(chan io.Closer, max),
+		ctrl:   ctx.Control(),
+		logger: ctx.Logger(),
+		fn:     fn,
+		max:    max,
+		raw:    list.New(),
+		take:   make(chan interface{}),
+		ret:    make(chan interface{}, max),
 	}
 
 	p.start()
@@ -42,11 +43,11 @@ func NewObjectPool(ctx Context, name string, fn func() (io.Closer, error), max i
 
 func (p *pool) start() {
 	go func() {
-		out := 0
+		var take chan interface{}
+		var next interface{}
+		for out := 0; ; {
+			p.logger.Debug("Currently live objects [%v]", out)
 
-		var take chan io.Closer
-		var next io.Closer
-		for {
 			take = nil
 			next = nil
 			if out < p.max {
@@ -60,7 +61,6 @@ func (p *pool) start() {
 				take = p.take
 			}
 
-			p.logger.Debug("Currently live objects [%v]", out)
 			select {
 			case <-p.ctrl.Closed():
 				return
@@ -84,7 +84,7 @@ func (p *pool) Close() error {
 	return p.ctrl.Close()
 }
 
-func (p *pool) Take() io.Closer {
+func (p *pool) Take() interface{} {
 	select {
 	case <-p.ctrl.Closed():
 		return nil
@@ -93,7 +93,7 @@ func (p *pool) Take() io.Closer {
 	}
 }
 
-func (p *pool) TakeTimeout(dur time.Duration) (conn io.Closer) {
+func (p *pool) TakeTimeout(dur time.Duration) (conn interface{}) {
 	timer := time.NewTimer(dur)
 	select {
 	case <-timer.C:
@@ -105,33 +105,32 @@ func (p *pool) TakeTimeout(dur time.Duration) (conn io.Closer) {
 	}
 }
 
-func (p *pool) Fail(c io.Closer) {
-	defer c.Close()
+func (p *pool) Fail(c interface{}) {
 	select {
 	case <-p.ctrl.Closed():
 	case p.ret <- nil:
 	}
 }
 
-func (p *pool) Return(c io.Closer) {
+func (p *pool) Return(c interface{}) {
 	select {
 	case <-p.ctrl.Closed():
 	case p.ret <- c:
 	}
 }
 
-func (p *pool) spawn() (io.Closer, error) {
+func (p *pool) spawn() (interface{}, error) {
 	return p.fn()
 }
 
-func (p *pool) returnToPool(c io.Closer) {
+func (p *pool) returnToPool(c interface{}) {
 	p.raw.PushFront(c)
 }
 
-func (p *pool) takeOrSpawnFromPool() (io.Closer, error) {
+func (p *pool) takeOrSpawnFromPool() (interface{}, error) {
 	if item := p.raw.Front(); item != nil {
 		p.raw.Remove(item)
-		return item.Value.(io.Closer), nil
+		return item.Value.(interface{}), nil
 	}
 
 	return p.spawn()

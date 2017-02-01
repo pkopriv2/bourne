@@ -81,15 +81,15 @@ func (e *eventLog) Commit(pos int) (new int, err error) {
 	return
 }
 
-func (e *eventLog) Get(index int) (LogItem, bool, error) {
+func (e *eventLog) Get(index int) (Entry, bool, error) {
 	return e.raw.Get(index)
 }
 
-func (e *eventLog) Scan(start int, end int) ([]LogItem, error) {
+func (e *eventLog) Scan(start int, end int) ([]Entry, error) {
 	return e.raw.Scan(start, end)
 }
 
-func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind Kind) (LogItem, error) {
+func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind Kind) (Entry, error) {
 	item, err := e.raw.Append(evt, term, source, seq, kind)
 	if err != nil {
 		return item, err
@@ -102,7 +102,7 @@ func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind K
 	return item, nil
 }
 
-func (e *eventLog) Insert(batch []LogItem) error {
+func (e *eventLog) Insert(batch []Entry) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -185,7 +185,7 @@ func (e *eventLog) Install(snapshot StoredSnapshot) error {
 
 func (e *eventLog) Compact(until int, data <-chan Event, size int, config []byte) error {
 	item, ok, err := e.Get(until)
-	if err != nil || ! ok {
+	if err != nil || !ok {
 		return errors.Wrapf(CompactionError, "Cannot compact until [%v].  It doesn't exist", until)
 	}
 
@@ -260,7 +260,7 @@ type refListener struct {
 	log  *eventLog
 	pos  *ref
 	buf  int
-	ch   chan LogItem
+	ch   chan Entry
 	ctrl common.Control
 }
 
@@ -269,7 +269,7 @@ func newRefListener(log *eventLog, pos *ref, from int, buf int) *refListener {
 		log:  log,
 		pos:  pos,
 		buf:  buf,
-		ch:   make(chan LogItem, buf),
+		ch:   make(chan Entry, buf),
 		ctrl: common.NewControl(nil),
 	}
 	l.start(from)
@@ -322,10 +322,10 @@ func (l *refListener) start(from int) {
 	}()
 }
 
-func (p *refListener) Next() (LogItem, bool, error) {
+func (p *refListener) Next() (Entry, bool, error) {
 	select {
 	case <-p.ctrl.Closed():
-		return LogItem{}, false, p.ctrl.Failure()
+		return Entry{}, false, p.ctrl.Failure()
 	case i := <-p.ch:
 		return i, true, nil
 	}

@@ -23,6 +23,10 @@ func NewContext(config Config) Context {
 	return &ctx{config: config, logger: NewStandardLogger(config), env: NewEnv(), control: NewControl(nil)}
 }
 
+func NewEmptyContext() Context {
+	return NewContext(NewEmptyConfig())
+}
+
 func (c *ctx) Close() error {
 	return c.control.Close()
 }

@@ -10,6 +10,7 @@ import (
 
 // a host simply binds a network service with the core log machine.
 type host struct {
+
 	ctx    common.Context
 	server net.Server
 	core   *replica
@@ -131,7 +132,6 @@ func (h *host) tryLeave() error {
 	return cl.UpdateRoster(h.core.Self, false)
 }
 
-
 func (h *host) Close() error {
 	return h.ctx.Control().Close()
 }
@@ -152,22 +152,18 @@ func (h *host) Peers() []peer {
 	return h.core.Others()
 }
 
-func (h *host) Log() *eventLog {
-	return h.core.Log
-}
-
-func (h *host) Append(e Event) (LogItem, error) {
-	return LogItem{}, nil
-	// return h.core.Append(e, )
-}
-
 func (h *host) Client() (*rpcClient, error) {
 	return h.Self().Client(h.Context())
 }
 
-func (h *host) Listen(from int, buf int) (Listener, error) {
-	return h.core.Listen(from, buf)
+func (h *host) Sync() (Sync, error) {
+	panic("not implemented")
 }
+
+func (h *host) Session(id uuid.UUID) (Session, error) {
+	return newSession(h.core, id)
+}
+
 
 func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {
 	ret := make([]*host, 0, len(hosts))

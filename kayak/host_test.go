@@ -113,12 +113,12 @@ func TestHost_Cluster_Leader_Append_Single(t *testing.T) {
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
-	item, err := leader.Append(Event{0, 1})
+	item, err := leader.core.Append(Event{0, 1}, Std)
 	assert.Nil(t, err)
 
 	done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 		SyncMajority(cluster, func(h *host) bool {
-			return h.Log().Head() >= item.Index && h.Log().Committed() >= item.Index
+			return h.core.Log.Head() >= item.Index && h.core.Log.Committed() >= item.Index
 		})
 	})
 
@@ -157,63 +157,7 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 
 	done, timeout := concurrent.NewBreaker(500*time.Second, func() {
 		SyncAll(cluster, func(h *host) bool {
-			return h.Log().Head() >= (numThreads*numItemsPerThread)-1 && h.Log().Committed() >= (numThreads*numItemsPerThread)-1
-		})
-	})
-
-	select {
-	case <-done:
-	case <-timeout:
-		assert.FailNow(t, "Timed out waiting for majority to sync")
-	}
-}
-
-func TestHost_Cluster_Follower_AppendMulti_WithLeaderFailure(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	cluster := StartTestCluster(ctx, 3)
-	leader := Converge(cluster)
-	assert.NotNil(t, leader)
-
-	numThreads := 10
-	numItemsPerThread := 10
-
-	member := First(cluster, func(h *host) bool {
-		return h.Id() != leader.Id()
-	})
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		leader.core.logger.Info("Killing leader!")
-		leader.Close()
-	}()
-
-	failures := concurrent.NewAtomicCounter()
-	for i := 0; i < numThreads; i++ {
-		go func(i int) {
-			for j := 0; j < numItemsPerThread; j++ {
-				leader.core.logger.Info("Appending: %v", numThreads*i+j)
-
-				_, err := member.core.Append(Event(stash.Int(numThreads*i+j)), Std)
-				if err != nil {
-					failures.Inc()
-				}
-			}
-		}(i)
-	}
-
-	done, timeout := concurrent.NewBreaker(50*time.Second, func() {
-		SyncAll(cluster, func(h *host) bool {
-			if h.Self() == leader.Self() {
-				return true
-			}
-
-			return h.Log().Head() >= (numThreads*numItemsPerThread)-int(failures.Get()) && h.Log().Committed() >= (numThreads*numItemsPerThread)-int(failures.Get())
+			return h.core.Log.Head() >= (numThreads*numItemsPerThread)-1 && h.core.Log.Committed() >= (numThreads*numItemsPerThread)-1
 		})
 	})
 
@@ -275,7 +219,51 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 
 	done, timeout := concurrent.NewBreaker(500*time.Second, func() {
 		SyncAll(cluster, func(h *host) bool {
-			return h.Log().Head() >= (numThreads*numItemsPerThread)-1 && h.Log().Committed() >= (numThreads*numItemsPerThread)-1
+			return h.core.Log.Head() >= (numThreads*numItemsPerThread)-1 && h.core.Log.Committed() >= (numThreads*numItemsPerThread)-1
+		})
+	})
+
+	select {
+	case <-done:
+	case <-timeout:
+		assert.FailNow(t, "Timed out waiting for majority to sync")
+	}
+}
+
+func TestHost_Cluster_Session_Append_Multi(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	cluster := StartTestCluster(ctx, 3)
+	leader := Converge(cluster)
+	assert.NotNil(t, leader)
+
+	numThreads := 10
+	numItemsPerThread := 100
+
+	for i := 0; i < numThreads; i++ {
+		go func() {
+			session, err := leader.Session(uuid.NewV1())
+			if err != nil {
+				panic(err)
+			}
+
+			for j := 0; j < numItemsPerThread; j++ {
+				_, err := session.Append(100 * time.Millisecond, Event(stash.Int(numThreads*i+j)))
+				if err != nil {
+					panic(err)
+				}
+			}
+		}()
+	}
+
+	done, timeout := concurrent.NewBreaker(500*time.Second, func() {
+		SyncAll(cluster, func(h *host) bool {
+			return h.core.Log.Head() >= (numThreads*numItemsPerThread)-1 && h.core.Log.Committed() >= (numThreads*numItemsPerThread)-1
 		})
 	})
 
@@ -316,7 +304,7 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 //
 // done, timeout := concurrent.NewBreaker(2*time.Second, func() {
 // SyncMajority(cluster, func(h *host) bool {
-// return h.Log().Head() == 0 && h.Log().Committed() == 0
+// return h.core.Log.Head() == 0 && h.core.Log.Committed() == 0
 // })
 // })
 //
