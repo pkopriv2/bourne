@@ -184,16 +184,10 @@ func StartTestHostFromDb(ctx common.Context, db *database, port int, peer string
 		panic(fmt.Sprintf("%+v", err))
 	}
 
-	ctx.Env().OnClose(func() {
-		db.Log().stash.Close()
-	})
-
-	ctx.Env().OnClose(func() {
-		db.Close()
-	})
-
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		host.Shutdown()
+		db.Close()
+		db.Log().stash.Close()
 	})
 
 	return host

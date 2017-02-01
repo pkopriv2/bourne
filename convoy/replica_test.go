@@ -317,7 +317,7 @@ func StartTestReplicaCluster(ctx common.Context, num int) []*replica {
 	}(cluster)
 
 	closed := make(chan struct{}, 1)
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		closed <- struct{}{}
 	})
 
@@ -380,16 +380,10 @@ func StartTestReplicaFromDb(ctx common.Context, db *database, port int) *replica
 		panic(err)
 	}
 
-	ctx.Env().OnClose(func() {
-		db.Log().stash.Close()
-	})
-
-	ctx.Env().OnClose(func() {
-		db.Close()
-	})
-
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		replica.Close()
+		db.Log().stash.Close()
+		db.Close()
 	})
 
 	return replica

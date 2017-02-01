@@ -148,7 +148,7 @@ func OpenTestStash(ctx common.Context) stash.Stash {
 
 func OpenTestChangeLog(ctx common.Context) *changeLog {
 	log := openChangeLog(OpenTestStash(ctx))
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		log.Close()
 	})
 	return log

@@ -57,7 +57,7 @@ func StartTransientCluster(ctx common.Context, start int, num int) []Host {
 		return len(all) == len(cluster)
 	})
 
-	ctx.Env().OnClose(func() {
+	ctx.Control().Defer(func(error) {
 		for _, h := range cluster {
 			h.Shutdown()
 		}
