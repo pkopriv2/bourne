@@ -232,28 +232,30 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 
 func TestHost_Cluster_Session_Append_Multi(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster := StartTestCluster(ctx, 3)
+	cluster := StartTestCluster(ctx, 5)
 	leader := Converge(cluster)
 	assert.NotNil(t, leader)
 
 	numThreads := 10
 	numItemsPerThread := 100
 
+	op := concurrent.NewAtomicCounter()
 	for i := 0; i < numThreads; i++ {
 		go func() {
-			session, err := leader.Session(uuid.NewV1())
+			session, err := leader.Session()
 			if err != nil {
 				panic(err)
 			}
 
 			for j := 0; j < numItemsPerThread; j++ {
-				_, err := session.Append(100 * time.Millisecond, Event(stash.Int(numThreads*i+j)))
+				// ctx.Logger().Info("Append: %v", op.Inc())
+				_, err := session.Append(1000 * time.Millisecond, Event(stash.Int(numThreads*i+j)))
 				if err != nil {
 					panic(err)
 				}

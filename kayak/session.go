@@ -1,7 +1,6 @@
 package kayak
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
@@ -60,21 +59,8 @@ type session struct {
 	pool common.ObjectPool
 }
 
-func newSession(self *replica, id uuid.UUID) (*session, error) {
+func newSession(self *replica, pool common.ObjectPool, id uuid.UUID) (*session, error) {
 	ctx := self.Ctx.Sub("Session(%v)", id.String()[:8])
-
-	leaderFn := func() (cl interface{}, err error) {
-		for cl == nil {
-			leader := self.Leader()
-			if leader == nil {
-				time.Sleep(self.ElectionTimeout)
-				continue
-			}
-
-			cl, err = leader.Client(self.Ctx)
-		}
-		return
-	}
 
 	s := &session{
 		ctx:    ctx,
@@ -85,7 +71,7 @@ func newSession(self *replica, id uuid.UUID) (*session, error) {
 		last:   time.Now(),
 		exp:    5 * time.Minute,
 		req:    make(chan *common.Request),
-		pool:   common.NewObjectPool(self.Ctx, fmt.Sprintf("Session(%v)", id.String()[:8]), leaderFn, 1),
+		pool:   pool,
 	}
 
 	if err := s.start(); err != nil {
@@ -137,7 +123,7 @@ func (c *session) sessionExpired() bool {
 }
 
 func (c *session) sessionTick() error {
-	_, err := c.append(c.self.RequestTimeout, scribe.Write(sessionTick{c.id, int(c.exp)}).Bytes(), SessionTick)
+	_, err := c.append(c.self.RequestTimeout, scribe.Write(sessionTick{c.id, int(c.exp)}).Bytes(), Tick)
 	return err
 }
 
@@ -164,7 +150,7 @@ func (c *session) append(timeout time.Duration, e Event, k Kind) (Entry, error) 
 
 func (c *session) start() error {
 	go func() {
-		timer := time.NewTimer(c.exp/2)
+		timer := time.NewTimer(c.exp / 2)
 		for {
 			select {
 			case <-c.ctrl.Closed():
@@ -180,7 +166,7 @@ func (c *session) start() error {
 
 	go func() {
 		for seq := 0; ; seq++ {
-			timer := time.NewTimer(c.exp/2)
+			timer := time.NewTimer(c.exp / 2)
 
 			var req *common.Request
 			select {
@@ -240,7 +226,6 @@ func (c *session) start() error {
 	return nil
 }
 
-
 func (c *session) tryAppend(cl *rpcClient, seq int, evt Event, kind Kind) (Entry, error) {
 	resp, err := cl.Append(appendEvent{evt, c.id, seq, kind})
 	if err != nil {
@@ -267,14 +252,14 @@ func (p *sessionListener) Next() (Entry, bool, error) {
 		}
 
 		cur := p.seq[next.Session]
-		if next.Tx <= cur || next.Tx > 1024 {
+		if next.Seq <= cur || next.Seq > 1024 {
 			continue
 		}
 
-		if next.Tx >= 1024 {
+		if next.Seq >= 1024 {
 			delete(p.seq, next.Session)
 		} else {
-			p.seq[next.Session] = next.Tx
+			p.seq[next.Session] = next.Seq
 		}
 
 		return next, true, nil

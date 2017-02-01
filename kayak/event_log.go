@@ -3,7 +3,6 @@ package kayak
 import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	uuid "github.com/satori/go.uuid"
 )
 
 // FIXME: Split snapshot creating from the
@@ -89,8 +88,8 @@ func (e *eventLog) Scan(start int, end int) ([]Entry, error) {
 	return e.raw.Scan(start, end)
 }
 
-func (e *eventLog) Append(evt Event, term int, source uuid.UUID, seq int, kind Kind) (Entry, error) {
-	item, err := e.raw.Append(evt, term, source, seq, kind)
+func (e *eventLog) Append(evt Event, term int, kind Kind) (Entry, error) {
+	item, err := e.raw.Append(evt, term, kind)
 	if err != nil {
 		return item, err
 	}

@@ -40,9 +40,6 @@ type replica struct {
 	// the current cluster configuration
 	Roster *roster
 
-	// the committed cluster configuration (used for snapshotting only)
-	ComittedRoster *roster
-
 	// the core database
 	Db *bolt.DB
 
@@ -58,8 +55,8 @@ type replica struct {
 	// the client timeout
 	RequestTimeout time.Duration
 
-	// the client timeout (the maximum distance between client appends)
-	ClientTtl int
+	// session timeouts
+	SessionTimeout time.Duration
 
 	// the event log.
 	Log *eventLog
@@ -283,10 +280,6 @@ func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 	}
 }
 
-func (h *replica) Session(id uuid.UUID) (*session, error) {
-	return newSession(h, id)
-}
-
 func (h *replica) AddPeer(peer peer) error {
 	return h.UpdateRoster(rosterUpdate{peer, true})
 }
@@ -312,12 +305,12 @@ func (h *replica) UpdateRoster(update rosterUpdate) error {
 	return err
 }
 
-func (h *replica) ReadBarrier() (response, error) {
+func (h *replica) ReadBarrier() (int, error) {
 	val, err := h.sendRequest(h.Barrier, h.RequestTimeout, nil)
 	if err != nil {
-		return response{}, err
+		return 0, err
 	}
-	return val.(response), nil
+	return val.(int), nil
 }
 
 func (h *replica) InstallSnapshot(snapshot installSnapshot) (response, error) {

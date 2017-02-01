@@ -1,6 +1,9 @@
 package kayak
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
@@ -8,12 +11,31 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+func newLeaderPool(self *replica, size int) common.ObjectPool {
+	leaderFn := func() (cl io.Closer, err error) {
+		for cl == nil {
+			leader := self.Leader()
+			if leader == nil {
+				time.Sleep(self.ElectionTimeout)
+				continue
+			}
+
+			cl, err = leader.Client(self.Ctx)
+		}
+		return
+	}
+
+	return common.NewObjectPool(self.Ctx, fmt.Sprintf("LeaderPool"), leaderFn, size)
+}
+
 // a host simply binds a network service with the core log machine.
 type host struct {
-
 	ctx    common.Context
+	ctrl   common.Control
+	logger common.Logger
 	server net.Server
 	core   *replica
+	pool   common.ObjectPool
 }
 
 func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *host, err error) {
@@ -28,6 +50,11 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 	if err != nil {
 		return nil, err
 	}
+
+	pool := newLeaderPool(core, 20)
+	ctx.Control().Defer(func(cause error) {
+		pool.Close()
+	})
 
 	// FIXME: Refactor net.Server to accept addrs instead of ports.
 	_, port, err := net.SplitAddr(self)
@@ -48,10 +75,8 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 		ctx:    ctx,
 		core:   core,
 		server: server,
+		pool:   pool,
 	}
-	core.ctrl.Defer(func(error) {
-		h.Close()
-	})
 
 	return
 }
@@ -160,10 +185,9 @@ func (h *host) Sync() (Sync, error) {
 	panic("not implemented")
 }
 
-func (h *host) Session(id uuid.UUID) (Session, error) {
-	return newSession(h.core, id)
+func (h *host) Session() (Session, error) {
+	return newSession(h.core, h.pool, uuid.NewV1())
 }
-
 
 func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {
 	ret := make([]*host, 0, len(hosts))

@@ -1,18 +1,31 @@
 package kayak
 
-import "time"
+import (
+	"time"
+
+	"github.com/pkopriv2/bourne/common"
+)
 
 type syncer struct {
-}
-
-func (s *syncer) Applied(index int, val interface{}) {
-	panic("not implemented")
+	pool common.ObjectPool
+	self *replica
+	ref  *ref
 }
 
 func (s *syncer) Barrier() (int, error) {
-	panic("not implemented")
+	return s.self.ReadBarrier()
 }
 
-func (s *syncer) Sync(timeout time.Duration, barrier int) interface{} {
-	panic("not implemented")
+func (s *syncer) Ack(index int) {
+	s.ref.Update(func(cur int) int {
+		return common.Max(cur, index)
+	})
+}
+
+func (s *syncer) Sync(timeout time.Duration, index int) (bool, error) {
+	_, canceled, alive := s.ref.WaitUntilOrTimeout(timeout, index)
+	if ! alive {
+		return false, ClosedError
+	}
+	return ! canceled, nil
 }

@@ -1,6 +1,11 @@
 package kayak
 
-import "sync"
+import (
+	"sync"
+	"time"
+
+	"github.com/pkopriv2/bourne/common"
+)
 
 // A simply notifying integer value.
 
@@ -27,6 +32,39 @@ func (c *ref) WaitUntil(cur int) (val int, alive bool) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	for val, alive = c.val, !c.dead; val < cur && alive; val, alive = c.val, !c.dead {
+		c.lock.Wait()
+	}
+	return
+}
+
+func (c *ref) WaitUntilOrTimeout(timeout time.Duration, until int) (val int, canceled bool, alive bool) {
+	ctrl := common.NewControl(nil)
+	go func() {
+		defer ctrl.Close()
+
+		timer := time.NewTimer(timeout)
+		select {
+		case <-ctrl.Closed():
+			return
+		case <-timer.C:
+			c.Notify()
+			return
+		}
+	}()
+	defer ctrl.Close()
+
+	isCanceled := func() bool {
+		select {
+		default:
+			return false
+		case <-ctrl.Closed():
+			return true
+		}
+	}
+
+	c.lock.L.Lock()
+	defer c.lock.L.Unlock()
+	for val, alive, canceled = c.val, !c.dead, isCanceled(); val < until && alive && ! canceled; val, alive, canceled = c.val, !c.dead, isCanceled() {
 		c.lock.Wait()
 	}
 	return

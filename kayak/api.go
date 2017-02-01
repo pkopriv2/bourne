@@ -122,19 +122,23 @@ func Join(ctx common.Context, self string, peers []string) (Peer, error) {
 type Peer interface {
 	io.Closer
 
+	// The unique identifier for this peer.
+	Id() uuid.UUID
+
+	// Hostname of self.
+	Hostname() string
+
+	// Hostnames of all members in the cluster
+	Roster() []string
+
 	// Returns the cluster synchronizer.
 	Sync() (Sync, error)
 
-	// Retrieves the given session or creates it if it doesn't exist.
-	// The provided expiration represents the maximum distance between
-	Session(id uuid.UUID) (Session, error)
+	// Retrieves a new session.
+	Log() (Log, error)
 }
 
-type Session interface {
-	io.Closer
-
-	// Returns the client id.
-	Id() uuid.UUID
+type Log interface {
 
 	// Listen generates a stream of committed log entries starting at and
 	// including the start index.
@@ -197,7 +201,7 @@ type Sync interface {
 	Ack(index int)
 
 	// Sync waits for the local machine to be caught up to the barrier.
-	Wait(timeout time.Duration, index int) error
+	Sync(timeout time.Duration, index int) error
 }
 
 type Listener interface {
@@ -260,25 +264,14 @@ type Entry struct {
 	// Internal Only: the current election cycle number.
 	Term int
 
-	// Internal Only: (used to filter duplicate appends)
-	Session uuid.UUID
-
-	// Internal Only: (used to filter duplicate appends)
-	Tx int
-
 	// Internal Only: Used for system level events (e.g. config, noop, etc...)
 	Kind Kind
 }
 
-func NewLogItem(i int, e Event, t int, s uuid.UUID, seq int, k Kind) Entry {
-	return Entry{i, e, t, s, seq, k}
-}
-
 var (
-	Std         Kind = 0
-	NoOp        Kind = 1
-	Config      Kind = 2
-	SessionTick Kind = 3
+	Std    Kind = 0
+	NoOp   Kind = 1
+	Config Kind = 2
 )
 
 type Kind int
@@ -293,8 +286,6 @@ func (k Kind) String() string {
 		return "NoOp"
 	case Config:
 		return "Config"
-	case SessionTick:
-		return "SessionTick"
 	}
 }
 
@@ -306,8 +297,8 @@ func (l Entry) Write(w scribe.Writer) {
 	w.WriteInt("index", l.Index)
 	w.WriteBytes("event", l.Event)
 	w.WriteInt("term", l.Term)
-	w.WriteUUID("source", l.Session)
-	w.WriteInt("seq", l.Tx)
+	// w.WriteUUID("source", l.Session)
+	// w.WriteInt("seq", l.Seq)
 	w.WriteInt("kind", int(l.Kind))
 }
 
@@ -319,8 +310,8 @@ func readEntry(r scribe.Reader) (entry Entry, err error) {
 	err = common.Or(err, r.ReadInt("index", &entry.Index))
 	err = common.Or(err, r.ReadInt("term", &entry.Term))
 	err = common.Or(err, r.ReadBytes("event", (*[]byte)(&entry.Event)))
-	err = common.Or(err, r.ReadUUID("source", &entry.Session))
-	err = common.Or(err, r.ReadInt("seq", &entry.Tx))
+	// err = common.Or(err, r.ReadUUID("source", &entry.Session))
+	// err = common.Or(err, r.ReadInt("seq", &entry.Seq))
 	err = common.Or(err, r.ReadInt("kind", (*int)(&entry.Kind)))
 	return
 }
@@ -344,7 +335,6 @@ func parseEntryBytes(bytes []byte) (Entry, error) {
 type LogStore interface {
 	Get(id uuid.UUID) (StoredLog, error)
 	New(uuid.UUID, []byte) (StoredLog, error)
-
 	NewSnapshot(int, int, <-chan Event, int, []byte) (StoredSnapshot, error)
 }
 
@@ -354,7 +344,7 @@ type StoredLog interface {
 	Last() (int, int, error)
 	Truncate(start int) error
 	Scan(beg int, end int) ([]Entry, error)
-	Append(Event, int, uuid.UUID, int, Kind) (Entry, error)
+	Append(Event, int, Kind) (Entry, error)
 	Get(index int) (Entry, bool, error)
 	Insert([]Entry) error
 	Install(StoredSnapshot) error

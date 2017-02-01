@@ -50,6 +50,8 @@ func NewConnectionPool(network string, addr string, max int, timeout time.Durati
 
 func (p *pool) start() {
 	go func() {
+		defer p.closePool()
+
 		out := 0
 
 		var take chan Connection
@@ -129,6 +131,13 @@ func (p *pool) Return(c Connection) {
 	case <-p.closed:
 	case p.ret <- c:
 	}
+}
+
+func (p *pool) closePool() (err error) {
+	for item := p.conns.Front() ;item != nil; item = p.conns.Front() {
+		item.Value.(io.Closer).Close()
+	}
+	return
 }
 
 func (p *pool) spawn() (Connection, error) {

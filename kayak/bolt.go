@@ -189,9 +189,9 @@ func (b *boltLog) Scan(beg int, end int) (i []Entry, e error) {
 	return
 }
 
-func (b *boltLog) Append(evt Event, t int, c uuid.UUID, s int, k Kind) (i Entry, e error) {
+func (b *boltLog) Append(evt Event, t int, k Kind) (i Entry, e error) {
 	e = b.db.Update(func(tx *bolt.Tx) error {
-		i, e = b.append(tx, evt, t, c, s, k)
+		i, e = b.append(tx, evt, t, k)
 		return e
 	})
 	return
@@ -364,13 +364,13 @@ func (b *boltLog) last(tx *bolt.Tx) (int, int, error) {
 	return raw.maxIndex, raw.maxTerm, nil
 }
 
-func (b *boltLog) append(tx *bolt.Tx, e Event, term int, source uuid.UUID, seq int, kind Kind) (Entry, error) {
+func (b *boltLog) append(tx *bolt.Tx, e Event, term int, kind Kind) (Entry, error) {
 	max, _, err := b.last(tx)
 	if err != nil {
 		return Entry{}, err
 	}
 
-	item := NewLogItem(max+1, e, term, source, seq, kind)
+	item := Entry{max+1, e, term, kind}
 	return item, b.insert(tx, []Entry{item})
 }
 
