@@ -161,6 +161,9 @@ type Peer interface {
 
 type Log interface {
 
+	// Returns the latest snaphot from the log.
+	Snapshot() (EventStream, error)
+
 	// Listen generates a stream of committed log entries starting at and
 	// including the start index.
 	//
@@ -175,9 +178,6 @@ type Log interface {
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
 	Append(timeout time.Duration, event Event) (Entry, error)
-
-	// Returns the latest snaphot from the log.
-	Snapshot() (EventStream, error)
 
 	// Compact replaces the log until the given point with the given snapshot
 	//

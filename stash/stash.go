@@ -1,7 +1,6 @@
 package stash
 
 import (
-	"io"
 	"path"
 	"time"
 
@@ -16,21 +15,6 @@ const (
 	StashLocationKey     = "bourne.stash.path"
 	StashLocationDefault = "/var/bourne/stash.data"
 )
-
-// A stash is nothing but a shared instance of a bolt
-// database.  They can be
-type Stash interface {
-	io.Closer
-
-	// Returns the os filesystem path to the stash
-	Path() string
-
-	// Update the shared bolt instance.
-	Update(func(*bolt.Tx) error) error
-
-	// View the shared bolt instance.
-	View(func(*bolt.Tx) error) error
-}
 
 // Opens a stash instance at random temporary location.
 func OpenRandom(ctx common.Context) (*bolt.DB, error) {

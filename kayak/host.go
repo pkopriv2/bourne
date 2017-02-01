@@ -83,6 +83,63 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 	return
 }
 
+func (h *host) Close() error {
+	return h.ctx.Control().Close()
+}
+
+func (h *host) Id() uuid.UUID {
+	return h.core.Id
+}
+
+func (h *host) Context() common.Context {
+	return h.core.Ctx
+}
+
+func (h *host) Hostname() string {
+	host, _, err := net.SplitAddr(h.Self().Addr)
+	if err != nil {
+		panic(err)
+	}
+	return host
+}
+
+func (h *host) Roster() []string {
+	hostnames := make([]string, 0, 8)
+	for _, p := range h.core.Cluster() {
+		host, _, err := net.SplitAddr(p.Addr)
+		if err != nil {
+			panic(err)
+		}
+
+		hostnames = append(hostnames, host)
+	}
+	return hostnames
+}
+
+func (h *host) Self() peer {
+	return h.core.Self
+}
+
+func (h *host) Peers() []peer {
+	return h.core.Others()
+}
+
+func (h *host) Cluster() []peer {
+	return h.core.Cluster()
+}
+
+func (h *host) Client() (*rpcClient, error) {
+	return h.Self().Client(h.Context())
+}
+
+func (h *host) Sync() (Sync, error) {
+	return newSyncer(h.pool), nil
+}
+
+func (h *host) Log() (Log, error) {
+	return newLogClient(h.core, h.pool), nil
+}
+
 func (h *host) Start() error {
 	becomeFollower(h.core)
 	return nil
@@ -155,64 +212,6 @@ func (h *host) tryLeave() error {
 	}
 	defer cl.Close()
 	return cl.UpdateRoster(h.core.Self, false)
-}
-
-func (h *host) Close() error {
-	return h.ctx.Control().Close()
-}
-
-func (h *host) Id() uuid.UUID {
-	return h.core.Id
-}
-
-func (h *host) Context() common.Context {
-	return h.core.Ctx
-}
-
-func (h *host) Hostname() string {
-	host, _, err := net.SplitAddr(h.Self().Addr)
-	if err != nil {
-		panic(err)
-	}
-	return host
-}
-
-func (h *host) Roster() []string {
-	hostnames := make([]string, 0, 8)
-	for _, p := range h.core.Cluster() {
-		host, _, err := net.SplitAddr(p.Addr)
-		if err != nil {
-			panic(err)
-		}
-
-		hostnames = append(hostnames, host)
-	}
-	return hostnames
-}
-
-
-func (h *host) Self() peer {
-	return h.core.Self
-}
-
-func (h *host) Peers() []peer {
-	return h.core.Others()
-}
-
-func (h *host) Cluster() []peer {
-	return h.core.Cluster()
-}
-
-func (h *host) Client() (*rpcClient, error) {
-	return h.Self().Client(h.Context())
-}
-
-func (h *host) Sync() (Sync, error) {
-	return newSyncer(h.pool), nil
-}
-
-func (h *host) Log() (Log, error) {
-	return newLogClient(h.core, h.pool), nil
 }
 
 func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {
