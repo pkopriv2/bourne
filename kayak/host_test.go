@@ -60,22 +60,22 @@ func TestHost_Cluster_ConvergeSevenPeers(t *testing.T) {
 	assert.NotNil(t, Converge(cluster))
 }
 
-// func TestHost_Cluster_Close(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-//
-// before := runtime.NumGoroutine()
-// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-//
-// cluster := StartTestCluster(ctx, 7)
-// assert.NotNil(t, Converge(cluster))
-// ctx.Close()
-//
-// time.Sleep(1000 * time.Millisecond)
-// runtime.GC()
-// after := runtime.NumGoroutine()
-// pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
-// assert.Equal(t, before, after)
-// }
+func TestHost_Cluster_Close(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+
+	before := runtime.NumGoroutine()
+	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+
+	cluster := StartTestCluster(ctx, 7)
+	assert.NotNil(t, Converge(cluster))
+	ctx.Close()
+
+	time.Sleep(1000 * time.Millisecond)
+	runtime.GC()
+	after := runtime.NumGoroutine()
+	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+	assert.Equal(t, before, after)
+}
 
 func TestHost_Cluster_Leader_Failure(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
@@ -380,7 +380,6 @@ func StartTestCluster(ctx common.Context, size int) []*host {
 		}
 
 		SyncAll(hosts[:i+2], func(h *host) bool {
-			// h.core.logger.Info("Roster: ", h.core.Cluster())
 			return hasPeer(zero.core.Cluster(), h.core.Self) && equalPeers(zero.core.Cluster(), h.core.Cluster())
 		})
 	}

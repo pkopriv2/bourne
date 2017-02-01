@@ -82,6 +82,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/stash"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
@@ -110,12 +111,32 @@ func Cause(err error) error {
 	return extractError(err)
 }
 
-func Start(ctx common.Context, self string) (Peer, error) {
-	return nil, nil
+func Start(ctx common.Context, path string, self string) (Peer, error) {
+	db, err := stash.Open(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	host, err := newHost(ctx, self, NewBoltStore(db), db)
+	if err != nil {
+		return nil, err
+	}
+
+	return host, host.Start()
 }
 
-func Join(ctx common.Context, self string, peers []string) (Peer, error) {
-	return nil, nil
+func Join(ctx common.Context, path string, self string, peers []string) (Peer, error) {
+	db, err := stash.Open(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	host, err := newHost(ctx, self, NewBoltStore(db), db)
+	if err != nil {
+		return nil, err
+	}
+
+	return host, host.Join(peers[0])
 }
 
 // A peer is a member of a cluster that is actively participating in log replication.

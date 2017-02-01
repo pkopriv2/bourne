@@ -80,7 +80,6 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 		server: server,
 		pool:   pool,
 	}
-
 	return
 }
 
@@ -106,7 +105,6 @@ func (h *host) Join(addr string) error {
 			h.ctx.Logger().Error("Attempt(%v): Error joining cluster: %v: %v", addr, attmpt, err)
 			continue
 		}
-
 		break
 	}
 
@@ -121,7 +119,6 @@ func (h *host) Leave() error {
 			h.ctx.Logger().Error("Attempt(%v): Error leaving cluster: %v", attmpt, err)
 			continue
 		}
-
 		break
 	}
 
@@ -172,12 +169,38 @@ func (h *host) Context() common.Context {
 	return h.core.Ctx
 }
 
+func (h *host) Hostname() string {
+	host, _, err := net.SplitAddr(h.Self().Addr)
+	if err != nil {
+		panic(err)
+	}
+	return host
+}
+
+func (h *host) Roster() []string {
+	hostnames := make([]string, 0, 8)
+	for _, p := range h.core.Cluster() {
+		host, _, err := net.SplitAddr(p.Addr)
+		if err != nil {
+			panic(err)
+		}
+
+		hostnames = append(hostnames, host)
+	}
+	return hostnames
+}
+
+
 func (h *host) Self() peer {
 	return h.core.Self
 }
 
 func (h *host) Peers() []peer {
 	return h.core.Others()
+}
+
+func (h *host) Cluster() []peer {
+	return h.core.Cluster()
 }
 
 func (h *host) Client() (*rpcClient, error) {
