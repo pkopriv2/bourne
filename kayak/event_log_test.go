@@ -47,7 +47,7 @@ func TestEventLog_Append_Single(t *testing.T) {
 	log := OpenTestBoltEventLog(ctx)
 
 	exp := Entry{Index: 0, Term: 1, Event: Event{0}}
-	head, err := log.Append(exp.Event, exp.Term, exp.Session, exp.Seq, exp.Kind)
+	head, err := log.Append(exp.Event, exp.Term, exp.Kind)
 	assert.Nil(t, err)
 	assert.Equal(t, 0, head.Index)
 

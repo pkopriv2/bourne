@@ -30,8 +30,8 @@ func becomeLeader(replica *replica) {
 		logger:     ctx.Logger(),
 		ctrl:       ctx.Control(),
 		syncer:     newLogSyncer(ctx, replica),
-		proxyPool:  concurrent.NewWorkPool(10),
-		appendPool: concurrent.NewWorkPool(10),
+		proxyPool:  concurrent.NewWorkPool(5),
+		appendPool: concurrent.NewWorkPool(20),
 		term:       replica.CurrentTerm(),
 		replica:    replica,
 	}
@@ -47,12 +47,11 @@ func becomeLeader(replica *replica) {
 }
 
 func (l *leader) start() {
-	// Establish leadership
-	l.broadcastHeartbeat()
-
 	// Proxy routine.
 	go func() {
-		for {
+		defer l.ctrl.Close()
+
+		for !l.ctrl.IsClosed() {
 			select {
 			case <-l.ctrl.Closed():
 				return
@@ -64,7 +63,9 @@ func (l *leader) start() {
 
 	// Roster routine
 	go func() {
-		for {
+		defer l.ctrl.Close()
+
+		for !l.ctrl.IsClosed() {
 			select {
 			case <-l.ctrl.Closed():
 				return
@@ -77,7 +78,8 @@ func (l *leader) start() {
 	// Main routine
 	go func() {
 		defer l.ctrl.Close()
-		for {
+
+		for !l.ctrl.IsClosed() {
 			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
 			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
@@ -92,6 +94,8 @@ func (l *leader) start() {
 				l.handleReplication(req)
 			case req := <-l.replica.VoteRequests:
 				l.handleRequestVote(req)
+			case req := <-l.replica.Barrier:
+				l.handleReadBarrier(req)
 			case <-timer.C:
 				l.broadcastHeartbeat()
 			case <-l.syncer.ctrl.Closed():
@@ -102,8 +106,19 @@ func (l *leader) start() {
 		}
 	}()
 
+	// Establish leadership
+	if ! l.broadcastHeartbeat() {
+		becomeFollower(l.replica)
+		l.ctrl.Close()
+		return
+	}
+
 	// Establish read barrier
-	l.replica.LocalAppend(appendEvent{Event{}, l.replica.Self.Id, 0, NoOp})
+	if _, err := l.replica.LocalAppend(appendEvent{Event{}, NoOp}); err != nil {
+		becomeFollower(l.replica)
+		l.ctrl.Close()
+		return
+	}
 }
 
 // leaders do not accept snapshot installations
@@ -130,6 +145,17 @@ func (c *leader) handleReplication(req *common.Request) {
 
 	c.replica.Term(append.term, &append.id, &append.id)
 	req.Ack(newResponse(append.term, false))
+	becomeFollower(c.replica)
+	c.ctrl.Close()
+}
+
+func (c *leader) handleReadBarrier(req *common.Request) {
+	if c.broadcastHeartbeat() {
+		req.Ack(c.replica.Log.Committed())
+		return
+	}
+
+	req.Fail(NotLeaderError)
 	becomeFollower(c.replica)
 	c.ctrl.Close()
 }
@@ -181,7 +207,6 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 
 	all = addPeer(all, update.peer)
 	c.syncer.handleRosterChange(all)
-
 	sync := c.syncer.Syncer(update.peer.Id)
 
 	_, err = sync.heartbeat()
@@ -242,7 +267,7 @@ func (c *leader) handleRequestVote(req *common.Request) {
 }
 
 
-func (c *leader) broadcastHeartbeat() {
+func (c *leader) broadcastHeartbeat() bool {
 	ch := c.replica.Broadcast(func(cl *rpcClient) response {
 		resp, err := cl.Replicate(newHeartBeat(c.replica.Id, c.term.Num, c.replica.Log.Committed()))
 		if err != nil {
@@ -256,13 +281,13 @@ func (c *leader) broadcastHeartbeat() {
 	for i := 0; i < c.replica.Majority()-1; {
 		select {
 		case <-c.ctrl.Closed():
-			return
+			return false
 		case resp := <-ch:
 			if resp.term > c.term.Num {
 				c.replica.Term(resp.term, nil, c.term.VotedFor)
 				becomeFollower(c.replica)
 				c.ctrl.Close()
-				return
+				return false
 			}
 
 			i++
@@ -271,7 +296,9 @@ func (c *leader) broadcastHeartbeat() {
 			c.replica.Term(c.term.Num, nil, c.term.VotedFor)
 			becomeFollower(c.replica)
 			c.ctrl.Close()
-			return
+			return false
 		}
 	}
+
+	return true
 }

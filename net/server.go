@@ -44,7 +44,7 @@ const (
 const (
 	DefaultServerSendTimeout = 30 * time.Second
 	DefaultServerRecvTimeout = 30 * time.Second
-	DefaultServerPoolSize    = 50
+	DefaultServerPoolSize    = 30
 	DefaultClientSendTimeout = 30 * time.Second
 	DefaultClientRecvTimeout = 30 * time.Second
 	DefaultClientEncoding    = "json"
@@ -307,7 +307,7 @@ func NewClient(ctx common.Context, log common.Logger, conn Connection) (Client, 
 	switch enc {
 	default:
 		return nil, &UnsupportedEncodingError{EncodingToString(enc)}
-	case Json,Gob:
+	case Json, Gob:
 	}
 
 	return &client{
@@ -446,7 +446,7 @@ func NewServer(ctx common.Context, logger common.Logger, listener Listener, hand
 		closed:      make(chan struct{}),
 		closer:      make(chan struct{}, 1)}
 
-	s.startListener()
+	s.start()
 	return s, nil
 }
 
@@ -495,7 +495,7 @@ func (s *server) Close() error {
 	return err
 }
 
-func (s *server) startListener() {
+func (s *server) start() {
 	s.wait.Add(1)
 	go func() {
 		defer s.wait.Done()

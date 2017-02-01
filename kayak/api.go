@@ -106,7 +106,7 @@ var (
 )
 
 // Extracts out the raw errors.
-func ExtractError(err error) error {
+func Cause(err error) error {
 	return extractError(err)
 }
 
@@ -128,13 +128,13 @@ type Peer interface {
 	// Hostname of self.
 	Hostname() string
 
-	// Hostnames of all members in the cluster
+	// Hostnames of all members in the cluster (*dynamic*)
 	Roster() []string
 
 	// Returns the cluster synchronizer.
 	Sync() (Sync, error)
 
-	// Retrieves a new session.
+	// Retrieves a connection to the log.
 	Log() (Log, error)
 }
 
@@ -143,9 +143,8 @@ type Log interface {
 	// Listen generates a stream of committed log entries starting at and
 	// including the start index.
 	//
-	// This listener guarantees that entries are delivered with exactly-once
+	// This listener guarantees that entries are delivered with at-least-once
 	// semantics.
-	//
 	Listen(start int, buf int) (Listener, error)
 
 	// Append appends and commits the event to the log.
@@ -181,18 +180,17 @@ type Log interface {
 
 // The synchronizer gives the consuming machine the ability to synchronize
 // its state with other members of the cluster.  This is critical for
-// machines to be able to prevent stale reads - and provide read-level linearizability.
+// machines to be able to prevent stale reads.
 //
 // In order to give linearizable reads, consumers can query for a "read-barrier"
 // index. This index is the maximum index that has been applied to any machine
 // within the cluster.  With this barrier, machines can ensure their
 // internal state has been caught up to the time the read was initiated,
 // thereby obtaining linearizability for the operation.
-//
 type Sync interface {
 
 	// Returns the current read-barrier for the cluster.
-	Barrier() (int, error)
+	Barrier(timeout time.Duration) (int, error)
 
 	// Applied tells the synchronizer that the index (and everything that preceded)
 	// it has been applied to the state machine. This operation is commutative,
@@ -297,8 +295,6 @@ func (l Entry) Write(w scribe.Writer) {
 	w.WriteInt("index", l.Index)
 	w.WriteBytes("event", l.Event)
 	w.WriteInt("term", l.Term)
-	// w.WriteUUID("source", l.Session)
-	// w.WriteInt("seq", l.Seq)
 	w.WriteInt("kind", int(l.Kind))
 }
 
@@ -310,8 +306,6 @@ func readEntry(r scribe.Reader) (entry Entry, err error) {
 	err = common.Or(err, r.ReadInt("index", &entry.Index))
 	err = common.Or(err, r.ReadInt("term", &entry.Term))
 	err = common.Or(err, r.ReadBytes("event", (*[]byte)(&entry.Event)))
-	// err = common.Or(err, r.ReadUUID("source", &entry.Session))
-	// err = common.Or(err, r.ReadInt("seq", &entry.Seq))
 	err = common.Or(err, r.ReadInt("kind", (*int)(&entry.Kind)))
 	return
 }

@@ -58,7 +58,7 @@ func (c *candidate) start() {
 		c.logger.Info("Setting timer [%v]", c.replica.ElectionTimeout)
 		timer := time.NewTimer(c.replica.ElectionTimeout)
 
-		for numVotes := 1; ; {
+		for numVotes := 1; ! c.ctrl.IsClosed() ; {
 			c.logger.Info("Received [%v/%v] votes", numVotes, len(c.replica.Cluster()))
 
 			needed := c.replica.Majority()
@@ -66,7 +66,6 @@ func (c *candidate) start() {
 				c.logger.Info("Acquired majority [%v] votes.", needed)
 				c.replica.Term(c.replica.term.Num, &c.replica.Id, &c.replica.Id)
 				becomeLeader(c.replica)
-				c.ctrl.Close()
 				return
 			}
 

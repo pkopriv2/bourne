@@ -57,6 +57,10 @@ func (c *follower) start() {
 		var snapshotDone *common.Request
 		var snapshotOffset int
 		for {
+			if c.ctrl.IsClosed() {
+				return
+			}
+
 			electionTimer := time.NewTimer(c.replica.ElectionTimeout)
 			c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
 
@@ -92,43 +96,6 @@ func (c *follower) handleRemoteAppend(req *common.Request) {
 
 func (c *follower) handleRosterUpdate(req *common.Request) {
 	req.Fail(NotLeaderError)
-}
-
-func (c *follower) startSnapshotStream(s installSnapshot) (chan<- Event, *common.Request) {
-	data := make(chan Event)
-	resp := common.NewRequest(nil)
-	go func() {
-		snapshot, err := c.replica.Log.NewSnapshot(s.maxIndex, s.maxTerm, data, s.size, s.config)
-		if err != nil {
-			c.logger.Error("Error installing snapshot: %+v", err)
-			resp.Fail(err)
-			return
-		}
-
-		err = c.replica.Log.Install(snapshot)
-		if err != nil {
-			c.logger.Error("Error installing snapshot: %+v", err)
-			resp.Fail(err)
-			return
-		}
-
-		resp.Ack(newResponse(c.term.Num, true))
-	}()
-	return data, resp
-}
-
-func (c *follower) streamSnapshotSegment(data chan<- Event, s installSnapshot) error {
-	timer := time.NewTimer(c.replica.RequestTimeout)
-	for i := 0; i < len(s.batch); i++ {
-		select {
-		case <-timer.C:
-			return errors.Wrapf(TimeoutError, "Timed out writing segment [%v]: [%v]", c.replica.RequestTimeout, s)
-		case <-c.ctrl.Closed():
-			return errors.Wrapf(ClosedError, "Unable to stream segment [%v]", s)
-		case data <- s.batch[i]:
-		}
-	}
-	return nil
 }
 
 func (c *follower) handleInstallSnapshot(req *common.Request, data chan<- Event, done *common.Request, offset int) (chan<- Event, *common.Request, int) {
@@ -284,4 +251,41 @@ func (c *follower) handleReplication(req *common.Request) {
 	}
 
 	req.Ack(newResponse(append.term, true))
+}
+
+func (c *follower) startSnapshotStream(s installSnapshot) (chan<- Event, *common.Request) {
+	data := make(chan Event)
+	resp := common.NewRequest(nil)
+	go func() {
+		snapshot, err := c.replica.Log.NewSnapshot(s.maxIndex, s.maxTerm, data, s.size, s.config)
+		if err != nil {
+			c.logger.Error("Error installing snapshot: %+v", err)
+			resp.Fail(err)
+			return
+		}
+
+		err = c.replica.Log.Install(snapshot)
+		if err != nil {
+			c.logger.Error("Error installing snapshot: %+v", err)
+			resp.Fail(err)
+			return
+		}
+
+		resp.Ack(newResponse(c.term.Num, true))
+	}()
+	return data, resp
+}
+
+func (c *follower) streamSnapshotSegment(data chan<- Event, s installSnapshot) error {
+	timer := time.NewTimer(c.replica.RequestTimeout)
+	for i := 0; i < len(s.batch); i++ {
+		select {
+		case <-timer.C:
+			return errors.Wrapf(TimeoutError, "Timed out writing segment [%v]: [%v]", c.replica.RequestTimeout, s)
+		case <-c.ctrl.Closed():
+			return errors.Wrapf(ClosedError, "Unable to stream segment [%v]", s)
+		case data <- s.batch[i]:
+		}
+	}
+	return nil
 }

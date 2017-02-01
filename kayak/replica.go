@@ -289,7 +289,7 @@ func (h *replica) DelPeer(peer peer) error {
 }
 
 func (h *replica) Append(event Event, kind Kind) (Entry, error) {
-	return h.LocalAppend(appendEvent{event, h.Self.Id, 0, kind})
+	return h.LocalAppend(appendEvent{event, kind})
 }
 
 func (h *replica) Listen(start int, buf int) (Listener, error) {

@@ -46,7 +46,7 @@ func (p *objectPool) start() {
 		var take chan io.Closer
 		var next io.Closer
 		for out := 0; ; {
-			p.logger.Debug("Currently live objects [%v]", out)
+			// p.logger.Debug("Currently live objects [%v]", out)
 
 			take = nil
 			next = nil

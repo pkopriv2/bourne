@@ -171,15 +171,11 @@ func (r requestVote) Request() net.Request {
 // These come from active clients.
 type appendEvent struct {
 	Event  Event
-	Source uuid.UUID
-	Seq    int
 	Kind   Kind
 }
 
 func readAppendEvent(r scribe.Reader) (ret appendEvent, err error) {
 	err = common.Or(err, r.ReadBytes("event", (*[]byte)(&ret.Event)))
-	err = common.Or(err, r.ReadUUID("source", &ret.Source))
-	err = common.Or(err, r.ReadInt("seq", &ret.Seq))
 	err = common.Or(err, r.ReadInt("kind", (*int)(&ret.Kind)))
 	return ret, err
 }
@@ -194,8 +190,6 @@ func (r appendEvent) Request() net.Request {
 
 func (r appendEvent) Write(w scribe.Writer) {
 	w.WriteBytes("event", r.Event)
-	w.WriteUUID("source", r.Source)
-	w.WriteInt("seq", r.Seq)
 	w.WriteInt("kind", int(r.Kind))
 }
 

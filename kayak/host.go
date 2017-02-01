@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/boltdb/bolt"
@@ -12,7 +13,10 @@ import (
 )
 
 func newLeaderPool(self *replica, size int) common.ObjectPool {
-	leaderFn := func() (cl io.Closer, err error) {
+	leaderFn := func() (io.Closer, error) {
+		var cl *rpcClient
+		// var err error
+
 		for cl == nil {
 			leader := self.Leader()
 			if leader == nil {
@@ -20,11 +24,10 @@ func newLeaderPool(self *replica, size int) common.ObjectPool {
 				continue
 			}
 
-			cl, err = leader.Client(self.Ctx)
+			cl, _ = leader.Client(self.Ctx)
 		}
-		return
+		return cl, nil
 	}
-
 	return common.NewObjectPool(self.Ctx, fmt.Sprintf("LeaderPool"), leaderFn, size)
 }
 
@@ -51,7 +54,7 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 		return nil, err
 	}
 
-	pool := newLeaderPool(core, 20)
+	pool := newLeaderPool(core, 10)
 	ctx.Control().Defer(func(cause error) {
 		pool.Close()
 	})
@@ -182,11 +185,11 @@ func (h *host) Client() (*rpcClient, error) {
 }
 
 func (h *host) Sync() (Sync, error) {
-	panic("not implemented")
+	return newSyncer(h.pool), nil
 }
 
-func (h *host) Session() (Session, error) {
-	return newSession(h.core, h.pool, uuid.NewV1())
+func (h *host) Log() (Log, error) {
+	return newLogClient(h.core, h.pool), nil
 }
 
 func hostsCollect(hosts []*host, fn func(h *host) bool) []*host {

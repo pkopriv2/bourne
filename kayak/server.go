@@ -30,6 +30,8 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 			return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
 		case actStatus:
 			return s.Status(req)
+		case actReadBarrier:
+			return s.ReadBarrier(req)
 		case actReplicate:
 			return s.Replicate(req)
 		case actRequestVote:
@@ -46,6 +48,15 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 
 func (s *server) Status(req net.Request) net.Response {
 	return status{s.self.Id, s.self.CurrentTerm(), s.self.Cluster()}.Response()
+}
+
+func (s *server) ReadBarrier(req net.Request) net.Response {
+	val, err := s.self.ReadBarrier()
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return newReadBarrierResponse(val)
 }
 
 func (s *server) UpdateRoster(req net.Request) net.Response {

@@ -187,7 +187,7 @@ func TestBoltLog_Append_Single(t *testing.T) {
 	assert.Nil(t, err)
 
 	exp := Entry{Index: 0, Term: 1, Event: Event{0}}
-	item, err := log.Append(exp.Event, exp.Term, exp.Session, exp.Seq, exp.Kind)
+	item, err := log.Append(exp.Event, exp.Term, exp.Kind)
 	assert.Nil(t, err)
 	assert.Equal(t, exp, item)
 
@@ -207,9 +207,9 @@ func TestBoltLog_Append_Multi(t *testing.T) {
 	exp1 := Entry{Index: 0, Term: 0, Event: Event{0}}
 	exp2 := Entry{Index: 1, Term: 1, Event: Event{1}}
 
-	item1, err := log.Append(exp1.Event, exp1.Term, exp1.Session, exp1.Seq, exp1.Kind)
+	item1, err := log.Append(exp1.Event, exp1.Term, exp1.Kind)
 	assert.Nil(t, err)
-	item2, err := log.Append(exp2.Event, exp2.Term, exp2.Session, exp2.Seq, exp2.Kind)
+	item2, err := log.Append(exp2.Event, exp2.Term, exp2.Kind)
 	assert.Nil(t, err)
 
 	assert.Equal(t, exp1, item1)

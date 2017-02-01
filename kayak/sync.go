@@ -3,17 +3,26 @@ package kayak
 import (
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 )
 
 type syncer struct {
 	pool common.ObjectPool
-	self *replica
 	ref  *ref
 }
 
-func (s *syncer) Barrier() (int, error) {
-	return s.self.ReadBarrier()
+func newSyncer(pool common.ObjectPool) *syncer {
+	return &syncer{pool, newRef(-1)}
+}
+
+func (s *syncer) Barrier(timeout time.Duration) (int, error) {
+	for {
+		val, err := s.tryBarrier(timeout)
+		if err == nil {
+			return val, nil
+		}
+	}
 }
 
 func (s *syncer) Ack(index int) {
@@ -22,10 +31,29 @@ func (s *syncer) Ack(index int) {
 	})
 }
 
-func (s *syncer) Sync(timeout time.Duration, index int) (bool, error) {
+func (s *syncer) Sync(timeout time.Duration, index int) error {
 	_, canceled, alive := s.ref.WaitUntilOrTimeout(timeout, index)
-	if ! alive {
-		return false, ClosedError
+	if !alive {
+		return ClosedError
 	}
-	return ! canceled, nil
+	if canceled {
+		return errors.Wrapf(TimeoutError, "Unable to sync. Timeout [%v] while waiting for index [%v] to be applied.", timeout, index)
+	}
+	return nil
+}
+
+func (s *syncer) tryBarrier(timeout time.Duration) (val int, err error) {
+	raw := s.pool.TakeTimeout(timeout)
+	if raw == nil {
+		return 0, errors.Wrapf(TimeoutError, "Unable to retrieve barrier. Timeout [%v] while waiting for client.", timeout)
+	}
+	defer func() {
+		if err != nil {
+			s.pool.Fail(raw)
+		} else {
+			s.pool.Return(raw)
+		}
+	}()
+	val, err = raw.(*rpcClient).Barrier()
+	return
 }

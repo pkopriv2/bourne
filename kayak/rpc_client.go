@@ -29,6 +29,19 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
+func (c *rpcClient) Barrier() (int, error) {
+	resp, err := c.raw.Send(newReadBarrierRequest())
+	if err != nil {
+		return 0, err
+	}
+
+	if err := resp.Error(); err != nil {
+		return 0, err
+	}
+
+	return readBarrierResponse(resp.Body())
+}
+
 func (c *rpcClient) Status() (status, error) {
 	resp, err := c.raw.Send(newStatusRequest())
 	if err != nil {

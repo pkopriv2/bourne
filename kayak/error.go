@@ -41,15 +41,14 @@ func extractError(err error) error {
 	}
 
 	// recurse now (more performant to do direct comaparisons first.)
-	cause := extractError(Cause(err))
-	if cause != nil {
+	if cause := extractError(cause(err)); cause != nil {
 		return cause
 	}
 
 	return err
 }
 
-func Cause(err error) error {
+func cause(err error) error {
 	type causer interface {
 		Cause() error
 	}

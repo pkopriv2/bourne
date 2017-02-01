@@ -133,7 +133,7 @@ func (s *logSyncer) Append(append appendEvent) (item Entry, err error) {
 	committed := make(chan struct{}, 1)
 	go func() {
 		// append
-		item, err = s.self.Log.Append(append.Event, s.term.Num, append.Source, append.Seq, append.Kind)
+		item, err = s.self.Log.Append(append.Event, s.term.Num, append.Kind)
 		if err != nil {
 			s.ctrl.Fail(err)
 			return
