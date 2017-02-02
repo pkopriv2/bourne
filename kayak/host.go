@@ -1,8 +1,6 @@
 package kayak
 
 import (
-	"fmt"
-	"io"
 	"time"
 
 	"github.com/boltdb/bolt"
@@ -11,25 +9,6 @@ import (
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
-
-func newLeaderPool(self *replica, size int) common.ObjectPool {
-	leaderFn := func() (io.Closer, error) {
-		var cl *rpcClient
-		// var err error
-
-		for cl == nil {
-			leader := self.Leader()
-			if leader == nil {
-				time.Sleep(self.ElectionTimeout)
-				continue
-			}
-
-			cl, _ = leader.Client(self.Ctx)
-		}
-		return cl, nil
-	}
-	return common.NewObjectPool(self.Ctx, fmt.Sprintf("LeaderPool"), leaderFn, size)
-}
 
 // a host simply binds a network service with the core log machine.
 type host struct {
@@ -41,7 +20,7 @@ type host struct {
 	pool   common.ObjectPool
 }
 
-func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *host, err error) {
+func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, addr string) (h *host, err error) {
 	ctx = ctx.Sub("Kayak")
 	defer func() {
 		if err != nil {
@@ -49,33 +28,38 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 		}
 	}()
 
-	core, err := newReplica(ctx, self, store, db)
+	listener, err := net.Listen(10*time.Second, addr)
 	if err != nil {
 		return nil, err
 	}
+	ctx.Control().Defer(func(cause error) {
+		listener.Close()
+	})
+
+	core, err := newReplica(ctx, net, store, db, listener.Addr().String())
+	if err != nil {
+		return nil, err
+	}
+	ctx.Control().Defer(func(cause error) {
+		core.ctrl.Close()
+	})
+
+	server, err := newServer(ctx, core, listener, 20)
+	if err != nil {
+		return nil, err
+	}
+	ctx.Control().Defer(func(cause error) {
+		server.Close()
+	})
 
 	pool := newLeaderPool(core, 10)
 	ctx.Control().Defer(func(cause error) {
 		pool.Close()
 	})
 
-	// FIXME: Refactor net.Server to accept addrs instead of ports.
-	_, port, err := net.SplitAddr(self)
-	if err != nil {
-		return nil, err
-	}
-
-	server, err := newServer(ctx, ctx.Logger(), port, core)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx.Control().Defer(func(cause error) {
-		server.Close()
-	})
-
 	h = &host{
 		ctx:    ctx,
+		ctrl:   ctx.Control(),
 		core:   core,
 		server: server,
 		pool:   pool,
@@ -84,7 +68,7 @@ func newHost(ctx common.Context, self string, store LogStore, db *bolt.DB) (h *h
 }
 
 func (h *host) Close() error {
-	return h.ctx.Control().Close()
+	return h.ctrl.Close()
 }
 
 func (h *host) Id() uuid.UUID {
@@ -126,10 +110,6 @@ func (h *host) Peers() []peer {
 
 func (h *host) Cluster() []peer {
 	return h.core.Cluster()
-}
-
-func (h *host) Client() (*rpcClient, error) {
-	return h.Self().Client(h.Context())
 }
 
 func (h *host) Sync() (Sync, error) {
@@ -185,7 +165,7 @@ func (h *host) Leave() error {
 }
 
 func (h *host) tryJoin(addr string) error {
-	cl, err := connect(h.ctx, addr)
+	cl, err := connect(h.core.Ctx, h.core.Network, h.core.RequestTimeout, addr)
 	if err != nil {
 		return errors.Wrapf(err, "Error connecting to peer [%v]", addr)
 	}
@@ -206,7 +186,7 @@ func (h *host) tryLeave() error {
 		return NoLeaderError
 	}
 
-	cl, err := peer.Client(h.ctx)
+	cl, err := peer.Client(h.core.Ctx, h.core.Network)
 	if err != nil {
 		return err
 	}

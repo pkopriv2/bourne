@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -36,6 +38,9 @@ type replica struct {
 
 	// the peer representing the local instance
 	Self peer
+
+	// the networking abstraction
+	Network net.Network
 
 	// the current cluster configuration
 	Roster *roster
@@ -86,7 +91,7 @@ type replica struct {
 	RosterUpdates chan *common.Request
 }
 
-func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*replica, error) {
+func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, addr string) (*replica, error) {
 	termStore, err := openTermStore(db)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Host")
@@ -142,6 +147,7 @@ func newReplica(ctx common.Context, addr string, store LogStore, db *bolt.DB) (*
 		Log:             log,
 		Db:              db,
 		Roster:          roster,
+		Network:         net,
 		Barrier:         make(chan *common.Request),
 		Replications:    make(chan *common.Request),
 		VoteRequests:    make(chan *common.Request),
@@ -244,7 +250,7 @@ func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
-			cl, err := p.Client(h.Ctx)
+			cl, err := p.Client(h.Ctx, h.Network)
 			if cl == nil || err != nil {
 				ret <- newResponse(h.term.Num, false)
 				return
@@ -359,5 +365,25 @@ func majority(num int) int {
 		return 1 + (num / 2)
 	} else {
 		return int(math.Ceil(float64(num) / float64(2)))
+	}
+}
+
+func newLeaderPool(self *replica, size int) common.ObjectPool {
+	return common.NewObjectPool(self.Ctx.Sub("LeaderPool(%v)", size), size, newLeaderConstructor(self))
+}
+
+func newLeaderConstructor(self *replica) func() (io.Closer, error) {
+	return func() (io.Closer, error) {
+		var cl *rpcClient
+		for cl == nil {
+			leader := self.Leader()
+			if leader == nil {
+				time.Sleep(self.ElectionTimeout)
+				continue
+			}
+
+			cl, _ = leader.Client(self.Ctx, self.Network)
+		}
+		return cl, nil
 	}
 }

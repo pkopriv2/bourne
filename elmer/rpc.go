@@ -33,14 +33,12 @@ func readMeta(meta scribe.Reader) (ret string, err error) {
 
 type getRpc struct {
 	Key    []byte
-	Expire time.Duration
 }
 
 type swapRpc struct {
 	Key    []byte
 	Val    []byte
 	Prev   int
-	Expire time.Duration
 }
 
 func (s swapRpc) Write(w scribe.Writer) {

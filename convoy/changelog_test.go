@@ -3,6 +3,7 @@ package convoy
 import (
 	"testing"
 
+	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
 	"github.com/stretchr/testify/assert"
@@ -138,7 +139,7 @@ func TestChangeLog_All(t *testing.T) {
 	assert.Equal(t, []change{chg1, chg2, chg3}, all)
 }
 
-func OpenTestStash(ctx common.Context) stash.Stash {
+func OpenTestStash(ctx common.Context) *bolt.DB {
 	db, err := stash.OpenTransient(ctx)
 	if err != nil {
 		panic(err)

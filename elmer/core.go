@@ -1,36 +1,41 @@
 package elmer
 
 import (
-	"sync"
-	"time"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 )
 
 type machine struct {
-
 	ctx    common.Context
 	ctrl   common.Control
 	logger common.Logger
+	peer   kayak.Peer
+	read   chan *common.Request
+	swap   chan *common.Request
+	pool   common.WorkPool
+}
 
-	peer kayak.Peer
+func newStoreMachine(ctx common.Context, peer kayak.Peer, workers int) (*machine, error) {
+	m := &machine{
+		ctx:    ctx,
+		ctrl:   ctx.Control(),
+		logger: ctx.Logger(),
+		peer:   peer,
+		read:   make(chan *common.Request),
+		swap:   make(chan *common.Request),
+		pool:   common.NewWorkPool(ctx.Control(), workers),
+	}
 
-	epoch     *epoch
-	epockLock sync.RWMutex
-
-	read chan *common.Request
-	swap chan *common.Request
-
-	pool common.WorkPool
+	m.start()
+	return m, nil
 }
 
 func (m *machine) Close() error {
 	return m.ctrl.Close()
 }
 
-func (s *machine) start() error {
+func (s *machine) start() {
 	go func() {
 		defer s.ctrl.Close()
 
@@ -49,10 +54,13 @@ func (s *machine) start() error {
 				continue
 			}
 
-			for {
+			for !s.ctrl.IsClosed() {
 				select {
 				case <-s.ctrl.Closed():
 					return
+				case <-epoch.ctrl.Closed():
+					s.logger.Error("Epoch [%v] died [%v]. Rebuilding.", iter, epoch.ctrl.Failure())
+					continue
 				case req := <-s.read:
 					s.handleRead(epoch, req)
 				case req := <-s.swap:
@@ -61,18 +69,17 @@ func (s *machine) start() error {
 			}
 		}
 	}()
-	return nil
 }
 
-func (h *machine) sendRequest(ch chan<- *common.Request, timeout time.Duration, val interface{}) (interface{}, error) {
-	timer := time.NewTimer(timeout)
-
+func (h *machine) sendRequest(ch chan<- *common.Request, cancel <-chan struct{}, val interface{}) (interface{}, error) {
 	req := common.NewRequest(val)
+	defer req.Cancel()
+
 	select {
 	case <-h.ctrl.Closed():
-		return nil, ClosedError
-	case <-timer.C:
-		return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to accept [%v]", timeout)
+		return nil, errors.WithStack(ClosedError)
+	case <-cancel:
+		return nil, errors.WithStack(CanceledError)
 	case ch <- req:
 		select {
 		case <-h.ctrl.Closed():
@@ -81,15 +88,14 @@ func (h *machine) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 			return r, nil
 		case e := <-req.Failed():
 			return nil, e
-		case <-timer.C:
-			req.Cancel()
-			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to response [%v]", timeout)
+		case <-cancel:
+			return nil, errors.WithStack(CanceledError)
 		}
 	}
 }
 
-func (s *machine) Read(read getRpc) (Item, bool, error) {
-	raw, err := s.sendRequest(s.read, read.Expire, read)
+func (s *machine) Read(cancel <-chan struct{}, read getRpc) (Item, bool, error) {
+	raw, err := s.sendRequest(s.read, cancel, read)
 	if err != nil {
 		return Item{}, false, err
 	}
@@ -98,8 +104,8 @@ func (s *machine) Read(read getRpc) (Item, bool, error) {
 	return rpc.Item, rpc.Ok, nil
 }
 
-func (s *machine) Swap(swap swapRpc) (Item, bool, error) {
-	raw, err := s.sendRequest(s.swap, swap.Expire, swap)
+func (s *machine) Swap(cancel <-chan struct{}, swap swapRpc) (Item, bool, error) {
+	raw, err := s.sendRequest(s.swap, cancel, swap)
 	if err != nil {
 		return Item{}, false, err
 	}

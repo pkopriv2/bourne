@@ -10,7 +10,6 @@ import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -103,14 +102,14 @@ func (l *changeLogListener) Close() error {
 // built on a bolt DB instance, so it is guaranteed
 // both durable and thread-safe.
 type changeLog struct {
-	stash  stash.Stash
+	stash  *bolt.DB
 	subs   concurrent.Map
 	closed chan struct{}
 	closer chan struct{}
 }
 
 // Opens the change log.  This uses the shared store
-func openChangeLog(db stash.Stash) *changeLog {
+func openChangeLog(db *bolt.DB) *changeLog {
 	return &changeLog{
 		stash:  db,
 		subs:   concurrent.NewMap(),

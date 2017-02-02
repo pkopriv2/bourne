@@ -82,6 +82,7 @@ import (
 	"io"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
@@ -111,33 +112,34 @@ func Cause(err error) error {
 	return extractError(err)
 }
 
-func Start(ctx common.Context, path string, self string) (Peer, error) {
+func Start(ctx common.Context, net net.Network, logs LogStore, path string, addr string) (Peer, error) {
 	db, err := stash.Open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
+	return nil, nil
 
-	host, err := newHost(ctx, self, NewBoltStore(db), db)
+	host, err := newHost(ctx, net, logs, db, addr)
 	if err != nil {
 		return nil, err
 	}
 
 	return host, host.Start()
 }
-
-func Join(ctx common.Context, path string, self string, peers []string) (Peer, error) {
-	db, err := stash.Open(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	host, err := newHost(ctx, self, NewBoltStore(db), db)
-	if err != nil {
-		return nil, err
-	}
-
-	return host, host.Join(peers[0])
-}
+//
+// func Join(ctx common.Context, path string, self string, peers []string) (Peer, error) {
+	// db, err := stash.Open(ctx, path)
+	// if err != nil {
+		// return nil, err
+	// }
+//
+	// host, err := newHost(ctx, self, NewBoltStore(db), db)
+	// if err != nil {
+		// return nil, err
+	// }
+//
+	// return host, host.Join(peers[0])
+// }
 
 // A peer is a member of a cluster that is actively participating in log replication.
 type Peer interface {

@@ -7,7 +7,11 @@ import (
 	"github.com/pkg/errors"
 )
 
-func ListenTcp(timeout time.Duration, addr string) (*TcpListener, error) {
+func NewTcpNetwork() *TcpNetwork {
+	return &TcpNetwork{}
+}
+
+func ListenTcp(timeout time.Duration, addr string) (Listener, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -16,7 +20,7 @@ func ListenTcp(timeout time.Duration, addr string) (*TcpListener, error) {
 	return &TcpListener{listener: listener, timeout: timeout}, nil
 }
 
-func ConnectTcp(timeout time.Duration, addr string) (*TcpConnection, error) {
+func ConnectTcp(timeout time.Duration, addr string) (Connection, error) {
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, err

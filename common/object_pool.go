@@ -26,8 +26,8 @@ type objectPool struct {
 	ret    chan io.Closer
 }
 
-func NewObjectPool(ctx Context, name string, fn func() (io.Closer, error), max int) ObjectPool {
-	ctx = ctx.Sub("ObjectPool(%v)", name)
+func NewObjectPool(ctx Context, max int, fn func() (io.Closer, error)) ObjectPool {
+	ctx = ctx.Sub("")
 	p := &objectPool{
 		ctrl:   ctx.Control(),
 		logger: ctx.Logger(),

@@ -11,7 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-
 func hasPeer(peers []peer, p peer) bool {
 	for _, cur := range peers {
 		if cur.Id == p.Id {
@@ -110,50 +109,54 @@ func newPeer(addr string) peer {
 
 func (p peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
-	// return fmt.Sprintf("Peer(%v)", p.Addr)
 }
 
-func (p peer) Pool(ctx common.Context) *rpcClientPool {
-	return newRpcClientPool(ctx, net.NewClientPool(ctx, ctx.Logger(), net.NewConnectionPool("tcp", p.Addr, 10, 10*time.Second)))
-}
+// func (p peer) Pool(ctx common.Context) *rpcClientPool {
+// return newRpcClientPool(ctx, net.NewClientPool(ctx, ctx.Logger(), net.NewConnectionPool("tcp", p.Addr, 10, 10*time.Second)))
+// }
 
-func (p peer) Client(ctx common.Context) (*rpcClient, error) {
-	raw, err := net.NewTcpClient(ctx, ctx.Logger(), p.Addr)
-	if err != nil {
+func (p peer) Client(ctx common.Context, network net.Network) (*rpcClient, error) {
+	raw, err := network.Dial(30*time.Second, p.Addr)
+	if raw == nil || err != nil {
+		return nil, errors.Wrapf(err, "Error connecting to peer [%v]", p)
+	}
+
+	cl, err := net.NewClient(ctx, raw)
+	if cl == nil || err != nil {
 		return nil, err
 	}
 
-	return &rpcClient{raw}, nil
+	return &rpcClient{cl}, nil
 }
 
-func (p peer) Connect(ctx common.Context, cancel <-chan struct{}) (*rpcClient, error) {
-	// exponential backoff up to 2^6 seconds.
-	for timeout := 1 * time.Second; ; {
-		ch := make(chan *rpcClient)
-		go func() {
-			cl, err := p.Client(ctx)
-			if err == nil && cl != nil {
-				ch <- cl
-			}
-		}()
-
-		timer := time.NewTimer(timeout)
-		select {
-		case <-cancel:
-			return nil, ClosedError
-		case <-timer.C:
-
-			// 64 seconds is maximum timeout
-			if timeout < 2^6*time.Second {
-				timeout *= 2
-			}
-
-			continue
-		case cl := <-ch:
-			return cl, nil
-		}
-	}
-}
+// func (p peer) Connect(ctx common.Context, network net.Network) (*rpcClient, error) {
+// // exponential backoff up to 2^6 seconds.
+// for timeout := 1 * time.Second; ; {
+// ch := make(chan *rpcClient)
+// go func() {
+// cl, err := p.Client(ctx)
+// if err == nil && cl != nil {
+// ch <- cl
+// }
+// }()
+//
+// timer := time.NewTimer(timeout)
+// select {
+// case <-cancel:
+// return nil, ClosedError
+// case <-timer.C:
+//
+// // 64 seconds is maximum timeout
+// if timeout < 2^6*time.Second {
+// timeout *= 2
+// }
+//
+// continue
+// case cl := <-ch:
+// return cl, nil
+// }
+// }
+// }
 
 func (p peer) Write(w scribe.Writer) {
 	w.WriteUUID("id", p.Id)

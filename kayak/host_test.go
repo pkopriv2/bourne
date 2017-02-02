@@ -340,7 +340,7 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 
 func NewTestSeedHost(ctx common.Context, addr string) *host {
 	db := OpenTestLogStash(ctx)
-	host, err := newHost(ctx, addr, NewBoltStore(db), db)
+	host, err := newHost(ctx, net.NewTcpNetwork(), NewBoltStore(db), db, addr)
 	if err != nil {
 		panic(err)
 	}
@@ -358,7 +358,7 @@ func StartTestCluster(ctx common.Context, size int) []*host {
 
 	hosts := make([]*host, 0, len(peers))
 	for _, p := range peers {
-		host, err := newHost(ctx, p.Addr, NewBoltStore(db), db)
+		host, err := newHost(ctx, net.NewTcpNetwork(), NewBoltStore(db), db, p.Addr)
 		if err != nil {
 			panic(err)
 		}

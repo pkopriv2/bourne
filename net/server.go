@@ -25,14 +25,11 @@ import (
 // server, err := NewTcpServer(ctx, 8080, myHandler)
 // defer server.Close()
 //
-
 const (
-	ConfServerPoolSize = "bourne.net.server.pool.size"
-	ConfEncoding       = "bourne.net.encoding"
+	ConfEncoding = "bourne.net.encoding"
 )
 
 const (
-	DefaultServerPoolSize = 30
 	DefaultClientEncoding = "json"
 )
 
@@ -274,7 +271,7 @@ type client struct {
 	recvTimeout time.Duration
 }
 
-func NewClient(ctx common.Context, log common.Logger, conn Connection) (Client, error) {
+func NewClient(ctx common.Context, conn Connection) (Client, error) {
 	config := ctx.Config()
 
 	enc, err := EncodingFromString(config.Optional(ConfEncoding, DefaultClientEncoding))
@@ -392,7 +389,7 @@ func (s *server) Client() (Client, error) {
 		return nil, errors.Wrap(err, "Unable to retrieve connection")
 	}
 
-	return NewClient(s.context, s.logger, conn)
+	return NewClient(s.context, conn)
 }
 
 func (s *server) Close() error {
