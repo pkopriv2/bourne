@@ -104,16 +104,16 @@ func (h *host) Hostname() string {
 }
 
 func (h *host) Roster() []string {
-	hostnames := make([]string, 0, 8)
+	hosts := make([]string, 0, 8)
 	for _, p := range h.core.Cluster() {
 		host, _, err := net.SplitAddr(p.Addr)
 		if err != nil {
 			panic(err)
 		}
 
-		hostnames = append(hostnames, host)
+		hosts = append(hosts, host)
 	}
-	return hostnames
+	return hosts
 }
 
 func (h *host) Self() peer {

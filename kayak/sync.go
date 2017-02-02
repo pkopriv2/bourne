@@ -1,14 +1,12 @@
 package kayak
 
 import (
-	"time"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 )
 
 type syncer struct {
-	pool common.ObjectPool
+	pool common.ObjectPool // T: *rpcClient
 	ref  *ref
 }
 
@@ -16,10 +14,10 @@ func newSyncer(pool common.ObjectPool) *syncer {
 	return &syncer{pool, newRef(-1)}
 }
 
-func (s *syncer) Barrier(timeout time.Duration) (int, error) {
+func (s *syncer) Barrier(cancel <-chan struct{}) (int, error) {
 	for {
-		val, err := s.tryBarrier(timeout)
-		if err == nil {
+		val, err := s.tryBarrier(cancel)
+		if err == nil || common.IsCanceled(cancel) {
 			return val, nil
 		}
 	}
@@ -31,21 +29,23 @@ func (s *syncer) Ack(index int) {
 	})
 }
 
-func (s *syncer) Sync(timeout time.Duration, index int) error {
-	_, canceled, alive := s.ref.WaitUntilOrTimeout(timeout, index)
+func (s *syncer) Sync(cancel <-chan struct{}, index int) error {
+	_, alive := s.ref.WaitUntilOrCancel(cancel, index)
 	if !alive {
-		return ClosedError
+		return errors.WithStack(ClosedError)
 	}
-	if canceled {
-		return errors.Wrapf(TimeoutError, "Unable to sync. Timeout [%v] while waiting for index [%v] to be applied.", timeout, index)
+
+	if common.IsCanceled(cancel) {
+		return errors.WithStack(CanceledError)
 	}
+
 	return nil
 }
 
-func (s *syncer) tryBarrier(timeout time.Duration) (val int, err error) {
-	raw := s.pool.TakeTimeout(timeout)
+func (s *syncer) tryBarrier(cancel <-chan struct{}) (val int, err error) {
+	raw := s.pool.TakeOrCancel(cancel)
 	if raw == nil {
-		return 0, errors.Wrapf(TimeoutError, "Unable to retrieve barrier. Timeout [%v] while waiting for client.", timeout)
+		return 0, errors.WithStack(CanceledError)
 	}
 	defer func() {
 		if err != nil {

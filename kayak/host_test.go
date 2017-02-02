@@ -251,7 +251,7 @@ func TestHost_Cluster_Session_Append_Multi(t *testing.T) {
 			}
 
 			for j := 0; j < numItemsPerThread; j++ {
-				_, err := log.Append(1000*time.Millisecond, Event(stash.Int(numThreads*i+j)))
+				_, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
 				if err != nil {
 					panic(err)
 				}
@@ -295,7 +295,7 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 		}
 
 		for {
-			val, err := sync.Barrier(10 * time.Millisecond)
+			val, err := sync.Barrier(nil)
 			leader.core.logger.Info("Value: %v, %v", val, err)
 			time.Sleep(5 * time.Millisecond)
 		}
@@ -308,7 +308,7 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 		go func() {
 			log, _ := member.Log()
 			for j := 0; j < numItemsPerThread; j++ {
-				_, err := log.Append(1000*time.Millisecond, Event(stash.Int(numThreads*i+j)))
+				_, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
 				if err != nil {
 					failures.Inc()
 				}

@@ -275,7 +275,8 @@ func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 		case e := <-req.Failed():
 			return nil, e
 		case <-timer.C:
-			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to respond [%v]", timeout)
+			req.Cancel()
+			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to response [%v]", timeout)
 		}
 	}
 }

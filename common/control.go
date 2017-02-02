@@ -3,8 +3,22 @@ package common
 import (
 	"io"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/concurrent"
 )
+
+func IsCanceled(cancel <-chan struct{}) bool {
+	return IsClosed(cancel)
+}
+
+func IsClosed(ch <-chan struct{}) bool {
+	select {
+	default:
+		return false
+	case <-ch:
+		return true
+	}
+}
 
 type Control interface {
 	io.Closer
@@ -34,7 +48,7 @@ func NewControl(parent Control) *control {
 		go func() {
 			select {
 			case <-parent.Closed():
-				l.Fail(parent.Failure())
+				l.Fail(errors.WithStack(parent.Failure()))
 				return
 			case <-l.closed:
 				return

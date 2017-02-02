@@ -5,7 +5,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
 )
 
 type leader struct {
@@ -13,8 +12,8 @@ type leader struct {
 	logger     common.Logger
 	ctrl       common.Control
 	syncer     *logSyncer
-	proxyPool  concurrent.WorkPool
-	appendPool concurrent.WorkPool
+	proxyPool  common.WorkPool
+	appendPool common.WorkPool
 	term       term
 	replica    *replica
 }
@@ -30,8 +29,8 @@ func becomeLeader(replica *replica) {
 		logger:     ctx.Logger(),
 		ctrl:       ctx.Control(),
 		syncer:     newLogSyncer(ctx, replica),
-		proxyPool:  concurrent.NewWorkPool(5),
-		appendPool: concurrent.NewWorkPool(20),
+		proxyPool:  common.NewWorkPool(ctx.Control(), 5),
+		appendPool: common.NewWorkPool(ctx.Control(), 20),
 		term:       replica.CurrentTerm(),
 		replica:    replica,
 	}
@@ -107,7 +106,7 @@ func (l *leader) start() {
 	}()
 
 	// Establish leadership
-	if ! l.broadcastHeartbeat() {
+	if !l.broadcastHeartbeat() {
 		becomeFollower(l.replica)
 		l.ctrl.Close()
 		return
@@ -161,7 +160,7 @@ func (c *leader) handleReadBarrier(req *common.Request) {
 }
 
 func (c *leader) handleRemoteAppend(req *common.Request) {
-	err := c.proxyPool.Submit(func() {
+	err := c.proxyPool.SubmitOrCancel(req.Canceled(), func() {
 		req.Return(c.replica.LocalAppend(req.Body().(appendEvent)))
 	})
 
@@ -171,7 +170,7 @@ func (c *leader) handleRemoteAppend(req *common.Request) {
 }
 
 func (c *leader) handleLocalAppend(req *common.Request) {
-	err := c.appendPool.SubmitTimeout(1000*time.Millisecond, func() {
+	err := c.appendPool.SubmitOrCancel(req.Canceled(), func() {
 		req.Return(c.syncer.Append(req.Body().(appendEvent)))
 	})
 
@@ -265,7 +264,6 @@ func (c *leader) handleRequestVote(req *common.Request) {
 	becomeFollower(c.replica)
 	c.ctrl.Close()
 }
-
 
 func (c *leader) broadcastHeartbeat() bool {
 	ch := c.replica.Broadcast(func(cl *rpcClient) response {

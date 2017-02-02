@@ -44,27 +44,42 @@ func (r *rosterManager) start() {
 			}
 			defer commits.Close()
 
-			ctrl := r.self.Ctx.Control().Sub()
+			ctrl := r.self.ctrl.Sub()
 			go func() {
-				l := newConfigListener(appends, ctrl)
+				defer ctrl.Close()
 
-				peers, ok, err := l.Next()
-				for ; ok; peers, ok, err = l.Next() {
+				l := newConfigListener(appends, ctrl)
+				for {
+					var peers []peer
+					select {
+					case <-ctrl.Closed():
+						return
+					case <-l.Ctrl().Closed():
+						return
+					case peers = <-l.Data():
+					}
 
 					r.logger.Info("Updating roster: %v", peers)
 					r.self.Roster.Set(peers)
 				}
-
-				ctrl.Fail(err)
 			}()
 
 			go func() {
+				defer ctrl.Close()
+
 				l := newConfigListener(commits, ctrl)
 
-				member := false
+				// FIXME: Must play log out to make sure we aren't re-added!
+				for member := false;; {
+					var peers []peer
+					select {
+					case <-ctrl.Closed():
+						return
+					case <-l.Ctrl().Closed():
+						return
+					case peers = <-l.Data():
+					}
 
-				peers, ok, err := l.Next()
-				for ; ok; peers, ok, err = l.Next() {
 					if hasPeer(peers, r.self.Self) {
 						member = true
 					}
@@ -76,8 +91,6 @@ func (r *rosterManager) start() {
 						return
 					}
 				}
-
-				ctrl.Fail(err)
 			}()
 
 			select {
@@ -171,36 +184,55 @@ func (c *roster) Close() {
 type configListener struct {
 	raw  Listener
 	ctrl common.Control
+	ch   chan []peer
 }
 
 func newConfigListener(raw Listener, ctrl common.Control) *configListener {
-	return &configListener{raw, ctrl}
+	l := &configListener{raw, ctrl, make(chan []peer)}
+	l.start()
+	return l
 }
 
-func (p *configListener) Next() ([]peer, bool, error) {
-	for {
-		if p.ctrl.IsClosed() {
-			return nil, false, p.ctrl.Failure()
-		}
-
-		next, ok, err := p.raw.Next()
-		if err != nil || !ok {
-			return nil, false, err
-		}
-
-		if next.Kind != Config {
-			continue
-		}
-
-		peers, err := parsePeers(next.Event)
-		if err != nil {
-			return nil, false, err
-		}
-
-		return peers, true, nil
-	}
+func (c *configListener) Close() error {
+	return c.ctrl.Close()
 }
 
-func (l *configListener) Close() error {
-	return l.raw.Close()
+func (c *configListener) Ctrl() common.Control {
+	return c.ctrl
+}
+
+func (c *configListener) Data() <-chan []peer {
+	return c.ch
+}
+
+func (p *configListener) start() {
+	go func() {
+		for {
+			var next Entry
+			select {
+			case <-p.ctrl.Closed():
+				return
+			case <-p.raw.Ctrl().Closed():
+				p.ctrl.Fail(errors.WithStack(p.raw.Ctrl().Failure()))
+				return
+			case next = <-p.raw.Data():
+			}
+
+			if next.Kind != Config {
+				continue
+			}
+
+			peers, err := parsePeers(next.Event)
+			if err != nil {
+				p.ctrl.Fail(errors.WithStack(err))
+				return
+			}
+
+			select {
+			case <-p.ctrl.Closed():
+				return
+			case p.ch<- peers:
+			}
+		}
+	}()
 }

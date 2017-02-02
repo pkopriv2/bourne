@@ -56,6 +56,10 @@ func (l *snapshotStream) start() {
 		defer l.Close()
 
 		for i := 0; i < l.snapshot.Size(); i++ {
+			if l.ctrl.IsClosed() {
+				return
+			}
+
 			beg := i
 			end := common.Min(l.snapshot.Size()-1, beg+l.buf)
 
@@ -81,15 +85,15 @@ func (l *snapshotStream) start() {
 	}()
 }
 
-func (p *snapshotStream) Next() (Event, error) {
-	select {
-	case <-p.ctrl.Closed():
-		return nil, p.ctrl.Failure()
-	case e := <-p.ch:
-		return e, nil
-	}
-}
-
 func (l *snapshotStream) Close() error {
 	return l.ctrl.Close()
 }
+
+func (l *snapshotStream) Ctrl() common.Control {
+	return l.ctrl
+}
+
+func (l *snapshotStream) Data() <-chan Event {
+	return l.ch
+}
+

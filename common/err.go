@@ -1,23 +1,16 @@
 package common
 
 import (
-	"fmt"
+	"errors"
 	"reflect"
-	"time"
 )
 
-type TimeoutError struct {
-	timeout time.Duration
-	msg     string
-}
-
-func NewTimeoutError(timeout time.Duration, msg string) TimeoutError {
-	return TimeoutError{timeout, msg}
-}
-
-func (t TimeoutError) Error() string {
-	return fmt.Sprintf("Timeout[%v]: %v", t.timeout, t.msg)
-}
+var (
+	ClosedError    = errors.New("Common:ClosedError")
+	TimeoutError   = errors.New("Common:TimeoutError")
+	ExpiredError   = errors.New("Common:ExpiredError")
+	CanceledError  = errors.New("Common:CanceledError")
+)
 
 // FIXME: Remove this! this is broken
 func RunIf(fn func()) func(v interface{}) {

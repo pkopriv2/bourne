@@ -269,7 +269,7 @@ func newRefListener(log *eventLog, pos *ref, from int, buf int) *refListener {
 		pos:  pos,
 		buf:  buf,
 		ch:   make(chan Entry, buf),
-		ctrl: common.NewControl(nil),
+		ctrl: log.ctrl.Sub(),
 	}
 	l.start(from)
 	return l
@@ -321,13 +321,12 @@ func (l *refListener) start(from int) {
 	}()
 }
 
-func (p *refListener) Next() (Entry, bool, error) {
-	select {
-	case <-p.ctrl.Closed():
-		return Entry{}, false, p.ctrl.Failure()
-	case i := <-p.ch:
-		return i, true, nil
-	}
+func (p *refListener) Data() <-chan Entry {
+	return p.ch
+}
+
+func (p *refListener) Ctrl() common.Control {
+	return p.ctrl
 }
 
 func (l *refListener) Close() error {

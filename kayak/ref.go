@@ -2,7 +2,6 @@ package kayak
 
 import (
 	"sync"
-	"time"
 
 	"github.com/pkopriv2/bourne/common"
 )
@@ -37,37 +36,20 @@ func (c *ref) WaitUntil(cur int) (val int, alive bool) {
 	return
 }
 
-func (c *ref) WaitUntilOrTimeout(timeout time.Duration, until int) (val int, canceled bool, alive bool) {
-	ctrl := common.NewControl(nil)
+func (c *ref) WaitUntilOrCancel(cancel <-chan struct{}, until int) (val int, alive bool) {
 	go func() {
-		defer ctrl.Close()
-
-		timer := time.NewTimer(timeout)
-		select {
-		case <-ctrl.Closed():
-			return
-		case <-timer.C:
-			c.Notify()
-			return
-		}
+		<-cancel
+		c.Notify()
 	}()
-	defer ctrl.Close()
-
-	isCanceled := func() bool {
-		select {
-		default:
-			return false
-		case <-ctrl.Closed():
-			return true
-		}
-	}
-
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
-	for val, alive, canceled = c.val, !c.dead, isCanceled(); val < until && alive && ! canceled; val, alive, canceled = c.val, !c.dead, isCanceled() {
+	for {
+		val, alive, canceled := c.val, !c.dead, common.IsCanceled(cancel)
+		if val >= until || ! alive || canceled {
+			return val, alive
+		}
 		c.lock.Wait()
 	}
-	return
 }
 
 func (c *ref) Notify() {

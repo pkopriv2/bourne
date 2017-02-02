@@ -554,11 +554,11 @@ func (b *boltLog) scan(tx *bolt.Tx, beg int, end int) ([]Entry, error) {
 	return batch, nil
 }
 
-func deleteLog(db stash.Stash, id uuid.UUID) error {
+func deleteLog(db *bolt.DB, id uuid.UUID) error {
 	return nil
 }
 
-func deleteLogItems(db stash.Stash, id uuid.UUID) (err error) {
+func deleteLogItems(db *bolt.DB, id uuid.UUID) (err error) {
 	prefix := stash.UUID(id)
 
 	for contd := true; contd; {

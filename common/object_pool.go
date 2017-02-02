@@ -11,6 +11,7 @@ type ObjectPool interface {
 	Max() int
 	Take() io.Closer
 	TakeTimeout(time.Duration) io.Closer
+	TakeOrCancel(<-chan struct{}) io.Closer
 	Return(io.Closer)
 	Fail(io.Closer)
 }
@@ -86,6 +87,17 @@ func (p *objectPool) Close() error {
 
 func (p *objectPool) Take() io.Closer {
 	select {
+	case <-p.ctrl.Closed():
+		return nil
+	case conn := <-p.take:
+		return conn
+	}
+}
+
+func (p *objectPool) TakeOrCancel(cancel <-chan struct{}) (conn io.Closer) {
+	select {
+	case <-cancel:
+		return nil
 	case <-p.ctrl.Closed():
 		return nil
 	case conn := <-p.take:

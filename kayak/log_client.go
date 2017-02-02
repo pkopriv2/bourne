@@ -1,8 +1,6 @@
 package kayak
 
 import (
-	"time"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
@@ -42,10 +40,10 @@ func (c *logClient) Close() error {
 	return c.ctrl.Close()
 }
 
-func (c *logClient) Append(timeout time.Duration, e Event) (entry Entry, err error) {
-	raw := c.pool.TakeTimeout(timeout)
+func (c *logClient) Append(cancel <-chan struct{}, e Event) (entry Entry, err error) {
+	raw := c.pool.TakeOrCancel(cancel)
 	if raw == nil {
-		return Entry{}, errors.Wrapf(TimeoutError, "Unable to append. Timeout [%v] while waiting for client.", timeout)
+		return Entry{}, errors.WithStack(CanceledError)
 	}
 	defer func() {
 		if err != nil {
@@ -70,13 +68,13 @@ func (s *logClient) Listen(start int, buf int) (Listener, error) {
 	return newLogClientListener(raw), nil
 }
 
-func (s *logClient) Snapshot() (EventStream, error) {
+func (s *logClient) Snapshot() (int, EventStream, error) {
 	snapshot, err := s.self.Log.Snapshot()
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
-	return newSnapshotStream(s.ctrl, snapshot, 1024), nil
+	return snapshot.LastIndex(), newSnapshotStream(s.ctrl, snapshot, 1024), nil
 }
 
 func (s *logClient) Compact(until int, data <-chan Event, size int) error {
@@ -85,25 +83,45 @@ func (s *logClient) Compact(until int, data <-chan Event, size int) error {
 
 type logClientListener struct {
 	raw Listener
+	dat chan Entry
 }
 
 func newLogClientListener(raw Listener) *logClientListener {
-	return &logClientListener{raw}
+	return &logClientListener{raw, make(chan Entry, 128)}
 }
 
-func (p *logClientListener) Next() (Entry, bool, error) {
-	for {
-		next, ok, err := p.raw.Next()
-		if err != nil || !ok {
-			return next, ok, err
-		}
+func (p *logClientListener) start() {
+	go func() {
+		for {
+			var e Entry
+			select {
+			case <-p.Ctrl().Closed():
+				return
+			case e = <-p.raw.Data():
+			}
 
-		if next.Kind == Std {
-			return next, true, nil
+			if e.Kind != Std {
+				continue
+			}
+
+			select {
+			case <-p.Ctrl().Closed():
+				return
+			case p.dat<-e:
+			}
 		}
-	}
+	}()
 }
 
 func (l *logClientListener) Close() error {
 	return l.raw.Close()
 }
+
+func (l *logClientListener) Ctrl() common.Control {
+	return l.raw.Ctrl()
+}
+
+func (l *logClientListener) Data() <-chan Entry {
+	return l.dat
+}
+

@@ -77,14 +77,13 @@
 package kayak
 
 import (
+	"errors"
 	"fmt"
 	"io"
-	"time"
 
-	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/stash"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -96,6 +95,7 @@ var (
 	NoLeaderError  = errors.New("Kayak:NoLeaderError")
 	TimeoutError   = errors.New("Kayak:TimeoutError")
 	ExpiredError   = errors.New("Kayak:ExpiredError")
+	CanceledError  = errors.New("Kayak:CanceledError")
 )
 
 // Storage api errors
@@ -162,7 +162,7 @@ type Peer interface {
 type Log interface {
 
 	// Returns the latest snaphot from the log.
-	Snapshot() (EventStream, error)
+	Snapshot() (int, EventStream, error)
 
 	// Listen generates a stream of committed log entries starting at and
 	// including the start index.
@@ -177,7 +177,7 @@ type Log interface {
 	// have been replicated to this instance.  Appends should always accompany
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.
-	Append(timeout time.Duration, event Event) (Entry, error)
+	Append(cancel <-chan struct{}, event Event) (Entry, error)
 
 	// Compact replaces the log until the given point with the given snapshot
 	//
@@ -211,7 +211,7 @@ type Log interface {
 type Sync interface {
 
 	// Returns the current read-barrier for the cluster.
-	Barrier(timeout time.Duration) (int, error)
+	Barrier(cancel <-chan struct{}) (int, error)
 
 	// Applied tells the synchronizer that the index (and everything that preceded)
 	// it has been applied to the state machine. This operation is commutative,
@@ -220,34 +220,26 @@ type Sync interface {
 	Ack(index int)
 
 	// Sync waits for the local machine to be caught up to the barrier.
-	Sync(timeout time.Duration, index int) error
+	Sync(cancel <-chan struct{}, index int) error
 }
 
 type Listener interface {
 	io.Closer
-
-	// Returns the next log item in the listener.  If an error is returned,
-	// it may be for a variety of reasons:
-	//
-	// * The underlying log has been closed.
-	// * The underlying log has been compacted away.  (*Important: See Below)
-	// * There was a system/disc error.
-	//
-	// It is possible for a listener to get so far behind the log head that
-	// relevant sections of the log are compacted away.  This is extremely
-	// unlikely, as compactions typically only
-	//
-	// This method is not safe for concurrent access.
-	Next() (Entry, bool, error)
+	Ctrl() common.Control
+	Data() <-chan Entry
 }
 
 type EventStream interface {
 	io.Closer
+	Ctrl() common.Control
+	Data() <-chan Event
+	// Data()   <-chan Entry
+	// Failed() <-chan error
 
 	// Returns the next event in the stream.
 	//
 	// This method is not safe for concurrent access.
-	Next() (Event, error)
+	// Next() (Event, error)
 }
 
 // Events are the fundamental unit of replication.  This the primary

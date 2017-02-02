@@ -2,13 +2,14 @@ package common
 
 // Implements a very simple request/response object.
 type Request struct {
-	body  interface{}
-	resp chan interface{}
-	fail  chan error
+	body   interface{}
+	resp   chan interface{}
+	fail   chan error
+	cancel chan struct{}
 }
 
 func NewRequest(val interface{}) *Request {
-	return &Request{val, make(chan interface{}, 1), make(chan error, 1)}
+	return &Request{val, make(chan interface{}, 1), make(chan error, 1), make(chan struct{})}
 }
 
 func (r *Request) Body() interface{} {
@@ -17,6 +18,14 @@ func (r *Request) Body() interface{} {
 
 func (r *Request) Ack(val interface{}) {
 	r.resp <- val
+}
+
+func (r *Request) Cancel() {
+	close(r.cancel)
+}
+
+func (r *Request) Canceled() <-chan struct{} {
+	return r.cancel
 }
 
 func (r *Request) Acked() <-chan interface{} {
