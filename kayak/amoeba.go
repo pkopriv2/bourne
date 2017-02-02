@@ -14,8 +14,22 @@ package kayak
 // return &amoebaLog{id: id, commit: -1, active: newAmoebaSegment(newAmoebaSnapshot([]Event{}, config), -1, -1)}, nil
 // }
 //
+// func (a *amoebaLogStore) Get(id uuid.UUID) (StoredLog, error) {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLogStore) New(uuid.UUID, []byte) (StoredLog, error) {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLogStore) NewSnapshot(int, int, <-chan Event, int, []byte) (StoredSnapshot, error) {
+// panic("not implemented")
+// }
+//
+//
 // type amoebaLog struct {
 // id         uuid.UUID
+// store      *amoebaLogStore
 // commit     int
 // commitLock sync.RWMutex
 // active     *amoebaSegment
@@ -26,11 +40,42 @@ package kayak
 // return a.id
 // }
 //
-// func (a *amoebaLog) Active() (StoredSegment, error) {
-// a.activeLock.RLock()
-// defer a.activeLock.RUnlock()
-// return a.active, nil
+// func (a *amoebaLog) Store() (LogStore, error) {
+// panic("not implemented")
 // }
+//
+// func (a *amoebaLog) Last() (int, int, error) {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLog) Truncate(start int) error {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLog) Scan(beg int, end int) ([]Entry, error) {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLog) Append(Event, int, Kind) (Entry, error) {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLog) Get(index int) (Entry, bool, error) {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLog) Insert([]Entry) error {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLog) Install(StoredSnapshot) error {
+// panic("not implemented")
+// }
+//
+// func (a *amoebaLog) Snapshot() (StoredSnapshot, error) {
+// panic("not implemented")
+// }
+//
 //
 // func (a *amoebaLog) GetCommit() (int, error) {
 // a.commitLock.RLock()

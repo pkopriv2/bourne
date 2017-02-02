@@ -15,14 +15,8 @@ type eventLog struct {
 	ctx    common.Context
 	ctrl   common.Control
 	logger common.Logger
-
-	// the stored log.
-	raw StoredLog
-
-	// index of last item inserted. (initialized to -1)
-	head *ref
-
-	// index of last item committed.(initialized to -1)
+	raw    StoredLog
+	head   *ref
 	commit *ref
 }
 

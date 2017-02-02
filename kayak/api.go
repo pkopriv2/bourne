@@ -210,36 +210,31 @@ type Log interface {
 // thereby obtaining linearizability for the operation.
 type Sync interface {
 
-	// Returns the current read-barrier for the cluster.
-	Barrier(cancel <-chan struct{}) (int, error)
-
 	// Applied tells the synchronizer that the index (and everything that preceded)
 	// it has been applied to the state machine. This operation is commutative,
 	// meaning that if a lower index is applied after a later index, then
 	// only the latest is used for synchronization purposes.
 	Ack(index int)
 
+	// Returns the current read-barrier for the cluster.
+	Barrier(cancel <-chan struct{}) (int, error)
+
 	// Sync waits for the local machine to be caught up to the barrier.
 	Sync(cancel <-chan struct{}, index int) error
 }
 
+// A listener is just a stream of entries.
 type Listener interface {
 	io.Closer
 	Ctrl() common.Control
 	Data() <-chan Entry
 }
 
+// An event is just a stream of events.
 type EventStream interface {
 	io.Closer
 	Ctrl() common.Control
 	Data() <-chan Event
-	// Data()   <-chan Entry
-	// Failed() <-chan error
-
-	// Returns the next event in the stream.
-	//
-	// This method is not safe for concurrent access.
-	// Next() (Event, error)
 }
 
 // Events are the fundamental unit of replication.  This the primary
@@ -265,18 +260,10 @@ func eventParser(r scribe.Reader) (interface{}, error) {
 
 // An Entry represents an entry in the replicated log.
 type Entry struct {
-
-	// Item index. May be used to reconcile state with log.
 	Index int
-
-	// The event bytes.  This is the fundamental unit of replication.
 	Event Event
-
-	// Internal Only: the current election cycle number.
-	Term int
-
-	// Internal Only: Used for system level events (e.g. config, noop, etc...)
-	Kind Kind
+	Term  int
+	Kind  Kind
 }
 
 var (
@@ -334,35 +321,4 @@ func parseEntryBytes(bytes []byte) (Entry, error) {
 	}
 
 	return readEntry(msg)
-}
-
-// TODO: Complete the api so that we can have command line utilities for interacting
-// with nodes.
-
-type LogStore interface {
-	Get(id uuid.UUID) (StoredLog, error)
-	New(uuid.UUID, []byte) (StoredLog, error)
-	NewSnapshot(int, int, <-chan Event, int, []byte) (StoredSnapshot, error)
-}
-
-type StoredLog interface {
-	Id() uuid.UUID
-	Store() (LogStore, error)
-	Last() (int, int, error)
-	Truncate(start int) error
-	Scan(beg int, end int) ([]Entry, error)
-	Append(Event, int, Kind) (Entry, error)
-	Get(index int) (Entry, bool, error)
-	Insert([]Entry) error
-	Install(StoredSnapshot) error
-	Snapshot() (StoredSnapshot, error)
-}
-
-type StoredSnapshot interface {
-	LastIndex() int
-	LastTerm() int
-	Size() int
-	Config() []byte
-	Scan(beg int, end int) ([]Event, error)
-	Delete() error
 }

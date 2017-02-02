@@ -49,12 +49,37 @@ func (e *epoch) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {
 	if err != nil {
 		return Item{}, false, err
 	}
+
+	if err := e.sync.Sync(cancel, val); err != nil {
+		return Item{}, false, err
+	}
+
 	item, ok := read(e.idx, key)
 	return item, ok, nil
 }
 
-func (e *epoch) Swap(cancel <-chan struct{}, key []byte, val []byte, exp int) (Item, bool, error) {
-	return Item{}, false
+func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
+	entry, err := e.log.Append(cancel, item.Bytes())
+	if err != nil {
+		return Item{}, false, err
+	}
+
+	// TODO: Does this break linearizability???
+
+	if err := e.sync.Sync(cancel, entry.Index); err != nil {
+		return Item{}, false, err
+	}
+
+	actual, ok := read(e.idx, item.Key)
+	if ! ok {
+		return Item{}, false, nil
+	}
+
+	if ! actual.Equal(item) {
+		return Item{}, false, nil
+	}
+
+	return item, true, nil
 }
 
 func (e *epoch) Start(index int) error {
@@ -65,44 +90,45 @@ func (e *epoch) Start(index int) error {
 
 	go func() {
 		defer l.Close()
-		for index := -1; ; {
-			var e kayak.Entry
+		for {
+			var entry kayak.Entry
 			select {
 			case <-e.ctrl.Closed():
 				return
 			case <-l.Ctrl().Closed():
 				e.ctrl.Fail(l.Ctrl().Failure())
 				return
-			case e = <-l.Data():
+			case entry = <-l.Data():
 			}
 
-			item, err := parseItemBytes(e.Event)
+			item, err := parseItemBytes(entry.Event)
 			if err != nil {
 				e.logger.Error("Error parsing item from event stream [%v]: %v", index)
 				continue
 			}
 
-			swap(e.idx, item.Key, item.Val, item.Ver)
+			swap(e.idx, item.Key, item.Val, item.Prev)
 			e.sync.Ack(entry.Index)
 		}
 	}()
+
 	return nil
 }
 
-func swap(idx amoeba.Index, key []byte, val []byte, exp int) (item Item, ok bool) {
+func swap(idx amoeba.Index, key []byte, val []byte, prev int) (item Item, ok bool) {
 	bytesKey := amoeba.BytesKey(item.Key)
 
-	item = Item{key, val, exp + 1}
+	item = Item{key, val, prev + 1}
 	idx.Update(func(u amoeba.Update) {
 		raw := u.Get(bytesKey)
 		if raw == nil {
-			if ok = exp == 0; ok {
+			if ok = prev == 0; ok {
 				u.Put(bytesKey, item)
 			}
 			return
 		}
 
-		if cur := raw.(Item); cur.Ver == exp {
+		if cur := raw.(Item); cur.Prev == prev {
 			u.Put(bytesKey, item)
 			ok = true
 			return
@@ -128,9 +154,11 @@ func build(st kayak.EventStream) (amoeba.Index, error) {
 
 	idx := amoeba.NewBTreeIndex(32)
 	for {
-		evt, err := st.Next()
-		if err != nil || evt == nil {
-			return nil, err
+		var evt kayak.Event
+		select {
+		case <-st.Ctrl().Closed():
+			break
+		case evt = <-st.Data():
 		}
 
 		item, err := parseItemBytes(evt)
