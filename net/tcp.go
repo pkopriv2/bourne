@@ -1,24 +1,23 @@
 package net
 
 import (
-	"fmt"
 	"net"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
-
-func ListenTcp(port string) (*TcpListener, error) {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%v", port))
+func ListenTcp(timeout time.Duration, addr string) (*TcpListener, error) {
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 
-	return &TcpListener{listener: listener}, nil
+	return &TcpListener{listener: listener, timeout: timeout}, nil
 }
 
-func ConnectTcp(addr string) (*TcpConnection, error) {
-	conn, err := net.Dial("tcp", addr)
+func ConnectTcp(timeout time.Duration, addr string) (*TcpConnection, error) {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -27,11 +26,23 @@ func ConnectTcp(addr string) (*TcpConnection, error) {
 		return nil, errors.Errorf("Error opening connection [%v]", addr)
 	}
 
-	return &TcpConnection{conn}, nil
+	return &TcpConnection{conn, timeout}, nil
+}
+
+type TcpNetwork struct {
+}
+
+func (t *TcpNetwork) Dial(timeout time.Duration, addr string) (Connection, error) {
+	return ConnectTcp(timeout, addr)
+}
+
+func (t *TcpNetwork) Listen(timeout time.Duration, addr string) (Listener, error) {
+	return ListenTcp(timeout, addr)
 }
 
 type TcpListener struct {
 	listener net.Listener
+	timeout  time.Duration
 }
 
 func (u *TcpListener) Close() error {
@@ -43,7 +54,7 @@ func (u *TcpListener) Addr() net.Addr {
 }
 
 func (u *TcpListener) Conn() (Connection, error) {
-	return ConnectTcp(u.listener.Addr().String())
+	return ConnectTcp(u.timeout, u.listener.Addr().String())
 }
 
 func (u *TcpListener) Accept() (Connection, error) {
@@ -52,11 +63,12 @@ func (u *TcpListener) Accept() (Connection, error) {
 		return nil, err
 	}
 
-	return &TcpConnection{conn}, nil
+	return &TcpConnection{conn, u.timeout}, nil
 }
 
 type TcpConnection struct {
-	conn net.Conn
+	conn    net.Conn
+	timeout time.Duration
 }
 
 func (u *TcpConnection) Close() error {
@@ -64,17 +76,19 @@ func (u *TcpConnection) Close() error {
 }
 
 func (t *TcpConnection) Read(p []byte) (n int, err error) {
+	t.conn.SetReadDeadline(time.Now().Add(t.timeout))
 	return t.conn.Read(p)
 }
 
 func (t *TcpConnection) Write(p []byte) (n int, err error) {
+	t.conn.SetWriteDeadline(time.Now().Add(t.timeout))
 	return t.conn.Write(p)
 }
 
-func (t *TcpConnection) LocalAddr() net.Addr {
+func (t *TcpConnection) Local() net.Addr {
 	return t.conn.LocalAddr()
 }
 
-func (t *TcpConnection) RemoteAddr() net.Addr {
+func (t *TcpConnection) Remote() net.Addr {
 	return t.conn.RemoteAddr()
 }

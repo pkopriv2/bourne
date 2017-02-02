@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/scribe"
 )
 
@@ -27,27 +25,15 @@ import (
 // server, err := NewTcpServer(ctx, 8080, myHandler)
 // defer server.Close()
 //
-var (
-	ServerError       = errors.New("NET:SERVER:ERROR")
-	ServerClosedError = errors.New("NET:SERVER:CLOSED")
+
+const (
+	ConfServerPoolSize = "bourne.net.server.pool.size"
+	ConfEncoding       = "bourne.net.encoding"
 )
 
 const (
-	ConfServerSendTimeout = "bourne.net.server.send.timeout"
-	ConfServerRecvTimeout = "bourne.net.server.recv.timeout"
-	ConfServerPoolSize    = "bourne.net.server.pool.size"
-	ConfClientSendTimeout = "bourne.net.client.send.timeout"
-	ConfClientRecvTimeout = "bourne.net.client.recv.timeout"
-	ConfClientEncoding    = "bourne.net.client.encoding"
-)
-
-const (
-	DefaultServerSendTimeout = 30 * time.Second
-	DefaultServerRecvTimeout = 30 * time.Second
-	DefaultServerPoolSize    = 30
-	DefaultClientSendTimeout = 30 * time.Second
-	DefaultClientRecvTimeout = 30 * time.Second
-	DefaultClientEncoding    = "json"
+	DefaultServerPoolSize = 30
+	DefaultClientEncoding = "json"
 )
 
 // Each server manages a single handler and invokes the handler for
@@ -67,14 +53,6 @@ type Server interface {
 type Client interface {
 	io.Closer
 	Send(Request) (Response, error)
-}
-
-type ClientPool interface {
-	io.Closer
-	Max() int
-	TakeTimeout(time.Duration) Client
-	Return(Client)
-	Fail(Client)
 }
 
 // A request is a writable message asking the server to invoke a handler.
@@ -299,7 +277,7 @@ type client struct {
 func NewClient(ctx common.Context, log common.Logger, conn Connection) (Client, error) {
 	config := ctx.Config()
 
-	enc, err := EncodingFromString(config.Optional(ConfClientEncoding, DefaultClientEncoding))
+	enc, err := EncodingFromString(config.Optional(ConfEncoding, DefaultClientEncoding))
 	if err != nil {
 		return nil, err
 	}
@@ -311,15 +289,13 @@ func NewClient(ctx common.Context, log common.Logger, conn Connection) (Client, 
 	}
 
 	return &client{
-		logger:      ctx.Logger(),
-		conn:        conn,
-		enc:         enc,
-		sendTimeout: config.OptionalDuration(ConfClientSendTimeout, DefaultClientSendTimeout),
-		recvTimeout: config.OptionalDuration(ConfClientRecvTimeout, DefaultClientRecvTimeout)}, nil
+		logger: ctx.Logger(),
+		conn:   conn,
+		enc:    enc}, nil
 }
 
 func (s *client) String() string {
-	return fmt.Sprintf("%v-->%v", s.conn.LocalAddr(), s.conn.RemoteAddr())
+	return fmt.Sprintf("%v-->%v", s.conn.Local(), s.conn.Remote())
 }
 
 func (s *client) Close() error {
@@ -341,29 +317,19 @@ func (s *client) Send(req Request) (res Response, err error) {
 }
 
 func (s *client) send(req Request) (err error) {
-	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() {
-		var encoder scribe.Encoder
-		switch s.enc {
-		case Json:
-			encoder = json.NewEncoder(s.conn)
-		case Gob:
-			encoder = gob.NewEncoder(s.conn)
-		}
-
-		if err := writeEncoding(s.conn, s.enc); err != nil {
-			err = errors.Wrapf(err, "Error writing encoding header")
-			return
-		}
-
-		err = scribe.Encode(encoder, req)
-	})
-
-	select {
-	case <-done:
-		return
-	case e := <-timeout:
-		return errors.Wrapf(e, "client:send")
+	var encoder scribe.Encoder
+	switch s.enc {
+	case Json:
+		encoder = json.NewEncoder(s.conn)
+	case Gob:
+		encoder = gob.NewEncoder(s.conn)
 	}
+
+	if err := writeEncoding(s.conn, s.enc); err != nil {
+		return errors.Wrapf(err, "Error writing encoding header")
+	}
+
+	return scribe.Encode(encoder, req)
 }
 
 func (s *client) recv() (resp Response, err error) {
@@ -374,132 +340,67 @@ func (s *client) recv() (resp Response, err error) {
 	case Gob:
 		decoder = gob.NewDecoder(s.conn)
 	}
-
-	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() {
-		resp, err = readResponse(decoder)
-	})
-
-	select {
-	case <-done:
-		return
-	case e := <-timeout:
-		return resp, errors.Wrapf(e, "client:recv")
-	}
-}
-
-// Client pooling implementation
-
-type clientPool struct {
-	ctx common.Context
-	log common.Logger
-	raw ConnectionPool
-}
-
-func NewClientPool(ctx common.Context, log common.Logger, raw ConnectionPool) *clientPool {
-	return &clientPool{ctx, log, raw}
-}
-
-func (c *clientPool) Close() error {
-	return c.raw.Close()
-}
-
-func (c *clientPool) Max() int {
-	return c.raw.Max()
-}
-
-func (c *clientPool) TakeTimeout(dur time.Duration) Client {
-	conn := c.raw.TakeTimeout(dur)
-	if conn == nil {
-		return nil
-	}
-
-	client, err := NewClient(c.ctx, c.log, conn)
-	if err != nil {
-		panic(err)
-	}
-
-	return client
-}
-
-func (c *clientPool) Return(cl Client) {
-	c.raw.Return(cl.(*client).conn)
-}
-
-func (c *clientPool) Fail(cl Client) {
-	c.raw.Fail(cl.(*client).conn)
+	return readResponse(decoder)
 }
 
 // Server implementation
-func NewServer(ctx common.Context, logger common.Logger, listener Listener, handler Handler) (Server, error) {
-	config := ctx.Config()
+func NewServer(ctx common.Context, listener Listener, handler Handler, workers int) (Server, error) {
+	ctx = ctx.Sub("Server(%v)", listener.Addr().String())
 
-	sendTimeout := config.OptionalDuration(ConfServerSendTimeout, DefaultServerSendTimeout)
-	recvTimeout := config.OptionalDuration(ConfServerRecvTimeout, sendTimeout)
+	ctrl := ctx.Control()
+	ctrl.Defer(func(error) {
+		listener.Close()
+	})
+
+	pool := common.NewWorkPool(ctrl, workers)
+	ctrl.Defer(func(error) {
+		pool.Close()
+	})
+
+	ctrl.Defer(func(error) {
+		ctx.Logger().Info("Shutting down server")
+	})
+
 	s := &server{
-		context:     ctx,
-		logger:      logger,
-		listener:    listener,
-		handler:     handler,
-		pool:        concurrent.NewWorkPool(config.OptionalInt(ConfServerPoolSize, DefaultServerPoolSize)),
-		sendTimeout: sendTimeout,
-		recvTimeout: recvTimeout,
-		closed:      make(chan struct{}),
-		closer:      make(chan struct{}, 1)}
+		context:  ctx,
+		ctrl:     ctx.Control(),
+		logger:   ctx.Logger(),
+		listener: listener,
+		handler:  handler,
+		pool:     pool}
 
 	s.start()
 	return s, nil
 }
 
 type server struct {
-	handler     Handler
-	listener    Listener
-	context     common.Context
-	logger      common.Logger
-	pool        concurrent.WorkPool
-	closer      chan struct{}
-	closed      chan struct{}
-	wait        sync.WaitGroup
-	sendTimeout time.Duration
-	recvTimeout time.Duration
+	handler  Handler
+	listener Listener
+	context  common.Context
+	logger   common.Logger
+	pool     common.WorkPool
+	ctrl     common.Control
 }
 
 func (s *server) Client() (Client, error) {
-	select {
-	case <-s.closed:
-		return nil, ServerClosedError
-	default:
+	if s.ctrl.IsClosed() {
+		return nil, errors.WithStack(common.ClosedError)
 	}
 
 	conn, err := s.listener.Conn()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "Unable to retrieve connection")
 	}
 
 	return NewClient(s.context, s.logger, conn)
 }
 
 func (s *server) Close() error {
-	select {
-	case <-s.closed:
-		return ServerClosedError
-	case s.closer <- struct{}{}:
-	}
-
-	s.logger.Info("Closing server.")
-	close(s.closed)
-
-	var err error
-	err = s.listener.Close()
-	err = s.pool.Close()
-	s.wait.Wait()
-	return err
+	return s.ctrl.Close()
 }
 
 func (s *server) start() {
-	s.wait.Add(1)
 	go func() {
-		defer s.wait.Done()
-
 		for {
 			conn, err := s.listener.Accept()
 			if err != nil {
@@ -548,19 +449,19 @@ func (s *server) newWorker(conn Connection) func() {
 			req, err := s.recv(decoder)
 			if err != nil {
 				if err != io.EOF {
-					s.logger.Error("Error receiving request [%v]: %v", err, conn.RemoteAddr())
+					s.logger.Error("Error receiving request [%v]: %v", err, conn.Remote())
 				}
 				return
 			}
 
 			res, err := s.handle(req)
 			if err != nil {
-				s.logger.Error("Error handling request [%v]: %v", err, conn.RemoteAddr())
+				s.logger.Error("Error handling request [%v]: %v", err, conn.Remote())
 				return
 			}
 
 			if err = s.send(encoder, res); err != nil {
-				s.logger.Error("Error sending response [%v]: %v", err, conn.RemoteAddr())
+				s.logger.Error("Error sending response [%v]: %v", err, conn.Remote())
 				return
 			}
 		}
@@ -575,60 +476,19 @@ func (s *server) handle(req Request) (Response, error) {
 
 	var resp Response
 	select {
-	case <-s.closed:
-		return resp, ServerClosedError
+	case <-s.ctrl.Closed():
+		return resp, errors.WithStack(common.ClosedError)
 	case resp = <-val:
 		return resp, nil
 	}
 }
 
 func (s *server) recv(dec scribe.Decoder) (req Request, err error) {
-	done, timeout := concurrent.NewBreaker(s.recvTimeout, func() {
-		req, err = readRequest(dec)
-	})
-
-	select {
-	case <-s.closed:
-		return req, ServerClosedError
-	case e := <-timeout:
-		return req, errors.Wrapf(e, "server:recv")
-	case <-done:
-		return req, err
-	}
+	return readRequest(dec)
 }
 
 func (s *server) send(encoder scribe.Encoder, res Response) (err error) {
-	done, timeout := concurrent.NewBreaker(s.sendTimeout, func() {
-		err = scribe.Encode(encoder, res)
-	})
-
-	select {
-	case <-s.closed:
-		return ServerClosedError
-	case e := <-timeout:
-		return errors.Wrapf(e, "server:send")
-	case <-done:
-		return err
-	}
-}
-
-// Tcp support
-func NewTcpClient(ctx common.Context, log common.Logger, addr string) (Client, error) {
-	conn, err := ConnectTcp(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewClient(ctx, log, conn)
-}
-
-func NewTcpServer(ctx common.Context, log common.Logger, port string, handler Handler) (Server, error) {
-	listener, err := ListenTcp(port)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewServer(ctx, log, listener, handler)
+	return scribe.Encode(encoder, res)
 }
 
 var empty string

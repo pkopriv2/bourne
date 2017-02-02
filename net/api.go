@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"time"
 )
 
 var (
@@ -18,9 +19,8 @@ type Connection interface {
 	io.Reader
 	io.Writer
 	io.Closer
-
-	LocalAddr() net.Addr
-	RemoteAddr() net.Addr
+	Local() net.Addr
+	Remote() net.Addr
 }
 
 // A simple listener abstraction.  This will be the basis of
@@ -30,6 +30,11 @@ type Listener interface {
 	Addr() net.Addr
 	Conn() (Connection, error)
 	Accept() (Connection, error)
+}
+
+type Network interface {
+	Dial(timeout time.Duration, addr string) (Connection, error)
+	Listen(timeout time.Duration, addr string) (Listener, error)
 }
 
 func NewAddr(host string, port string) string {

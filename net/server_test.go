@@ -21,13 +21,14 @@ var failureHandler = func(Request) Response {
 	return NewErrorResponse(failure)
 }
 
-func NewTestServer(fn Handler, config common.Config) Server {
-	if config == nil {
-		config = common.NewEmptyConfig()
+func NewTestServer(ctx common.Context, fn Handler) Server {
+	network := &TcpNetwork{}
+	l, err := network.Listen(10*time.Second, ":0")
+	if err != nil {
+		panic(err)
 	}
-	ctx := common.NewContext(config)
 
-	server, err := NewTcpServer(ctx, ctx.Logger(), "0", fn)
+	server, err := NewServer(ctx, l, fn, 10)
 	if err != nil {
 		panic(err)
 	}
@@ -36,13 +37,16 @@ func NewTestServer(fn Handler, config common.Config) Server {
 }
 
 func TestServer_Close(t *testing.T) {
-	server := NewTestServer(successHandler, nil)
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+	server := NewTestServer(ctx, successHandler)
 	assert.Nil(t, server.Close())
 }
 
 func TestClient_Close(t *testing.T) {
-	server := NewTestServer(successHandler, nil)
-	defer server.Close()
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+	server := NewTestServer(ctx, successHandler)
 
 	client, err := server.Client()
 	assert.Nil(t, err)
@@ -53,15 +57,19 @@ func TestClient_Close(t *testing.T) {
 }
 
 func TestClient_ServerCloseBefore(t *testing.T) {
-	server := NewTestServer(successHandler, nil)
-	assert.Nil(t, server.Close())
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+	server := NewTestServer(ctx, successHandler)
+	server.Close()
 
 	_, err := server.Client()
 	assert.NotNil(t, err)
 }
 
 func TestClient_ServerCloseAfter(t *testing.T) {
-	server := NewTestServer(successHandler, nil)
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+	server := NewTestServer(ctx, successHandler)
 
 	client, err := server.Client()
 	assert.Nil(t, err)
@@ -72,13 +80,16 @@ func TestClient_ServerCloseAfter(t *testing.T) {
 }
 
 func TestClientServer_SingleRequest(t *testing.T) {
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
 	msg := scribe.Build(func(w scribe.Writer) {
 		w.WriteInt("field1", 1)
 		w.WriteBool("field2", true)
 	})
 
 	called := concurrent.NewAtomicBool()
-	server := NewTestServer(func(r Request) Response {
+	server := NewTestServer(ctx, func(r Request) Response {
 		called.Set(true)
 
 		var field1 int
@@ -89,7 +100,7 @@ func TestClientServer_SingleRequest(t *testing.T) {
 		assert.Equal(t, true, field2)
 
 		return NewStandardResponse(msg)
-	}, nil)
+	})
 	defer server.Close()
 
 	client, _ := server.Client()
@@ -109,12 +120,15 @@ func TestClientServer_SingleRequest(t *testing.T) {
 }
 
 func TestClientServer_MultiRequest(t *testing.T) {
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
 	called := concurrent.NewAtomicCounter()
-	server := NewTestServer(func(r Request) Response {
+	server := NewTestServer(ctx, func(r Request) Response {
 		called.Inc()
 		assert.Equal(t, scribe.EmptyMessage, r.Body())
 		return NewStandardResponse(nil)
-	}, nil)
+	})
 	defer server.Close()
 
 	client, _ := server.Client()
@@ -147,10 +161,13 @@ func TestClientServer_MultiRequest(t *testing.T) {
 // }
 
 func TestClientServer_ServerClosed(t *testing.T) {
-	server := NewTestServer(func(Request) Response {
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
+	server := NewTestServer(ctx, func(Request) Response {
 		time.Sleep(5 * time.Second)
 		return NewEmptyResponse()
-	}, nil)
+	})
 	defer server.Close()
 
 	client, _ := server.Client()
