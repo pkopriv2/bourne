@@ -185,7 +185,7 @@ func (h *host) tryLeave() error {
 		return NoLeaderError
 	}
 
-	cl, err := peer.Client(h.core.Ctx, h.core.Network)
+	cl, err := peer.Client(h.core.Ctx, h.core.Network, h.core.RequestTimeout)
 	if err != nil {
 		return err
 	}

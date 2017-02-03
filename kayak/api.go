@@ -114,6 +114,7 @@ type Dependencies struct {
 	Db       *bolt.DB
 }
 
+// TODO: FINISH THIS DUMMY!
 func DefaultDependencies(ctx common.Context) Dependencies {
 	return Dependencies{}
 }
@@ -163,7 +164,8 @@ type Peer interface {
 
 type Log interface {
 
-	// Returns the latest snaphot from the log.
+	// Returns the latest snaphot and the maximum index that the events
+	// stream represents.
 	Snapshot() (int, EventStream, error)
 
 	// Listen generates a stream of committed log entries starting at and
@@ -201,6 +203,18 @@ type Log interface {
 	Compact(until int, snapshot <-chan Event, size int) error
 }
 
+type Listener interface {
+	io.Closer
+	Ctrl() common.Control
+	Data() <-chan Entry
+}
+
+type EventStream interface {
+	io.Closer
+	Ctrl() common.Control
+	Data() <-chan Event
+}
+
 // The synchronizer gives the consuming machine the ability to synchronize
 // its state with other members of the cluster.  This is critical for
 // machines to be able to prevent stale reads.
@@ -223,20 +237,6 @@ type Sync interface {
 
 	// Sync waits for the local machine to be caught up to the barrier.
 	Sync(cancel <-chan struct{}, index int) error
-}
-
-// A listener is just a stream of entries.
-type Listener interface {
-	io.Closer
-	Ctrl() common.Control
-	Data() <-chan Entry
-}
-
-// An event is just a stream of events.
-type EventStream interface {
-	io.Closer
-	Ctrl() common.Control
-	Data() <-chan Event
 }
 
 // Events are the fundamental unit of replication.  This the primary

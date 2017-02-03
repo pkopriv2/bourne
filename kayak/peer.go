@@ -64,10 +64,6 @@ func clusterBytes(cluster peers) []byte {
 	return cluster.Bytes()
 }
 
-func clusterMessage(cluster peers) scribe.Message {
-	return scribe.Write(cluster)
-}
-
 // replicated configuration
 type peers []peer
 
@@ -111,8 +107,8 @@ func (p peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
 }
 
-func (p peer) Client(ctx common.Context, network net.Network) (*rpcClient, error) {
-	raw, err := network.Dial(30*time.Second, p.Addr)
+func (p peer) Client(ctx common.Context, network net.Network, timeout time.Duration) (*rpcClient, error) {
+	raw, err := network.Dial(timeout, p.Addr)
 	if raw == nil || err != nil {
 		return nil, errors.Wrapf(err, "Error connecting to peer [%v]", p)
 	}

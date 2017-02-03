@@ -168,7 +168,7 @@ func (c *rpcClientPool) Fail(cl *rpcClient) {
 
 func newRpcClientConstructor(ctx common.Context, network net.Network, peer peer) func() (io.Closer, error) {
 	return func() (io.Closer, error) {
-		if cl, err := peer.Client(ctx, network); cl != nil && err == nil {
+		if cl, err := peer.Client(ctx, network, 30*time.Second); cl != nil && err == nil {
 			return cl, err
 		}
 

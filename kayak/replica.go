@@ -264,7 +264,7 @@ func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
-			cl, err := p.Client(h.Ctx, h.Network)
+			cl, err := p.Client(h.Ctx, h.Network, h.RequestTimeout)
 			if cl == nil || err != nil {
 				ret <- newResponse(h.term.Num, false)
 				return
@@ -397,7 +397,7 @@ func newLeaderConstructor(self *replica) func() (io.Closer, error) {
 				continue
 			}
 
-			cl, _ = leader.Client(self.Ctx, self.Network)
+			cl, _ = leader.Client(self.Ctx, self.Network, self.RequestTimeout)
 		}
 		return cl, nil
 	}

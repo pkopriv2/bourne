@@ -5,7 +5,6 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
-	"strconv"
 	"testing"
 	"time"
 
@@ -349,17 +348,11 @@ func NewTestSeedHost(ctx common.Context, addr string) *host {
 }
 
 func StartTestCluster(ctx common.Context, size int) []*host {
-	peers := make([]peer, 0, size)
-	for i := 0; i < size; i++ {
-		peers = append(peers, newPeer(net.NewAddr("localhost", strconv.Itoa(9300+i))))
-	}
-	ctx.Logger().Info("Starting kayak cluster [%v]", peers)
-
 	db := OpenTestLogStash(ctx)
 
-	hosts := make([]*host, 0, len(peers))
-	for _, p := range peers {
-		host, err := newHost(ctx, net.NewTcpNetwork(), NewBoltStore(db), db, p.Addr)
+	hosts := make([]*host, 0, size)
+	for i := 0; i < size; i++ {
+		host, err := newHost(ctx, net.NewTcpNetwork(), NewBoltStore(db), db, ":0")
 		if err != nil {
 			panic(err)
 		}
