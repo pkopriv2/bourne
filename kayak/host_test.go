@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/stash"
 	"github.com/stretchr/testify/assert"
 )
@@ -171,7 +172,6 @@ func SyncTo(index int) func(p Peer) bool {
 	}
 }
 
-
 func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),
@@ -220,7 +220,6 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 			}
 		}()
 	}
-
 
 	timer := ctx.Timer(30 * time.Second)
 	SyncMajority(timer, cluster, SyncTo(numThreads*numItemsPerThread-1))
@@ -290,13 +289,13 @@ func TestCluster_Append_Multi(t *testing.T) {
 
 func TestHost_Cluster_Barrier(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
+		"bourne.log.level": int(common.Debug),
 	})
 
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartTransientCluster(ctx, 7)
+	cluster, err := StartTransientCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	leader := Converge(ctx.Timer(10*time.Second), cluster)
@@ -308,16 +307,21 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	sync, err := leader.Sync()
 	assert.Nil(t, err)
 
-	numThreads := 100
+	numThreads := 10
 	numItemsPerThread := 100
 
+	max := concurrent.NewAtomicCounter()
 	for i := 0; i < numThreads; i++ {
 		go func() {
 			for j := 0; j < numItemsPerThread; j++ {
-				_, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
+				item, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
 				if err != nil {
 					panic(err)
 				}
+
+				max.Update(func(cur uint64) uint64 {
+					return uint64(common.Max(int(cur), item.Index))
+				})
 			}
 		}()
 	}
@@ -325,7 +329,10 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	go func() {
 		for {
 			val, err := sync.Barrier(nil)
-			leader.Context().Logger().Info("Value: %v, %v", val, err)
+			assert.Nil(t, err)
+			cur := max.Get()
+			assert.True(t, uint64(val) <= cur)
+			leader.Context().Logger().Info("Barrier(val=%v, max=%v)", val, cur)
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
@@ -334,162 +341,3 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	SyncMajority(timer, cluster, SyncTo(numThreads*numItemsPerThread-1))
 	assert.False(t, common.IsCanceled(timer))
 }
-//
-// func NewTestSeedHost(ctx common.Context, addr string) *host {
-// db := OpenTestLogStash(ctx)
-// host, err := newHost(ctx, net.NewTcpNetwork(), NewBoltStore(db), db, addr)
-// if err != nil {
-// panic(err)
-// }
-// return host
-// }
-
-//
-// func StartTestCluster(ctx common.Context, size int) []*host {
-// db := OpenTestLogStash(ctx)
-//
-// hosts := make([]*host, 0, size)
-// for i := 0; i < size; i++ {
-// host, err := newHost(ctx, net.NewTcpNetwork(), NewBoltStore(db), db, ":0")
-// if err != nil {
-// panic(err)
-// }
-//
-// hosts = append(hosts, host)
-// ctx.Control().Defer(func(error) {
-// host.Close()
-// })
-// }
-//
-// zero := hosts[0]
-// zero.Start()
-// Converge(hosts[:1])
-//
-// for i, h := range hosts[1:] {
-// ctx.Logger().Info("Adding host [%v]", h.core.Self)
-// if err := h.Join(zero.core.Self.Addr); err != nil {
-// panic(err)
-// }
-//
-// SyncAll(hosts[:i+2], func(h *host) bool {
-// return hasPeer(zero.core.Cluster(), h.core.Self) && equalPeers(zero.core.Cluster(), h.core.Cluster())
-// })
-// }
-//
-// return hosts
-// }
-//
-// func Converge(cluster []*host) *host {
-// var term int = 0
-// var leader *uuid.UUID
-//
-// cancelled := make(chan struct{})
-// done, timeout := concurrent.NewBreaker(10*time.Second, func() {
-// SyncAll(cluster, func(h *host) bool {
-// select {
-// case <-cancelled:
-// return true
-// default:
-// }
-//
-// copy := h.core.CurrentTerm()
-// if copy.Num > term {
-// term = copy.Num
-// }
-//
-// if copy.Num == term && copy.Leader != nil {
-// leader = copy.Leader
-// }
-//
-// return leader != nil && copy.Leader == leader && copy.Num == term
-// })
-// })
-//
-// // data race...
-//
-// select {
-// case <-done:
-// return First(cluster, func(h *host) bool {
-// return h.Id() == *leader
-// })
-// case <-timeout:
-// close(cancelled)
-// return nil
-// }
-// }
-//
-// func RemoveHost(cluster []*host, i int) []*host {
-// ret := make([]*host, 0, len(cluster)-1)
-// ret = append(ret, cluster[:i]...)
-// ret = append(ret, cluster[i+1:]...)
-// return ret
-// }
-//
-// func SyncMajority(cluster []*host, fn func(h *host) bool) {
-// done := make(map[uuid.UUID]struct{})
-// start := time.Now()
-//
-// majority := majority(len(cluster))
-// for len(done) < majority {
-// for _, r := range cluster {
-// id := r.core.Id
-// if _, ok := done[id]; ok {
-// continue
-// }
-//
-// if fn(r) {
-// done[id] = struct{}{}
-// continue
-// }
-//
-// if time.Now().Sub(start) > 10*time.Second {
-// r.core.logger.Info("Still not sync'ed")
-// }
-// }
-// <-time.After(250 * time.Millisecond)
-// }
-// }
-//
-// func SyncAll(cluster []*host, fn func(h *host) bool) {
-// done := make(map[uuid.UUID]struct{})
-// start := time.Now()
-//
-// for len(done) < len(cluster) {
-// for _, r := range cluster {
-// id := r.core.Id
-// if _, ok := done[id]; ok {
-// continue
-// }
-//
-// if fn(r) {
-// done[id] = struct{}{}
-// continue
-// }
-//
-// if time.Now().Sub(start) > 10*time.Second {
-// r.core.logger.Info("Still not sync'ed")
-// }
-// }
-// <-time.After(250 * time.Millisecond)
-// }
-// }
-//
-// func First(cluster []*host, fn func(h *host) bool) *host {
-// for _, h := range cluster {
-// if fn(h) {
-// return h
-// }
-// }
-//
-// return nil
-// }
-//
-// func Index(cluster []*host, fn func(h *host) bool) int {
-// for i, h := range cluster {
-// if fn(h) {
-// return i
-// }
-// }
-//
-// return -1
-// }
