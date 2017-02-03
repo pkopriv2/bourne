@@ -81,10 +81,10 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -107,39 +107,39 @@ var (
 	CompactionError  = errors.New("Kayak:CompactionError")
 )
 
+type Dependencies struct {
+	Ctx      common.Context
+	LogStore LogStore
+	Network  net.Network
+	Db       *bolt.DB
+}
+
+func DefaultDependencies(ctx common.Context) Dependencies {
+	return Dependencies{}
+}
+
 // Extracts out the raw errors.
 func Cause(err error) error {
 	return extractError(err)
 }
 
-func Start(ctx common.Context, net net.Network, logs LogStore, path string, addr string) (Peer, error) {
-	db, err := stash.Open(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	return nil, nil
-
-	host, err := newHost(ctx, net, logs, db, addr)
+func Start(ctx common.Context, deps Dependencies, addr string) (Peer, error) {
+	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Db, addr)
 	if err != nil {
 		return nil, err
 	}
 
 	return host, host.Start()
 }
-//
-// func Join(ctx common.Context, path string, self string, peers []string) (Peer, error) {
-	// db, err := stash.Open(ctx, path)
-	// if err != nil {
-		// return nil, err
-	// }
-//
-	// host, err := newHost(ctx, self, NewBoltStore(db), db)
-	// if err != nil {
-		// return nil, err
-	// }
-//
-	// return host, host.Join(peers[0])
-// }
+
+func Join(ctx common.Context, deps Dependencies, addr string, peers []string) (Peer, error) {
+	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Db, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return host, host.Join(peers[0])
+}
 
 // A peer is a member of a cluster that is actively participating in log replication.
 type Peer interface {

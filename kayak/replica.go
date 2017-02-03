@@ -42,11 +42,14 @@ type replica struct {
 	// the networking abstraction
 	Network net.Network
 
+	// the core database
+	Db *bolt.DB
+
 	// the current cluster configuration
 	Roster *roster
 
-	// the core database
-	Db *bolt.DB
+	// the event log.
+	Log *eventLog
 
 	// data lock (currently using very coarse lock)
 	lock sync.RWMutex
@@ -54,20 +57,14 @@ type replica struct {
 	// the current term.
 	term term
 
+	// the durable term store.
+	terms *termStore
+
 	// the election timeout.  (heartbeat: = timeout / 5)
 	ElectionTimeout time.Duration
 
 	// the client timeout
 	RequestTimeout time.Duration
-
-	// session timeouts
-	SessionTimeout time.Duration
-
-	// the event log.
-	Log *eventLog
-
-	// the durable term store.
-	terms *termStore
 
 	// read barrier request
 	Barrier chan *common.Request
@@ -91,28 +88,23 @@ type replica struct {
 	RosterUpdates chan *common.Request
 }
 
-func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, addr string) (*replica, error) {
-	termStore, err := openTermStore(db)
+func getOrCreateReplicaId(store *termStore, addr string) (uuid.UUID, error) {
+	id, ok, err := store.GetId(addr)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Host")
-	}
-
-	id, ok, err := termStore.GetId(addr)
-	if err != nil {
-		return nil, errors.Wrapf(err, "Error retrieving id for address [%v]", addr)
+		return uuid.UUID{}, errors.Wrapf(err, "Error retrieving id for address [%v]", addr)
 	}
 
 	if !ok {
 		id = uuid.NewV1()
-		if err := termStore.SetId(addr, id); err != nil {
-			return nil, errors.Wrapf(err, "Error associating addr [%v] with id [%v]", addr, id)
+		if err := store.SetId(addr, id); err != nil {
+			return uuid.UUID{}, errors.Wrapf(err, "Error associating addr [%v] with id [%v]", addr, id)
 		}
 	}
 
-	self := peer{id, addr}
-	ctx = ctx.Sub("%v", self)
-	ctx.Logger().Info("Starting replica.")
+	return id, nil
+}
 
+func getOrCreateStore(ctx common.Context, store LogStore, self peer) (*eventLog, error) {
 	raw, err := store.Get(self.Id)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
@@ -125,16 +117,39 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		}
 	}
 
-	log, err := openEventLog(ctx, raw)
+	return openEventLog(ctx, raw)
+}
+
+func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, addr string) (*replica, error) {
+	ctx = ctx.Sub("%v", addr)
+	ctx.Logger().Info("Starting replica.")
+
+	termStore, err := openTermStore(db)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Error opening event log")
+		return nil, errors.Wrapf(err, "Error retrieving term store")
 	}
+
+	id, err := getOrCreateReplicaId(termStore, addr)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Error retrieving peer id [%v]", addr)
+	}
+
+	self := peer{id, addr}
+	log, err := getOrCreateStore(ctx, store, self)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Error retrieving durable log [%v]", id)
+	}
+	ctx.Control().Defer(func(cause error) {
+		log.Close()
+	})
 
 	roster := newRoster([]peer{self})
 	ctx.Control().Defer(func(cause error) {
-		ctx.Logger().Info("Replica shutting down [%v]", cause)
-		log.Close()
 		roster.Close()
+	})
+
+	ctx.Control().Defer(func(cause error) {
+		ctx.Logger().Info("Replica closed: %v", cause)
 	})
 
 	r := &replica{
@@ -159,6 +174,9 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		RequestTimeout:  10 * time.Second,
 	}
 
+	go func() {
+	}()
+
 	return r, r.start()
 }
 
@@ -175,9 +193,6 @@ func (h *replica) start() error {
 	}
 
 	listenRosterChanges(h)
-	go func() {
-		h.logger.Info("Replica closed: %v", h.ctrl.Failure())
-	}()
 	return nil
 }
 
@@ -217,7 +232,6 @@ func (h *replica) Leader() *peer {
 
 		}
 	}
-
 	return nil
 }
 
@@ -267,6 +281,8 @@ func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 	timer := time.NewTimer(timeout)
 
 	req := common.NewRequest(val)
+	defer req.Cancel()
+
 	select {
 	case <-h.ctrl.Closed():
 		return nil, ClosedError
@@ -281,7 +297,6 @@ func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 		case e := <-req.Failed():
 			return nil, e
 		case <-timer.C:
-			req.Cancel()
 			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to response [%v]", timeout)
 		}
 	}

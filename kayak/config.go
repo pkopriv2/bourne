@@ -19,7 +19,7 @@ var EnvConfig = struct {
 	"kayak.server.pool.size",
 }
 
-const (
+var (
 	defaultRequestTimeout      = 15 * time.Second
 	defaultBaseElectionTimeout = 2 * time.Millisecond
 )

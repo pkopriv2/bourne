@@ -80,12 +80,12 @@ func (u *TcpConnection) Close() error {
 }
 
 func (t *TcpConnection) Read(p []byte) (n int, err error) {
-	t.conn.SetReadDeadline(time.Now().Add(t.timeout))
+	// t.conn.SetReadDeadline(time.Now().Add(t.timeout))
 	return t.conn.Read(p)
 }
 
 func (t *TcpConnection) Write(p []byte) (n int, err error) {
-	t.conn.SetWriteDeadline(time.Now().Add(t.timeout))
+	// t.conn.SetWriteDeadline(time.Now().Add(t.timeout))
 	return t.conn.Write(p)
 }
 

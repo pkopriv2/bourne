@@ -29,7 +29,7 @@ func becomeLeader(replica *replica) {
 		logger:     ctx.Logger(),
 		ctrl:       ctx.Control(),
 		syncer:     newLogSyncer(ctx, replica),
-		proxyPool:  common.NewWorkPool(ctx.Control(), 5),
+		proxyPool:  common.NewWorkPool(ctx.Control(), 20),
 		appendPool: common.NewWorkPool(ctx.Control(), 20),
 		term:       replica.CurrentTerm(),
 		replica:    replica,
@@ -78,9 +78,9 @@ func (l *leader) start() {
 	go func() {
 		defer l.ctrl.Close()
 
+		timer := time.NewTimer(l.replica.ElectionTimeout / 5)
+		l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 		for !l.ctrl.IsClosed() {
-			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.ctrl.Closed():
@@ -102,6 +102,8 @@ func (l *leader) start() {
 				becomeFollower(l.replica)
 				return
 			}
+
+			timer.Reset(l.replica.ElectionTimeout)
 		}
 	}()
 

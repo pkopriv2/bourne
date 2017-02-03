@@ -37,6 +37,9 @@ func NewObjectPool(ctx Context, max int, fn func() (io.Closer, error)) ObjectPoo
 		take:   make(chan io.Closer),
 		ret:    make(chan io.Closer, max),
 	}
+	ctx.Control().Defer(func(error) {
+		p.closePool()
+	})
 
 	p.start()
 	return p
@@ -64,6 +67,9 @@ func (p *objectPool) start() {
 
 			select {
 			case <-p.ctrl.Closed():
+				if next != nil {
+					next.Close()
+				}
 				return
 			case take <- next:
 				out++

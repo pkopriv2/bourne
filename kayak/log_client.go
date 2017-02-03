@@ -7,23 +7,18 @@ import (
 )
 
 type logClient struct {
+	id     uuid.UUID
 	ctx    common.Context
 	ctrl   common.Control
 	logger common.Logger
-
-	// the id of the logClient.
-	id uuid.UUID
-
-	// the core replica instance.  (used mostly for)
-	self *replica
-
-	// the raw leader client
-	pool common.ObjectPool
+	pool   common.ObjectPool
+	self   *replica
 }
 
 func newLogClient(self *replica, pool common.ObjectPool) *logClient {
 	ctx := self.Ctx.Sub("LogClient")
 	return &logClient{
+		id:     self.Id,
 		ctx:    ctx,
 		logger: ctx.Logger(),
 		ctrl:   ctx.Control(),
@@ -107,7 +102,7 @@ func (p *logClientListener) start() {
 			select {
 			case <-p.Ctrl().Closed():
 				return
-			case p.dat<-e:
+			case p.dat <- e:
 			}
 		}
 	}()
@@ -124,4 +119,3 @@ func (l *logClientListener) Ctrl() common.Control {
 func (l *logClientListener) Data() <-chan Entry {
 	return l.dat
 }
-

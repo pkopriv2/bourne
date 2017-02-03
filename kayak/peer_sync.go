@@ -207,12 +207,10 @@ type peerSyncer struct {
 	prevIndex int
 	prevTerm  int
 	prevLock  sync.RWMutex
-	pool      *rpcClientPool
 }
 
 func newPeerSyncer(ctx common.Context, self *replica, term term, peer peer) *peerSyncer {
 	sub := ctx.Sub("Sync(%v)", peer)
-
 	sync := &peerSyncer{
 		logger:    sub.Logger(),
 		ctrl:      sub.Control(),
@@ -221,7 +219,6 @@ func newPeerSyncer(ctx common.Context, self *replica, term term, peer peer) *pee
 		term:      term,
 		prevIndex: -1,
 		prevTerm:  -1,
-		pool:      newRpcClientPool(sub, self.Network, peer, 3),
 	}
 	sync.start()
 	return sync
@@ -245,14 +242,10 @@ func (l *peerSyncer) SetPrevIndexAndTerm(index int, term int) {
 }
 
 func (s *peerSyncer) heartbeat() (resp response, err error) {
-	cl := s.pool.TakeTimeout(5 * time.Second)
-	defer func() {
-		if err != nil {
-			s.pool.Fail(cl)
-		} else {
-			s.pool.Return(cl)
-		}
-	}()
+	cl, err := s.peer.Client(s.self.Ctx, s.self.Network)
+	if err != nil {
+		return response{}, err
+	}
 
 	resp, err = cl.Replicate(newHeartBeat(s.self.Id, s.term.Num, s.self.Log.Committed()))
 	return
@@ -266,6 +259,13 @@ func (s *peerSyncer) start() {
 	go func() {
 		defer s.ctrl.Close()
 		defer s.logger.Info("Shutting down")
+
+		var cl *rpcClient
+		defer func() {
+			if cl != nil {
+				cl.Close()
+			}
+		}()
 
 		prev, err := s.syncInit()
 		if err != nil {
@@ -287,54 +287,53 @@ func (s *peerSyncer) start() {
 
 				// might have to reinitialize client after each batch.
 				s.logger.Debug("Position [%v/%v]", prev.Index, next)
-				prev, err = s.syncNextBatch(prev, next)
+				if cl == nil {
+					s.logger.Debug("Re-initializing client")
+					cl, err = s.peer.Client(s.self.Ctx, s.self.Network)
+					if err != nil {
+						s.ctrl.Fail(err)
+						return
+					}
+				}
+
+				// send the batch
+				cl, prev, ok, err = s.sendBatch(cl, prev, next)
 				if err != nil {
 					s.ctrl.Fail(err)
 					return
 				}
+
+				// any network errors, start this iteration over
+				if cl == nil {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				// if everything was ok, advance the index and term
+				if ok {
+					s.SetPrevIndexAndTerm(prev.Index, prev.Term)
+					continue
+				}
+
+				s.logger.Info("Too far behind [%v,%v]. Installing snapshot.", prev.Index, prev.Term)
+				cl, prev, err = s.installSnapshot(cl)
+				if err != nil {
+					s.ctrl.Fail(err)
+					return
+				}
+
+				// any network errors, start this iteration over
+				if cl == nil {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				s.SetPrevIndexAndTerm(prev.Index, prev.Term)
 			}
 
 			s.logger.Debug("Sync'ed to [%v]", prev.Index)
 		}
 	}()
-}
-
-func (s *peerSyncer) syncNextBatch(prev Entry, horizon int) (Entry, error) {
-	cl := s.pool.TakeTimeout(30 * time.Second)
-	if cl == nil {
-		return Entry{}, errors.Wrapf(TimeoutError, "Error retrieving client [%v]", s.peer)
-	}
-
-	var ok bool
-	var err error
-	defer func() {
-		if err != nil {
-			s.pool.Fail(cl)
-		} else {
-			s.pool.Return(cl)
-		}
-	}()
-
-	// send the batch
-	prev, ok, err = s.sendBatch(cl, prev, horizon)
-	if err != nil {
-		return Entry{}, err
-	}
-
-	// if everything was ok, advance the index and term
-	if ok {
-		s.SetPrevIndexAndTerm(prev.Index, prev.Term)
-		return prev, nil
-	}
-
-	s.logger.Info("Too far behind [%v,%v]. Installing snapshot.", prev.Index, prev.Term)
-	prev, err = s.installSnapshot(cl)
-	if err != nil {
-		return Entry{}, err
-	}
-
-	s.SetPrevIndexAndTerm(prev.Index, prev.Term)
-	return prev, nil
 }
 
 func (s *peerSyncer) score() (int, error) {
@@ -407,53 +406,57 @@ func (s *peerSyncer) syncInit() (Entry, error) {
 }
 
 // Sends a batch up to the horizon
-func (s *peerSyncer) sendBatch(cl *rpcClient, prev Entry, horizon int) (Entry, bool, error) {
+func (s *peerSyncer) sendBatch(cl *rpcClient, prev Entry, horizon int) (*rpcClient, Entry, bool, error) {
 	// scan a full batch of events.
 	batch, err := s.self.Log.Scan(prev.Index+1, common.Min(horizon, prev.Index+1+256))
 	if err != nil {
-		return prev, false, err
+		return cl, prev, false, err
 	}
 
 	// send the append request.
 	resp, err := cl.Replicate(newReplication(s.self.Id, s.term.Num, prev.Index, prev.Term, batch, s.self.Log.Committed()))
 	if err != nil {
-		return prev, false, err
+		s.logger.Error("Unable to replicate batch [%v]", err)
+		return nil, prev, false, err
 	}
 
 	// make sure we're still a leader.
 	if resp.term > s.term.Num {
-		return prev, false, NotLeaderError
+		return cl, prev, false, NotLeaderError
 	}
 
 	// if it was successful, progress the peer's index and term
 	if resp.success {
-		return batch[len(batch)-1], true, nil
+		return cl, batch[len(batch)-1], true, nil
 	}
 
 	s.logger.Error("Consistency check failed. Received hint [%v]", resp.hint)
 	prev, ok, err := s.self.Log.Get(common.Min(resp.hint, prev.Index-1))
-	return prev, ok, err
+	return cl, prev, ok, err
 }
 
-func (s *peerSyncer) installSnapshot(cl *rpcClient) (Entry, error) {
+func (s *peerSyncer) installSnapshot(cl *rpcClient) (*rpcClient, Entry, error) {
 	snapshot, err := s.self.Log.Snapshot()
 	if err != nil {
-		return Entry{}, err
+		return cl, Entry{}, err
 	}
 
-	err = s.sendSnapshot(cl, snapshot)
+	cl, err = s.sendSnapshot(cl, snapshot)
 	if err != nil {
-		return Entry{}, err
+		return cl, Entry{}, err
+	}
+	if cl != nil {
+		return cl, Entry{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}, nil
 	}
 
-	return Entry{Index: snapshot.LastIndex(), Term: snapshot.LastTerm()}, nil
+	prev, err := s.syncInit()
+	return cl, prev, err
 }
 
 // sends the snapshot to the client
-func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) error {
-
+func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) (*rpcClient, error) {
 	size := snapshot.Size()
-	sendSegment := func(cl *rpcClient, offset int, batch []Event) error {
+	sendSegment := func(cl *rpcClient, offset int, batch []Event) (*rpcClient, error) {
 		segment := installSnapshot{
 			l.self.Id,
 			l.term.Num,
@@ -466,18 +469,18 @@ func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) error 
 
 		resp, err := cl.InstallSnapshot(segment)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if resp.term > l.term.Num || !resp.success {
-			return NotLeaderError
+			return cl, NotLeaderError
 		}
 
 		if !resp.success {
-			return NotLeaderError
+			return cl, NotLeaderError
 		}
 
-		return nil
+		return cl, nil
 	}
 
 	if size == 0 {
@@ -486,7 +489,7 @@ func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) error 
 
 	for i := 0; i < size; {
 		if l.ctrl.IsClosed() {
-			return ClosedError
+			return cl, ClosedError
 		}
 
 		beg, end := i, common.Min(size-1, i+255)
@@ -494,15 +497,16 @@ func (l *peerSyncer) sendSnapshot(cl *rpcClient, snapshot StoredSnapshot) error 
 		l.logger.Info("Sending snapshot segment [%v,%v]", beg, end)
 		batch, err := snapshot.Scan(beg, end)
 		if err != nil {
-			return errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
+			return cl, errors.Wrapf(err, "Error scanning batch [%v, %v]", beg, end)
 		}
 
-		err = sendSegment(cl, beg, batch)
+		cl, err = sendSegment(cl, beg, batch)
 		if cl == nil || err != nil {
-			return err
+			return cl, err
 		}
 
 		i += len(batch)
 	}
-	return nil
+
+	return cl, nil
 }

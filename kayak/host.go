@@ -44,7 +44,7 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		core.ctrl.Close()
 	})
 
-	server, err := newServer(ctx, core, listener, 20)
+	server, err := newServer(ctx, core, listener, 30)
 	if err != nil {
 		return nil, err
 	}
@@ -52,19 +52,18 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		server.Close()
 	})
 
-	pool := newLeaderPool(core, 10)
+	pool := newLeaderPool(core, 20)
 	ctx.Control().Defer(func(cause error) {
 		pool.Close()
 	})
 
-	h = &host{
+	return &host{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
 		core:   core,
 		server: server,
 		pool:   pool,
-	}
-	return
+	}, nil
 }
 
 func (h *host) Close() error {

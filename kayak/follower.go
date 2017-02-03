@@ -56,14 +56,13 @@ func (c *follower) start() {
 		var snapshotStream chan<- Event
 		var snapshotDone *common.Request
 		var snapshotOffset int
+
+		timer := time.NewTimer(c.replica.ElectionTimeout)
+		c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
 		for {
 			if c.ctrl.IsClosed() {
 				return
 			}
-
-			electionTimer := time.NewTimer(c.replica.ElectionTimeout)
-			c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
-
 			select {
 			case <-c.ctrl.Closed():
 				return
@@ -73,11 +72,13 @@ func (c *follower) start() {
 				c.handleRequestVote(req)
 			case req := <-c.replica.Snapshots:
 				snapshotStream, snapshotDone, snapshotOffset = c.handleInstallSnapshot(req, snapshotStream, snapshotDone, snapshotOffset)
-			case <-electionTimer.C:
+			case <-timer.C:
 				c.logger.Info("Waited too long for heartbeat.")
 				becomeCandidate(c.replica)
 				return
 			}
+
+			timer.Reset(c.replica.ElectionTimeout)
 		}
 	}()
 }

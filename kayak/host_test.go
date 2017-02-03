@@ -129,7 +129,7 @@ func TestHost_Cluster_Leader_Append_Single(t *testing.T) {
 
 func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
+		"bourne.log.level": int(common.Debug),
 	})
 
 	ctx := common.NewContext(conf)
@@ -228,7 +228,7 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 	}
 }
 
-func TestHost_Cluster_Session_Append_Multi(t *testing.T) {
+func TestHost_Cluster_Client_Append_Multi(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),
 	})
@@ -241,7 +241,7 @@ func TestHost_Cluster_Session_Append_Multi(t *testing.T) {
 	assert.NotNil(t, leader)
 
 	numThreads := 30
-	numItemsPerThread := 300
+	numItemsPerThread := 333
 
 	for i := 0; i < numThreads; i++ {
 		go func() {
@@ -274,7 +274,7 @@ func TestHost_Cluster_Session_Append_Multi(t *testing.T) {
 
 func TestHost_Cluster_Barrier(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
+		"bourne.log.level": int(common.Debug),
 	})
 
 	ctx := common.NewContext(conf)
@@ -327,7 +327,8 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 			}
 
 			fails := int(failures.Get())
-			return h.core.Log.Head() >= (numThreads*numItemsPerThread)-fails-1 && h.core.Log.Committed() >= (numThreads*numItemsPerThread)-fails-1
+			return h.core.Log.Head() >= (numThreads*numItemsPerThread)-fails-1 &&
+				h.core.Log.Committed() >= (numThreads*numItemsPerThread)-fails-1
 		})
 	})
 
