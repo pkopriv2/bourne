@@ -69,6 +69,7 @@ func (s *logSyncer) spawnSyncer(p peer) *peerSyncer {
 				return
 			}
 
+			time.Sleep(5*time.Second)
 			s.logger.Info("Restarting sync'er: %v", p)
 			s.handleRosterChange(s.self.Cluster())
 			return
@@ -83,6 +84,7 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 	cur, active := s.Syncers(), make(map[uuid.UUID]*peerSyncer)
 
 	// Add any missing
+	s.logger.Info("Adding any missing sync'ers: Cur(%v), New(%v)", cur, peers)
 	for _, p := range peers {
 		if p.Id == s.self.Self.Id {
 			continue

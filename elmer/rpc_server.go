@@ -13,12 +13,15 @@ type server struct {
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, listener net.Listener, self *machine) (net.Server, error) {
-	return nil, nil
-	// ctx = ctx.Sub("Server(%v)", listener.Addr())
-//
-	// server := &server{ctx: ctx, logger: ctx.Logger(), self: self}
-	// return net.NewServer(ctx, ctx.Logger(), listener, serverInitHandler(server))
+func newServer(ctx common.Context, listener net.Listener, self *machine, workers int) (net.Server, error) {
+	ctx = ctx.Sub("Rpc")
+
+	server := &server{
+		ctx:    ctx,
+		logger: ctx.Logger(),
+		self:   self}
+
+	return net.NewServer(ctx, listener, serverInitHandler(server), workers)
 }
 
 func serverInitHandler(s *server) func(net.Request) net.Response {
@@ -46,9 +49,29 @@ func (s *server) Status(req net.Request) net.Response {
 }
 
 func (s *server) Read(req net.Request) net.Response {
-	return nil
+	rpc, err := readGetRpc(req.Body())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	item, ok, err := s.self.Read(nil, rpc)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return responseRpc{item, ok}.Response()
 }
 
 func (s *server) Swap(req net.Request) net.Response {
-	return nil
+	rpc, err := readSwapRpc(req.Body())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	item, ok, err := s.self.Swap(nil, rpc)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return responseRpc{item, ok}.Response()
 }

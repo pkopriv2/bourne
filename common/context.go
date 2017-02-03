@@ -1,6 +1,9 @@
 package common
 
-import "io"
+import (
+	"io"
+	"time"
+)
 
 type Context interface {
 	io.Closer
@@ -9,7 +12,8 @@ type Context interface {
 	Config() Config
 	Logger() Logger
 	Control() Control
-	Sub(fmt string, args...interface{}) Context
+	Timer(time.Duration) <-chan struct{}
+	Sub(fmt string, args ...interface{}) Context
 }
 
 type ctx struct {
@@ -47,8 +51,12 @@ func (c *ctx) Logger() Logger {
 	return c.logger
 }
 
-func (c *ctx) Sub(fmt string, args...interface{}) Context {
-	return &ctx{config: c.config, logger: c.logger.Fmt(fmt, args...), control: c.control.Sub()}
+func (c *ctx) Timer(dur time.Duration) <-chan struct{} {
+	return NewTimer(c.Control(), dur)
+}
+
+func (c *ctx) Sub(fmt string, args ...interface{}) Context {
+	return &ctx{env: c.env, config: c.config, logger: c.logger.Fmt(fmt, args...), control: c.control.Sub()}
 }
 
 func (c *ctx) FormatLogger(fmt string, args ...interface{}) Logger {

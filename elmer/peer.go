@@ -32,22 +32,20 @@ func newPeer(ctx common.Context, listener net.Listener, self kayak.Peer) (h *pee
 		core.Close()
 	})
 
-	server, err := newServer(ctx, listener, core)
+	server, err := newServer(ctx, listener, core, 50)
 	if err != nil {
 		return nil, err
 	}
 	ctx.Control().Defer(func(cause error) {
 		server.Close()
 	})
-
-	h = &peer{
+	return &peer{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
 		logger: ctx.Logger(),
 		core:   core,
 		server: server,
-	}
-	return
+	}, nil
 }
 
 func (h *peer) Close() error {

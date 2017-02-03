@@ -22,23 +22,24 @@ var (
 	snapshotEventsBucket = []byte("kayak.snapshots.events")
 )
 
-func initBoltBuckets(tx *bolt.Tx) (err error) {
-	var e error
-	_, e = tx.CreateBucketIfNotExists(logBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(logItemBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(logMinBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(logMaxBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(logSnapshotBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(snapshotsBucket)
-	err = common.Or(err, e)
-	_, e = tx.CreateBucketIfNotExists(snapshotEventsBucket)
-	err = common.Or(err, e)
-	return
+func initBoltBuckets(db *bolt.DB) (err error) {
+	return db.Update(func(tx *bolt.Tx) error {
+		var e error
+		_, e = tx.CreateBucketIfNotExists(logBucket)
+		err = common.Or(err, e)
+		_, e = tx.CreateBucketIfNotExists(logItemBucket)
+		err = common.Or(err, e)
+		_, e = tx.CreateBucketIfNotExists(logMinBucket)
+		err = common.Or(err, e)
+		_, e = tx.CreateBucketIfNotExists(logMaxBucket)
+		err = common.Or(err, e)
+		_, e = tx.CreateBucketIfNotExists(logSnapshotBucket)
+		err = common.Or(err, e)
+		_, e = tx.CreateBucketIfNotExists(snapshotsBucket)
+		err = common.Or(err, e)
+		_, e = tx.CreateBucketIfNotExists(snapshotEventsBucket)
+		return common.Or(err, e)
+	})
 }
 
 // Store impl.
@@ -46,8 +47,12 @@ type boltStore struct {
 	db *bolt.DB
 }
 
-func NewBoltStore(db *bolt.DB) LogStore {
-	return &boltStore{db}
+func NewBoltStore(db *bolt.DB) (LogStore, error) {
+	if err := initBoltBuckets(db); err != nil {
+		return nil, err
+	}
+
+	return &boltStore{db}, nil
 }
 
 func (s *boltStore) Get(id uuid.UUID) (StoredLog, error) {

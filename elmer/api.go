@@ -100,6 +100,10 @@ func readItem(r scribe.Reader) (item Item, err error) {
 	return
 }
 
+func itemParser(r scribe.Reader) (interface{}, error) {
+	return readItem(r)
+}
+
 func parseItemBytes(bytes []byte) (item Item, err error) {
 	msg, err := scribe.Parse(bytes)
 	if err != nil {

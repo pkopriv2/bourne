@@ -92,8 +92,6 @@ type replica struct {
 }
 
 func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, addr string) (*replica, error) {
-	ctx = ctx.Sub("%v", addr)
-	ctx.Logger().Info("Starting replica.")
 
 	termStore, err := openTermStore(db)
 	if err != nil {
@@ -106,6 +104,9 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 	}
 
 	self := peer{id, addr}
+	ctx = ctx.Sub("%v", self)
+	ctx.Logger().Info("Starting replica.")
+
 	log, err := getOrCreateStore(ctx, store, self)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error retrieving durable log [%v]", id)

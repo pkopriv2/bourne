@@ -35,24 +35,16 @@ func (c *logClient) Close() error {
 	return c.ctrl.Close()
 }
 
-func (c *logClient) Append(cancel <-chan struct{}, e Event) (entry Entry, err error) {
-	raw := c.pool.TakeOrCancel(cancel)
-	if raw == nil {
-		return Entry{}, errors.WithStack(CanceledError)
-	}
-	defer func() {
-		if err != nil {
-			c.pool.Fail(raw)
-		} else {
-			c.pool.Return(raw)
-		}
-	}()
-	resp, err := raw.(*rpcClient).Append(appendEvent{e, Std})
-	if err != nil {
-		return Entry{}, err
-	}
+func (s *logClient) Head() int {
+	return s.self.Log.Head()
+}
 
-	return Entry{resp.index, e, resp.term, Std}, nil
+func (s *logClient) Committed() int {
+	return s.self.Log.Committed()
+}
+
+func (s *logClient) Compact(until int, data <-chan Event, size int) error {
+	return s.self.Compact(until, data, size)
 }
 
 func (s *logClient) Listen(start int, buf int) (Listener, error) {
@@ -72,8 +64,24 @@ func (s *logClient) Snapshot() (int, EventStream, error) {
 	return snapshot.LastIndex(), newSnapshotStream(s.ctrl, snapshot, 1024), nil
 }
 
-func (s *logClient) Compact(until int, data <-chan Event, size int) error {
-	return s.self.Compact(until, data, size)
+func (c *logClient) Append(cancel <-chan struct{}, e Event) (entry Entry, err error) {
+	raw := c.pool.TakeOrCancel(cancel)
+	if raw == nil {
+		return Entry{}, errors.WithStack(CanceledError)
+	}
+	defer func() {
+		if err != nil {
+			c.pool.Fail(raw)
+		} else {
+			c.pool.Return(raw)
+		}
+	}()
+	resp, err := raw.(*rpcClient).Append(appendEvent{e, Std})
+	if err != nil {
+		return Entry{}, err
+	}
+
+	return Entry{resp.index, e, resp.term, Std}, nil
 }
 
 type logClientListener struct {

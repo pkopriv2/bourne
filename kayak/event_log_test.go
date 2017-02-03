@@ -10,12 +10,15 @@ import (
 )
 
 func OpenTestBoltLogStore(ctx common.Context) LogStore {
-	return NewBoltStore(OpenTestLogStash(ctx))
+	store, err := NewBoltStore(OpenTestLogStash(ctx))
+	if err != nil {
+		panic(err)
+	}
+	return store
 }
 
 func OpenTestBoltEventLog(ctx common.Context) *eventLog {
-	store := NewBoltStore(OpenTestLogStash(ctx))
-	raw, err := store.New(uuid.NewV1(), []byte{})
+	raw, err := OpenTestBoltLogStore(ctx).New(uuid.NewV1(), []byte{})
 	if err != nil {
 		panic(err)
 	}

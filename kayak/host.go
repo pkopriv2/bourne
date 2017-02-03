@@ -76,25 +76,8 @@ func (h *host) Context() common.Context {
 	return h.core.Ctx
 }
 
-func (h *host) Hostname() string {
-	host, _, err := net.SplitAddr(h.Self().Addr)
-	if err != nil {
-		panic(err)
-	}
-	return host
-}
-
-func (h *host) Roster() []string {
-	hosts := make([]string, 0, 8)
-	for _, p := range h.core.Cluster() {
-		host, _, err := net.SplitAddr(p.Addr)
-		if err != nil {
-			panic(err)
-		}
-
-		hosts = append(hosts, host)
-	}
-	return hosts
+func (h *host) Addr() string {
+	return h.core.Self.Addr
 }
 
 func (h *host) Self() peer {
@@ -115,6 +98,14 @@ func (h *host) Sync() (Sync, error) {
 
 func (h *host) Log() (Log, error) {
 	return newLogClient(h.core, h.pool), nil
+}
+
+func (h *host) Roster() []string {
+	addrs := make([]string, 0, 8)
+	for _, p := range h.core.Cluster() {
+		addrs = append(addrs, p.Addr)
+	}
+	return addrs
 }
 
 func (h *host) Start() error {

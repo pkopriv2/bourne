@@ -81,11 +81,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -108,25 +105,6 @@ var (
 	CompactionError  = errors.New("Kayak:CompactionError")
 )
 
-type Dependencies struct {
-	Network  net.Network
-	LogStore LogStore
-	Storage  *bolt.DB
-}
-
-func DefaultDependencies(ctx common.Context) (Dependencies, error) {
-	db, err := stash.Open(ctx, ctx.Config().Optional(Config.StoragePath, Config.StoragePathDefault))
-	if err != nil {
-		return Dependencies{}, err
-	}
-
-	return Dependencies{
-		Network:  net.NewTcpNetwork(),
-		LogStore: NewBoltStore(db),
-		Storage:  db,
-	}, nil
-}
-
 // Extracts out the raw errors.
 func Cause(err error) error {
 	return extractError(err)
@@ -147,20 +125,42 @@ func Join(ctx common.Context, deps Dependencies, addr string, peers []string) (P
 		return nil, err
 	}
 
+	// FIXME: use all peer addrs.
 	return host, host.Join(peers[0])
+}
+
+func StartDefault(ctx common.Context, addr string) (Peer, error) {
+	opts, err := NewDefaultDependencies(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return Start(ctx, opts, addr)
+}
+
+func JoinDefault(ctx common.Context, addr string, peers []string) (Peer, error) {
+	opts, err := NewDefaultDependencies(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return Join(ctx, opts, addr, peers)
 }
 
 // A peer is a member of a cluster that is actively participating in log replication.
 type Peer interface {
 	io.Closer
 
+	// Returns the context to which this peer is bound
+	Context() common.Context
+
 	// The unique identifier for this peer.
 	Id() uuid.UUID
 
-	// Hostname of self.
-	Hostname() string
+	// Address of self.
+	Addr() string
 
-	// Hostnames of all members in the cluster (*dynamic*)
+	// Addresses of all members in the cluster (*dynamic*)
 	Roster() []string
 
 	// Returns the cluster synchronizer.
@@ -171,6 +171,12 @@ type Peer interface {
 }
 
 type Log interface {
+
+	// Returns the index of the maximum inserted item in the local log.
+	Head() int
+
+	// Returns the index of the maximum committed item in the local log.
+	Committed() int
 
 	// Returns the latest snaphot and the maximum index that the events
 	// stream represents.

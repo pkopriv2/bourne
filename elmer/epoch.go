@@ -64,7 +64,9 @@ func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
 		return Item{}, false, err
 	}
 
-	// TODO: Does this break linearizability???
+	// TODO: Does this break linearizability???  Technically, another conflicting item
+	// can come in immediately after we sync and update the value - and we can't tell
+	// whether our update was accepted or not..
 
 	if err := e.sync.Sync(cancel, entry.Index); err != nil {
 		return Item{}, false, err

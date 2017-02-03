@@ -12,9 +12,9 @@ import (
 
 func OpenTestLogStash(ctx common.Context) *bolt.DB {
 	db := OpenTestStash(ctx)
-	db.Update(func(tx *bolt.Tx) error {
-		return initBoltBuckets(tx)
-	})
+	if err := initBoltBuckets(db); err != nil {
+		panic(err)
+	}
 	return db
 }
 
@@ -115,7 +115,8 @@ func TestBoltStore_New_WithConfig(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	s := NewBoltStore(OpenTestLogStash(ctx))
+	s, e := NewBoltStore(OpenTestLogStash(ctx))
+	assert.Nil(t, e)
 	assert.NotNil(t, s)
 
 	id := uuid.NewV1()
