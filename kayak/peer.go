@@ -111,10 +111,6 @@ func (p peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
 }
 
-// func (p peer) Pool(ctx common.Context) *rpcClientPool {
-// return newRpcClientPool(ctx, net.NewClientPool(ctx, ctx.Logger(), net.NewConnectionPool("tcp", p.Addr, 10, 10*time.Second)))
-// }
-
 func (p peer) Client(ctx common.Context, network net.Network) (*rpcClient, error) {
 	raw, err := network.Dial(30*time.Second, p.Addr)
 	if raw == nil || err != nil {

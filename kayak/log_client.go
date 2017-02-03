@@ -11,7 +11,7 @@ type logClient struct {
 	ctx    common.Context
 	ctrl   common.Control
 	logger common.Logger
-	pool   common.ObjectPool
+	pool   common.ObjectPool // T: *rpcClient
 	self   *replica
 }
 
