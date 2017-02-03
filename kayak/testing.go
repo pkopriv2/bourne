@@ -60,7 +60,7 @@ func StartTransientCluster(ctx common.Context, size int) (peers []Peer, err erro
 		return []Peer{}, nil
 	}
 
-	ctx = ctx.Sub("Cluster(%v)", size)
+	ctx = ctx.Sub("Cluster(size=%v)", size)
 	defer func() {
 		if err != nil {
 			ctx.Control().Close()

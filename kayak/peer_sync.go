@@ -84,7 +84,6 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 	cur, active := s.Syncers(), make(map[uuid.UUID]*peerSyncer)
 
 	// Add any missing
-	s.logger.Info("Adding any missing sync'ers: Cur(%v), New(%v)", cur, peers)
 	for _, p := range peers {
 		if p.Id == s.self.Self.Id {
 			continue
