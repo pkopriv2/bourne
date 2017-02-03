@@ -226,117 +226,114 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 	SyncMajority(timer, cluster, SyncTo(numThreads*numItemsPerThread-1))
 	assert.False(t, common.IsCanceled(timer))
 }
-//
-// func TestHost_Cluster_Client_Append_Multi(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Debug),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// cluster := StartTestCluster(ctx, 3)
-// leader := Converge(cluster)
-// assert.NotNil(t, leader)
-//
-// numThreads := 30
-// numItemsPerThread := 333
-//
-// for i := 0; i < numThreads; i++ {
-// go func() {
-// log, err := leader.Log()
-// if err != nil {
-// panic(err)
-// }
-//
-// for j := 0; j < numItemsPerThread; j++ {
-// _, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
-// if err != nil {
-// panic(err)
-// }
-// }
-// }()
-// }
-//
-// done, timeout := concurrent.NewBreaker(500*time.Second, func() {
-// SyncAll(cluster, func(h *host) bool {
-// return h.core.Log.Head() >= (numThreads*numItemsPerThread)-1 && h.core.Log.Committed() >= (numThreads*numItemsPerThread)-1
-// })
-// })
-//
-// select {
-// case <-done:
-// case <-timeout:
-// assert.FailNow(t, "Timed out waiting for majority to sync")
-// }
-// }
-//
-// func TestHost_Cluster_Barrier(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Debug),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// cluster := StartTestCluster(ctx, 3)
-// leader := Converge(cluster)
-// assert.NotNil(t, leader)
-//
-// member := First(cluster, func(h *host) bool {
-// return h.Id() != leader.Id()
-// })
-//
-// go func() {
-// sync, err := member.Sync()
-// if err != nil {
-// panic(err)
-// }
-//
-// for {
-// val, err := sync.Barrier(nil)
-// leader.core.logger.Info("Value: %v, %v", val, err)
-// time.Sleep(5 * time.Millisecond)
-// }
-// }()
-//
-// failures := concurrent.NewAtomicCounter()
-// numThreads := 100
-// numItemsPerThread := 100
-// for i := 0; i < numThreads; i++ {
-// go func() {
-// log, _ := member.Log()
-// for j := 0; j < numItemsPerThread; j++ {
-// _, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
-// if err != nil {
-// failures.Inc()
-// }
-// }
-// }()
-// }
-//
-// time.Sleep(2000 * time.Millisecond)
-// leader.core.logger.Info("Killing leader!")
-// leader.Close()
-//
-// done, timeout := concurrent.NewBreaker(500*time.Second, func() {
-// SyncAll(cluster, func(h *host) bool {
-// if h.Id() == leader.Id() {
-// return true
-// }
-//
-// fails := int(failures.Get())
-// return h.core.Log.Head() >= (numThreads*numItemsPerThread)-fails-1 &&
-// h.core.Log.Committed() >= (numThreads*numItemsPerThread)-fails-1
-// })
-// })
-//
-// select {
-// case <-done:
-// case <-timeout:
-// assert.FailNow(t, "Timed out waiting for majority to sync")
-// }
-// }
+
+func TestHost_Cluster_Append_Single(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	cluster, err := StartTransientCluster(ctx, 3)
+	assert.Nil(t, err)
+
+	leader := Converge(ctx.Timer(10*time.Second), cluster)
+	assert.NotNil(t, leader)
+
+	log, err := leader.Log()
+	assert.Nil(t, err)
+
+	item, err := log.Append(nil, Event{0})
+	assert.Nil(t, err)
+
+	timer := ctx.Timer(10 * time.Second)
+	SyncMajority(timer, cluster, SyncTo(item.Index))
+	assert.False(t, common.IsCanceled(timer))
+}
+
+func TestCluster_Append_Multi(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	cluster, err := StartTransientCluster(ctx, 3)
+	assert.Nil(t, err)
+
+	leader := Converge(ctx.Timer(10*time.Second), cluster)
+	assert.NotNil(t, leader)
+
+	log, err := leader.Log()
+	assert.Nil(t, err)
+
+	numThreads := 100
+	numItemsPerThread := 100
+
+	for i := 0; i < numThreads; i++ {
+		go func() {
+			for j := 0; j < numItemsPerThread; j++ {
+				_, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
+				if err != nil {
+					panic(err)
+				}
+			}
+		}()
+	}
+
+	timer := ctx.Timer(30 * time.Second)
+	SyncMajority(timer, cluster, SyncTo(numThreads*numItemsPerThread-1))
+	assert.False(t, common.IsCanceled(timer))
+}
+
+func TestHost_Cluster_Barrier(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	cluster, err := StartTransientCluster(ctx, 7)
+	assert.Nil(t, err)
+
+	leader := Converge(ctx.Timer(10*time.Second), cluster)
+	assert.NotNil(t, leader)
+
+	log, err := leader.Log()
+	assert.Nil(t, err)
+
+	sync, err := leader.Sync()
+	assert.Nil(t, err)
+
+	numThreads := 100
+	numItemsPerThread := 100
+
+	for i := 0; i < numThreads; i++ {
+		go func() {
+			for j := 0; j < numItemsPerThread; j++ {
+				_, err := log.Append(nil, Event(stash.Int(numThreads*i+j)))
+				if err != nil {
+					panic(err)
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for {
+			val, err := sync.Barrier(nil)
+			leader.Context().Logger().Info("Value: %v, %v", val, err)
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	timer := ctx.Timer(30 * time.Second)
+	SyncMajority(timer, cluster, SyncTo(numThreads*numItemsPerThread-1))
+	assert.False(t, common.IsCanceled(timer))
+}
 //
 // func NewTestSeedHost(ctx common.Context, addr string) *host {
 // db := OpenTestLogStash(ctx)
