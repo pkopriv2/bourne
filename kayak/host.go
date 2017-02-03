@@ -26,7 +26,7 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		}
 	}()
 
-	listener, err := net.Listen(ctx.Config().OptionalDuration(Config.ConnectionTimeout, defaultConnectionTimeout), addr)
+	listener, err := net.Listen(ctx.Config().OptionalDuration(Config.ConnectionTimeout, Config.ConnectionTimeoutDefault), addr)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		core.Close()
 	})
 
-	server, err := newServer(ctx, core, listener, ctx.Config().OptionalInt(Config.ServerWorkers, defaultServerWorkers))
+	server, err := newServer(ctx, core, listener, ctx.Config().OptionalInt(Config.ServerWorkers, Config.ServerWorkdersDefault))
 	if err != nil {
 		return nil, err
 	}

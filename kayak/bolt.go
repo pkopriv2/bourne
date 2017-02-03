@@ -602,6 +602,7 @@ func createEmptyBoltSnapshot(db *bolt.DB, config []byte) (*boltSnapshot, error) 
 	return createBoltSnapshot(db, -1, -1, NewEventChannel([]Event{}), 0, config)
 }
 
+// FIXME: Cleanup erroneous snapshot installations
 func createBoltSnapshot(db *bolt.DB, lastIndex int, lastTerm int, ch <-chan Event, size int, config []byte) (*boltSnapshot, error) {
 	raw := snapshotDat{uuid.NewV1(), lastIndex, lastTerm, size, config}
 	err := storeSnapshotEvents(db, raw.id, size, ch)

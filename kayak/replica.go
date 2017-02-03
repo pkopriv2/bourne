@@ -123,10 +123,8 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		ctx.Logger().Info("Replica closed: %v", cause)
 	})
 
-	connTimeout := ctx.Config().OptionalDuration(Config.ConnectionTimeout, defaultConnectionTimeout)
-	requestTimeout := ctx.Config().OptionalDuration(Config.RequestTimeout, defaultRequestTimeout)
-	baseElectionTimeout := ctx.Config().OptionalDuration(Config.BaseElectionTimeout, defaultBaseElectionTimeout)
-	rndmElectionTimeout := time.Duration(baseElectionTimeout.Nanoseconds() + int64(rand.Intn(1000000000)))
+	baseElectionTimeout := ctx.Config().OptionalDuration(Config.BaseElectionTimeout, Config.BaseElectionTimeoutDefault)
+	rndmElectionTimeout := time.Duration(int64(rand.Intn(1000000000)))
 	r := &replica{
 		Ctx:             ctx,
 		logger:          ctx.Logger(),
@@ -146,8 +144,8 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		Snapshots:       make(chan *common.Request),
 		RosterUpdates:   make(chan *common.Request),
 		ElectionTimeout: baseElectionTimeout + rndmElectionTimeout,
-		RequestTimeout:  requestTimeout,
-		ConnTimeout:     connTimeout,
+		RequestTimeout:  ctx.Config().OptionalDuration(Config.RequestTimeout, Config.RequestTimeoutDefault),
+		ConnTimeout:     ctx.Config().OptionalDuration(Config.ConnectionTimeout, Config.ConnectionTimeoutDefault),
 	}
 	return r, r.start()
 }

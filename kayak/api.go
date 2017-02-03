@@ -85,6 +85,7 @@ import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -108,15 +109,22 @@ var (
 )
 
 type Dependencies struct {
-	Ctx      common.Context
-	LogStore LogStore
 	Network  net.Network
-	Db       *bolt.DB
+	LogStore LogStore
+	Storage  *bolt.DB
 }
 
-// TODO: FINISH THIS DUMMY!
-func DefaultDependencies(ctx common.Context) Dependencies {
-	return Dependencies{}
+func DefaultDependencies(ctx common.Context) (Dependencies, error) {
+	db, err := stash.Open(ctx, ctx.Config().Optional(Config.StoragePath, Config.StoragePathDefault))
+	if err != nil {
+		return Dependencies{}, err
+	}
+
+	return Dependencies{
+		Network:  net.NewTcpNetwork(),
+		LogStore: NewBoltStore(db),
+		Storage:  db,
+	}, nil
 }
 
 // Extracts out the raw errors.
@@ -125,7 +133,7 @@ func Cause(err error) error {
 }
 
 func Start(ctx common.Context, deps Dependencies, addr string) (Peer, error) {
-	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Db, addr)
+	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Storage, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +142,7 @@ func Start(ctx common.Context, deps Dependencies, addr string) (Peer, error) {
 }
 
 func Join(ctx common.Context, deps Dependencies, addr string, peers []string) (Peer, error) {
-	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Db, addr)
+	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Storage, addr)
 	if err != nil {
 		return nil, err
 	}
