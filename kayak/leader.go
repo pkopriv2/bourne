@@ -197,7 +197,7 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 		all = delPeer(all, update.peer)
 
 		c.logger.Info("Removing peer: %v", update.peer)
-		if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
+		if _, e := c.replica.Append(clusterBytes(all), Conf); e != nil {
 			req.Fail(e)
 			return
 		} else {
@@ -237,7 +237,7 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 		return
 	}
 
-	if _, e := c.replica.Append(clusterBytes(all), Config); e != nil {
+	if _, e := c.replica.Append(clusterBytes(all), Conf); e != nil {
 		req.Fail(e)
 		return
 	} else {

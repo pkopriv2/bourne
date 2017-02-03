@@ -364,13 +364,13 @@ func (b *boltLog) last(tx *bolt.Tx) (int, int, error) {
 	return raw.maxIndex, raw.maxTerm, nil
 }
 
-func (b *boltLog) append(tx *bolt.Tx, e Event, term int, kind Kind) (Entry, error) {
+func (b *boltLog) append(tx *bolt.Tx, e Event, term int, k Kind) (Entry, error) {
 	max, _, err := b.last(tx)
 	if err != nil {
 		return Entry{}, err
 	}
 
-	item := Entry{max+1, e, term, kind}
+	item := Entry{max+1, e, term, k}
 	return item, b.insert(tx, []Entry{item})
 }
 

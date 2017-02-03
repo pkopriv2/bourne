@@ -269,9 +269,9 @@ type Entry struct {
 }
 
 var (
-	Std    Kind = 0
-	NoOp   Kind = 1
-	Config Kind = 2
+	Std  Kind = 0
+	NoOp Kind = 1
+	Conf Kind = 2
 )
 
 type Kind int
@@ -284,7 +284,7 @@ func (k Kind) String() string {
 		return "Std"
 	case NoOp:
 		return "NoOp"
-	case Config:
+	case Conf:
 		return "Config"
 	}
 }

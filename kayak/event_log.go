@@ -82,8 +82,8 @@ func (e *eventLog) Scan(start int, end int) ([]Entry, error) {
 	return e.raw.Scan(start, end)
 }
 
-func (e *eventLog) Append(evt Event, term int, kind Kind) (Entry, error) {
-	item, err := e.raw.Append(evt, term, kind)
+func (e *eventLog) Append(evt Event, term int, k Kind) (Entry, error) {
+	item, err := e.raw.Append(evt, term, k)
 	if err != nil {
 		return item, err
 	}

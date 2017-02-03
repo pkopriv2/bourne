@@ -1,10 +1,6 @@
 package elmer
 
-import (
-	"time"
-
-	"github.com/pkopriv2/bourne/scribe"
-)
+import "github.com/pkopriv2/bourne/scribe"
 
 // server endpoints
 const (
@@ -32,13 +28,13 @@ func readMeta(meta scribe.Reader) (ret string, err error) {
 }
 
 type getRpc struct {
-	Key    []byte
+	Key []byte
 }
 
 type swapRpc struct {
-	Key    []byte
-	Val    []byte
-	Prev   int
+	Key  []byte
+	Val  []byte
+	Prev int
 }
 
 func (s swapRpc) Write(w scribe.Writer) {

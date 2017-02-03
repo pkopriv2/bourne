@@ -14,10 +14,11 @@ type server struct {
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, listener net.Listener, self *machine) (net.Server, error) {
-	ctx = ctx.Sub("Server(%v)", listener.Addr())
-
-	server := &server{ctx: ctx, logger: ctx.Logger(), self: self}
-	return net.NewServer(ctx, ctx.Logger(), listener, serverInitHandler(server))
+	return nil, nil
+	// ctx = ctx.Sub("Server(%v)", listener.Addr())
+//
+	// server := &server{ctx: ctx, logger: ctx.Logger(), self: self}
+	// return net.NewServer(ctx, ctx.Logger(), listener, serverInitHandler(server))
 }
 
 func serverInitHandler(s *server) func(net.Request) net.Response {

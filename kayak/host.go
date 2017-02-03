@@ -1,8 +1,6 @@
 package kayak
 
 import (
-	"time"
-
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
@@ -28,7 +26,7 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		}
 	}()
 
-	listener, err := net.Listen(10*time.Second, addr)
+	listener, err := net.Listen(ctx.Config().OptionalDuration(Config.ConnectionTimeout, defaultConnectionTimeout), addr)
 	if err != nil {
 		return nil, err
 	}
@@ -41,10 +39,10 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		return nil, err
 	}
 	ctx.Control().Defer(func(cause error) {
-		core.ctrl.Close()
+		core.Close()
 	})
 
-	server, err := newServer(ctx, core, listener, 30)
+	server, err := newServer(ctx, core, listener, ctx.Config().OptionalInt(Config.ServerWorkers, defaultServerWorkers))
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +50,7 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		server.Close()
 	})
 
-	pool := newLeaderPool(core, 20)
+	pool := newLeaderPool(core, 10)
 	ctx.Control().Defer(func(cause error) {
 		pool.Close()
 	})
@@ -164,7 +162,7 @@ func (h *host) Leave() error {
 }
 
 func (h *host) tryJoin(addr string) error {
-	cl, err := connect(h.core.Ctx, h.core.Network, h.core.RequestTimeout, addr)
+	cl, err := connect(h.core.Ctx, h.core.Network, h.core.ConnTimeout, addr)
 	if err != nil {
 		return errors.Wrapf(err, "Error connecting to peer [%v]", addr)
 	}
@@ -185,7 +183,7 @@ func (h *host) tryLeave() error {
 		return NoLeaderError
 	}
 
-	cl, err := peer.Client(h.core.Ctx, h.core.Network, h.core.RequestTimeout)
+	cl, err := peer.Client(h.core.Ctx, h.core.Network, h.core.ConnTimeout)
 	if err != nil {
 		return err
 	}

@@ -242,7 +242,7 @@ func (l *peerSyncer) SetPrevIndexAndTerm(index int, term int) {
 }
 
 func (s *peerSyncer) heartbeat() (resp response, err error) {
-	cl, err := s.peer.Client(s.self.Ctx, s.self.Network, s.self.RequestTimeout)
+	cl, err := s.peer.Client(s.self.Ctx, s.self.Network, s.self.ConnTimeout)
 	if err != nil {
 		return response{}, err
 	}
@@ -289,7 +289,7 @@ func (s *peerSyncer) start() {
 				s.logger.Debug("Position [%v/%v]", prev.Index, next)
 				if cl == nil {
 					s.logger.Debug("Re-initializing client")
-					cl, err = s.peer.Client(s.self.Ctx, s.self.Network, s.self.RequestTimeout)
+					cl, err = s.peer.Client(s.self.Ctx, s.self.Network, s.self.ConnTimeout)
 					if err != nil {
 						s.ctrl.Fail(err)
 						return

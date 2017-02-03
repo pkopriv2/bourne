@@ -3,7 +3,7 @@ package kayak
 import "time"
 
 // Public Configuration
-var EnvConfig = struct {
+var Config = struct {
 
 	// The key for specifying request timeout
 	RequestTimeout string
@@ -13,13 +13,24 @@ var EnvConfig = struct {
 
 	// The number of workers that operate in the server pool.
 	ServerWorkers string
+
+	// The maximum number of connections to allows to the leader
+	LeaderPool string
+
+	// The key for specifying request timeout
+	ConnectionTimeout string
 }{
 	"kayak.request.timeout",
 	"kayak.base.election.timeout",
-	"kayak.server.pool.size",
+	"kayak.server.workers",
+	"kayak.leader.connection.pool",
+	"kayak.connection.timeout",
 }
 
 var (
-	defaultRequestTimeout      = 15 * time.Second
-	defaultBaseElectionTimeout = 2 * time.Millisecond
+	defaultRequestTimeout       = 10 * time.Second
+	defaultConnectionTimeout    = 15 * time.Second
+	defaultBaseElectionTimeout  = 2 * time.Second
+	defaultServerWorkers        = 50
+	defaultLeaderConnectionPool = 10
 )

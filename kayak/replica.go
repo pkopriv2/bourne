@@ -66,6 +66,9 @@ type replica struct {
 	// the client timeout
 	RequestTimeout time.Duration
 
+	// the connection timeout
+	ConnTimeout time.Duration
+
 	// read barrier request
 	Barrier chan *common.Request
 
@@ -86,38 +89,6 @@ type replica struct {
 
 	// append requests (from local state machine)
 	RosterUpdates chan *common.Request
-}
-
-func getOrCreateReplicaId(store *termStore, addr string) (uuid.UUID, error) {
-	id, ok, err := store.GetId(addr)
-	if err != nil {
-		return uuid.UUID{}, errors.Wrapf(err, "Error retrieving id for address [%v]", addr)
-	}
-
-	if !ok {
-		id = uuid.NewV1()
-		if err := store.SetId(addr, id); err != nil {
-			return uuid.UUID{}, errors.Wrapf(err, "Error associating addr [%v] with id [%v]", addr, id)
-		}
-	}
-
-	return id, nil
-}
-
-func getOrCreateStore(ctx common.Context, store LogStore, self peer) (*eventLog, error) {
-	raw, err := store.Get(self.Id)
-	if err != nil {
-		return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
-	}
-
-	if raw == nil {
-		raw, err = store.New(self.Id, clusterBytes([]peer{self}))
-		if err != nil {
-			return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
-		}
-	}
-
-	return openEventLog(ctx, raw)
 }
 
 func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, addr string) (*replica, error) {
@@ -152,6 +123,10 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		ctx.Logger().Info("Replica closed: %v", cause)
 	})
 
+	connTimeout := ctx.Config().OptionalDuration(Config.ConnectionTimeout, defaultConnectionTimeout)
+	requestTimeout := ctx.Config().OptionalDuration(Config.RequestTimeout, defaultRequestTimeout)
+	baseElectionTimeout := ctx.Config().OptionalDuration(Config.BaseElectionTimeout, defaultBaseElectionTimeout)
+	rndmElectionTimeout := time.Duration(baseElectionTimeout.Nanoseconds() + int64(rand.Intn(1000000000)))
 	r := &replica{
 		Ctx:             ctx,
 		logger:          ctx.Logger(),
@@ -170,14 +145,15 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		LocalAppends:    make(chan *common.Request),
 		Snapshots:       make(chan *common.Request),
 		RosterUpdates:   make(chan *common.Request),
-		ElectionTimeout: time.Millisecond * time.Duration((2000 + rand.Intn(1000))),
-		RequestTimeout:  10 * time.Second,
+		ElectionTimeout: baseElectionTimeout + rndmElectionTimeout,
+		RequestTimeout:  requestTimeout,
+		ConnTimeout:     connTimeout,
 	}
-
-	go func() {
-	}()
-
 	return r, r.start()
+}
+
+func (h *replica) Close() error {
+	return h.ctrl.Close()
 }
 
 func (h *replica) start() error {
@@ -264,7 +240,7 @@ func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
 		go func(p peer) {
-			cl, err := p.Client(h.Ctx, h.Network, h.RequestTimeout)
+			cl, err := p.Client(h.Ctx, h.Network, h.ConnTimeout)
 			if cl == nil || err != nil {
 				ret <- newResponse(h.term.Num, false)
 				return
@@ -397,8 +373,40 @@ func newLeaderConstructor(self *replica) func() (io.Closer, error) {
 				continue
 			}
 
-			cl, _ = leader.Client(self.Ctx, self.Network, self.RequestTimeout)
+			cl, _ = leader.Client(self.Ctx, self.Network, self.ConnTimeout)
 		}
 		return cl, nil
 	}
+}
+
+func getOrCreateReplicaId(store *termStore, addr string) (uuid.UUID, error) {
+	id, ok, err := store.GetId(addr)
+	if err != nil {
+		return uuid.UUID{}, errors.Wrapf(err, "Error retrieving id for address [%v]", addr)
+	}
+
+	if !ok {
+		id = uuid.NewV1()
+		if err := store.SetId(addr, id); err != nil {
+			return uuid.UUID{}, errors.Wrapf(err, "Error associating addr [%v] with id [%v]", addr, id)
+		}
+	}
+
+	return id, nil
+}
+
+func getOrCreateStore(ctx common.Context, store LogStore, self peer) (*eventLog, error) {
+	raw, err := store.Get(self.Id)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
+	}
+
+	if raw == nil {
+		raw, err = store.New(self.Id, clusterBytes([]peer{self}))
+		if err != nil {
+			return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
+		}
+	}
+
+	return openEventLog(ctx, raw)
 }

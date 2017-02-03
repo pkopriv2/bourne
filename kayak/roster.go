@@ -70,7 +70,7 @@ func (r *rosterManager) start() {
 				l := newConfigListener(commits, ctrl)
 
 				// FIXME: Must play log out to make sure we aren't re-added!
-				for member := false;; {
+				for member := false; ; {
 					var peers []peer
 					select {
 					case <-ctrl.Closed():
@@ -218,7 +218,7 @@ func (p *configListener) start() {
 			case next = <-p.raw.Data():
 			}
 
-			if next.Kind != Config {
+			if next.Kind != Conf {
 				continue
 			}
 
@@ -231,7 +231,7 @@ func (p *configListener) start() {
 			select {
 			case <-p.ctrl.Closed():
 				return
-			case p.ch<- peers:
+			case p.ch <- peers:
 			}
 		}
 	}()
