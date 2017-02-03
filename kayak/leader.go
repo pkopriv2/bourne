@@ -24,23 +24,31 @@ func becomeLeader(replica *replica) {
 	ctx := replica.Ctx.Sub("Leader(%v)", replica.CurrentTerm())
 	ctx.Logger().Info("Becoming leader")
 
+	proxyPool := common.NewWorkPool(ctx.Control(), 20)
+	ctx.Control().Defer(func(error) {
+		proxyPool.Close()
+	})
+
+	appendPool := common.NewWorkPool(ctx.Control(), 20)
+	ctx.Control().Defer(func(error) {
+		appendPool.Close()
+	})
+
+	logSyncer := newLogSyncer(ctx, replica)
+	ctx.Control().Defer(func(error) {
+		logSyncer.Close()
+	})
+
 	l := &leader{
 		ctx:        ctx,
 		logger:     ctx.Logger(),
 		ctrl:       ctx.Control(),
-		syncer:     newLogSyncer(ctx, replica),
-		proxyPool:  common.NewWorkPool(ctx.Control(), 20),
-		appendPool: common.NewWorkPool(ctx.Control(), 20),
+		syncer:     logSyncer,
+		proxyPool:  proxyPool,
+		appendPool: appendPool,
 		term:       replica.CurrentTerm(),
 		replica:    replica,
 	}
-
-	ctx.Control().Defer(func(error) {
-		l.ctrl.Close()
-		l.proxyPool.Close()
-		l.appendPool.Close()
-		l.syncer.Close()
-	})
 
 	l.start()
 }
