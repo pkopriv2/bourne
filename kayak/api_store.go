@@ -1,11 +1,23 @@
 package kayak
 
-import uuid "github.com/satori/go.uuid"
+import (
+	"errors"
+
+	uuid "github.com/satori/go.uuid"
+)
 
 // Durability apis
 
 // TODO: Complete the api so that we can have command line utilities for interacting
 // with nodes.
+
+// Storage api errors
+var (
+	InvariantError   = errors.New("Kayak:InvariantError")
+	EndOfStreamError = errors.New("Kayak:EndOfStreamError")
+	OutOfBoundsError = errors.New("Kayak:OutOfBoundsError")
+	CompactionError  = errors.New("Kayak:CompactionError")
+)
 
 type LogStore interface {
 	Get(id uuid.UUID) (StoredLog, error)

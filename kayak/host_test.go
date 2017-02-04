@@ -136,14 +136,14 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartTransientCluster(ctx, 7)
+	cluster, err := StartTransientCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	leader := Converge(ctx.Timer(10*time.Second), cluster)
 	assert.NotNil(t, leader)
 
-	numThreads := 10
-	numItemsPerThread := 10
+	numThreads := 100
+	numItemsPerThread := 100
 
 	for i := 0; i < numThreads; i++ {
 		go func() {
@@ -159,17 +159,6 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	timer := ctx.Timer(30 * time.Second)
 	SyncMajority(timer, cluster, SyncTo(numThreads*numItemsPerThread-1))
 	assert.False(t, common.IsCanceled(timer))
-}
-
-func SyncTo(index int) func(p Peer) bool {
-	return func(p Peer) bool {
-		log, err := p.Log()
-		if err != nil {
-			return false
-		}
-
-		return log.Head() >= index && log.Committed() >= index
-	}
 }
 
 func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
@@ -341,3 +330,15 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	SyncMajority(timer, cluster, SyncTo(numThreads*numItemsPerThread-1))
 	assert.False(t, common.IsCanceled(timer))
 }
+
+func SyncTo(index int) func(p Peer) bool {
+	return func(p Peer) bool {
+		log, err := p.Log()
+		if err != nil {
+			return false
+		}
+
+		return log.Head() >= index && log.Committed() >= index
+	}
+}
+

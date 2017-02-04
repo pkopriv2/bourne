@@ -1,21 +1,19 @@
-// FIXME: Fix docs now that api has changed.
-//
 // Kayak allows consumers to utilize a generic, replicated event
 // log in order to create highly-resilient, strongly consistent
 // replicated state machines.
 //
 // # Distributed Consensus
 //
-// Underpinning every machine is a log that implements the Raft
-// distributed consensus protocol.  While most of the details of the
+// Underpinning every state machine is a log that implements the Raft
+// distributed consensus protocol [1].  While most of the details of the
 // protocol are abstracted, it is useful to know some of the high level
 // details.
 //
-// At startup, the machines are aware of each other's existence
-// and form a fully-connected graph between them.  The machines
-// use the Raft leader election protocol to establish a leader
-// amongst the group and the leader maintains its leadership through
-// the use of periodic heartbeats.
+// Before any progress can be made in a kayak cluster, the members
+// of the cluster must elect a leader.  Moreover, most interactions
+// require a leader.  Raft uses an election system - based on majority
+// decision - to elect a leader.  Once established, the leader
+// maintains its position through the use of heartbeats.
 //
 // If a leader dies or becomes unreachable, the previous followers
 // will hold an election to determine a new leader.  If the previous
@@ -63,16 +61,52 @@
 // # Log Compactions
 //
 // For many machines, their state is actually represented by many redundant
-// log items.  In other words, many of the items have been obviated.  The
-// machine can provide the log of a shortened 'snapshot' version of itself
-// using the Log#Compact() method.  On startup, the latest snapshot
-// is delivered to the machine in order to give the machine an opportunity
-// to rebuild its state.
+// log items.  The machine can provide the log of a shortened 'snapshot'
+// version of itself using the Log#Compact() method.  This, however, means
+// that the underlying log itself is pruned - or partially deleted.  For
+// consumers of the log, this means that they must not make any assumptions
+// about the state of the log with respect to their next read.  The log may
+// be compacted at any time, for any reason.  Machines must be resilient to
+// this.
+//
+// In practical terms, this mostly means that machines must be ready to rebuild
+// their state at any time.
 //
 // # Linearizability
 //
-// The raft
+// For those unfamiliar with the term, linearizability is simply a property
+// that states that given an object, any concurrent operation on that
+// object must be equivalent to some legal sequential operation [2].
 //
+// When it comes to describing a log of state machine commands, linearizability
+// means a few things:
+//
+//  * Items arrive in the order they were received.
+//  * Items are never lost
+//  * Items never arrive more than once.
+//
+// Kayak differs from raft in that it does NOT support full linearizability
+// with respect to duplicate items.  Therefore, a requirement of every state
+// machine must be idempotent. And just for good measure:
+//
+// * Every consuming state machine must be idempotent.
+//
+// However, an often overlooked aspect of linearizability is that concurrent
+// operations also include reads.  Imagine a series of reads on some value
+// within a state machine.  If those reads all happen on the same machine,
+// it is very likely that no illegal sequence was witnessed.  However, take
+// the same sequence of reads and execute them across several machines. As
+// long as that sequence of reads never shows any out of date or partial
+// changes, the system is said to be linearizable.
+//
+// Kayak provides linearizability through the use of what are known as
+// "read-barriers".  Machines which should not permit stale reads may
+// use the syncing library to query for a read-barrier.  This represents
+// the lowest entry that has been guaranteed to be applied to a majority
+// of machines.
+//
+// [1] https://raft.github.io/raft.pdf
+// [2] http://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf
 //
 package kayak
 
@@ -95,14 +129,6 @@ var (
 	TimeoutError   = errors.New("Kayak:TimeoutError")
 	ExpiredError   = errors.New("Kayak:ExpiredError")
 	CanceledError  = errors.New("Kayak:CanceledError")
-)
-
-// Storage api errors
-var (
-	InvariantError   = errors.New("Kayak:InvariantError")
-	EndOfStreamError = errors.New("Kayak:EndOfStreamError")
-	OutOfBoundsError = errors.New("Kayak:OutOfBoundsError")
-	CompactionError  = errors.New("Kayak:CompactionError")
 )
 
 // Extracts out the raw errors.
