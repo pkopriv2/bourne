@@ -12,7 +12,7 @@ func NewTcpNetwork() *TcpNetwork {
 }
 
 func ListenTcp(timeout time.Duration, addr string) (Listener, error) {
-	listener, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp4", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -21,7 +21,7 @@ func ListenTcp(timeout time.Duration, addr string) (Listener, error) {
 }
 
 func ConnectTcp(timeout time.Duration, addr string) (Connection, error) {
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	conn, err := net.DialTimeout("tcp4", addr, timeout)
 	if err != nil {
 		return nil, err
 	}

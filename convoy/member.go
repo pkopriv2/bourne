@@ -3,6 +3,7 @@ package convoy
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
@@ -22,11 +23,11 @@ func membersCollect(arr []member, fn func(m member) bool) []member {
 // member implementation.  For now, these should be considered immutable.
 type member struct {
 	id      uuid.UUID
-	Host    string
-	Port    string // no need for int representation
+	host    string
+	port    string // no need for int representation
 	version int
-	Healthy bool
-	Active  bool
+	healthy bool
+	active  bool
 }
 
 func newMember(id uuid.UUID, host string, port string, ver int) member {
@@ -37,8 +38,12 @@ func (m member) Id() uuid.UUID {
 	return m.id
 }
 
+func (m member) Addr() string {
+	return net.NewAddr(m.host, m.port)
+}
+
 func (m member) Hostname() string {
-	return m.Host
+	return m.host
 }
 
 func (m member) Version() int {
@@ -46,21 +51,21 @@ func (m member) Version() int {
 }
 
 func (m member) String() string {
-	return fmt.Sprintf("Member(id=%v)[addr=%v:%v](v=%v)", m.id.String()[:8], m.Host, m.Port, m.version)
+	return fmt.Sprintf("Member(%v,%v,%v)", m.id.String()[:8], m.version, net.NewAddr(m.host, m.port))
 }
 
-func (m member) connect(port string) (net.Connection, error) {
-	return net.ConnectTcp(net.NewAddr(m.Host, port))
+func (m member) Connect(network net.Network, timeout time.Duration, port int) (net.Connection, error) {
+	return network.Dial(timeout, net.NewAddr(m.host, strconv.Itoa(port)))
 }
 
-func (m member) Connect(port int) (net.Connection, error) {
-	return m.connect(strconv.Itoa(port))
+func (m member) Client(ctx common.Context, network net.Network, timeout time.Duration) (*rpcClient, error) {
+	return connectMember(ctx, network, timeout, net.NewAddr(m.host, m.port))
 }
 
-func (m member) Store(common.Context) (Store, error) {
+func (m member) Store(net net.Network, timeout time.Duration) (Store, error) {
 	panic("not implemented")
 }
 
-func (m member) Client(ctx common.Context) (*client, error) {
-	return connectMember(ctx, ctx.Logger().Fmt(m.String()), net.NewAddr(m.Host, m.Port))
+func (m member) Directory(net net.Network, timeout time.Duration) (Directory, error) {
+	panic("not implemented")
 }

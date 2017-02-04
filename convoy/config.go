@@ -5,6 +5,9 @@ import "time"
 // Public Configuration
 var Config = struct {
 
+	// Storage path
+	StoragePath string
+
 	// The number of attempts to try to rejoin a cluster on failure.
 	JoinAttempts string
 
@@ -29,6 +32,7 @@ var Config = struct {
 	// in events per period.
 	DisseminationBatchSize string
 }{
+	"convoy.storage.path",
 	"convoy.join.attempts.count",
 	"convoy.health.probe.count",
 	"convoy.health.probe.timeout",
@@ -38,6 +42,7 @@ var Config = struct {
 }
 
 const (
+	defaultStoragePath         = "/var/kayak/storage.db"
 	defaultJoinAttemptsCount   = 10
 	defaultHealthProbeTimeout  = 10 * time.Second
 	defaultHealthProbeCount    = 3

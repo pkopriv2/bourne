@@ -3,7 +3,9 @@ package convoy
 import (
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
@@ -11,49 +13,93 @@ import (
 // Transienting utilities for dependent projects...makes it easier to stand up local
 // clusters, etc...
 
-func StartTransientSeedHost(ctx common.Context, port int) Host {
-	stash, err := stash.OpenTransient(ctx)
+func StartTestHost(ctx common.Context, addr string) (Host, error) {
+	raw, err := stash.OpenTransient(ctx)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	host, err := StartSeedHost(ctx, stash.Path(), port)
+	db, err := openDatabase(ctx, openChangeLog(ctx, raw))
 	if err != nil {
-		panic(err)
+		return nil, errors.WithStack(err)
 	}
 
-	return host
+	host, err := newHost(ctx, db, net.NewTcpNetwork(), addr, nil)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return host, nil
 }
 
-func StartTransientHost(ctx common.Context, port int, seedPort int) Host {
-	stash, err := stash.OpenTransient(ctx)
+func JoinTestHost(ctx common.Context, addr string, peers []string) (Host, error) {
+	raw, err := stash.OpenTransient(ctx)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	host, err := StartHost(ctx, stash.Path(), port, seedPort)
+	db, err := openDatabase(ctx, openChangeLog(ctx, raw))
 	if err != nil {
-		panic(err)
+		return nil, errors.WithStack(err)
 	}
 
-	return host
+	host, err := newHost(ctx, db, net.NewTcpNetwork(), addr, peers)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return host, nil
 }
 
-func StartTransientCluster(ctx common.Context, start int, num int) []Host {
-	seeder := StartTransientSeedHost(ctx, start)
+func StartTestCluster(ctx common.Context, num int) ([]Host, error) {
+	ctx = ctx.Sub("TestCluster(%v)", num)
+
+	var err error
+	defer func() {
+		if err != nil {
+			ctx.Control().Fail(err)
+		}
+	}()
+
+	ctx.Logger().Info("Starting seed host")
+	seeder, err := StartTestHost(ctx, ":0")
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	ctx.Control().Defer(func(error) {
+		seeder.Shutdown()
+	})
+
+	member, err := seeder.Self()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	cluster := []Host{seeder}
-	for i := num - 1; i > 0; i-- {
-		h := StartTransientHost(ctx, start+i, start)
-		cluster = append(cluster, h)
+	for i := 1; i < num; i++ {
+		var cur Host
+
+		ctx.Logger().Info("Starting test host [%v]", i)
+		cur, err = JoinTestHost(ctx, ":0", []string{member.Addr()})
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		time.Sleep(2*time.Second)
+		cluster = append(cluster, cur)
 	}
 
 	SyncCluster(cluster, func(h Host) bool {
-		all, err := h.Directory().All()
+		dir, err := h.Directory()
 		if err != nil {
 			panic(err)
 		}
 
+		all, err := dir.All(ctx.Timer(30*time.Second))
+		if err != nil {
+			panic(err)
+		}
+
+		h.(*host).logger.Info("Current roster size: %v", len(all))
 		return len(all) == len(cluster)
 	})
 
@@ -63,8 +109,8 @@ func StartTransientCluster(ctx common.Context, start int, num int) []Host {
 		}
 	})
 
-	seeder.(*host).logger.Info("Successfully started cluster of [%v] hosts", len(cluster))
-	return cluster
+	ctx.Logger().Info("Successfully started cluster of [%v] hosts", len(cluster))
+	return cluster, nil
 }
 
 func SyncCluster(cluster []Host, fn func(r Host) bool) {

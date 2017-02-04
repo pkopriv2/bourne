@@ -11,13 +11,13 @@ import (
 
 func TestStorage_Close(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	assert.Nil(t, core.Close())
 }
 
 func TestStorage_Status_NotEnabled_NotDisabled(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	core.Update(func(u *update) error {
@@ -29,7 +29,7 @@ func TestStorage_Status_NotEnabled_NotDisabled(t *testing.T) {
 
 func TestStorage_Status_Enabled(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -52,7 +52,7 @@ func TestStorage_Status_Enabled(t *testing.T) {
 
 func TestStorage_Get_NotEnabled(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -69,7 +69,7 @@ func TestStorage_Get_NotEnabled(t *testing.T) {
 
 func TestStorage_Scan_NotEnabled(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -94,7 +94,7 @@ func TestStorage_Scan_NotEnabled(t *testing.T) {
 
 func TestStorage_Get_Enabled(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -114,7 +114,7 @@ func TestStorage_Get_Enabled(t *testing.T) {
 
 func TestStorage_Get_Disabled(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -132,7 +132,7 @@ func TestStorage_Get_Disabled(t *testing.T) {
 
 func TestStorage_Get_Rejoin(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -155,7 +155,7 @@ func TestStorage_Get_Rejoin(t *testing.T) {
 
 func TestStorage_Get_Del(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -174,7 +174,7 @@ func TestStorage_Get_Del(t *testing.T) {
 
 func TestStorage_Get_OldData(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -192,7 +192,7 @@ func TestStorage_Get_OldData(t *testing.T) {
 
 func TestStorage_Update_RosterListener(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()
@@ -222,7 +222,7 @@ func TestStorage_Update_RosterListener(t *testing.T) {
 
 func TestStorage_Update_HealthListener(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
-	core := newStorage(ctx, ctx.Logger())
+	core := newStorage(ctx)
 	defer core.Close()
 
 	id := uuid.NewV1()

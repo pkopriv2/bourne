@@ -45,7 +45,7 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) Status(req net.Request) net.Response {
-	return nil
+	return statusRpc{s.self.peer.Id(), s.self.peer.Roster()}.Response()
 }
 
 func (s *server) Read(req net.Request) net.Response {

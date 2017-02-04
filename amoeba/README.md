@@ -101,7 +101,6 @@ The only requirement is that keys implement the sortable interface.
 
 Amoeba currently requires no environmental configuration.
 
-
 ## Authors
 
 * Preston Koprivica: pkoriv2@gmail.com

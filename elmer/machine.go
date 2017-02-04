@@ -10,13 +10,13 @@ type machine struct {
 	ctx    common.Context
 	ctrl   common.Control
 	logger common.Logger
-	peer   kayak.Peer
+	peer   kayak.Host
 	read   chan *common.Request
 	swap   chan *common.Request
 	pool   common.WorkPool
 }
 
-func newStoreMachine(ctx common.Context, peer kayak.Peer, workers int) (*machine, error) {
+func newStoreMachine(ctx common.Context, peer kayak.Host, workers int) (*machine, error) {
 	m := &machine{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
@@ -40,17 +40,17 @@ func (s *machine) start() {
 		defer s.ctrl.Close()
 
 		for iter := 0; ; iter++ {
-			s.logger.Debug("Starting epoch [%v]", iter)
+			s.logger.Info("Starting epoch [%v]", iter)
 
 			log, sync, err := s.getLog()
 			if err != nil {
-				s.logger.Error("Error retrieving log: %v", err)
+				s.logger.Error("Error retrieving log: %+v", err)
 				continue
 			}
 
 			epoch, err := openEpoch(s.ctx, log, sync, iter)
 			if err != nil {
-				s.logger.Error("Error retrieving log: %v", err)
+				s.logger.Error("Error retrieving log: %+v", err)
 				continue
 			}
 

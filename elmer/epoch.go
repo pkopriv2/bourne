@@ -73,11 +73,11 @@ func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
 	}
 
 	actual, ok := read(e.idx, item.Key)
-	if ! ok {
+	if !ok {
 		return Item{}, false, nil
 	}
 
-	if ! actual.Equal(item) {
+	if !actual.Equal(item) {
 		return Item{}, false, nil
 	}
 

@@ -359,7 +359,7 @@ func majority(num int) int {
 }
 
 func newLeaderPool(self *replica, size int) common.ObjectPool {
-	return common.NewObjectPool(self.Ctx.Sub("LeaderPool(%v)", size), size, newLeaderConstructor(self))
+	return common.NewObjectPool(self.Ctx.Control().Sub(), size, newLeaderConstructor(self))
 }
 
 func newLeaderConstructor(self *replica) func() (io.Closer, error) {

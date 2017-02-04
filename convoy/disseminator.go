@@ -8,7 +8,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/concurrent"
+	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -71,6 +71,8 @@ func (i *dissemIter) Next() (m member, ok bool) {
 type disseminator struct {
 	ctx          common.Context
 	logger       common.Logger
+	ctrl         common.Control
+	net          net.Network
 	self         member
 	events       *viewLog
 	dir          *directory
@@ -80,15 +82,16 @@ type disseminator struct {
 	probeCount   int
 	probeTimeout time.Duration
 	lock         sync.Mutex
-	closed       chan struct{}
-	closer       chan struct{}
-	wait         sync.WaitGroup
 }
 
-func newDisseminator(ctx common.Context, logger common.Logger, self member, dir *directory) (*disseminator, error) {
+func newDisseminator(ctx common.Context, net net.Network, self member, dir *directory) (*disseminator, error) {
+	ctx = ctx.Sub("Disseminator")
+
 	ret := &disseminator{
 		ctx:          ctx,
-		logger:       logger.Fmt("Disseminator"),
+		logger:       ctx.Logger(),
+		ctrl:         ctx.Control(),
+		net:          net,
 		self:         self,
 		events:       newViewLog(ctx),
 		dir:          dir,
@@ -96,8 +99,7 @@ func newDisseminator(ctx common.Context, logger common.Logger, self member, dir 
 		dissemFactor: ctx.Config().OptionalInt(Config.DisseminationFactor, defaultDisseminationFactor),
 		probeCount:   ctx.Config().OptionalInt(Config.HealthProbeCount, defaultHealthProbeCount),
 		probeTimeout: ctx.Config().OptionalDuration(Config.HealthProbeTimeout, defaultHealthProbeTimeout),
-		closed:       make(chan struct{}),
-		closer:       make(chan struct{}, 1)}
+	}
 
 	if err := ret.start(); err != nil {
 		return nil, err
@@ -107,22 +109,12 @@ func newDisseminator(ctx common.Context, logger common.Logger, self member, dir 
 }
 
 func (d *disseminator) Close() error {
-	select {
-	case <-d.closed:
-		return ClosedError
-	case d.closer <- struct{}{}:
-	}
-
-	close(d.closed)
-	d.wait.Wait()
-	return nil
+	return d.ctrl.Close()
 }
 
 func (d *disseminator) Push(e []event) error {
-	select {
-	case <-d.closed:
-		return ClosedError
-	default:
+	if common.IsClosed(d.ctrl.Closed()) {
+		return errors.WithStack(ClosedError)
 	}
 
 	num := len(e)
@@ -132,7 +124,7 @@ func (d *disseminator) Push(e []event) error {
 
 	n := len(d.dir.AllActive())
 	if fanout := dissemFanout(d.dissemFactor, n); fanout > 0 {
-		d.logger.Debug("Adding [%v] events to be disseminated [%v/%v] times", num, fanout, n)
+		d.logger.Debug("Adding [%v] events to be disseminated [%v] times", num, n)
 		d.events.Push(e, fanout)
 	}
 
@@ -168,14 +160,12 @@ func (d *disseminator) nextMember() (member, bool) {
 }
 
 func (d *disseminator) start() error {
-	d.wait.Add(1)
 	go func() {
-		defer d.wait.Done()
 
 		tick := time.NewTicker(d.dissemPeriod)
 		for {
 			select {
-			case <-d.closed:
+			case <-d.ctrl.Closed():
 				return
 			case <-tick.C:
 			}
@@ -190,38 +180,28 @@ func (d *disseminator) start() error {
 				continue
 			}
 
+			// d.logger.Info("Received failure response from [%v].  %+v.", m, err)
 			if err == FailedError {
 				d.logger.Error("Received failure response from [%v].  Evicting self.", m)
 				d.dir.Fail(d.self)
 				continue
 			}
 
-			var success bool
-			done, timeout := concurrent.NewBreaker(d.probeTimeout, func() {
-				ch := d.probe(m, d.probeCount)
-				for i := 0; i < d.probeCount; i++ {
-					if <-ch {
-						success = true
-						return
-					}
+			timer := d.ctx.Timer(30 * time.Second)
+
+			ch := d.probe(m, d.probeCount)
+			for i := 0; i < d.probeCount; i++ {
+				if common.IsCanceled(timer) {
+					d.logger.Info("Detected failed member [%v]: %v", m, err)
+					d.dir.Fail(m)
+					break
 				}
-			})
 
-			select {
-			case <-d.closed:
-				return
-			case <-timeout:
-				continue
-			case <-done:
+				if <-ch {
+					d.logger.Info("Successfully probed member [%v]", m)
+					break
+				}
 			}
-
-			if success {
-				d.logger.Info("Successfully probed member [%v]", m)
-				continue
-			}
-
-			d.logger.Info("Detected failed member [%v]: %v", m, err)
-			d.dir.Fail(m)
 		}
 
 	}()
@@ -255,7 +235,7 @@ func (d *disseminator) probe(m member, num int) <-chan bool {
 }
 
 func (d *disseminator) tryPingProxy(target member, via member) (bool, error) {
-	client, err := via.Client(d.ctx)
+	client, err := via.Client(d.ctx, d.net, 30*time.Second)
 	if err != nil || client == nil {
 		return false, errors.Wrapf(err, "Error retrieving member client [%v]", via)
 	}
@@ -269,7 +249,7 @@ func (d *disseminator) disseminate(m member) ([]event, error) {
 }
 
 func (d *disseminator) disseminateTo(m member, batch []event) error {
-	client, err := m.Client(d.ctx)
+	client, err := m.Client(d.ctx, d.net, 30*time.Second)
 	if err != nil || client == nil {
 		return errors.Wrapf(err, "Error retrieving member client [%v]", m)
 	}

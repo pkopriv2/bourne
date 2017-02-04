@@ -11,12 +11,12 @@ type peer struct {
 	ctx    common.Context
 	ctrl   common.Control
 	logger common.Logger
-	self   kayak.Peer
+	self   kayak.Host
 	core   *machine
 	server net.Server
 }
 
-func newPeer(ctx common.Context, listener net.Listener, self kayak.Peer) (h *peer, err error) {
+func newPeer(ctx common.Context, listener net.Listener, self kayak.Host) (h *peer, err error) {
 	ctx = ctx.Sub("Elmer")
 	defer func() {
 		if err != nil {

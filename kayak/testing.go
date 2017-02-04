@@ -8,7 +8,10 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-func StartTransient(ctx common.Context, addr string) (Peer, error) {
+// Transienting utilities for dependent projects...makes it easier to stand up local
+// clusters, etc...
+
+func StartTransient(ctx common.Context, addr string) (Host, error) {
 	opts, err := NewTransientDependencies(ctx)
 	if err != nil {
 		return nil, err
@@ -17,7 +20,7 @@ func StartTransient(ctx common.Context, addr string) (Peer, error) {
 	return Start(ctx, opts, addr)
 }
 
-func JoinTransient(ctx common.Context, addr string, peers []string) (Peer, error) {
+func JoinTransient(ctx common.Context, addr string, peers []string) (Host, error) {
 	opts, err := NewTransientDependencies(ctx)
 	if err != nil {
 		return nil, err
@@ -26,38 +29,9 @@ func JoinTransient(ctx common.Context, addr string, peers []string) (Peer, error
 	return Join(ctx, opts, addr, peers)
 }
 
-// Transienting utilities for dependent projects...makes it easier to stand up local
-// clusters, etc...
-
-func Converge(cancel <-chan struct{}, cluster []Peer) Peer {
-	var term int = 0
-	var leader *uuid.UUID
-
-	SyncMajority(cancel, cluster, func(h Peer) bool {
-		copy := h.(*host).core.CurrentTerm()
-		if copy.Num > term {
-			term = copy.Num
-		}
-
-		if copy.Num == term && copy.Leader != nil {
-			leader = copy.Leader
-		}
-
-		return leader != nil && copy.Leader == leader && copy.Num == term
-	})
-
-	if leader == nil || common.IsCanceled(cancel) {
-		return nil
-	}
-
-	return First(cluster, func(h Peer) bool {
-		return h.Id() == *leader
-	})
-}
-
-func StartTransientCluster(ctx common.Context, size int) (peers []Peer, err error) {
+func StartTransientCluster(ctx common.Context, size int) (peers []Host, err error) {
 	if size < 1 {
-		return []Peer{}, nil
+		return []Host{}, nil
 	}
 
 	ctx = ctx.Sub("Cluster(size=%v)", size)
@@ -81,12 +55,12 @@ func StartTransientCluster(ctx common.Context, size int) (peers []Peer, err erro
 		first.Close()
 	})
 
-	first = Converge(ctx.Control().Closed(), []Peer{first})
+	first = Converge(ctx.Control().Closed(), []Host{first})
 	if first == nil {
 		return nil, errors.Wrap(NoLeaderError, "First member failed to become leader")
 	}
 
-	hosts := []Peer{first}
+	hosts := []Host{first}
 	for i := 1; i < size; i++ {
 		host, err := Join(ctx, deps, ":0", first.Roster())
 		if err != nil {
@@ -102,7 +76,33 @@ func StartTransientCluster(ctx common.Context, size int) (peers []Peer, err erro
 	return hosts, nil
 }
 
-func SyncMajority(cancel <-chan struct{}, cluster []Peer, fn func(h Peer) bool) {
+func Converge(cancel <-chan struct{}, cluster []Host) Host {
+	var term int = 0
+	var leader *uuid.UUID
+
+	SyncMajority(cancel, cluster, func(h Host) bool {
+		copy := h.(*host).core.CurrentTerm()
+		if copy.Num > term {
+			term = copy.Num
+		}
+
+		if copy.Num == term && copy.Leader != nil {
+			leader = copy.Leader
+		}
+
+		return leader != nil && copy.Leader == leader && copy.Num == term
+	})
+
+	if leader == nil || common.IsCanceled(cancel) {
+		return nil
+	}
+
+	return First(cluster, func(h Host) bool {
+		return h.Id() == *leader
+	})
+}
+
+func SyncMajority(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) {
 	done := make(map[uuid.UUID]struct{})
 	start := time.Now()
 
@@ -130,7 +130,7 @@ func SyncMajority(cancel <-chan struct{}, cluster []Peer, fn func(h Peer) bool) 
 	}
 }
 
-func SyncAll(cancel <-chan struct{}, cluster []Peer, fn func(h Peer) bool) {
+func SyncAll(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) {
 	done := make(map[uuid.UUID]struct{})
 	start := time.Now()
 
@@ -157,7 +157,7 @@ func SyncAll(cancel <-chan struct{}, cluster []Peer, fn func(h Peer) bool) {
 	}
 }
 
-func First(cluster []Peer, fn func(h Peer) bool) Peer {
+func First(cluster []Host, fn func(h Host) bool) Host {
 	for _, h := range cluster {
 		if fn(h) {
 			return h
@@ -167,7 +167,7 @@ func First(cluster []Peer, fn func(h Peer) bool) Peer {
 	return nil
 }
 
-func Index(cluster []Peer, fn func(h Peer) bool) int {
+func Index(cluster []Host, fn func(h Host) bool) int {
 	for i, h := range cluster {
 		if fn(h) {
 			return i

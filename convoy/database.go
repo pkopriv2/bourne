@@ -1,12 +1,9 @@
 package convoy
 
 import (
-	"sync"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/stash"
 )
 
 var (
@@ -15,26 +12,27 @@ var (
 
 type database struct {
 	ctx    common.Context
+	ctrl   common.Control
 	data   amoeba.Index
 	chgLog *changeLog
-	lock   sync.RWMutex
-	closed bool
 }
 
 // Opens the database using the path to the given db file.
-func openDatabase(ctx common.Context, path string) (*database, error) {
-	stash, err := stash.Open(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	return initDatabase(ctx, openChangeLog(stash))
-}
+// func openDatabase(ctx common.Context, path string) (*database, error) {
+// stash, err := stash.Open(ctx, path)
+// if err != nil {
+// return nil, err
+// }
+//
+// return initDatabase(ctx, openChangeLog(ctx, stash))
+// }
 
 // Opens the database using the given changelog
-func initDatabase(ctx common.Context, log *changeLog) (*database, error) {
+func openDatabase(ctx common.Context, log *changeLog) (*database, error) {
+	ctx = ctx.Sub("Db")
 	db := &database{
 		ctx:    ctx,
+		ctrl:   ctx.Control(),
 		data:   amoeba.NewBTreeIndex(8),
 		chgLog: log,
 	}
@@ -43,9 +41,9 @@ func initDatabase(ctx common.Context, log *changeLog) (*database, error) {
 }
 
 func (d *database) init() error {
-	chgs, err := d.chgLog.All()
+	chgs, err := d.Log().All()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
 	d.data.Update(func(u amoeba.Update) {
@@ -61,21 +59,12 @@ func (d *database) init() error {
 }
 
 func (d *database) Close() error {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	if d.closed {
-		return databaseClosedError
-	}
-
-	d.Log().Close()
-	return nil
+	return d.ctrl.Close()
 }
 
 func (d *database) Get(key string) (found bool, item Item, err error) {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-	if d.closed {
-		return false, Item{}, databaseClosedError
+	if d.ctrl.IsClosed() {
+		return false, Item{}, errors.WithStack(ClosedError)
 	}
 
 	d.data.Read(func(v amoeba.View) {
@@ -85,10 +74,8 @@ func (d *database) Get(key string) (found bool, item Item, err error) {
 }
 
 func (d *database) Put(key string, val string, expected int) (ok bool, new Item, err error) {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-	if d.closed {
-		return false, Item{}, databaseClosedError
+	if d.ctrl.IsClosed() {
+		return false, Item{}, errors.WithStack(ClosedError)
 	}
 
 	d.data.Update(func(u amoeba.Update) {
@@ -98,10 +85,8 @@ func (d *database) Put(key string, val string, expected int) (ok bool, new Item,
 }
 
 func (d *database) Del(key string, expected int) (ok bool, new Item, err error) {
-	d.lock.RLock()
-	defer d.lock.RUnlock()
-	if d.closed {
-		return false, Item{}, databaseClosedError
+	if d.ctrl.IsClosed() {
+		return false, Item{}, errors.WithStack(ClosedError)
 	}
 
 	d.data.Update(func(u amoeba.Update) {

@@ -2,9 +2,9 @@ package convoy
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/concurrent"
@@ -142,6 +142,7 @@ func streamHealth(ch <-chan []item) <-chan health {
 type storage struct {
 	ctx    common.Context
 	logger common.Logger
+	ctrl   common.Control
 
 	// All mutable fields sync'ed on datItems
 	// Data objects.
@@ -151,23 +152,26 @@ type storage struct {
 
 	// subscriptions
 	listeners concurrent.List
-
-	// Utility
-	wait   sync.WaitGroup
-	closed chan struct{}
-	closer chan struct{}
 }
 
-func newStorage(ctx common.Context, logger common.Logger) *storage {
+func newStorage(ctx common.Context) *storage {
+	ctx = ctx.Sub("Storage")
+
 	s := &storage{
 		ctx:       ctx,
-		logger:    logger.Fmt("Storage"),
+		logger:    ctx.Logger(),
+		ctrl:      ctx.Control(),
 		items:     amoeba.NewBTreeIndex(32),
 		roster:    make(map[uuid.UUID]membership),
 		health:    make(map[uuid.UUID]health),
 		listeners: concurrent.NewList(8),
-		closed:    make(chan struct{}),
-		closer:    make(chan struct{}, 1)}
+	}
+
+	ctx.Control().Defer(func(error) {
+		for _, l := range s.Listeners() {
+			close(l)
+		}
+	})
 
 	coll := newStorageGc(s)
 	coll.start()
@@ -175,19 +179,7 @@ func newStorage(ctx common.Context, logger common.Logger) *storage {
 }
 
 func (s *storage) Close() error {
-	select {
-	case <-s.closed:
-		return ClosedError
-	case s.closer <- struct{}{}:
-	}
-
-	for _, l := range s.Listeners() {
-		close(l)
-	}
-
-	close(s.closed)
-	s.wait.Wait()
-	return nil
+	return s.ctrl.Close()
 }
 
 func (d *storage) View(fn func(*view)) {
@@ -197,10 +189,8 @@ func (d *storage) View(fn func(*view)) {
 }
 
 func (d *storage) Update(fn func(*update) error) (err error) {
-	select {
-	case <-d.closed:
-		return ClosedError
-	default:
+	if d.ctrl.IsClosed() {
+		return errors.WithStack(ClosedError)
 	}
 
 	var ret []item
@@ -213,22 +203,17 @@ func (d *storage) Update(fn func(*update) error) (err error) {
 		err = fn(update)
 	})
 
-	// do not allow listeners to be closed while we're brodcasting.
-	select {
-	case <-d.closed:
-		return ClosedError
-	case d.closer<-struct{}{}:
-	}
-	defer func() {<-d.closer}()
-
 	// Because this is outside of update, ordering is no longer guaranteed.
 	// Consumers must be idempotent
 	for _, ch := range d.Listeners() {
+		if d.ctrl.IsClosed() {
+			return errors.WithStack(ClosedError)
+		}
+
 		select {
-		case <-d.closed:
+		case <-d.ctrl.Closed():
+			return errors.WithStack(ClosedError)
 		case ch <- ret:
-		// default:
-			// drop
 		}
 	}
 
@@ -565,12 +550,10 @@ func newStorageGc(store *storage) *storageGc {
 }
 
 func (c *storageGc) start() {
-	c.store.wait.Add(1)
 	go c.run()
 }
 
 func (d *storageGc) run() {
-	defer d.store.wait.Done()
 	defer d.logger.Debug("GC shutting down")
 
 	d.logger.Debug("Running GC every [%v] with expiration [%v]", d.gcPer, d.gcExp)
@@ -578,7 +561,7 @@ func (d *storageGc) run() {
 	ticker := time.Tick(d.gcPer)
 	for {
 		select {
-		case <-d.store.closed:
+		case <-d.store.ctrl.Closed():
 			return
 		case <-ticker:
 			d.runGcCycle(d.gcExp)

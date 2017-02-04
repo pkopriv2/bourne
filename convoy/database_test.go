@@ -73,7 +73,7 @@ func TestDatabase_Del(t *testing.T) {
 }
 
 func OpenTestDatabase(ctx common.Context, log *changeLog) *database {
-	db, err := initDatabase(ctx, log)
+	db, err := openDatabase(ctx, log)
 	if err != nil {
 		panic(err)
 	}

@@ -113,7 +113,7 @@ func (p peer) Client(ctx common.Context, network net.Network, timeout time.Durat
 		return nil, errors.Wrapf(err, "Error connecting to peer [%v]", p)
 	}
 
-	cl, err := net.NewClient(ctx, raw)
+	cl, err := net.NewClient(ctx, raw, net.Json)
 	if cl == nil || err != nil {
 		return nil, err
 	}

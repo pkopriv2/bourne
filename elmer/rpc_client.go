@@ -39,6 +39,19 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
+func (c *rpcClient) Status() (statusRpc, error) {
+	resp, err := c.raw.Send(newStatusRequest())
+	if err != nil {
+		return statusRpc{}, err
+	}
+
+	if err := resp.Error(); err != nil {
+		return statusRpc{}, err
+	}
+
+	return readStatusRpc(resp.Body())
+}
+
 func (c *rpcClient) Read(g getRpc) (responseRpc, error) {
 	resp, err := c.raw.Send(g.Request())
 	if err != nil {

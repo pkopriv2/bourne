@@ -38,7 +38,7 @@ func TestChangeLog_Id_Durability(t *testing.T) {
 	db, err := stash.OpenTransient(ctx)
 	assert.Nil(t, err)
 
-	cl := openChangeLog(db)
+	cl := openChangeLog(ctx, db)
 
 	id1, err := cl.Id()
 	assert.Nil(t, err)
@@ -51,7 +51,7 @@ func TestChangeLog_Id_Durability(t *testing.T) {
 	db, err = stash.Open(ctx, path)
 	assert.Nil(t, err)
 
-	cl = openChangeLog(db)
+	cl = openChangeLog(ctx, db)
 	id2, err := cl.Id()
 	assert.Nil(t, err)
 	assert.Equal(t, id1, id2)
@@ -148,7 +148,7 @@ func OpenTestStash(ctx common.Context) *bolt.DB {
 }
 
 func OpenTestChangeLog(ctx common.Context) *changeLog {
-	log := openChangeLog(OpenTestStash(ctx))
+	log := openChangeLog(ctx, OpenTestStash(ctx))
 	ctx.Control().Defer(func(error) {
 		log.Close()
 	})

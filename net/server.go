@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"time"
 
 	"github.com/pkg/errors"
@@ -25,13 +26,6 @@ import (
 // server, err := NewTcpServer(ctx, 8080, myHandler)
 // defer server.Close()
 //
-const (
-	ConfEncoding = "bourne.net.encoding"
-)
-
-const (
-	DefaultClientEncoding = "json"
-)
 
 // Each server manages a single handler and invokes the handler for
 // each request it receives.  Handler implementations must be
@@ -43,12 +37,14 @@ type Handler func(Request) Response
 // This is extremely useful in testing scenarios.
 type Server interface {
 	io.Closer
-	Client() (Client, error)
+	Client(Encoding) (Client, error)
 }
 
 // A client gives consumers access to invoke a server's handlers.
 type Client interface {
 	io.Closer
+	Local() net.Addr
+	Remote() net.Addr
 	Send(Request) (Response, error)
 }
 
@@ -74,6 +70,26 @@ type Response interface {
 	// The body of the message.  Never nil
 	Body() scribe.Reader
 }
+
+// Support for multiple encodings (intended to help troubleshoot live systems)
+const (
+	Json Encoding = 0
+	Gob           = 1
+)
+
+type Encoding byte
+
+func (e Encoding) String() string {
+	switch e {
+	default:
+		return "unknown"
+	case Json:
+		return "json"
+	case Gob:
+		return "gob"
+	}
+}
+
 
 // Request/response intiailization functions.
 func NewRequest(meta scribe.Message, body scribe.Message) Request {
@@ -205,61 +221,6 @@ func (r *response) String() string {
 	return fmt.Sprintf("Err: %v :: Body: %v", r.err, r.body)
 }
 
-// Support for multiple encodings (intended to help troubleshoot live systems)
-type Encoding byte
-
-func (e Encoding) String() string {
-	return EncodingToString(e)
-}
-
-const (
-	Json Encoding = 0
-	Gob           = 1
-)
-
-type UnsupportedEncodingError struct {
-	encoding string
-}
-
-func (m *UnsupportedEncodingError) Error() string {
-	return fmt.Sprintf("Unsupported encoding", m.encoding)
-}
-
-func EncodingToString(encoding Encoding) string {
-	switch encoding {
-	default:
-		return fmt.Sprintf("%v", encoding)
-	case Json:
-		return "json"
-	case Gob:
-		return "gob"
-	}
-}
-
-func EncodingFromString(name string) (Encoding, error) {
-	switch name {
-	default:
-		return 0, &UnsupportedEncodingError{name}
-	case "json":
-		return Json, nil
-	case "gob":
-		return Gob, nil
-	}
-}
-
-func readEncoding(conn Connection) (Encoding, error) {
-	var buf = []byte{0}
-	if _, err := conn.Read(buf); err != nil {
-		return 0, err
-	}
-
-	return Encoding(buf[0]), nil
-}
-
-func writeEncoding(conn Connection, enc Encoding) error {
-	_, err := conn.Write([]byte{byte(enc)})
-	return err
-}
 
 // Client implementation
 
@@ -271,20 +232,7 @@ type client struct {
 	recvTimeout time.Duration
 }
 
-func NewClient(ctx common.Context, conn Connection) (Client, error) {
-	config := ctx.Config()
-
-	enc, err := EncodingFromString(config.Optional(ConfEncoding, DefaultClientEncoding))
-	if err != nil {
-		return nil, err
-	}
-
-	switch enc {
-	default:
-		return nil, &UnsupportedEncodingError{EncodingToString(enc)}
-	case Json, Gob:
-	}
-
+func NewClient(ctx common.Context, conn Connection, enc Encoding) (Client, error) {
 	return &client{
 		logger: ctx.Logger(),
 		conn:   conn,
@@ -297,6 +245,14 @@ func (s *client) String() string {
 
 func (s *client) Close() error {
 	return s.conn.Close()
+}
+
+func (s *client) Local() net.Addr {
+	return s.conn.Local()
+}
+
+func (s *client) Remote() net.Addr {
+	return s.conn.Remote()
 }
 
 func (s *client) Send(req Request) (res Response, err error) {
@@ -345,9 +301,9 @@ func NewServer(ctx common.Context, listener Listener, handler Handler, workers i
 	ctx = ctx.Sub("Server(%v)", listener.Addr().String())
 
 	ctrl := ctx.Control()
-	ctrl.Defer(func(error) {
-		listener.Close()
-	})
+	// ctrl.Defer(func(error) {
+		// listener.Close()
+	// })
 
 	pool := common.NewWorkPool(ctrl, workers)
 	ctrl.Defer(func(error) {
@@ -379,7 +335,7 @@ type server struct {
 	ctrl     common.Control
 }
 
-func (s *server) Client() (Client, error) {
+func (s *server) Client(enc Encoding) (Client, error) {
 	if s.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
 	}
@@ -389,7 +345,7 @@ func (s *server) Client() (Client, error) {
 		return nil, errors.Wrap(err, "Unable to retrieve connection")
 	}
 
-	return NewClient(s.context, conn)
+	return NewClient(s.context, conn, enc)
 }
 
 func (s *server) Close() error {
@@ -496,6 +452,20 @@ func parseError(msg string) error {
 	}
 
 	return errors.New(msg)
+}
+
+func readEncoding(conn Connection) (Encoding, error) {
+	var buf = []byte{0}
+	if _, err := conn.Read(buf); err != nil {
+		return 0, err
+	}
+
+	return Encoding(buf[0]), nil
+}
+
+func writeEncoding(conn Connection, enc Encoding) error {
+	_, err := conn.Write([]byte{byte(enc)})
+	return err
 }
 
 // pooling support

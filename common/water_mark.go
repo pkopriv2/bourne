@@ -6,17 +6,17 @@ import (
 
 // A simply notifying integer value.
 
-type Ref struct {
+type WaterMark struct {
 	val  int
 	lock *sync.Cond
 	dead bool
 }
 
-func NewRef(val int) *Ref {
-	return &Ref{val, &sync.Cond{L: &sync.Mutex{}}, false}
+func NewWaterMark(val int) *WaterMark {
+	return &WaterMark{val, &sync.Cond{L: &sync.Mutex{}}, false}
 }
 
-func (c *Ref) WaitExceeds(cur int) (val int, alive bool) {
+func (c *WaterMark) WaitExceeds(cur int) (val int, alive bool) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	for val, alive = c.val, !c.dead; val <= cur && alive; val, alive = c.val, !c.dead {
@@ -25,7 +25,7 @@ func (c *Ref) WaitExceeds(cur int) (val int, alive bool) {
 	return
 }
 
-func (c *Ref) WaitUntil(cur int) (val int, alive bool) {
+func (c *WaterMark) WaitUntil(cur int) (val int, alive bool) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	for val, alive = c.val, !c.dead; val < cur && alive; val, alive = c.val, !c.dead {
@@ -34,7 +34,7 @@ func (c *Ref) WaitUntil(cur int) (val int, alive bool) {
 	return
 }
 
-func (c *Ref) WaitUntilOrCancel(cancel <-chan struct{}, until int) (val int, alive bool) {
+func (c *WaterMark) WaitUntilOrCancel(cancel <-chan struct{}, until int) (val int, alive bool) {
 	go func() {
 		<-cancel
 		c.Notify()
@@ -50,11 +50,11 @@ func (c *Ref) WaitUntilOrCancel(cancel <-chan struct{}, until int) (val int, ali
 	}
 }
 
-func (c *Ref) Notify() {
+func (c *WaterMark) Notify() {
 	c.lock.Broadcast()
 }
 
-func (c *Ref) Close() {
+func (c *WaterMark) Close() {
 	c.lock.L.Lock()
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
@@ -62,7 +62,7 @@ func (c *Ref) Close() {
 	c.lock.Broadcast()
 }
 
-func (c *Ref) Update(fn func(int) int) int {
+func (c *WaterMark) Update(fn func(int) int) int {
 	var cur int
 	var ret int
 	defer func() {
@@ -79,13 +79,13 @@ func (c *Ref) Update(fn func(int) int) int {
 	return ret
 }
 
-func (c *Ref) Set(pos int) int {
+func (c *WaterMark) Set(pos int) int {
 	return c.Update(func(int) int {
 		return pos
 	})
 }
 
-func (c *Ref) Get() (pos int) {
+func (c *WaterMark) Get() (pos int) {
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
 	return c.val

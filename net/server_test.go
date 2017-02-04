@@ -48,7 +48,7 @@ func TestClient_Close(t *testing.T) {
 	defer ctx.Close()
 	server := NewTestServer(ctx, successHandler)
 
-	client, err := server.Client()
+	client, err := server.Client(Json)
 	assert.Nil(t, err)
 	assert.Nil(t, client.Close())
 
@@ -62,7 +62,7 @@ func TestClient_ServerCloseBefore(t *testing.T) {
 	server := NewTestServer(ctx, successHandler)
 	server.Close()
 
-	_, err := server.Client()
+	_, err := server.Client(Json)
 	assert.NotNil(t, err)
 }
 
@@ -71,7 +71,7 @@ func TestClient_ServerCloseAfter(t *testing.T) {
 	defer ctx.Close()
 	server := NewTestServer(ctx, successHandler)
 
-	client, err := server.Client()
+	client, err := server.Client(Json)
 	assert.Nil(t, err)
 	assert.Nil(t, server.Close())
 
@@ -103,7 +103,7 @@ func TestClientServer_SingleRequest(t *testing.T) {
 	})
 	defer server.Close()
 
-	client, _ := server.Client()
+	client, _ := server.Client(Json)
 	defer client.Close()
 
 	resp, err := client.Send(NewStandardRequest(msg))
@@ -131,7 +131,7 @@ func TestClientServer_MultiRequest(t *testing.T) {
 	})
 	defer server.Close()
 
-	client, _ := server.Client()
+	client, _ := server.Client(Json)
 	defer client.Close()
 
 	for i := 0; i < 10; i++ {
@@ -170,7 +170,7 @@ func TestClientServer_ServerClosed(t *testing.T) {
 	})
 	defer server.Close()
 
-	client, _ := server.Client()
+	client, _ := server.Client(Json)
 	defer client.Close()
 
 	barrier1 := make(chan struct{}, 1)

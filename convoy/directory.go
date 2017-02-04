@@ -35,15 +35,17 @@ func readEvent(r scribe.Reader) (event, error) {
 	return readItem(r)
 }
 
-type directory struct {
-	logger common.Logger
-	Core   *storage
+func eventParser(r scribe.Reader) (interface{}, error) {
+	return readItem(r)
 }
 
-func newDirectory(ctx common.Context, logger common.Logger) *directory {
+type directory struct {
+	Core *storage
+}
+
+func newDirectory(ctx common.Context) *directory {
 	return &directory{
-		logger: logger.Fmt("Directory"),
-		Core:   newStorage(ctx, logger),
+		Core: newStorage(ctx),
 	}
 }
 
@@ -69,7 +71,7 @@ func (d *directory) Joins() <-chan membership {
 	go func() {
 		for m := range ch {
 			if m.Active {
-				ret<-m
+				ret <- m
 			}
 		}
 		close(ret)
@@ -82,8 +84,8 @@ func (d *directory) Evictions() <-chan membership {
 	ret := make(chan membership)
 	go func() {
 		for m := range ch {
-			if ! m.Active {
-				ret<-m
+			if !m.Active {
+				ret <- m
 			}
 		}
 		close(ret)
@@ -96,8 +98,8 @@ func (d *directory) Failures() <-chan health {
 	ret := make(chan health)
 	go func() {
 		for h := range ch {
-			if ! h.Healthy {
-				ret<-h
+			if !h.Healthy {
+				ret <- h
 			}
 		}
 		close(ret)
@@ -128,7 +130,7 @@ func (d *directory) Events() []event {
 
 func (d *directory) Add(m member) error {
 	return d.Core.Update(func(u *update) error {
-		if !m.Healthy {
+		if !m.healthy {
 			return errors.Errorf("Cannot join unhealthy member [%v]", m)
 		}
 
@@ -136,8 +138,8 @@ func (d *directory) Add(m member) error {
 			return errors.Errorf("Member alread joined [%v]", m)
 		}
 
-		u.Put(m.id, m.version, memberHostAttr, m.Host, m.version)
-		u.Put(m.id, m.version, memberPortAttr, m.Port, m.version)
+		u.Put(m.id, m.version, memberHostAttr, m.host, m.version)
+		u.Put(m.id, m.version, memberPortAttr, m.port, m.version)
 		return nil
 	})
 }
@@ -152,7 +154,7 @@ func (d *directory) Evict(m Member) error {
 }
 
 func (d *directory) Fail(m Member) error {
-	d.logger.Error("Failing member [%v]", m)
+	d.Core.logger.Error("Failing member [%v]", m)
 	return d.Core.Update(func(u *update) error {
 		if !u.Del(m.Id(), m.Version(), memberHealthAttr, m.Version()) {
 			return errors.Errorf("Unable to fail member [%v]", m)
@@ -289,7 +291,7 @@ func (d *directory) First(filter func(uuid.UUID, string, string) bool) (ret memb
 // means that no eviction has been seen for this memeber.
 func dirGetActiveMember(v *view, id uuid.UUID) (member, bool) {
 	if m, ok := dirGetMember(v, id); ok {
-		if m.Active {
+		if m.active {
 			return m, true
 		}
 	}
@@ -320,10 +322,10 @@ func dirGetMember(v *view, id uuid.UUID) (member, bool) {
 
 	return member{
 		id:      id,
-		Host:    hostItem.Val,
-		Port:    portItem.Val,
-		Healthy: health.Healthy,
-		Active:  mem.Active,
+		host:    hostItem.Val,
+		port:    portItem.Val,
+		healthy: health.Healthy,
+		active:  mem.Active,
 		version: hostItem.Ver}, true
 }
 
@@ -347,5 +349,14 @@ func dirItemsToEvents(items []item) []event {
 	for _, i := range items {
 		ret = append(ret, i)
 	}
+	return ret
+}
+
+func toMembers(arr []member) []Member {
+	ret := make([]Member, 0, len(arr))
+	for _, m := range arr {
+		ret = append(ret, m)
+	}
+
 	return ret
 }

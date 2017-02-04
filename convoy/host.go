@@ -1,8 +1,9 @@
 package convoy
 
 import (
-	"sync"
+	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
@@ -19,108 +20,94 @@ type host struct {
 	// the root logger.
 	logger common.Logger
 
+	// lifecycle control
+	ctrl common.Control
+
 	// the host id
 	id uuid.UUID
 
-	// the published database.  Updates to this are merged into the directory
-	// and distributed throughout the cluster
+	// the network abstraction
+	net net.Network
+
+	// the
+	server net.Server
+
+	// the local store.
 	db *database
 
-	// the local hostname of the host.  Other members use THIS address to contact the member.
-	hostname string
+	// request channels
+	chs *rpcChannels
 
-	// the port that the replica will be hosted on.
-	port int
+	// the local server address
+	addr string
 
-	// the number of join attempts
-	attempts int
-
-	// the method for retrieving connections to the peer.  returns nil if master.
-	// invoked on each new instance of the replica.
-	peer func() (*client, error)
-
-	// the failure.  set if closed returns a value.
-	failure error
-
-	// constantly pushes the current value until the replica
-	// has been replaced.
+	// constantly pushes the current value until the replica has been replaced.
 	inst chan *replica
-
-	// the wait group.  will return once all child routines have returned.
-	wait sync.WaitGroup
-
-	// returns a value when the o
-	closed chan struct{}
-
-	// the lock that does the failure assignment.
-	closer chan struct{}
 }
 
-func newSeedHost(ctx common.Context, db *database, hostname string, port int) (*host, error) {
-	return newHost(ctx, db, hostname, port, "") // TODO: figure out how to reliably address localhost
-}
+func newHost(ctx common.Context, db *database, network net.Network, addr string, peers []string) (*host, error) {
+	// FIXME: Allow sub contexts without formatting
+	ctx = ctx.Sub("")
 
-func newHost(ctx common.Context, db *database, hostname string, port int, peer string) (*host, error) {
 	id, err := db.Log().Id()
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
+
+	list, err := network.Listen(30*time.Second, addr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	ctx.Control().Defer(func(error) {
+		list.Close()
+	})
+
+	chs := newRpcChannels(ctx)
+	server, err := newServer(ctx, chs, list, 30)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	ctx.Control().Defer(func(error) {
+		server.Close()
+	})
 
 	h := &host{
-		ctx:      ctx,
-		logger:   ctx.Logger().Fmt("Host(%v,%v)", hostname, port),
-		id:       id,
-		db:       db,
-		hostname: hostname,
-		port:     port,
-		attempts: ctx.Config().OptionalInt(Config.JoinAttempts, defaultJoinAttemptsCount),
-		inst:     make(chan *replica),
-		closed:   make(chan struct{}),
-		closer:   make(chan struct{}, 1),
-		peer: func() (*client, error) {
-			if peer == "" {
-				return nil, nil
-			} else {
-				return connectMember(ctx, ctx.Logger().Fmt("PeerFn"), peer)
-			}
-		},
+		ctx:    ctx,
+		logger: ctx.Logger(),
+		ctrl:   ctx.Control(),
+		id:     id,
+		net:    network,
+		server: server,
+		db:     db,
+		chs:    chs,
+		addr:   list.Addr().String(),
+		inst:   make(chan *replica),
 	}
 
-	if err := h.start(); err != nil {
+	if err := h.start(peers); err != nil {
 		return nil, err
 	}
 
 	return h, nil
 }
 
-func (h *host) Shutdown() error {
-	h.logger.Info("Shutting down forcefully")
-
-	rep, err := h.instance()
-	if err != nil {
-		return err
-	}
-
-	return h.shutdown(rep, nil)
-}
-
-func (h *host) Leave() error {
-	h.logger.Info("Shutting down gracefully")
-	rep, err := h.instance()
-	if err != nil {
-		return err
-	}
-
-	return h.shutdown(rep, rep.Leave())
+func (h *host) Id() uuid.UUID {
+	return h.id
 }
 
 func (h *host) Close() error {
 	return h.Leave()
 }
 
+func (h *host) Shutdown() error {
+	h.logger.Info("Shutting down forcefully")
+	return h.ctrl.Close()
+}
 
-func (h *host) Id() uuid.UUID {
-	return h.id
+func (h *host) Leave() error {
+	h.logger.Info("Shutting down gracefully")
+	h.ctrl.Fail(h.chs.Leave(h.ctx.Timer(30*time.Second)))
+	return h.ctrl.Failure()
 }
 
 func (h *host) Self() (Member, error) {
@@ -132,116 +119,109 @@ func (h *host) Self() (Member, error) {
 	return rep.Self, nil
 }
 
-func (h *host) Connect(port int) (net.Connection, error) {
-	rep, err := h.instance()
-	if err != nil {
-		return nil, err
-	}
-
-	return rep.Self.Connect(port)
-}
-
-func (h *host) Store() Store {
-	return &hostDb{h}
-}
-
-func (h *host) Directory() Directory {
-	return &hostDir{h}
+func (h *host) Directory() (Directory, error) {
+	return &hostDir{h.chs}, nil
 }
 
 func (h *host) instance() (r *replica, err error) {
 	select {
-	case <-h.closed:
-		return nil, common.Or(h.failure, ClosedError)
+	case <-h.ctrl.Closed():
+		return nil, common.Or(ClosedError, h.ctrl.Failure())
 	case r = <-h.inst:
 	}
 	return
 }
 
 func (h *host) shutdown(inst *replica, reason error) error {
-	select {
-	case <-h.closed:
-		return ClosedError
-	case h.closer <- struct{}{}:
-	}
-
-	// shutdown the db.
-	h.db.Close()
-
-	// cleanup the current instance
-	if inst != nil {
-		inst.Close()
-	}
-
-	h.failure = reason
-	close(h.closed)
-	h.wait.Wait()
-	return nil
+	inst.Ctrl.Fail(reason)
+	return inst.Ctrl.Failure()
 }
 
-func (h *host) ensureOpen() error {
-	select {
-	case <-h.closed:
-		return common.Or(h.failure, ClosedError)
-	default:
-		return nil
+func (h *host) self(ver int, peers []string) (member, error) {
+	if peers == nil {
+		host, port, err := net.SplitAddr(h.addr)
+		if err != nil {
+			return member{}, errors.WithStack(err)
+		}
+
+		return newMember(h.id, host, port, ver), nil
 	}
+
+	try := func(peer string) (member, error) {
+		cl, err := connectMember(h.ctx, h.net, 30*time.Second, peer)
+		if err != nil {
+			return member{}, err
+		}
+		defer cl.Close()
+
+		host, port, err := net.SplitAddr(cl.Raw.Local().String())
+		if err != nil {
+			return member{}, err
+		}
+
+		return newMember(h.id, host, port, ver), nil
+	}
+
+	var mem member
+	var err error
+	for _, peer := range peers {
+		mem, err = try(peer)
+		if err == nil {
+			return mem, nil
+		}
+	}
+
+	return mem, err
 }
 
-func (h *host) newReplica() (*replica, error) {
-	cl, err := h.peer()
+func (h *host) initReplica(ver int, peers []string) (*replica, error) {
+	self, err := h.self(ver, peers)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
-	if cl == nil {
-		return newSeedReplica(h.ctx, h.db, h.hostname, h.port)
+	cur, err := newReplica(h.chs, h.net, h.db, self)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
-	defer cl.Close()
-	return newReplica(h.ctx, h.db, h.hostname, h.port, cl)
+
+	if peers != nil && len(peers) > 0 {
+		if err := cur.Join(peers); err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
+
+	return cur, nil
 }
 
-func (h *host) start() error {
-	cur, err := h.newReplica()
+func (h *host) start(peers []string) error {
+	// FIXME: get version from changelog!!!
+	cur, err := h.initReplica(0, peers)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
-	h.wait.Add(1)
 	go func() {
-		defer h.wait.Done()
 		defer h.logger.Info("Manager shutting down")
 		for {
 			select {
-			case <-h.closed:
+			case <-h.ctrl.Closed():
 				return
 			case h.inst <- cur:
 				continue
-			case <-cur.Closed:
-
-				// if it shutdown due to irrecoverable failure, just bail out
-				if cur.Failure != FailedError {
-					h.shutdown(cur, cur.Failure)
+			case <-cur.Ctrl.Closed():
+				err := cur.Ctrl.Failure()
+				if err != FailedError {
+					h.ctrl.Fail(err)
 					return
 				}
 
-				var err error
-				var tmp *replica
-				for i := 0; i < h.attempts; i++ {
+				for i := 0; ; i++ {
 					h.logger.Info("Attempt [%v] to rejoin cluster.", i)
-					tmp, err = h.newReplica()
-					if err != nil {
-						continue
+					if tmp, err := h.initReplica(cur.Self.version + 1, peers); err == nil {
+						cur = tmp
+						break
 					}
-
-					cur = tmp
-					break
-				}
-
-				if err != nil {
-					h.logger.Error("Unable to rejoin cluster")
-					h.shutdown(nil, err)
-					return
 				}
 
 				h.logger.Info("Successfully rejoined cluster")
@@ -274,98 +254,34 @@ func (d *hostDb) Del(key string, expected int) (bool, Item, error) {
 	return d.h.db.Del(key, expected)
 }
 
-// The host directory.  The goal of the directory is to ensure that the user
-// is always working on the latest version of the directory - even in the
-// event of disconnects, failures, or evictions.
 type hostDir struct {
-	h *host
+	chs *rpcChannels
 }
 
-func (d *hostDir) Get(id uuid.UUID) (Member, error) {
-	for {
-		replica, err := d.h.instance()
+func (h *hostDir) Close() error {
+	panic("not implemented")
+}
+
+func (h *hostDir) Get(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
+	panic("not implemented")
+}
+
+func (h *hostDir) All(cancel <-chan struct{}) ([]Member, error) {
+	for ! common.IsCanceled(cancel) {
+		dir, err := h.chs.Directory(cancel)
 		if err != nil {
-			return nil, err
+			continue
 		}
 
-		m, ok := replica.Dir.Get(id)
-		if ok {
-			return m, nil
-		}
+		return toMembers(dir.AllActive()), nil
 	}
+	return nil, errors.WithStack(common.CanceledError)
 }
 
-func (d *hostDir) All() ([]Member, error) {
-	for {
-		replica, err := d.h.instance()
-		if err != nil {
-			return nil, err
-		}
-
-		return hostInternalMemberToMember(replica.Dir.AllActive()), nil
-	}
+func (h *hostDir) Evict(cancel <-chan struct{}, id uuid.UUID) error {
+	panic("not implemented")
 }
 
-func (d *hostDir) Evict(m Member) error {
-	for {
-		replica, err := d.h.instance()
-		if err != nil {
-			return err
-		}
-
-		err = replica.Dir.Evict(m)
-		if err != ClosedError {
-			return err
-		}
-	}
-}
-
-func (d *hostDir) Fail(m Member) error {
-	for {
-		replica, err := d.h.instance()
-		if err != nil {
-			return err
-		}
-
-		err = replica.Dir.Fail(m)
-		if err != ClosedError {
-			return err
-		}
-	}
-}
-
-func (d *hostDir) Search(filter func(uuid.UUID, string, string) bool) ([]Member, error) {
-	for {
-		replica, err := d.h.instance()
-		if err != nil {
-			return nil, err
-		}
-
-		return hostInternalMemberToMember(replica.Dir.Search(filter)), nil
-	}
-}
-
-func (d *hostDir) First(filter func(uuid.UUID, string, string) bool) (Member, error) {
-	for {
-		replica, err := d.h.instance()
-		if err != nil {
-			return nil, err
-		}
-
-		m, ok := replica.Dir.First(filter)
-		if ok {
-			return m, nil
-		} else {
-			return nil, nil
-		}
-	}
-}
-
-func hostInternalMemberToMember(arr []member) []Member {
-	ret := make([]Member, 0, len(arr))
-	for _, m := range arr {
-		ret = append(ret, m)
-	}
-
-	return ret
+func (h *hostDir) Fail(cancel <-chan struct{}, id uuid.UUID) error {
+	panic("not implemented")
 }

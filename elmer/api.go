@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
+	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
 )
 
@@ -18,11 +18,11 @@ var (
 	CanceledError = errors.New("Elmer:CanceledError")
 )
 
-func Start(ctx common.Context, net net.Network, self kayak.Peer) (Store, error) {
+func Start(ctx common.Context, net net.Network, self kayak.Host) (Store, error) {
 	return nil, nil
 }
 
-func Join(ctx common.Context, net net.Network, self kayak.Peer, addrs []string) (Store, error) {
+func Join(ctx common.Context, net net.Network, self kayak.Host, addrs []string) (Store, error) {
 	return nil, nil
 }
 

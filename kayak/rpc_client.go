@@ -24,7 +24,7 @@ func connect(ctx common.Context, network net.Network, timeout time.Duration, add
 		}
 	}()
 
-	cl, err := net.NewClient(ctx, conn)
+	cl, err := net.NewClient(ctx, conn, net.Json)
 	if cl == nil || err != nil {
 		return nil, errors.Wrapf(err, "Unable to connect to [%v]", addr)
 	}
@@ -137,8 +137,7 @@ type rpcClientPool struct {
 }
 
 func newRpcClientPool(ctx common.Context, network net.Network, peer peer, size int) *rpcClientPool {
-	ctx = ctx.Sub("ClientPool(%v,%v)", peer, size)
-	return &rpcClientPool{ctx, common.NewObjectPool(ctx, size, newRpcClientConstructor(ctx, network, peer))}
+	return &rpcClientPool{ctx, common.NewObjectPool(ctx.Control(), size, newRpcClientConstructor(ctx, network, peer))}
 }
 
 func (c *rpcClientPool) Close() error {

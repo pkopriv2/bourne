@@ -136,7 +136,7 @@ func Cause(err error) error {
 	return extractError(err)
 }
 
-func Start(ctx common.Context, deps Dependencies, addr string) (Peer, error) {
+func Start(ctx common.Context, deps Dependencies, addr string) (Host, error) {
 	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Storage, addr)
 	if err != nil {
 		return nil, err
@@ -145,7 +145,7 @@ func Start(ctx common.Context, deps Dependencies, addr string) (Peer, error) {
 	return host, host.Start()
 }
 
-func Join(ctx common.Context, deps Dependencies, addr string, peers []string) (Peer, error) {
+func Join(ctx common.Context, deps Dependencies, addr string, peers []string) (Host, error) {
 	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Storage, addr)
 	if err != nil {
 		return nil, err
@@ -155,7 +155,7 @@ func Join(ctx common.Context, deps Dependencies, addr string, peers []string) (P
 	return host, host.Join(peers[0])
 }
 
-func StartDefault(ctx common.Context, addr string) (Peer, error) {
+func StartDefault(ctx common.Context, addr string) (Host, error) {
 	opts, err := NewDefaultDependencies(ctx)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func StartDefault(ctx common.Context, addr string) (Peer, error) {
 	return Start(ctx, opts, addr)
 }
 
-func JoinDefault(ctx common.Context, addr string, peers []string) (Peer, error) {
+func JoinDefault(ctx common.Context, addr string, peers []string) (Host, error) {
 	opts, err := NewDefaultDependencies(ctx)
 	if err != nil {
 		return nil, err
@@ -173,8 +173,8 @@ func JoinDefault(ctx common.Context, addr string, peers []string) (Peer, error) 
 	return Join(ctx, opts, addr, peers)
 }
 
-// A peer is a member of a cluster that is actively participating in log replication.
-type Peer interface {
+// A host is a member of a cluster that is actively participating in log replication.
+type Host interface {
 	io.Closer
 
 	// Returns the context to which this peer is bound
@@ -204,8 +204,8 @@ type Log interface {
 	// Returns the index of the maximum committed item in the local log.
 	Committed() int
 
-	// Returns the latest snaphot and the maximum index that the events
-	// stream represents.
+	// Returns the latest snaphot and the maximum index that the events stream
+	// represents.
 	Snapshot() (int, EventStream, error)
 
 	// Listen generates a stream of committed log entries starting at and
@@ -234,8 +234,7 @@ type Log interface {
 	// Once the snapshot has been safely stored, the log until and including
 	// the index will be deleted. This method is synchronous, but can be called
 	// concurrent to other log methods. It should be considered safe for the
-	// machine to continue to serve requests normally while a compaction is
-	// processing.
+	// machine to continue to serve requests while a compaction is processing.
 	//
 	// Concurrent compactions are possible, however, an invariant of the log
 	// is that it must always progress.  Therefore, an older snapshot cannot

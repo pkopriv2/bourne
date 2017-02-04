@@ -6,7 +6,7 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-type server struct {
+type rpcServer struct {
 	ctx    common.Context
 	logger common.Logger
 	self   *replica
@@ -14,11 +14,11 @@ type server struct {
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, self *replica, listener net.Listener, workers int) (net.Server, error) {
-	server := &server{ctx: ctx, logger: ctx.Logger(), self: self}
+	server := &rpcServer{ctx: ctx, logger: ctx.Logger(), self: self}
 	return net.NewServer(ctx, listener, serverInitHandler(server), workers)
 }
 
-func serverInitHandler(s *server) func(net.Request) net.Response {
+func serverInitHandler(s *rpcServer) func(net.Request) net.Response {
 	return func(req net.Request) net.Response {
 		action, err := readMeta(req.Meta())
 		if err != nil {
@@ -46,11 +46,11 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 	}
 }
 
-func (s *server) Status(req net.Request) net.Response {
+func (s *rpcServer) Status(req net.Request) net.Response {
 	return status{s.self.Id, s.self.CurrentTerm(), s.self.Cluster()}.Response()
 }
 
-func (s *server) ReadBarrier(req net.Request) net.Response {
+func (s *rpcServer) ReadBarrier(req net.Request) net.Response {
 	val, err := s.self.ReadBarrier()
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -59,7 +59,7 @@ func (s *server) ReadBarrier(req net.Request) net.Response {
 	return newReadBarrierResponse(val)
 }
 
-func (s *server) UpdateRoster(req net.Request) net.Response {
+func (s *rpcServer) UpdateRoster(req net.Request) net.Response {
 	update, err := readRosterUpdate(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -68,7 +68,7 @@ func (s *server) UpdateRoster(req net.Request) net.Response {
 	return net.NewErrorResponse(s.self.UpdateRoster(update))
 }
 
-func (s *server) InstallSnapshot(req net.Request) net.Response {
+func (s *rpcServer) InstallSnapshot(req net.Request) net.Response {
 	snapshot, err := readInstallSnapshot(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -82,7 +82,7 @@ func (s *server) InstallSnapshot(req net.Request) net.Response {
 	return resp.Response()
 }
 
-func (s *server) Replicate(req net.Request) net.Response {
+func (s *rpcServer) Replicate(req net.Request) net.Response {
 	replicate, err := readReplicate(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -96,7 +96,7 @@ func (s *server) Replicate(req net.Request) net.Response {
 	return resp.Response()
 }
 
-func (s *server) RequestVote(req net.Request) net.Response {
+func (s *rpcServer) RequestVote(req net.Request) net.Response {
 	voteRequest, err := readRequestVote(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -110,7 +110,7 @@ func (s *server) RequestVote(req net.Request) net.Response {
 	return resp.Response()
 }
 
-func (s *server) Append(req net.Request) net.Response {
+func (s *rpcServer) Append(req net.Request) net.Response {
 	append, err := readAppendEvent(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)

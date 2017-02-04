@@ -18,7 +18,6 @@ type ObjectPool interface {
 
 type objectPool struct {
 	ctrl   Control
-	logger Logger
 	fn     func() (io.Closer, error)
 	raw    *list.List
 	max    int
@@ -26,18 +25,16 @@ type objectPool struct {
 	ret    chan io.Closer
 }
 
-func NewObjectPool(ctx Context, max int, fn func() (io.Closer, error)) ObjectPool {
-	ctx = ctx.Sub("")
+func NewObjectPool(ctrl Control, max int, fn func() (io.Closer, error)) ObjectPool {
 	p := &objectPool{
-		ctrl:   ctx.Control(),
-		logger: ctx.Logger(),
+		ctrl:   ctrl.Sub(),
 		fn:     fn,
 		max:    max,
 		raw:    list.New(),
 		take:   make(chan io.Closer),
 		ret:    make(chan io.Closer, max),
 	}
-	ctx.Control().Defer(func(error) {
+	ctrl.Defer(func(error) {
 		p.closePool()
 	})
 
