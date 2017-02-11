@@ -189,7 +189,7 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts, err := StartTestCluster(ctx, 3)
+	hosts, err := StartTestCluster(ctx, 16)
 	assert.Nil(t, err)
 
 	fails := make([]Listener, 0, len(hosts))
@@ -201,17 +201,6 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 		assert.Nil(t, err)
 
 		fails = append(fails, l)
-	}
-
-	joins := make([]Listener, 0, len(hosts))
-	for _, h := range hosts {
-		dir, err := h.Directory()
-		assert.Nil(t, err)
-
-		l, err := dir.Joins()
-		assert.Nil(t, err)
-
-		joins = append(joins, l)
 	}
 
 	self0, err := hosts[0].Self()
@@ -234,96 +223,28 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 		}
 	}
 
-	for _, l := range joins[1:] {
-		for {
-			select {
-			case <-timer.Closed():
-				assert.Fail(t, "Failed to receive join notification")
-				return
-			case id := <-l.Data():
-				if self0.Id() == id {
-					break
-				}
+	SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+		dir, err := h.Directory()
+		if err != nil {
+			return false
+		}
+
+		timer := ctx.Timer(30*time.Second)
+		defer timer.Close()
+
+		all, err := dir.All(timer.Closed())
+		if err != nil {
+			return false
+		}
+
+		for _, m := range all {
+			if m.Id() == self0.Id() && m.Version() > self0.Version() {
+				return true
 			}
 		}
-	}
+		return false
+	})
 
-	assert.False(t, fails[0].Ctrl().IsClosed())
-	assert.False(t, joins[0].Ctrl().IsClosed())
-	assert.False(t, hosts[0].(*host).ctrl.IsClosed())
+	assert.False(t, timer.IsClosed())
 }
-// func TestHost_Failed(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Info),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// hosts := StartTestHostCluster(ctx, 16)
-//
-// idx := rand.Intn(len(hosts))
-// failed := hosts[idx]
-//
-// for i := 0; i < 3; i++ {
-// r := <-failed.inst
-// r.Server.Close()
-//
-// r.Logger.Info("Sleeping")
-// time.Sleep(3 * time.Second)
-// r.Logger.Info("Done Sleeping")
-//
-// done, timeout := concurrent.NewBreaker(10*time.Second, func() {
-// SyncHostCluster(hosts, func(h *host) bool {
-// all, err := h.Directory().All()
-// if err != nil {
-// panic(err)
-// }
-//
-// return len(all) == len(hosts)
-// })
-// })
-//
-// select {
-// case <-done:
-// case <-timeout:
-// assert.Fail(t, "Timed out waiting for member to rejoined")
-// }
-// }
-// }
-//
-// func TestHost_Update_All(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Info),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// hosts := StartTestHostCluster(ctx, 16)
-//
-// for _, h := range hosts {
-// h.logger.Info("Writing key,val")
-// h.Store().Put("key", "val", 0)
-// }
-//
-// done, timeout := concurrent.NewBreaker(10*time.Second, func() {
-// SyncHostCluster(hosts, func(h *host) bool {
-// found, _ := h.Directory().Search(func(id uuid.UUID, key string, val string) bool {
-// if key == "key" {
-// return true
-// }
-// return false
-// })
-//
-// return len(found) == len(hosts)
-// })
-// })
-//
-// select {
-// case <-done:
-// case <-timeout:
-// assert.Fail(t, "Timed out waiting for member to rejoined")
-// }
-// }
-//
+

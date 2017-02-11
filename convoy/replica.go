@@ -40,6 +40,7 @@ func newReplica(ctx common.Context, net net.Network) *replicaIface {
 	}
 }
 
+
 func (r *replicaIface) Joins() *listener {
 	return newListener(r.ctx, r.joins)
 }
@@ -66,6 +67,16 @@ func (r *replicaIface) Self(cancel <-chan struct{}) (Member, error) {
 		return nil, errors.WithStack(err)
 	}
 	return raw.(Member), nil
+}
+
+func (r *replicaIface) Dump(cancel <-chan struct{}) (string, error) {
+	raw, err := r.DirView(cancel, func(dir *directory) interface{} {
+		return dir.String()
+	})
+	if err != nil {
+		return "", errors.WithStack(err)
+	}
+	return raw.(string), nil
 }
 
 func (r *replicaIface) Evict(cancel <-chan struct{}, m Member) error {
@@ -409,7 +420,9 @@ func (r *replicaEpoch) handlePushPull(req *common.Request) {
 	err := r.Pool.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(rpcPushPullRequest)
 
-		r.Logger.Info("Handling push pull: %v", len(rpc.events))
+		// for _, e := range rpc.events {
+			// // r.Logger.Info("Handling push: %v", e)
+		// }
 
 		var unHealthy bool
 		r.Dir.Core.View(func(v *view) {

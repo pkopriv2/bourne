@@ -1,6 +1,9 @@
 package convoy
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
@@ -49,7 +52,16 @@ func newDirectory(ctx common.Context) *directory {
 	}
 }
 
-func (d *directory) Close() (ret error) {
+func (d *directory) String() string {
+	all := d.Events()
+	strs := make([]string, 0, len(all))
+	for _, e := range all {
+		strs = append(strs, fmt.Sprintf("%v", e))
+	}
+	return strings.Join(strs, "\n")
+}
+
+func (d *directory) Close() error {
 	return d.Core.Close()
 }
 

@@ -1,6 +1,8 @@
 package convoy
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -119,7 +121,7 @@ func (h *host) start(peers []string) error {
 
 				for i := 1; ; i++ {
 					h.logger.Info("Attempt [%v] to rejoin cluster.", i)
-					if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(cur.Dir.AllActive())); err == nil {
+					if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(cur.Dir.AllHealthy())); err == nil {
 						cur = tmp
 						break
 					}
@@ -254,4 +256,20 @@ func (h *localDir) Evict(cancel <-chan struct{}, m Member) error {
 
 func (h *localDir) Fail(cancel <-chan struct{}, m Member) error {
 	return h.chs.Fail(cancel, m)
+}
+
+func (h *localDir) String() string {
+	timer := h.chs.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	all, err := h.All(timer.Closed())
+	if err != nil {
+		return "Error(Unable to print dir)"
+	}
+
+	strs := make([]string, 0, len(all))
+	for _, e := range all {
+		strs = append(strs, fmt.Sprintf("%v", e))
+	}
+	return strings.Join(strs, "\n")
 }
