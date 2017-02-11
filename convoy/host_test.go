@@ -46,15 +46,15 @@ func TestHost_Join_Three_Peers(t *testing.T) {
 
 func TestHost_Join_Many_Peers(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts, err := StartTestCluster(ctx, 16)
+	hosts, err := StartTestCluster(ctx, 256)
 	assert.Nil(t, err)
-	assert.Equal(t, 16, len(hosts))
+	assert.Equal(t, 256, len(hosts))
 }
 
 // func TestHost_Failed(t *testing.T) {

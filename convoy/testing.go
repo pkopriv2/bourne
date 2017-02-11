@@ -84,7 +84,6 @@ func StartTestCluster(ctx common.Context, num int) ([]Host, error) {
 			return nil, errors.WithStack(err)
 		}
 
-		time.Sleep(2*time.Second)
 		cluster = append(cluster, cur)
 	}
 
@@ -99,7 +98,7 @@ func StartTestCluster(ctx common.Context, num int) ([]Host, error) {
 			panic(err)
 		}
 
-		h.(*host).logger.Info("Current roster size: %v", len(all))
+		// h.(*host).logger.Info("Current roster size: %v", len(all))
 		return len(all) == len(cluster)
 	})
 

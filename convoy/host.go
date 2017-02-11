@@ -154,9 +154,14 @@ func (h *host) self(ver int, peers []string) (member, error) {
 		}
 		defer cl.Close()
 
-		host, port, err := net.SplitAddr(cl.Raw.Local().String())
+		host, _, err := net.SplitAddr(cl.Raw.Local().String())
 		if err != nil {
 			return member{}, err
+		}
+
+		_, port, err := net.SplitAddr(h.addr)
+		if err != nil {
+			return member{}, errors.WithStack(err)
 		}
 
 		return newMember(h.id, host, port, ver), nil

@@ -180,7 +180,7 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			// d.logger.Info("Received failure response from [%v].  %+v.", m, err)
+			d.logger.Info("Received failure response from [%v].  %+v.", m, err)
 			if err == FailedError {
 				d.logger.Error("Received failure response from [%v].  Evicting self.", m)
 				d.dir.Fail(d.self)

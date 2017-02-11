@@ -299,11 +299,12 @@ func (s *client) recv() (resp Response, err error) {
 // Server implementation
 func NewServer(ctx common.Context, listener Listener, handler Handler, workers int) (Server, error) {
 	ctx = ctx.Sub("Server(%v)", listener.Addr().String())
+	ctx.Logger().Info("Starting")
 
 	ctrl := ctx.Control()
-	// ctrl.Defer(func(error) {
-		// listener.Close()
-	// })
+	ctrl.Defer(func(error) {
+		listener.Close()
+	})
 
 	pool := common.NewWorkPool(ctrl, workers)
 	ctrl.Defer(func(error) {
