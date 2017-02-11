@@ -87,7 +87,7 @@ func StartTestCluster(ctx common.Context, num int) ([]Host, error) {
 		cluster = append(cluster, cur)
 	}
 
-	timer := ctx.Timer(30*time.Second)
+	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
 	SyncCluster(timer.Closed(), cluster, func(h Host) bool {
@@ -96,10 +96,10 @@ func StartTestCluster(ctx common.Context, num int) ([]Host, error) {
 			return false
 		}
 
-		timer := ctx.Timer(30*time.Second)
+		timer := ctx.Timer(30 * time.Second)
 		defer timer.Close()
 
-		all, err := dir.All(timer.Closed())
+		all, err := dir.AllMembers(timer.Closed())
 		if err != nil {
 			return false
 		}
@@ -122,7 +122,7 @@ func SyncCluster(cancel <-chan struct{}, cluster []Host, fn func(r Host) bool) {
 	start := time.Now()
 
 	cluster[0].(*host).logger.Info("Syncing cluster [%v]", len(cluster))
-	for len(done) < len(cluster) && ! common.IsCanceled(cancel) {
+	for len(done) < len(cluster) && !common.IsCanceled(cancel) {
 		cluster[0].(*host).logger.Info("Number of sync'ed: %v", len(done))
 		for _, r := range cluster {
 			id := r.Id()

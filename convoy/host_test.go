@@ -118,7 +118,7 @@ func TestHost_Evict_Listener(t *testing.T) {
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
 
-	assert.Nil(t, dir1.Evict(timer.Closed(), self0))
+	assert.Nil(t, dir1.EvictMember(timer.Closed(), self0))
 
 	for _, l := range lists[1:] {
 		select {
@@ -167,7 +167,7 @@ func TestHost_Fail_Listener(t *testing.T) {
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
 
-	assert.Nil(t, dir1.Fail(timer.Closed(), self0))
+	assert.Nil(t, dir1.FailMember(timer.Closed(), self0))
 	for _, l := range lists[1:] {
 		select {
 		case <-timer.Closed():
@@ -211,7 +211,7 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 
 	timer := ctx.Timer(5 * time.Second)
 	defer timer.Close()
-	assert.Nil(t, dir1.Fail(timer.Closed(), self0))
+	assert.Nil(t, dir1.FailMember(timer.Closed(), self0))
 
 	for _, l := range fails[1:] {
 		select {
@@ -229,10 +229,10 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 			return false
 		}
 
-		timer := ctx.Timer(30*time.Second)
+		timer := ctx.Timer(30 * time.Second)
 		defer timer.Close()
 
-		all, err := dir.All(timer.Closed())
+		all, err := dir.AllMembers(timer.Closed())
 		if err != nil {
 			return false
 		}
@@ -249,32 +249,32 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 }
 
 // func TestHost_Store_Put(t *testing.T) {
-	// conf := common.NewConfig(map[string]interface{}{
-		// "bourne.log.level": int(common.Debug),
-	// })
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Debug),
+// })
 //
-	// ctx := common.NewContext(conf)
-	// defer ctx.Close()
+// ctx := common.NewContext(conf)
+// defer ctx.Close()
 //
-	// hosts, err := StartTestCluster(ctx, 8)
-	// assert.Nil(t, err)
+// hosts, err := StartTestCluster(ctx, 8)
+// assert.Nil(t, err)
 //
-	// store0, err := hosts[0].Store()
-	// assert.Nil(t, err)
+// store0, err := hosts[0].Store()
+// assert.Nil(t, err)
 //
-	// ok, item, err := store0.Put("key", "val", 0)
-	// assert.True(t, ok)
+// ok, item, err := store0.Put("key", "val", 0)
+// assert.True(t, ok)
 //
-	// timer := ctx.Timer(10 * time.Second)
-	// defer timer.Close()
+// timer := ctx.Timer(10 * time.Second)
+// defer timer.Close()
 //
-	// SyncCluster(timer.Closed(), hosts, func(h Host) bool {
-		// dir, err := h.Directory()
-		// if err != nil {
-			// return false
-		// }
-		// return false
-	// })
+// SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+// dir, err := h.Directory()
+// if err != nil {
+// return false
+// }
+// return false
+// })
 //
-	// assert.False(t, timer.IsClosed())
+// assert.False(t, timer.IsClosed())
 // }

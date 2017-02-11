@@ -1,8 +1,6 @@
 package convoy
 
 import (
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -176,29 +174,6 @@ func (h *host) epoch(ver int, peers []string) (*replicaEpoch, error) {
 	return initEpoch(h.iface, h.net, h.db, h.id, ver, h.addr, peers)
 }
 
-// The host db simply manages access to the underlying local store.
-// Mostly it prevents consumers from erroneously disconnecting the
-// local database.
-type localDb struct {
-	db *database
-}
-
-func (d *localDb) Close() error {
-	return nil
-}
-
-func (d *localDb) Get(cancel <-chan struct{}, key string) (bool, Item, error) {
-	return d.db.Get(key)
-}
-
-func (d *localDb) Put(cancel <-chan struct{}, key string, val string, expected int) (bool, Item, error) {
-	return d.db.Put(key, val, expected)
-}
-
-func (d *localDb) Del(cancel <-chan struct{}, key string, expected int) (bool, Item, error) {
-	return d.db.Del(key, expected)
-}
-
 type localDir struct {
 	iface *replicaIface
 }
@@ -228,7 +203,15 @@ func (h *localDir) Failures() (Listener, error) {
 	return h.iface.Failures(), nil
 }
 
-func (h *localDir) Get(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
+func (h *localDir) EvictMember(cancel <-chan struct{}, m Member) error {
+	return h.iface.Evict(cancel, m)
+}
+
+func (h *localDir) FailMember(cancel <-chan struct{}, m Member) error {
+	return h.iface.Fail(cancel, m)
+}
+
+func (h *localDir) GetMember(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
 	for !common.IsCanceled(cancel) {
 		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
 			if m, ok := dir.Get(id); ok {
@@ -245,7 +228,7 @@ func (h *localDir) Get(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
 	return nil, errors.WithStack(common.CanceledError)
 }
 
-func (h *localDir) All(cancel <-chan struct{}) ([]Member, error) {
+func (h *localDir) AllMembers(cancel <-chan struct{}) ([]Member, error) {
 	for !common.IsCanceled(cancel) {
 		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
 			return toMembers(dir.AllActive())
@@ -258,26 +241,56 @@ func (h *localDir) All(cancel <-chan struct{}) ([]Member, error) {
 	return nil, errors.WithStack(common.CanceledError)
 }
 
-func (h *localDir) Evict(cancel <-chan struct{}, m Member) error {
-	return h.iface.Evict(cancel, m)
-}
-
-func (h *localDir) Fail(cancel <-chan struct{}, m Member) error {
-	return h.iface.Fail(cancel, m)
+func (h *localDir) GetMemberValue(cancel <-chan struct{}, id uuid.UUID, key string) (string, bool, error) {
+	type item struct{
+		val string
+		ok  bool
+	}
+	for !common.IsCanceled(cancel) {
+		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
+			return item{}
+		})
+		if err != nil || raw == nil {
+			continue
+		}
+		return raw.(item).val, raw.(item).ok, nil
+	}
+	return "", false, errors.WithStack(common.CanceledError)
 }
 
 func (h *localDir) String() string {
 	timer := h.iface.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	all, err := h.All(timer.Closed())
-	if err != nil {
-		return "Error(Unable to print dir)"
+	raw, err := h.iface.DirView(timer.Closed(), func(dir *directory) interface{} {
+		return dir.String()
+	})
+	if err != nil || raw == nil {
+		return "Dir"
 	}
 
-	strs := make([]string, 0, len(all))
-	for _, e := range all {
-		strs = append(strs, fmt.Sprintf("%v", e))
-	}
-	return strings.Join(strs, "\n")
+	return raw.(string)
+}
+
+// The host db simply manages access to the underlying local store.
+// Mostly it prevents consumers from erroneously disconnecting the
+// local database.
+type localDb struct {
+	db *database
+}
+
+func (d *localDb) Close() error {
+	return nil
+}
+
+func (d *localDb) Get(cancel <-chan struct{}, key string) (bool, Item, error) {
+	return d.db.Get(key)
+}
+
+func (d *localDb) Put(cancel <-chan struct{}, key string, val string, expected int) (bool, Item, error) {
+	return d.db.Put(key, val, expected)
+}
+
+func (d *localDb) Del(cancel <-chan struct{}, key string, expected int) (bool, Item, error) {
+	return d.db.Del(key, expected)
 }

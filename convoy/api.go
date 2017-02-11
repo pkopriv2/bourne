@@ -38,11 +38,12 @@ func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error)
 		return nil, errors.WithStack(err)
 	}
 
-	if host, err := newHost(ctx, db, opts.Network, addr, nil); err == nil {
-		return host, err
+	host, err := newHost(ctx, db, opts.Network, addr, nil)
+	if err == nil {
+		return host, nil
+	} else {
+		return nil, err
 	}
-
-	return nil, err
 }
 
 func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)) (Host, error) {
@@ -56,11 +57,12 @@ func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)
 		return nil, errors.WithStack(err)
 	}
 
-	if host, err := newHost(ctx, db, opts.Network, addr, peers); err == nil {
-		return host, err
+	host, err := newHost(ctx, db, opts.Network, addr, peers)
+	if err == nil {
+		return host, nil
+	} else {
+		return nil, err
 	}
-
-	return nil, err
 }
 
 // A host is the local member participating in and disseminating a shared
@@ -129,17 +131,21 @@ type Directory interface {
 	Failures() (Listener, error)
 
 	// Retrieves the member with the given id.  Nil if the member doesn't exist.
-	Get(cancel <-chan struct{}, id uuid.UUID) (Member, error)
+	GetMember(cancel <-chan struct{}, id uuid.UUID) (Member, error)
 
 	// Returns all of the currently active members.
-	All(cancel <-chan struct{}) ([]Member, error)
+	AllMembers(cancel <-chan struct{}) ([]Member, error)
 
 	// Evicts a member from the cluster.  The member will NOT automatically rejoin on eviction.
-	Evict(cancel <-chan struct{}, m Member) error
+	EvictMember(cancel <-chan struct{}, m Member) error
 
 	// Marks a member as being failed.  The next time the member contacts an
 	// infected member, he will be forced to leave the cluster and rejoin.
-	Fail(cancel <-chan struct{}, m Member) error
+	FailMember(cancel <-chan struct{}, m Member) error
+
+	// Retrieves the member value with the given key and a flag indicating
+	// whether or not the item exists.
+	GetMemberValue(cancel <-chan struct{}, id uuid.UUID, key string) (val string, ok bool, err error)
 }
 
 type Listener interface {
