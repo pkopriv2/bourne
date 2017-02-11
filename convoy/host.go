@@ -36,13 +36,13 @@ type host struct {
 	db *database
 
 	// request channels
-	chs *rpcChannels
+	chs *replica
 
 	// the local server address
 	addr string
 
 	// constantly pushes the current value until the replica has been replaced.
-	inst chan *replica
+	inst chan *replicaEpoch
 }
 
 func newHost(ctx common.Context, db *database, network net.Network, addr string, peers []string) (*host, error) {
@@ -62,7 +62,7 @@ func newHost(ctx common.Context, db *database, network net.Network, addr string,
 		list.Close()
 	})
 
-	chs := newRpcChannels(ctx)
+	chs := newReplica(ctx, network)
 	server, err := newServer(ctx, chs, list, 30)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -81,7 +81,7 @@ func newHost(ctx common.Context, db *database, network net.Network, addr string,
 		db:     db,
 		chs:    chs,
 		addr:   list.Addr().String(),
-		inst:   make(chan *replica),
+		inst:   make(chan *replicaEpoch),
 	}
 
 	if err := h.start(peers); err != nil {
@@ -89,6 +89,43 @@ func newHost(ctx common.Context, db *database, network net.Network, addr string,
 	}
 
 	return h, nil
+}
+
+func (h *host) start(peers []string) error {
+	// FIXME: get version from changelog!!!
+	cur, err := h.epoch(0, peers)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	go func() {
+		defer h.logger.Info("Manager shutting down")
+		for {
+			select {
+			case <-h.ctrl.Closed():
+				return
+			case h.inst <- cur:
+				continue
+			case <-cur.Ctrl.Closed():
+				err := cur.Ctrl.Failure()
+				if err != FailedError {
+					h.ctrl.Fail(err)
+					return
+				}
+
+				for i := 0; ; i++ {
+					h.logger.Info("Attempt [%v] to rejoin cluster.", i)
+					if tmp, err := h.epoch(cur.Self.version+1, peers); err == nil {
+						cur = tmp
+						break
+					}
+				}
+
+				h.logger.Info("Successfully rejoined cluster")
+			}
+		}
+	}()
+	return nil
 }
 
 func (h *host) Id() uuid.UUID {
@@ -106,35 +143,16 @@ func (h *host) Shutdown() error {
 
 func (h *host) Leave() error {
 	h.logger.Info("Shutting down gracefully")
-	h.ctrl.Fail(h.chs.Leave(h.ctx.Timer(30*time.Second)))
+	h.ctrl.Fail(h.chs.Leave(h.ctx.Timer(30 * time.Second)))
 	return h.ctrl.Failure()
 }
 
 func (h *host) Self() (Member, error) {
-	rep, err := h.instance()
-	if err != nil {
-		return nil, err
-	}
-
-	return rep.Self, nil
+	return h.chs.Self(h.ctx.Timer(30 * time.Second))
 }
 
 func (h *host) Directory() (Directory, error) {
-	return &hostDir{h.chs}, nil
-}
-
-func (h *host) instance() (r *replica, err error) {
-	select {
-	case <-h.ctrl.Closed():
-		return nil, common.Or(ClosedError, h.ctrl.Failure())
-	case r = <-h.inst:
-	}
-	return
-}
-
-func (h *host) shutdown(inst *replica, reason error) error {
-	inst.Ctrl.Fail(reason)
-	return inst.Ctrl.Failure()
+	return &localDir{h.chs}, nil
 }
 
 func (h *host) self(ver int, peers []string) (member, error) {
@@ -179,13 +197,13 @@ func (h *host) self(ver int, peers []string) (member, error) {
 	return mem, err
 }
 
-func (h *host) initReplica(ver int, peers []string) (*replica, error) {
+func (h *host) epoch(ver int, peers []string) (*replicaEpoch, error) {
 	self, err := h.self(ver, peers)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	cur, err := newReplica(h.chs, h.net, h.db, self)
+	cur, err := newEpoch(h.chs, h.net, h.db, self)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -199,94 +217,92 @@ func (h *host) initReplica(ver int, peers []string) (*replica, error) {
 	return cur, nil
 }
 
-func (h *host) start(peers []string) error {
-	// FIXME: get version from changelog!!!
-	cur, err := h.initReplica(0, peers)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	go func() {
-		defer h.logger.Info("Manager shutting down")
-		for {
-			select {
-			case <-h.ctrl.Closed():
-				return
-			case h.inst <- cur:
-				continue
-			case <-cur.Ctrl.Closed():
-				err := cur.Ctrl.Failure()
-				if err != FailedError {
-					h.ctrl.Fail(err)
-					return
-				}
-
-				for i := 0; ; i++ {
-					h.logger.Info("Attempt [%v] to rejoin cluster.", i)
-					if tmp, err := h.initReplica(cur.Self.version + 1, peers); err == nil {
-						cur = tmp
-						break
-					}
-				}
-
-				h.logger.Info("Successfully rejoined cluster")
-			}
-		}
-	}()
-	return nil
-}
-
 // The host db simply manages access to the underlying local store.
 // Mostly it prevents consumers from erroneously disconnecting the
 // local database.
-type hostDb struct {
+type localDb struct {
 	h *host
 }
 
-func (d *hostDb) Close() error {
+func (d *localDb) Close() error {
 	return nil
 }
 
-func (d *hostDb) Get(key string) (bool, Item, error) {
+func (d *localDb) Get(key string) (bool, Item, error) {
 	return d.h.db.Get(key)
 }
 
-func (d *hostDb) Put(key string, val string, expected int) (bool, Item, error) {
+func (d *localDb) Put(key string, val string, expected int) (bool, Item, error) {
 	return d.h.db.Put(key, val, expected)
 }
 
-func (d *hostDb) Del(key string, expected int) (bool, Item, error) {
+func (d *localDb) Del(key string, expected int) (bool, Item, error) {
 	return d.h.db.Del(key, expected)
 }
 
-type hostDir struct {
-	chs *rpcChannels
+type localDir struct {
+	chs *replica
 }
 
-func (h *hostDir) Close() error {
-	panic("not implemented")
+func (h *localDir) Close() error {
+	return nil
 }
 
-func (h *hostDir) Get(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
-	panic("not implemented")
+func (h *localDir) Joins() (Listener, error) {
+	if h.chs.ctrl.IsClosed() {
+		return nil, errors.WithStack(common.ClosedError)
+	}
+	return h.chs.Joins(), nil
 }
 
-func (h *hostDir) All(cancel <-chan struct{}) ([]Member, error) {
-	for ! common.IsCanceled(cancel) {
-		dir, err := h.chs.Directory(cancel)
-		if err != nil {
+func (h *localDir) Evictions() (Listener, error) {
+	if h.chs.ctrl.IsClosed() {
+		return nil, errors.WithStack(common.ClosedError)
+	}
+	return h.chs.Evictions(), nil
+}
+
+func (h *localDir) Failures() (Listener, error) {
+	if h.chs.ctrl.IsClosed() {
+		return nil, errors.WithStack(common.ClosedError)
+	}
+	return h.chs.Failures(), nil
+}
+
+func (h *localDir) Get(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
+	for !common.IsCanceled(cancel) {
+		raw, err := h.chs.DirView(cancel, func(dir *directory) interface{} {
+			if m, ok := dir.Get(id); ok {
+				return m
+			} else {
+				return nil
+			}
+		})
+		if err != nil || raw == nil {
 			continue
 		}
-
-		return toMembers(dir.AllActive()), nil
+		return raw.(Member), nil
 	}
 	return nil, errors.WithStack(common.CanceledError)
 }
 
-func (h *hostDir) Evict(cancel <-chan struct{}, id uuid.UUID) error {
-	panic("not implemented")
+func (h *localDir) All(cancel <-chan struct{}) ([]Member, error) {
+	for !common.IsCanceled(cancel) {
+		raw, err := h.chs.DirView(cancel, func(dir *directory) interface{} {
+			return toMembers(dir.AllActive())
+		})
+		if err != nil {
+			continue
+		}
+		return raw.([]Member), nil
+	}
+	return nil, errors.WithStack(common.CanceledError)
 }
 
-func (h *hostDir) Fail(cancel <-chan struct{}, id uuid.UUID) error {
-	panic("not implemented")
+func (h *localDir) Evict(cancel <-chan struct{}, m Member) error {
+	return h.chs.Evict(cancel, m)
+}
+
+func (h *localDir) Fail(cancel <-chan struct{}, m Member) error {
+	return h.chs.Fail(cancel, m)
 }

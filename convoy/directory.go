@@ -147,7 +147,7 @@ func (d *directory) Add(m member) error {
 func (d *directory) Evict(m Member) error {
 	return d.Core.Update(func(u *update) error {
 		if !u.Evict(m.Id(), m.Version()) {
-			return errors.Errorf("Member already evicted [%v]", m)
+			return errors.Wrapf(FailedError, "Error evicting member [%v]", m)
 		}
 		return nil
 	})
@@ -157,7 +157,7 @@ func (d *directory) Fail(m Member) error {
 	d.Core.logger.Error("Failing member [%v]", m)
 	return d.Core.Update(func(u *update) error {
 		if !u.Del(m.Id(), m.Version(), memberHealthAttr, m.Version()) {
-			return errors.Errorf("Unable to fail member [%v]", m)
+			return errors.Wrapf(FailedError, "Error failing member [%v]", m)
 		}
 		return nil
 	})

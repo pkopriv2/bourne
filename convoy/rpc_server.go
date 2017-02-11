@@ -11,19 +11,19 @@ import (
 type rpcServer struct {
 	ctx     common.Context
 	logger  common.Logger
-	chs     *rpcChannels
+	chs     *replica
 	timeout time.Duration
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, chs *rpcChannels, list net.Listener, workers int) (net.Server, error) {
+func newServer(ctx common.Context, chs *replica, list net.Listener, workers int) (net.Server, error) {
 	ctx = ctx.Sub("Server")
 
 	server := &rpcServer{
-		ctx:    ctx,
-		logger: ctx.Logger(),
-		chs:    chs,
-		timeout: 30*time.Second,
+		ctx:     ctx,
+		logger:  ctx.Logger(),
+		chs:     chs,
+		timeout: 30 * time.Second,
 	}
 
 	return net.NewServer(ctx, list, serverInitHandler(server), workers)
@@ -64,7 +64,7 @@ func (s *rpcServer) ProxyPing(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	res, err := s.chs.HealthProxyPing(s.ctx.Timer(s.timeout), id)
+	res, err := s.chs.ProxyPing(s.ctx.Timer(s.timeout), id)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

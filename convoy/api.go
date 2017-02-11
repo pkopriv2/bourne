@@ -76,7 +76,7 @@ type Host interface {
 
 	// Provides access to the distributed directory.
 	Directory() (Directory, error)
-//
+
 	// // The local store.
 	// Store() Store
 
@@ -119,6 +119,15 @@ type Member interface {
 type Directory interface {
 	io.Closer
 
+	// Starts listening for joins. (currently only availabe for local directory)
+	Joins() (Listener, error)
+
+	// Starts listening for evictions. (currently only availabe for local directory)
+	Evictions() (Listener, error)
+
+	// Starts listening for failures. (currently only availabe for local directory)
+	Failures() (Listener, error)
+
 	// Retrieves the replica with the given id.  Nil if the member doesn't exist.
 	Get(cancel <-chan struct{}, id uuid.UUID) (Member, error)
 
@@ -126,11 +135,17 @@ type Directory interface {
 	All(cancel <-chan struct{}) ([]Member, error)
 
 	// Evicts a member from the cluster.  The member will NOT automatically rejoin on eviction.
-	Evict(cancel <-chan struct{}, id uuid.UUID) error
+	Evict(cancel <-chan struct{}, m Member) error
 
 	// Marks a member as being failed.  The next time the member contacts an
 	// infected member, he will be forced to leave the cluster and rejoin.
-	Fail(cancel <-chan struct{}, id uuid.UUID) error
+	Fail(cancel <-chan struct{}, m Member) error
+}
+
+type Listener interface {
+	io.Closer
+	Ctrl() common.Control
+	Data() <-chan uuid.UUID
 }
 
 // A very simple key,value store abstraction. This store uses
