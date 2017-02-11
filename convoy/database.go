@@ -17,16 +17,6 @@ type database struct {
 	chgLog *changeLog
 }
 
-// Opens the database using the path to the given db file.
-// func openDatabase(ctx common.Context, path string) (*database, error) {
-// stash, err := stash.Open(ctx, path)
-// if err != nil {
-// return nil, err
-// }
-//
-// return initDatabase(ctx, openChangeLog(ctx, stash))
-// }
-
 // Opens the database using the given changelog
 func openDatabase(ctx common.Context, log *changeLog) (*database, error) {
 	ctx = ctx.Sub("Db")

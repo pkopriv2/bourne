@@ -147,7 +147,7 @@ func (d *directory) Add(m member) error {
 func (d *directory) Evict(m Member) error {
 	return d.Core.Update(func(u *update) error {
 		if !u.Evict(m.Id(), m.Version()) {
-			return errors.Wrapf(FailedError, "Error evicting member [%v]", m)
+			return errors.Wrapf(EvictedError, "Error evicting member [%v]", m)
 		}
 		return nil
 	})

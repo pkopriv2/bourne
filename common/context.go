@@ -12,7 +12,7 @@ type Context interface {
 	Config() Config
 	Logger() Logger
 	Control() Control
-	Timer(time.Duration) <-chan struct{}
+	Timer(time.Duration) Control
 	Sub(fmt string, args ...interface{}) Context
 }
 
@@ -51,7 +51,7 @@ func (c *ctx) Logger() Logger {
 	return c.logger
 }
 
-func (c *ctx) Timer(dur time.Duration) <-chan struct{} {
+func (c *ctx) Timer(dur time.Duration) Control {
 	return NewTimer(c.Control(), dur)
 }
 

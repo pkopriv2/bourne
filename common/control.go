@@ -3,7 +3,6 @@ package common
 import (
 	"io"
 
-	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/concurrent"
 )
 
@@ -45,15 +44,9 @@ func NewControl(parent Control) *control {
 	}
 
 	if parent != nil {
-		go func() {
-			select {
-			case <-parent.Closed():
-				l.Fail(errors.WithStack(parent.Failure()))
-				return
-			case <-l.closed:
-				return
-			}
-		}()
+		parent.Defer(func(e error) {
+			l.Fail(parent.Failure())
+		})
 	}
 
 	return l

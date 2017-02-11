@@ -20,6 +20,14 @@ func membersCollect(arr []member, fn func(m member) bool) []member {
 	return ret
 }
 
+func membersAddrs(all []member) []string {
+	ret := make([]string, 0, len(all))
+	for _, m := range all {
+		ret = append(ret, m.Addr())
+	}
+	return ret
+}
+
 // member implementation.  For now, these should be considered immutable.
 type member struct {
 	id      uuid.UUID

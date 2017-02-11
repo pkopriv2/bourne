@@ -11,12 +11,12 @@ import (
 type rpcServer struct {
 	ctx     common.Context
 	logger  common.Logger
-	chs     *replica
+	chs     *replicaIface
 	timeout time.Duration
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, chs *replica, list net.Listener, workers int) (net.Server, error) {
+func newServer(ctx common.Context, chs *replicaIface, list net.Listener, workers int) (net.Server, error) {
 	ctx = ctx.Sub("Server")
 
 	server := &rpcServer{
@@ -64,7 +64,10 @@ func (s *rpcServer) ProxyPing(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	res, err := s.chs.ProxyPing(s.ctx.Timer(s.timeout), id)
+	timer := s.ctx.Timer(s.timeout)
+	defer timer.Close()
+
+	res, err := s.chs.ProxyPing(timer.Closed(), id)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -74,7 +77,10 @@ func (s *rpcServer) ProxyPing(req net.Request) net.Response {
 
 // Handles a /dir/list request
 func (s *rpcServer) DirList(req net.Request) net.Response {
-	res, err := s.chs.DirList(s.ctx.Timer(s.timeout))
+	timer := s.ctx.Timer(s.timeout)
+	defer timer.Close()
+
+	res, err := s.chs.DirList(timer.Closed())
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -89,7 +95,10 @@ func (s *rpcServer) DirApply(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	res, err := s.chs.DirApply(s.ctx.Timer(s.timeout), events)
+	timer := s.ctx.Timer(s.timeout)
+	defer timer.Close()
+
+	res, err := s.chs.DirApply(timer.Closed(), events)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -104,7 +113,10 @@ func (s *rpcServer) PushPull(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	res, err := s.chs.DirPushPull(s.ctx.Timer(s.timeout), rpc)
+	timer := s.ctx.Timer(s.timeout)
+	defer timer.Close()
+
+	res, err := s.chs.DirPushPull(timer.Closed(), rpc)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

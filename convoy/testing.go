@@ -93,7 +93,10 @@ func StartTestCluster(ctx common.Context, num int) ([]Host, error) {
 			panic(err)
 		}
 
-		all, err := dir.All(ctx.Timer(30*time.Second))
+		timer := ctx.Timer(30*time.Second)
+		defer timer.Close()
+
+		all, err := dir.All(timer.Closed())
 		if err != nil {
 			panic(err)
 		}

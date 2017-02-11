@@ -36,7 +36,7 @@ type host struct {
 	db *database
 
 	// request channels
-	chs *replica
+	iface *replicaIface
 
 	// the local server address
 	addr string
@@ -47,12 +47,14 @@ type host struct {
 
 func newHost(ctx common.Context, db *database, network net.Network, addr string, peers []string) (*host, error) {
 	// FIXME: Allow sub contexts without formatting
-	ctx = ctx.Sub("")
 
 	id, err := db.Log().Id()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	ctx = ctx.Sub("Host(%v)", id.String()[:8])
+	ctx.Logger().Info("Starting")
 
 	list, err := network.Listen(30*time.Second, addr)
 	if err != nil {
@@ -79,7 +81,7 @@ func newHost(ctx common.Context, db *database, network net.Network, addr string,
 		net:    network,
 		server: server,
 		db:     db,
-		chs:    chs,
+		iface:  chs,
 		addr:   list.Addr().String(),
 		inst:   make(chan *replicaEpoch),
 	}
@@ -99,7 +101,7 @@ func (h *host) start(peers []string) error {
 	}
 
 	go func() {
-		defer h.logger.Info("Manager shutting down")
+		defer h.logger.Info("Shutting down")
 		for {
 			select {
 			case <-h.ctrl.Closed():
@@ -108,20 +110,22 @@ func (h *host) start(peers []string) error {
 				continue
 			case <-cur.Ctrl.Closed():
 				err := cur.Ctrl.Failure()
-				if err != FailedError {
+				h.logger.Info("Epoch [%v] died", cur.Self.version)
+
+				if err := errors.Cause(err); err != FailedError {
 					h.ctrl.Fail(err)
 					return
 				}
 
-				for i := 0; ; i++ {
+				for i := 1; ; i++ {
 					h.logger.Info("Attempt [%v] to rejoin cluster.", i)
-					if tmp, err := h.epoch(cur.Self.version+1, peers); err == nil {
+					if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(cur.Dir.AllActive())); err == nil {
 						cur = tmp
 						break
 					}
 				}
 
-				h.logger.Info("Successfully rejoined cluster")
+				h.logger.Info("Successfully rejoined cluster: %v", cur.Self)
 			}
 		}
 	}()
@@ -142,79 +146,24 @@ func (h *host) Shutdown() error {
 }
 
 func (h *host) Leave() error {
-	h.logger.Info("Shutting down gracefully")
-	h.ctrl.Fail(h.chs.Leave(h.ctx.Timer(30 * time.Second)))
+	timer := h.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+	h.ctrl.Fail(h.iface.Leave(timer.Closed()))
 	return h.ctrl.Failure()
 }
 
 func (h *host) Self() (Member, error) {
-	return h.chs.Self(h.ctx.Timer(30 * time.Second))
+	timer := h.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+	return h.iface.Self(timer.Closed())
 }
 
 func (h *host) Directory() (Directory, error) {
-	return &localDir{h.chs}, nil
-}
-
-func (h *host) self(ver int, peers []string) (member, error) {
-	if peers == nil {
-		host, port, err := net.SplitAddr(h.addr)
-		if err != nil {
-			return member{}, errors.WithStack(err)
-		}
-
-		return newMember(h.id, host, port, ver), nil
-	}
-
-	try := func(peer string) (member, error) {
-		cl, err := connectMember(h.ctx, h.net, 30*time.Second, peer)
-		if err != nil {
-			return member{}, err
-		}
-		defer cl.Close()
-
-		host, _, err := net.SplitAddr(cl.Raw.Local().String())
-		if err != nil {
-			return member{}, err
-		}
-
-		_, port, err := net.SplitAddr(h.addr)
-		if err != nil {
-			return member{}, errors.WithStack(err)
-		}
-
-		return newMember(h.id, host, port, ver), nil
-	}
-
-	var mem member
-	var err error
-	for _, peer := range peers {
-		mem, err = try(peer)
-		if err == nil {
-			return mem, nil
-		}
-	}
-
-	return mem, err
+	return &localDir{h.iface}, nil
 }
 
 func (h *host) epoch(ver int, peers []string) (*replicaEpoch, error) {
-	self, err := h.self(ver, peers)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	cur, err := newEpoch(h.chs, h.net, h.db, self)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	if peers != nil && len(peers) > 0 {
-		if err := cur.Join(peers); err != nil {
-			return nil, errors.WithStack(err)
-		}
-	}
-
-	return cur, nil
+	return initEpoch(h.iface, h.net, h.db, h.id, ver, h.addr, peers)
 }
 
 // The host db simply manages access to the underlying local store.
@@ -241,7 +190,7 @@ func (d *localDb) Del(key string, expected int) (bool, Item, error) {
 }
 
 type localDir struct {
-	chs *replica
+	chs *replicaIface
 }
 
 func (h *localDir) Close() error {

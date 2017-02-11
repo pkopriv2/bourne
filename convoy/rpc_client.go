@@ -92,14 +92,7 @@ func (m *rpcClient) DissemPushPull(sourceId uuid.UUID, sourceVersion int, events
 
 	rpc, err := readRpcPushPullResponse(resp)
 	if err != nil {
-		switch err.Error() {
-		default:
-			return nil, nil, err
-		case EvictedError.Error():
-			return nil, nil, EvictedError
-		case FailedError.Error():
-			return nil, nil, FailedError
-		}
+		return nil, nil, err
 	}
 
 	return rpc.success, rpc.events, nil

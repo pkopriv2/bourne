@@ -10,7 +10,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-type replica struct {
+type replicaIface struct {
 	ctx            common.Context
 	ctrl           common.Control
 	net            net.Network
@@ -24,8 +24,8 @@ type replica struct {
 	leave          chan *common.Request
 }
 
-func newReplica(ctx common.Context, net net.Network) *replica {
-	return &replica{
+func newReplica(ctx common.Context, net net.Network) *replicaIface {
+	return &replicaIface{
 		ctx,
 		ctx.Control(),
 		net,
@@ -40,27 +40,27 @@ func newReplica(ctx common.Context, net net.Network) *replica {
 	}
 }
 
-func (r *replica) Joins() *listener {
+func (r *replicaIface) Joins() *listener {
 	return newListener(r.ctx, r.joins)
 }
 
-func (r *replica) Evictions() *listener {
+func (r *replicaIface) Evictions() *listener {
 	return newListener(r.ctx, r.evictions)
 }
 
-func (r *replica) Failures() *listener {
+func (r *replicaIface) Failures() *listener {
 	return newListener(r.ctx, r.failures)
 }
 
-func (r *replica) DirView(cancel <-chan struct{}, fn func(dir *directory) interface{}) (interface{}, error) {
+func (r *replicaIface) DirView(cancel <-chan struct{}, fn func(dir *directory) interface{}) (interface{}, error) {
 	return r.sendRequest(r.dirReadOnly, cancel, fn)
 }
 
-func (r *replica) DirUpdate(cancel <-chan struct{}, fn func(dir *directory) (interface{}, error)) (interface{}, error) {
+func (r *replicaIface) DirUpdate(cancel <-chan struct{}, fn func(dir *directory) (interface{}, error)) (interface{}, error) {
 	return r.sendRequest(r.dirReadWrite, cancel, fn)
 }
 
-func (r *replica) Self(cancel <-chan struct{}) (Member, error) {
+func (r *replicaIface) Self(cancel <-chan struct{}) (Member, error) {
 	raw, err := r.sendRequest(r.self, cancel, nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -68,7 +68,7 @@ func (r *replica) Self(cancel <-chan struct{}) (Member, error) {
 	return raw.(Member), nil
 }
 
-func (r *replica) Evict(cancel <-chan struct{}, m Member) error {
+func (r *replicaIface) Evict(cancel <-chan struct{}, m Member) error {
 	_, err := r.DirUpdate(cancel, func(dir *directory) (interface{}, error) {
 		return nil, dir.Evict(m)
 	})
@@ -79,7 +79,7 @@ func (r *replica) Evict(cancel <-chan struct{}, m Member) error {
 	}
 }
 
-func (r *replica) Fail(cancel <-chan struct{}, m Member) error {
+func (r *replicaIface) Fail(cancel <-chan struct{}, m Member) error {
 	_, err := r.DirUpdate(cancel, func(dir *directory) (interface{}, error) {
 		return nil, dir.Fail(m)
 	})
@@ -90,7 +90,7 @@ func (r *replica) Fail(cancel <-chan struct{}, m Member) error {
 	}
 }
 
-func (r *replica) DirList(cancel <-chan struct{}) (rpcDirListResponse, error) {
+func (r *replicaIface) DirList(cancel <-chan struct{}) (rpcDirListResponse, error) {
 	raw, err := r.DirView(cancel, func(dir *directory) interface{} {
 		return dir.Events()
 	})
@@ -100,7 +100,7 @@ func (r *replica) DirList(cancel <-chan struct{}) (rpcDirListResponse, error) {
 	return rpcDirListResponse(raw.([]event)), nil
 }
 
-func (r *replica) DirApply(cancel <-chan struct{}, rpc rpcDirApplyRequest) (rpcDirApplyResponse, error) {
+func (r *replicaIface) DirApply(cancel <-chan struct{}, rpc rpcDirApplyRequest) (rpcDirApplyResponse, error) {
 	raw, err := r.DirUpdate(cancel, func(dir *directory) (interface{}, error) {
 		return dir.Apply(rpc)
 	})
@@ -111,7 +111,7 @@ func (r *replica) DirApply(cancel <-chan struct{}, rpc rpcDirApplyRequest) (rpcD
 	return rpcDirApplyResponse(raw.([]bool)), nil
 }
 
-func (r *replica) DirPushPull(cancel <-chan struct{}, rpc rpcPushPullRequest) (rpcPushPullResponse, error) {
+func (r *replicaIface) DirPushPull(cancel <-chan struct{}, rpc rpcPushPullRequest) (rpcPushPullResponse, error) {
 	raw, err := r.sendRequest(r.dissemPushPull, cancel, rpc)
 	if err != nil {
 		return rpcPushPullResponse{}, errors.WithStack(err)
@@ -119,12 +119,12 @@ func (r *replica) DirPushPull(cancel <-chan struct{}, rpc rpcPushPullRequest) (r
 	return raw.(rpcPushPullResponse), nil
 }
 
-func (r *replica) Leave(cancel <-chan struct{}) error {
+func (r *replicaIface) Leave(cancel <-chan struct{}) error {
 	_, err := r.sendRequest(r.leave, cancel, nil)
 	return err
 }
 
-func (r *replica) ProxyPing(cancel <-chan struct{}, req rpcPingProxyRequest) (rpcPingResponse, error) {
+func (r *replicaIface) ProxyPing(cancel <-chan struct{}, req rpcPingProxyRequest) (rpcPingResponse, error) {
 	raw, err := r.DirView(cancel, func(dir *directory) interface{} {
 		m, ok := dir.Get(uuid.UUID(req))
 		if !ok {
@@ -146,7 +146,7 @@ func (r *replica) ProxyPing(cancel <-chan struct{}, req rpcPingProxyRequest) (rp
 	return rpcPingResponse(raw.(bool)), nil
 }
 
-func (h *replica) sendRequest(ch chan<- *common.Request, cancel <-chan struct{}, val interface{}) (interface{}, error) {
+func (h *replicaIface) sendRequest(ch chan<- *common.Request, cancel <-chan struct{}, val interface{}) (interface{}, error) {
 	req := common.NewRequest(val)
 	defer req.Cancel()
 
@@ -169,10 +169,60 @@ func (h *replica) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 	}
 }
 
+// listener impl
+type listener struct {
+	ctrl common.Control
+	in   <-chan uuid.UUID
+	out  chan uuid.UUID
+}
+
+func newListener(ctx common.Context, in <-chan uuid.UUID) *listener {
+	l := &listener{
+		ctrl: ctx.Control().Sub(),
+		in:   in,
+		out:  make(chan uuid.UUID, 16),
+	}
+	l.start()
+	return l
+}
+
+func (l *listener) start() {
+	go func() {
+		defer l.Close()
+
+		for {
+			var id uuid.UUID
+			select {
+			case <-l.ctrl.Closed():
+				return
+			case id = <-l.in:
+			}
+
+			select {
+			case <-l.ctrl.Closed():
+				return
+			case l.out <- id:
+			}
+		}
+	}()
+}
+
+func (l *listener) Data() <-chan uuid.UUID {
+	return l.out
+}
+
+func (l *listener) Ctrl() common.Control {
+	return l.ctrl
+}
+
+func (l *listener) Close() error {
+	return l.ctrl.Close()
+}
+
 // A replica represents a live, joined instance of a convoy db. The instance itself is managed by the
 // host object.
 type replicaEpoch struct {
-	*replica
+	Iface *replicaIface
 
 	// the central context.
 	Ctx common.Context
@@ -205,9 +255,30 @@ type replicaEpoch struct {
 	Pool common.WorkPool
 }
 
+func initEpoch(iface *replicaIface, net net.Network, db *database, id uuid.UUID, ver int, addr string, peers []string) (*replicaEpoch, error) {
+	self, err := replicaInitSelf(iface.ctx, net, id, ver, addr, peers)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	cur, err := newEpoch(iface, net, db, self)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if peers != nil && len(peers) > 0 {
+		if err := cur.Join(peers); err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
+
+	return cur, nil
+}
+
 // Initializes and returns a generic replica instance.
-func newEpoch(chs *replica, net net.Network, db *database, self member) (*replicaEpoch, error) {
-	ctx := chs.ctx.Sub("%v", self)
+func newEpoch(iface *replicaIface, net net.Network, db *database, self member) (*replicaEpoch, error) {
+	ctx := iface.ctx.Sub("%v", self)
+	ctx.Logger().Info("Starting epoch")
 
 	var err error
 	defer func() {
@@ -227,16 +298,16 @@ func newEpoch(chs *replica, net net.Network, db *database, self member) (*replic
 	}
 
 	r := &replicaEpoch{
-		replica: chs,
-		Self:    self,
-		Ctx:     ctx,
-		Net:     net,
-		Ctrl:    ctx.Control(),
-		Logger:  ctx.Logger(),
-		Dir:     dir,
-		Db:      db,
-		Dissem:  diss,
-		Pool:    common.NewWorkPool(ctx.Control(), 50),
+		Iface:  iface,
+		Self:   self,
+		Ctx:    ctx,
+		Net:    net,
+		Ctrl:   ctx.Control(),
+		Logger: ctx.Logger(),
+		Dir:    dir,
+		Db:     db,
+		Dissem: diss,
+		Pool:   common.NewWorkPool(ctx.Control(), 50),
 	}
 
 	return r, r.start()
@@ -246,10 +317,11 @@ func (r *replicaEpoch) start() error {
 	joins := r.Dir.Joins()
 	go func() {
 		for j := range joins {
+			r.Logger.Debug("Member joined [%v,%v]", j.Id.String()[:8], j.Version)
 			select {
-			case <-r.ctrl.Closed():
+			case <-r.Ctrl.Closed():
 				return
-			case r.replica.joins <- j.Id:
+			case r.Iface.joins <- j.Id:
 			}
 		}
 	}()
@@ -257,17 +329,17 @@ func (r *replicaEpoch) start() error {
 	evictions := r.Dir.Evictions()
 	go func() {
 		for e := range evictions {
-			r.Logger.Debug("Member evicted [%v,%v]", e.Id, e.Version)
+			r.Logger.Debug("Member evicted [%v,%v]", e.Id.String()[:8], e.Version)
 			if e.Id == r.Self.id && e.Version == r.Self.version && !r.leaving.Get() {
 				r.Logger.Info("Self evicted. Shutting down.")
-				r.Leave()
+				r.Ctrl.Fail(r.Leave())
 				return
 			}
 
 			select {
-			case <-r.ctrl.Closed():
+			case <-r.Ctrl.Closed():
 				return
-			case r.replica.evictions <- e.Id:
+			case r.Iface.evictions <- e.Id:
 			}
 		}
 	}()
@@ -275,7 +347,7 @@ func (r *replicaEpoch) start() error {
 	failures := r.Dir.Failures()
 	go func() {
 		for f := range failures {
-			r.Logger.Debug("Member failed [%v,%v]", f.Id, f.Version)
+			r.Logger.Debug("Member failed [%v,%v]", f.Id.String()[:8], f.Version)
 			if f.Id == r.Self.id && f.Version == r.Self.version {
 				r.Logger.Error("Self Failed. Shutting down.")
 				r.Ctrl.Fail(FailedError)
@@ -283,9 +355,9 @@ func (r *replicaEpoch) start() error {
 			}
 
 			select {
-			case <-r.ctrl.Closed():
+			case <-r.Ctrl.Closed():
 				return
-			case r.replica.failures <- f.Id:
+			case r.Iface.failures <- f.Id:
 			}
 		}
 	}()
@@ -296,17 +368,16 @@ func (r *replicaEpoch) start() error {
 			select {
 			case <-r.Ctrl.Closed():
 				return
-			case req := <-r.replica.leave:
+			case req := <-r.Iface.leave:
 				req.Fail(r.Leave())
 				return
-			case req := <-r.replica.self:
+			case req := <-r.Iface.self:
 				req.Ack(r.Self)
-				return
-			case req := <-r.replica.dirReadOnly:
+			case req := <-r.Iface.dirReadOnly:
 				r.handleDirReadOnly(req)
-			case req := <-r.replica.dirReadWrite:
+			case req := <-r.Iface.dirReadWrite:
 				r.handleDirReadWrite(req)
-			case req := <-r.replica.dissemPushPull:
+			case req := <-r.Iface.dissemPushPull:
 				r.handlePushPull(req)
 			}
 		}
@@ -338,11 +409,13 @@ func (r *replicaEpoch) handlePushPull(req *common.Request) {
 	err := r.Pool.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(rpcPushPullRequest)
 
+		r.Logger.Info("Handling push pull: %v", len(rpc.events))
+
 		var unHealthy bool
 		r.Dir.Core.View(func(v *view) {
 			m, ok := v.Roster[rpc.id]
 			h, _ := v.Health[rpc.id]
-			unHealthy = ok && m.Version == rpc.version && m.Active && !h.Healthy
+			unHealthy = ok && m.Version >= rpc.version && m.Active && !h.Healthy
 		})
 
 		if unHealthy {
@@ -374,7 +447,7 @@ func (r *replicaEpoch) Close() error {
 
 func (r *replicaEpoch) Join(peers []string) error {
 	try := func(addr string) error {
-		peer, err := connectMember(r.ctx, r.Net, 30*time.Second, addr)
+		peer, err := connectMember(r.Ctx, r.Net, 30*time.Second, addr)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -433,7 +506,7 @@ func (r *replicaEpoch) leaveAndDrain() error {
 			time.Sleep(1 * time.Second)
 		case <-r.Ctrl.Closed():
 			return errors.WithStack(ClosedError)
-		case <-timer:
+		case <-timer.Closed():
 			return nil
 		}
 	}
@@ -480,7 +553,7 @@ func replicaInitDir(ctx common.Context, db *database, self member) (*directory, 
 func replicaInitDissem(ctx common.Context, net net.Network, self member, dir *directory) (*disseminator, error) {
 	dissem, err := newDisseminator(ctx, net, self, dir)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error constructing disseminator")
+		return nil, errors.WithStack(err)
 	}
 	ctx.Control().Defer(func(error) {
 		dissem.Close()
@@ -494,57 +567,58 @@ func replicaInitDissem(ctx common.Context, net net.Network, self member, dir *di
 func replicaClient(server net.Server) (*rpcClient, error) {
 	raw, err := server.Client(net.Json)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 
 	return &rpcClient{raw}, nil
 }
 
-type listener struct {
-	ctrl common.Control
-	in   <-chan uuid.UUID
-	out  chan uuid.UUID
-}
-
-func newListener(ctx common.Context, in <-chan uuid.UUID) *listener {
-	l := &listener{
-		ctrl: ctx.Control().Sub(),
-		in:   in,
-		out:  make(chan uuid.UUID),
+func replicaInitSelf(ctx common.Context, network net.Network, id uuid.UUID, ver int, addr string, peers []string) (member, error) {
+	addr, err := replicaInitAddr(ctx, network, addr, peers)
+	if err != nil {
+		return member{}, errors.WithStack(err)
 	}
-	l.start()
-	return l
+
+	host, port, err := net.SplitAddr(addr)
+	if err != nil {
+		return member{}, errors.WithStack(err)
+	}
+
+	return newMember(id, host, port, ver), nil
 }
 
-func (l *listener) start() {
-	go func() {
-		defer l.Close()
+func replicaInitAddr(ctx common.Context, network net.Network, addr string, peers []string) (string, error) {
+	if peers == nil {
+		return addr, nil
+	}
 
-		for {
-			var id uuid.UUID
-			select {
-			case <-l.ctrl.Closed():
-				return
-			case id = <-l.in:
-			}
-
-			select {
-			case <-l.ctrl.Closed():
-				return
-			case l.out <- id:
-			}
+	try := func(peer string) (string, error) {
+		cl, err := connectMember(ctx, network, 30*time.Second, peer)
+		if err != nil {
+			return "", err
 		}
-	}()
-}
+		defer cl.Close()
 
-func (l *listener) Data() <-chan uuid.UUID {
-	return l.out
-}
+		host, _, err := net.SplitAddr(cl.Raw.Local().String())
+		if err != nil {
+			return "", err
+		}
 
-func (l *listener) Ctrl() common.Control {
-	return l.ctrl
-}
+		_, port, err := net.SplitAddr(addr)
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
 
-func (l *listener) Close() error {
-	return l.ctrl.Close()
+		return net.NewAddr(host, port), nil
+	}
+
+	var err error
+	for _, peer := range peers {
+		addr, err = try(peer)
+		if err == nil {
+			return addr, nil
+		}
+	}
+
+	return addr, err
 }

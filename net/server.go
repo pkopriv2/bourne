@@ -311,8 +311,8 @@ func NewServer(ctx common.Context, listener Listener, handler Handler, workers i
 		pool.Close()
 	})
 
-	ctrl.Defer(func(error) {
-		ctx.Logger().Info("Shutting down server")
+	ctrl.Defer(func(cause error) {
+		ctx.Logger().Info("Shutting down server: %+v", cause)
 	})
 
 	s := &server{

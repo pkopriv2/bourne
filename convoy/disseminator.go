@@ -161,6 +161,7 @@ func (d *disseminator) nextMember() (member, bool) {
 
 func (d *disseminator) start() error {
 	go func() {
+		defer d.Close()
 
 		tick := time.NewTicker(d.dissemPeriod)
 		for {
@@ -180,18 +181,18 @@ func (d *disseminator) start() error {
 				continue
 			}
 
-			d.logger.Info("Received failure response from [%v].  %+v.", m, err)
-			if err == FailedError {
+			d.logger.Info("Received failure response from [%v]: %+v.", m, err)
+			if cause := common.Extract(err, FailedError); cause == FailedError {
 				d.logger.Error("Received failure response from [%v].  Evicting self.", m)
 				d.dir.Fail(d.self)
-				continue
+				return
 			}
 
 			timer := d.ctx.Timer(30 * time.Second)
 
 			ch := d.probe(m, d.probeCount)
 			for i := 0; i < d.probeCount; i++ {
-				if common.IsCanceled(timer) {
+				if timer.IsClosed() {
 					d.logger.Info("Detected failed member [%v]: %v", m, err)
 					d.dir.Fail(m)
 					break
@@ -199,11 +200,11 @@ func (d *disseminator) start() error {
 
 				if <-ch {
 					d.logger.Info("Successfully probed member [%v]", m)
+					timer.Close()
 					break
 				}
 			}
 		}
-
 	}()
 
 	return nil
@@ -301,5 +302,5 @@ func dissemShuffleIds(arr []uuid.UUID) []uuid.UUID {
 }
 
 func dissemFanout(factor int, numMembers int) int {
-	return factor * int(math.Ceil(math.Log(float64(numMembers))))
+	return 1 + factor*int(math.Ceil(math.Log(float64(numMembers))))
 }
