@@ -74,11 +74,11 @@ type Host interface {
 	// The local member
 	Self() (Member, error)
 
-	// Provides access to the distributed directory.
+	// The local directory
 	Directory() (Directory, error)
 
-	// // The local store.
-	// Store() Store
+	// The local store
+	Store() (Store, error)
 
 	// Performs an immediate shutdown of the host.
 	//
@@ -128,7 +128,7 @@ type Directory interface {
 	// Starts listening for failures. (currently only availabe for local directory)
 	Failures() (Listener, error)
 
-	// Retrieves the replica with the given id.  Nil if the member doesn't exist.
+	// Retrieves the member with the given id.  Nil if the member doesn't exist.
 	Get(cancel <-chan struct{}, id uuid.UUID) (Member, error)
 
 	// Returns all of the currently active members.
@@ -162,7 +162,7 @@ type Store interface {
 	//
 	// If the return value inclues an error, the other results should
 	// not be trusted.
-	Get(key string) (found bool, item Item, err error)
+	Get(cancel <-chan struct{}, key string) (found bool, item Item, err error)
 
 	// Updates the value at the given key if the version matches.
 	// Returns a flag indicating whether or not the operation was
@@ -171,7 +171,7 @@ type Store interface {
 	//
 	// If the return value inclues an error, the other results should
 	// not be trusted.
-	Put(key string, val string, expected int) (bool, Item, error)
+	Put(cancel <-chan struct{}, key string, val string, expected int) (bool, Item, error)
 
 	// Deletes the value at the given key if the version matches.
 	// Returns a flag indicating whether or not the operation was
@@ -180,7 +180,7 @@ type Store interface {
 	//
 	// If the return value inclues an error, the other results should
 	// not be trusted.
-	Del(key string, expected int) (bool, Item, error)
+	Del(cancel <-chan struct{}, key string, expected int) (bool, Item, error)
 }
 
 // An item in a store.

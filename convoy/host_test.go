@@ -144,7 +144,7 @@ func TestHost_Fail_Listener(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts, err := StartTestCluster(ctx, 3)
+	hosts, err := StartTestCluster(ctx, 8)
 	assert.Nil(t, err)
 
 	lists := make([]Listener, 0, len(hosts))
@@ -189,7 +189,7 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts, err := StartTestCluster(ctx, 16)
+	hosts, err := StartTestCluster(ctx, 8)
 	assert.Nil(t, err)
 
 	fails := make([]Listener, 0, len(hosts))
@@ -248,3 +248,33 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 	assert.False(t, timer.IsClosed())
 }
 
+// func TestHost_Store_Put(t *testing.T) {
+	// conf := common.NewConfig(map[string]interface{}{
+		// "bourne.log.level": int(common.Debug),
+	// })
+//
+	// ctx := common.NewContext(conf)
+	// defer ctx.Close()
+//
+	// hosts, err := StartTestCluster(ctx, 8)
+	// assert.Nil(t, err)
+//
+	// store0, err := hosts[0].Store()
+	// assert.Nil(t, err)
+//
+	// ok, item, err := store0.Put("key", "val", 0)
+	// assert.True(t, ok)
+//
+	// timer := ctx.Timer(10 * time.Second)
+	// defer timer.Close()
+//
+	// SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+		// dir, err := h.Directory()
+		// if err != nil {
+			// return false
+		// }
+		// return false
+	// })
+//
+	// assert.False(t, timer.IsClosed())
+// }

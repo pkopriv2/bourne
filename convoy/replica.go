@@ -40,7 +40,6 @@ func newReplica(ctx common.Context, net net.Network) *replicaIface {
 	}
 }
 
-
 func (r *replicaIface) Joins() *listener {
 	return newListener(r.ctx, r.joins)
 }

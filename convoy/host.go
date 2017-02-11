@@ -120,6 +120,10 @@ func (h *host) start(peers []string) error {
 				}
 
 				for i := 1; ; i++ {
+					if h.ctrl.IsClosed() {
+						return
+					}
+
 					h.logger.Info("Attempt [%v] to rejoin cluster.", i)
 					if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(cur.Dir.AllHealthy())); err == nil {
 						cur = tmp
@@ -164,6 +168,10 @@ func (h *host) Directory() (Directory, error) {
 	return &localDir{h.iface}, nil
 }
 
+func (h *host) Store() (Store, error) {
+	return &localDb{h.db}, nil
+}
+
 func (h *host) epoch(ver int, peers []string) (*replicaEpoch, error) {
 	return initEpoch(h.iface, h.net, h.db, h.id, ver, h.addr, peers)
 }
@@ -172,27 +180,27 @@ func (h *host) epoch(ver int, peers []string) (*replicaEpoch, error) {
 // Mostly it prevents consumers from erroneously disconnecting the
 // local database.
 type localDb struct {
-	h *host
+	db *database
 }
 
 func (d *localDb) Close() error {
 	return nil
 }
 
-func (d *localDb) Get(key string) (bool, Item, error) {
-	return d.h.db.Get(key)
+func (d *localDb) Get(cancel <-chan struct{}, key string) (bool, Item, error) {
+	return d.db.Get(key)
 }
 
-func (d *localDb) Put(key string, val string, expected int) (bool, Item, error) {
-	return d.h.db.Put(key, val, expected)
+func (d *localDb) Put(cancel <-chan struct{}, key string, val string, expected int) (bool, Item, error) {
+	return d.db.Put(key, val, expected)
 }
 
-func (d *localDb) Del(key string, expected int) (bool, Item, error) {
-	return d.h.db.Del(key, expected)
+func (d *localDb) Del(cancel <-chan struct{}, key string, expected int) (bool, Item, error) {
+	return d.db.Del(key, expected)
 }
 
 type localDir struct {
-	chs *replicaIface
+	iface *replicaIface
 }
 
 func (h *localDir) Close() error {
@@ -200,29 +208,29 @@ func (h *localDir) Close() error {
 }
 
 func (h *localDir) Joins() (Listener, error) {
-	if h.chs.ctrl.IsClosed() {
+	if h.iface.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
 	}
-	return h.chs.Joins(), nil
+	return h.iface.Joins(), nil
 }
 
 func (h *localDir) Evictions() (Listener, error) {
-	if h.chs.ctrl.IsClosed() {
+	if h.iface.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
 	}
-	return h.chs.Evictions(), nil
+	return h.iface.Evictions(), nil
 }
 
 func (h *localDir) Failures() (Listener, error) {
-	if h.chs.ctrl.IsClosed() {
+	if h.iface.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
 	}
-	return h.chs.Failures(), nil
+	return h.iface.Failures(), nil
 }
 
 func (h *localDir) Get(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
 	for !common.IsCanceled(cancel) {
-		raw, err := h.chs.DirView(cancel, func(dir *directory) interface{} {
+		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
 			if m, ok := dir.Get(id); ok {
 				return m
 			} else {
@@ -239,7 +247,7 @@ func (h *localDir) Get(cancel <-chan struct{}, id uuid.UUID) (Member, error) {
 
 func (h *localDir) All(cancel <-chan struct{}) ([]Member, error) {
 	for !common.IsCanceled(cancel) {
-		raw, err := h.chs.DirView(cancel, func(dir *directory) interface{} {
+		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
 			return toMembers(dir.AllActive())
 		})
 		if err != nil {
@@ -251,15 +259,15 @@ func (h *localDir) All(cancel <-chan struct{}) ([]Member, error) {
 }
 
 func (h *localDir) Evict(cancel <-chan struct{}, m Member) error {
-	return h.chs.Evict(cancel, m)
+	return h.iface.Evict(cancel, m)
 }
 
 func (h *localDir) Fail(cancel <-chan struct{}, m Member) error {
-	return h.chs.Fail(cancel, m)
+	return h.iface.Fail(cancel, m)
 }
 
 func (h *localDir) String() string {
-	timer := h.chs.ctx.Timer(30 * time.Second)
+	timer := h.iface.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
 	all, err := h.All(timer.Closed())
