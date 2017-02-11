@@ -8,14 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestHost_Close(t *testing.T) {
-	ctx := common.NewContext(common.NewEmptyConfig())
-	defer ctx.Close()
-	host, err := StartTestHost(ctx, ":0")
-	assert.Nil(t, err)
-	assert.Nil(t, host.Close())
-	assert.NotNil(t, host.Close())
-}
+// func TestHost_Close(t *testing.T) {
+	// ctx := common.NewContext(common.NewEmptyConfig())
+	// defer ctx.Close()
+	// host, err := StartTestHost(ctx, ":0")
+	// assert.Nil(t, err)
+	// assert.Nil(t, host.Close())
+	// assert.NotNil(t, host.Close())
+// }
 
 func TestHost_Join_Two_Peers(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
