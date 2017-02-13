@@ -69,45 +69,8 @@ func (i item) String() string {
 	}
 }
 
-// membership status
-type membership struct {
-	Id      uuid.UUID
-	Version int
-	Active  bool
-	Since   time.Time
-}
-
-func (s membership) String() string {
-	var str string
-	if s.Active {
-		str = "Active"
-	} else {
-		str = "Inactive" // really means gone
-	}
-
-	return fmt.Sprintf("%v(%v)", str, s.Version)
-}
-
-type health struct {
-	Id      uuid.UUID
-	Version int
-	Healthy bool
-	Since   time.Time
-}
-
-func (h health) String() string {
-	var str string
-	if h.Healthy {
-		str = "Healthy"
-	} else {
-		str = "Unhealthy"
-	}
-
-	return fmt.Sprintf("%v(%v) since %v", str, h.Version, h.Since)
-}
-
-func streamMemberships(l *itemListener) <-chan membership {
-	ret := make(chan membership)
+func streamMemberships(l *itemListener) <-chan Membership {
+	ret := make(chan Membership)
 	go func() {
 		defer close(ret)
 		for {
@@ -120,7 +83,7 @@ func streamMemberships(l *itemListener) <-chan membership {
 
 			for _, i := range batch {
 				if i.Key == memberMembershipAttr {
-					ret <- membership{i.MemId, i.MemVer, !i.Del, i.Time}
+					ret <- Membership{i.MemId, i.MemVer, !i.Del, i.Time}
 				}
 			}
 		}
@@ -128,8 +91,8 @@ func streamMemberships(l *itemListener) <-chan membership {
 	return ret
 }
 
-func streamHealth(l *itemListener) <-chan health {
-	ret := make(chan health)
+func streamHealth(l *itemListener) <-chan Health {
+	ret := make(chan Health)
 	go func() {
 		defer close(ret)
 
@@ -143,7 +106,7 @@ func streamHealth(l *itemListener) <-chan health {
 
 			for _, i := range batch {
 				if i.Key == memberHealthAttr {
-					ret <- health{i.MemId, i.MemVer, !i.Del, i.Time}
+					ret <- Health{i.MemId, i.MemVer, !i.Del, i.Time}
 				}
 			}
 		}
@@ -159,7 +122,7 @@ type itemListener struct {
 func newItemListener(ctrl common.Control) *itemListener {
 	return &itemListener{
 		ctrl: ctrl.Sub(),
-		out: make(chan []item), // FIXME: Make buffered.  currently unbuffered to flesh out possible deadlocks
+		out:  make(chan []item), // FIXME: Make buffered.  currently unbuffered to flesh out possible deadlocks
 	}
 }
 
@@ -180,8 +143,8 @@ type storage struct {
 	// All mutable fields sync'ed on datItems
 	// Data objects.
 	items  amoeba.Index
-	roster map[uuid.UUID]membership
-	health map[uuid.UUID]health
+	roster map[uuid.UUID]Membership
+	health map[uuid.UUID]Health
 
 	// subscriptions
 	listeners concurrent.List
@@ -195,8 +158,8 @@ func newStorage(ctx common.Context) *storage {
 		logger:    ctx.Logger(),
 		ctrl:      ctx.Control(),
 		items:     amoeba.NewBTreeIndex(32),
-		roster:    make(map[uuid.UUID]membership),
-		health:    make(map[uuid.UUID]health),
+		roster:    make(map[uuid.UUID]Membership),
+		health:    make(map[uuid.UUID]Health),
 		listeners: concurrent.NewList(8),
 	}
 
@@ -243,8 +206,8 @@ func (d *storage) Update(fn func(*update) error) (err error) {
 	return
 }
 
-func (s *storage) Roster() (ret map[uuid.UUID]membership) {
-	ret = make(map[uuid.UUID]membership)
+func (s *storage) Roster() (ret map[uuid.UUID]Membership) {
+	ret = make(map[uuid.UUID]Membership)
 	s.View(func(v *view) {
 		for k, v := range v.Roster {
 			ret[k] = v
@@ -253,8 +216,8 @@ func (s *storage) Roster() (ret map[uuid.UUID]membership) {
 	return
 }
 
-func (s *storage) Health() (ret map[uuid.UUID]health) {
-	ret = make(map[uuid.UUID]health)
+func (s *storage) Health() (ret map[uuid.UUID]Health) {
+	ret = make(map[uuid.UUID]Health)
 	s.View(func(v *view) {
 		for k, v := range v.Health {
 			ret[k] = v
@@ -291,8 +254,8 @@ func (d *storage) All() (ret []item) {
 // Transactional view
 type view struct {
 	raw    amoeba.View
-	Roster map[uuid.UUID]membership
-	Health map[uuid.UUID]health
+	Roster map[uuid.UUID]Membership
+	Health map[uuid.UUID]Health
 	now    time.Time
 }
 
@@ -378,7 +341,7 @@ func (u *update) Put(memId uuid.UUID, memVer int, key string, keyVal string, key
 			}
 		}
 
-		u.Roster[memId] = membership{memId, memVer, true, u.now}
+		u.Roster[memId] = Membership{memId, memVer, true, u.now}
 		return true
 	case memberHealthAttr:
 		cur, ok := u.Health[memId]
@@ -388,7 +351,7 @@ func (u *update) Put(memId uuid.UUID, memVer int, key string, keyVal string, key
 			}
 		}
 
-		u.Health[memId] = health{memId, memVer, true, u.now}
+		u.Health[memId] = Health{memId, memVer, true, u.now}
 		return true
 	}
 }
@@ -411,7 +374,7 @@ func (u *update) Del(memId uuid.UUID, memVer int, key string, keyVer int) bool {
 			}
 		}
 
-		u.Roster[memId] = membership{memId, memVer, false, u.now}
+		u.Roster[memId] = Membership{memId, memVer, false, u.now}
 		return true
 	case memberHealthAttr:
 		cur, ok := u.Health[memId]
@@ -421,7 +384,7 @@ func (u *update) Del(memId uuid.UUID, memVer int, key string, keyVer int) bool {
 			}
 		}
 
-		u.Health[memId] = health{memId, memVer, false, u.now}
+		u.Health[memId] = Health{memId, memVer, false, u.now}
 		return true
 	}
 }
@@ -524,7 +487,7 @@ func storageScan(data amoeba.View, fn func(amoeba.Scan, storageKey, storageValue
 	})
 }
 
-func storageRosterCollect(roster map[uuid.UUID]membership, fn func(uuid.UUID, membership) bool) []uuid.UUID {
+func storageRosterCollect(roster map[uuid.UUID]Membership, fn func(uuid.UUID, Membership) bool) []uuid.UUID {
 	if len(roster) == 0 {
 		return []uuid.UUID{}
 	}
@@ -538,7 +501,7 @@ func storageRosterCollect(roster map[uuid.UUID]membership, fn func(uuid.UUID, me
 	return ret
 }
 
-func storageHealthCollect(health map[uuid.UUID]health, fn func(uuid.UUID, health) bool) []uuid.UUID {
+func storageHealthCollect(health map[uuid.UUID]Health, fn func(uuid.UUID, Health) bool) []uuid.UUID {
 	if len(health) == 0 {
 		return []uuid.UUID{}
 	}
@@ -632,10 +595,10 @@ func collectMemberItems(v *view, dead map[uuid.UUID]struct{}) []item {
 	return ret
 }
 
-func collectDeadMembers(roster map[uuid.UUID]membership, gcStart time.Time, gcDead time.Duration) map[uuid.UUID]struct{} {
+func collectDeadMembers(roster map[uuid.UUID]Membership, gcStart time.Time, gcDead time.Duration) map[uuid.UUID]struct{} {
 	dead := make(map[uuid.UUID]struct{})
 	for id, status := range roster {
-		if !status.Active && gcStart.Sub(status.Since) > gcDead {
+		if !status.Active && gcStart.Sub(status.since) > gcDead {
 			dead[id] = struct{}{}
 		}
 	}

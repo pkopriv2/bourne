@@ -1,6 +1,7 @@
 package convoy
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -108,12 +109,13 @@ type Member interface {
 
 	// Returns a directory client.  Consumers are responsible for closing
 	// the store once they are finished.
-	Directory(net.Network, time.Duration) (Directory, error)
+	// Directory(net.Network, time.Duration) (Directory, error)
 
 	// Returns a store client.  Consumers are responsible for closing
 	// the store once they are finished.
 	Store(net.Network, time.Duration) (Store, error)
 }
+
 
 // The directory is the central storage unit that hosts all information
 // on all other members of the cluster.  All methods on the directory
@@ -121,20 +123,17 @@ type Member interface {
 type Directory interface {
 	io.Closer
 
-	// Starts listening for joins. (currently only availabe for local directory)
-	Joins() (Listener, error)
+	// Starts listening for joins & evictions. (currently only availabe for local directory)
+	ListenRoster() (RosterListener, error)
 
-	// Starts listening for evictions. (currently only availabe for local directory)
-	Evictions() (Listener, error)
-
-	// Starts listening for failures. (currently only availabe for local directory)
-	Failures() (Listener, error)
+	// Starts listening for failures & healthy. (currently only availabe for local directory)
+	ListenHealth() (HealthListener, error)
 
 	// Evicts a member from the cluster.  The member will NOT automatically rejoin on eviction.
 	EvictMember(cancel <-chan struct{}, m Member) error
 
-	// Marks a member as being failed.  The next time the member contacts an
-	// infected member, he will be forced to leave the cluster and rejoin.
+	// Marks a member as being failed.  This is the same as an eviction except the member will
+	// rejoin automatically
 	FailMember(cancel <-chan struct{}, m Member) error
 
 	// Retrieves the member with the given id.  Nil if the member doesn't exist.
@@ -143,23 +142,66 @@ type Directory interface {
 	// Returns all of the currently active members.
 	AllMembers(cancel <-chan struct{}) ([]Member, error)
 
-	// // Retrieves the member value with the given key and a flag indicating
-	// // whether or not the item exists.
-	// FindByKey(cancel <-chan struct{}, key string) ([]Member, error)
-	//
-	// // Retrieves the member value with the given key and a flag indicating
-	// // whether or not the item exists.
-	// FindByValue(cancel <-chan struct{}, value string) ([]Member, error)
+	// Retrieves the member value with the given key and a flag indicating
+	// whether or not the item exists.
+	FindByKey(cancel <-chan struct{}, key string) ([]Member, error)
+
+	// Retrieves the member value with the given key and a flag indicating
+	// whether or not the item exists.
+	FindByValue(cancel <-chan struct{}, value string) ([]Member, error)
 
 	// Retrieves the member value with the given key and a flag indicating
 	// whether or not the item exists.
 	GetMemberValue(cancel <-chan struct{}, id uuid.UUID, key string) (val string, ok bool, err error)
 }
 
-type Listener interface {
+// membership status
+type Membership struct {
+	Id      uuid.UUID
+	Version int
+	Active  bool
+	since   time.Time
+}
+
+func (s Membership) String() string {
+	var str string
+	if s.Active {
+		str = "Joined"
+	} else {
+		str = "Left" // really means gone
+	}
+
+	return fmt.Sprintf("%v(id=%v,ver=%v)", str, s.Id.String()[:8], s.Version)
+}
+
+type Health struct {
+	Id      uuid.UUID
+	Version int
+	Healthy bool
+	since   time.Time
+}
+
+func (h Health) String() string {
+	var str string
+	if h.Healthy {
+		str = "Healthy"
+	} else {
+		str = "Unhealthy"
+	}
+
+	return fmt.Sprintf("%v(id=%v,ver=%v)", str, h.Id.String()[:8], h.Version)
+}
+
+type RosterListener interface {
 	io.Closer
 	Ctrl() common.Control
-	Data() <-chan uuid.UUID
+	Data() <-chan Membership
+}
+
+type HealthListener interface {
+	io.Closer
+	Ctrl() common.Control
+	Data() <-chan Health
 }
 
 // A very simple key,value store abstraction. This store uses

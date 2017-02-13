@@ -239,13 +239,13 @@ func TestStorage_Update_HealthListener(t *testing.T) {
 	assert.Equal(t, false, h.Healthy)
 
 	core.Update(func(u *update) error {
-		u.Join(id, 2)
+		u.Join(id, 1)
 		return nil
 	})
 
 	select {
 	default:
 	case <-ch:
-		assert.Fail(t, "Should not have received value")
+		assert.Fail(t, "Should have received value")
 	}
 }

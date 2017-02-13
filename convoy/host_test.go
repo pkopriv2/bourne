@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// func TestHost_Close(t *testing.T) {
-// ctx := common.NewContext(common.NewEmptyConfig())
-// defer ctx.Close()
-// host, err := StartTestHost(ctx, ":0")
-// assert.Nil(t, err)
-// assert.Nil(t, host.Close())
-// assert.NotNil(t, host.Close())
-// }
+func TestHost_Close(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+	host, err := StartTestHost(ctx, ":0")
+	assert.Nil(t, err)
+	assert.Nil(t, host.Close())
+	assert.Nil(t, host.Close())
+}
 
 func TestHost_Join_Two_Peers(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
@@ -57,130 +57,6 @@ func TestHost_Join_Many_Peers(t *testing.T) {
 	assert.Equal(t, 16, len(hosts))
 }
 
-func TestHost_Join_Listener(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	host1, err := StartTestHost(ctx, ":0")
-	assert.Nil(t, err)
-
-	self1, err := host1.Self()
-	assert.Nil(t, err)
-
-	dir, err := host1.Directory()
-	assert.Nil(t, err)
-	joins, err := dir.Joins()
-
-	host2, err := JoinTestHost(ctx, ":0", []string{self1.Addr()})
-	assert.Nil(t, err)
-
-	timer := ctx.Timer(5 * time.Second)
-	defer timer.Close()
-	select {
-	case <-timer.Closed():
-		assert.Fail(t, "Failed to receive join notification")
-	case id := <-joins.Data():
-		assert.Equal(t, host2.Id(), id)
-	}
-}
-
-func TestHost_Evict_Listener(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	hosts, err := StartTestCluster(ctx, 32)
-	assert.Nil(t, err)
-
-	lists := make([]Listener, 0, len(hosts))
-	for _, h := range hosts {
-		dir, err := h.Directory()
-		assert.Nil(t, err)
-
-		evicts, err := dir.Evictions()
-		assert.Nil(t, err)
-
-		lists = append(lists, evicts)
-	}
-
-	self0, err := hosts[0].Self()
-	assert.Nil(t, err)
-
-	dir1, err := hosts[1].Directory()
-	assert.Nil(t, err)
-
-	timer := ctx.Timer(10 * time.Second)
-	defer timer.Close()
-
-	assert.Nil(t, dir1.EvictMember(timer.Closed(), self0))
-
-	for _, l := range lists[1:] {
-		select {
-		case <-timer.Closed():
-			assert.Fail(t, "Failed to receive evict notification")
-		case id := <-l.Data():
-			assert.Equal(t, self0.Id(), id)
-		}
-	}
-
-	select {
-	case <-timer.Closed():
-		assert.Fail(t, "Failed to receive evict notification")
-	case <-lists[0].Ctrl().Closed():
-	}
-}
-
-func TestHost_Fail_Listener(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	hosts, err := StartTestCluster(ctx, 8)
-	assert.Nil(t, err)
-
-	lists := make([]Listener, 0, len(hosts))
-	for _, h := range hosts {
-		dir, err := h.Directory()
-		assert.Nil(t, err)
-
-		l, err := dir.Failures()
-		assert.Nil(t, err)
-
-		lists = append(lists, l)
-	}
-
-	self0, err := hosts[0].Self()
-	assert.Nil(t, err)
-
-	dir1, err := hosts[1].Directory()
-	assert.Nil(t, err)
-
-	timer := ctx.Timer(10 * time.Second)
-	defer timer.Close()
-
-	assert.Nil(t, dir1.FailMember(timer.Closed(), self0))
-	for _, l := range lists[1:] {
-		select {
-		case <-timer.Closed():
-			assert.Fail(t, "Failed to receive evict notification")
-		case id := <-l.Data():
-			assert.Equal(t, self0.Id(), id)
-		}
-	}
-
-	assert.False(t, lists[0].Ctrl().IsClosed())
-	assert.False(t, hosts[0].(*host).ctrl.IsClosed())
-}
 
 func TestHost_Fail_Manual(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
@@ -307,7 +183,7 @@ func TestHost_Store_Put_Single(t *testing.T) {
 
 func TestHost_Store_Put_Multi(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
+		"bourne.log.level": int(common.Debug),
 	})
 
 	ctx := common.NewContext(conf)
@@ -354,4 +230,107 @@ func TestHost_Store_Put_Multi(t *testing.T) {
 	})
 
 	assert.False(t, timer.IsClosed())
+}
+
+func TestHost_ListenRoster_Join(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	host1, err := StartTestHost(ctx, ":0")
+	assert.Nil(t, err)
+
+	self1, err := host1.Self()
+	assert.Nil(t, err)
+
+	dir, err := host1.Directory()
+	assert.Nil(t, err)
+
+	roster, err := dir.ListenRoster()
+	assert.Nil(t, err)
+
+	host2, err := JoinTestHost(ctx, ":0", []string{self1.Addr()})
+	assert.Nil(t, err)
+
+	timer := ctx.Timer(5 * time.Second)
+	defer timer.Close()
+	select {
+	case <-timer.Closed():
+		assert.Fail(t, "Failed to receive join notification")
+	case m := <-roster.Data():
+		assert.Equal(t, host2.Id(), m.Id)
+	}
+}
+
+func TestHost_ListenRoster_Evict(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	hosts, err := StartTestCluster(ctx, 3)
+	assert.Nil(t, err)
+
+	self0, err := hosts[0].Self()
+	assert.Nil(t, err)
+
+	dir1, err := hosts[1].Directory()
+	assert.Nil(t, err)
+
+	dir2, err := hosts[2].Directory()
+	assert.Nil(t, err)
+
+	roster2, err := dir2.ListenRoster()
+	assert.Nil(t, err)
+
+	timer := ctx.Timer(10 * time.Second)
+	defer timer.Close()
+
+	assert.Nil(t, dir1.EvictMember(timer.Closed(), self0))
+	select {
+	case <-timer.Closed():
+		assert.Fail(t, "Failed to receive join notification")
+	case m := <-roster2.Data():
+		assert.Equal(t, self0.Id(), m.Id)
+	}
+}
+
+func TestHost_ListenHealth_Fail(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	hosts, err := StartTestCluster(ctx, 3)
+	assert.Nil(t, err)
+
+	self0, err := hosts[0].Self()
+	assert.Nil(t, err)
+
+	dir1, err := hosts[1].Directory()
+	assert.Nil(t, err)
+
+	dir2, err := hosts[2].Directory()
+	assert.Nil(t, err)
+
+	health2, err := dir2.ListenHealth()
+	assert.Nil(t, err)
+
+	timer := ctx.Timer(10 * time.Second)
+	defer timer.Close()
+
+	assert.Nil(t, dir1.FailMember(timer.Closed(), self0))
+	select {
+	case <-timer.Closed():
+		assert.Fail(t, "Failed to receive join notification")
+	case m := <-health2.Data():
+		assert.Equal(t, self0.Id(), m.Id)
+	}
 }

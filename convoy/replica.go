@@ -11,18 +11,17 @@ import (
 )
 
 type replica struct {
-	ctx            common.Context
-	ctrl           common.Control
-	net            net.Network
-	self           chan *common.Request
-	dirReadOnly    chan *common.Request
-	dirReadWrite   chan *common.Request
-	dissemPushPull chan *common.Request
-	leave          chan *common.Request
-	shutdown       chan *common.Request
-	joins          concurrent.Set
-	evictions      concurrent.Set
-	failures       concurrent.Set
+	ctx             common.Context
+	ctrl            common.Control
+	net             net.Network
+	self            chan *common.Request
+	dirReadOnly     chan *common.Request
+	dirReadWrite    chan *common.Request
+	dissemPushPull  chan *common.Request
+	leave           chan *common.Request
+	shutdown        chan *common.Request
+	rosterListeners concurrent.Set
+	healthListeners concurrent.Set
 }
 
 func newReplica(ctx common.Context, net net.Network) *replica {
@@ -39,34 +38,24 @@ func newReplica(ctx common.Context, net net.Network) *replica {
 		make(chan *common.Request),
 		concurrent.NewSet(),
 		concurrent.NewSet(),
-		concurrent.NewSet(),
 	}
 }
 
-func (r *replica) Joins() *listener {
-	ret := newListener(r.ctrl)
+func (r *replica) ListenRoster() *rosterListener {
+	ret := newRosterListener(r.ctrl)
 	ret.Ctrl().Defer(func(error) {
-		r.joins.Remove(ret)
+		r.rosterListeners.Remove(ret)
 	})
-	r.joins.Add(ret)
+	r.rosterListeners.Add(ret)
 	return ret
 }
 
-func (r *replica) Evictions() *listener {
-	ret := newListener(r.ctrl)
+func (r *replica) ListenHealth() *healthListener {
+	ret := newHealthListener(r.ctrl)
 	ret.Ctrl().Defer(func(error) {
-		r.evictions.Remove(ret)
+		r.healthListeners.Remove(ret)
 	})
-	r.evictions.Add(ret)
-	return ret
-}
-
-func (r *replica) Failures() *listener {
-	ret := newListener(r.ctrl)
-	ret.Ctrl().Defer(func(error) {
-		r.failures.Remove(ret)
-	})
-	r.failures.Add(ret)
+	r.healthListeners.Add(ret)
 	return ret
 }
 
@@ -202,35 +191,67 @@ func (h *replica) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 }
 
 // listener impl
-type listener struct {
+type rosterListener struct {
 	ctrl common.Control
-	out  chan uuid.UUID
+	out  chan Membership
 }
 
-func newListener(ctrl common.Control) *listener {
-	return &listener{
+func newRosterListener(ctrl common.Control) *rosterListener {
+	return &rosterListener{
 		ctrl: ctrl.Sub(),
-		out:  make(chan uuid.UUID),
+		out:  make(chan Membership),
 	}
 }
 
-func (l *listener) Send() chan<- uuid.UUID {
+func (l *rosterListener) Send() chan<- Membership {
 	return l.out
 }
 
-func (l *listener) Data() <-chan uuid.UUID {
+func (l *rosterListener) Data() <-chan Membership {
 	return l.out
 }
 
-func (l *listener) Closed() <-chan struct{} {
+func (l *rosterListener) Closed() <-chan struct{} {
 	return l.ctrl.Closed()
 }
 
-func (l *listener) Ctrl() common.Control {
+func (l *rosterListener) Ctrl() common.Control {
 	return l.ctrl
 }
 
-func (l *listener) Close() error {
+func (l *rosterListener) Close() error {
+	return l.ctrl.Close()
+}
+
+type healthListener struct {
+	ctrl common.Control
+	out  chan Health
+}
+
+func newHealthListener(ctrl common.Control) *healthListener {
+	return &healthListener{
+		ctrl: ctrl.Sub(),
+		out:  make(chan Health),
+	}
+}
+
+func (l *healthListener) Send() chan<- Health {
+	return l.out
+}
+
+func (l *healthListener) Data() <-chan Health {
+	return l.out
+}
+
+func (l *healthListener) Closed() <-chan struct{} {
+	return l.ctrl.Closed()
+}
+
+func (l *healthListener) Ctrl() common.Control {
+	return l.ctrl
+}
+
+func (l *healthListener) Close() error {
 	return l.ctrl.Close()
 }
 
@@ -359,42 +380,30 @@ func (r *epoch) start() error {
 
 	// start the listener threads
 	go func() {
-		joins := r.Dir.Joins()
-		for j := range joins {
-			for _, raw := range r.Iface.joins.All() {
-				l := raw.(*listener)
+		updates := r.Dir.ListenRoster()
+		for u := range updates {
+			for _, raw := range r.Iface.rosterListeners.All() {
+				l := raw.(*rosterListener)
 				select {
 				case <-r.Ctrl.Closed():
+					return
 				case <-l.Closed():
-				case l.Send() <- j.Id:
+				case l.Send() <- u:
 				}
 			}
 		}
 	}()
 
 	go func() {
-		evictions := r.Dir.Evictions()
-		for e := range evictions {
-			for _, raw := range r.Iface.evictions.All() {
-				l := raw.(*listener)
+		updates := r.Dir.ListenHealth()
+		for u := range updates {
+			for _, raw := range r.Iface.healthListeners.All() {
+				l := raw.(*healthListener)
 				select {
 				case <-r.Ctrl.Closed():
+					return
 				case <-l.Closed():
-				case l.Send() <- e.Id:
-				}
-			}
-		}
-	}()
-
-	go func() {
-		failures := r.Dir.Failures()
-		for f := range failures {
-			for _, raw := range r.Iface.failures.All() {
-				l := raw.(*listener)
-				select {
-				case <-r.Ctrl.Closed():
-				case <-l.Closed():
-				case l.Send() <- f.Id:
+				case l.Send() <- u:
 				}
 			}
 		}
@@ -593,87 +602,87 @@ func replicaInitDir(ctx common.Context, db *database, self member) (*directory, 
 		changeStreamToEventStream(
 			self, listener.ch), dir)
 
-	// Grab all the changes from the database
-	chgs, err := db.Log().All()
-	if err != nil {
-		return nil, err
-	}
+			// Grab all the changes from the database
+			chgs, err := db.Log().All()
+			if err != nil {
+				return nil, err
+			}
 
-	dir.Add(self)
-	dir.Apply(changesToEvents(self, chgs))
-	return dir, nil
-}
-
-// Returns a newly initialized disseminator.
-func replicaInitDissem(ctx common.Context, net net.Network, self member, dir *directory) (*disseminator, error) {
-	dissem, err := newDisseminator(ctx, net, self, dir)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	ctx.Control().Defer(func(error) {
-		dissem.Close()
-	})
-
-	// Start disseminating realtime changes.
-	dissemEvents(dirListen(dir), dissem)
-	return dissem, nil
-}
-
-func replicaClient(server net.Server) (*rpcClient, error) {
-	raw, err := server.Client(net.Json)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return &rpcClient{raw}, nil
-}
-
-func replicaInitSelf(ctx common.Context, network net.Network, id uuid.UUID, ver int, addr string, peers []string) (member, error) {
-	addr, err := replicaInitAddr(ctx, network, addr, peers)
-	if err != nil {
-		return member{}, errors.WithStack(err)
-	}
-
-	host, port, err := net.SplitAddr(addr)
-	if err != nil {
-		return member{}, errors.WithStack(err)
-	}
-
-	return newMember(id, host, port, ver), nil
-}
-
-func replicaInitAddr(ctx common.Context, network net.Network, addr string, peers []string) (string, error) {
-	if peers == nil {
-		return addr, nil
-	}
-
-	try := func(peer string) (string, error) {
-		cl, err := connectMember(ctx, network, 30*time.Second, peer)
-		if err != nil {
-			return "", err
-		}
-		defer cl.Close()
-
-		host, _, err := net.SplitAddr(cl.Raw.Local().String())
-		if err != nil {
-			return "", err
+			dir.Add(self)
+			dir.Apply(changesToEvents(self, chgs))
+			return dir, nil
 		}
 
-		_, port, err := net.SplitAddr(addr)
-		if err != nil {
-			return "", errors.WithStack(err)
+		// Returns a newly initialized disseminator.
+		func replicaInitDissem(ctx common.Context, net net.Network, self member, dir *directory) (*disseminator, error) {
+			dissem, err := newDisseminator(ctx, net, self, dir)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			ctx.Control().Defer(func(error) {
+				dissem.Close()
+			})
+
+			// Start disseminating realtime changes.
+			dissemEvents(dirListen(dir), dissem)
+			return dissem, nil
 		}
 
-		return net.NewAddr(host, port), nil
-	}
+		func replicaClient(server net.Server) (*rpcClient, error) {
+			raw, err := server.Client(net.Json)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
 
-	var err error
-	for _, peer := range peers {
-		addr, err = try(peer)
-		if err == nil {
-			return addr, nil
+			return &rpcClient{raw}, nil
 		}
-	}
 
-	return addr, err
-}
+		func replicaInitSelf(ctx common.Context, network net.Network, id uuid.UUID, ver int, addr string, peers []string) (member, error) {
+			addr, err := replicaInitAddr(ctx, network, addr, peers)
+			if err != nil {
+				return member{}, errors.WithStack(err)
+			}
+
+			host, port, err := net.SplitAddr(addr)
+			if err != nil {
+				return member{}, errors.WithStack(err)
+			}
+
+			return newMember(id, host, port, ver), nil
+		}
+
+		func replicaInitAddr(ctx common.Context, network net.Network, addr string, peers []string) (string, error) {
+			if peers == nil {
+				return addr, nil
+			}
+
+			try := func(peer string) (string, error) {
+				cl, err := connectMember(ctx, network, 30*time.Second, peer)
+				if err != nil {
+					return "", err
+				}
+				defer cl.Close()
+
+				host, _, err := net.SplitAddr(cl.Raw.Local().String())
+				if err != nil {
+					return "", err
+				}
+
+				_, port, err := net.SplitAddr(addr)
+				if err != nil {
+					return "", errors.WithStack(err)
+				}
+
+				return net.NewAddr(host, port), nil
+			}
+
+			var err error
+			for _, peer := range peers {
+				addr, err = try(peer)
+				if err == nil {
+					return addr, nil
+				}
+			}
+
+			return addr, err
+		}

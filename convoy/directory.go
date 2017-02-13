@@ -77,24 +77,18 @@ func (d *directory) Listen() <-chan []event {
 	return ret
 }
 
-func (d *directory) Joins() <-chan membership {
-	ch := streamMemberships(d.Core.Listen())
-	ret := make(chan membership)
-	go func() {
-		for m := range ch {
-			if m.Active {
-				ret <- m
-			}
-		}
-		close(ret)
-	}()
-	return ret
+func (d *directory) ListenRoster() <-chan Membership {
+	return streamMemberships(d.Core.Listen())
 }
 
-func (d *directory) Evictions() <-chan membership {
-	ch := streamMemberships(d.Core.Listen())
-	ret := make(chan membership)
+func (d *directory) ListenHealth() <-chan Health {
+	return streamHealth(d.Core.Listen())
+}
+
+func (d *directory) Evictions() <-chan Membership {
+	ret := make(chan Membership)
 	go func() {
+		ch := d.ListenRoster()
 		for m := range ch {
 			if !m.Active {
 				ret <- m
@@ -105,10 +99,10 @@ func (d *directory) Evictions() <-chan membership {
 	return ret
 }
 
-func (d *directory) Failures() <-chan health {
-	ch := streamHealth(d.Core.Listen())
-	ret := make(chan health)
+func (d *directory) Failures() <-chan Health {
+	ret := make(chan Health)
 	go func() {
+		ch := d.ListenHealth()
 		for h := range ch {
 			if !h.Healthy {
 				ret <- h
@@ -175,14 +169,14 @@ func (d *directory) Fail(m Member) error {
 	})
 }
 
-func (d *directory) Health(id uuid.UUID) (h health, ok bool) {
+func (d *directory) Health(id uuid.UUID) (h Health, ok bool) {
 	d.Core.View(func(v *view) {
 		h, ok = v.Health[id]
 	})
 	return
 }
 
-func (d *directory) Membership(id uuid.UUID) (m membership, ok bool) {
+func (d *directory) Membership(id uuid.UUID) (m Membership, ok bool) {
 	d.Core.View(func(v *view) {
 		m, ok = v.Roster[id]
 	})
@@ -270,7 +264,7 @@ func (d *directory) GetItem(id uuid.UUID, key string) (val string, ok bool) {
 	d.Core.View(func(u *view) {
 		var item item
 		item, ok = u.GetActive(id, key)
-		if ok && ! item.Del {
+		if ok && !item.Del {
 			val = item.Val
 		}
 	})

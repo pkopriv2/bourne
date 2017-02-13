@@ -186,25 +186,18 @@ func (h *localDir) Close() error {
 	return nil
 }
 
-func (h *localDir) Joins() (Listener, error) {
+func (h *localDir) ListenRoster() (RosterListener, error) {
 	if h.iface.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
 	}
-	return h.iface.Joins(), nil
+	return h.iface.ListenRoster(), nil
 }
 
-func (h *localDir) Evictions() (Listener, error) {
+func (h *localDir) ListenHealth() (HealthListener, error) {
 	if h.iface.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
 	}
-	return h.iface.Evictions(), nil
-}
-
-func (h *localDir) Failures() (Listener, error) {
-	if h.iface.ctrl.IsClosed() {
-		return nil, errors.WithStack(common.ClosedError)
-	}
-	return h.iface.Failures(), nil
+	return h.iface.ListenHealth(), nil
 }
 
 func (h *localDir) EvictMember(cancel <-chan struct{}, m Member) error {
@@ -236,6 +229,38 @@ func (h *localDir) AllMembers(cancel <-chan struct{}) ([]Member, error) {
 	for !common.IsCanceled(cancel) {
 		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
 			return toMembers(dir.AllActive())
+		})
+		if err != nil {
+			continue
+		}
+		return raw.([]Member), nil
+	}
+	return nil, errors.WithStack(common.CanceledError)
+}
+
+func (h *localDir) FindByKey(cancel <-chan struct{}, key string) ([]Member, error) {
+	for !common.IsCanceled(cancel) {
+		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
+			found := dir.Search(func(i uuid.UUID, k string, v string) bool {
+				return k == key
+			})
+			return toMembers(found)
+		})
+		if err != nil {
+			continue
+		}
+		return raw.([]Member), nil
+	}
+	return nil, errors.WithStack(common.CanceledError)
+}
+
+func (h *localDir) FindByValue(cancel <-chan struct{}, val string) ([]Member, error) {
+	for !common.IsCanceled(cancel) {
+		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
+			found := dir.Search(func(i uuid.UUID, k string, v string) bool {
+				return v == val
+			})
+			return toMembers(found)
 		})
 		if err != nil {
 			continue

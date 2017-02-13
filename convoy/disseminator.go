@@ -268,7 +268,7 @@ func (d *disseminator) disseminateTo(m member, batch []event) error {
 func (d *disseminator) newIterator() *dissemIter {
 	var ids []uuid.UUID
 	d.dir.Core.View(func(v *view) {
-		ids = storageHealthCollect(v.Health, func(id uuid.UUID, h health) bool {
+		ids = storageHealthCollect(v.Health, func(id uuid.UUID, h Health) bool {
 			if id == d.self.id {
 				return false
 			}
