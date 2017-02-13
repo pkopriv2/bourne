@@ -72,6 +72,8 @@ func (c *candidate) start() {
 			select {
 			case <-c.ctrl.Closed():
 				return
+			case <-c.replica.ctrl.Closed():
+				return
 			case req := <-c.replica.Replications:
 				c.handleAppendEvents(req)
 			case req := <-c.replica.VoteRequests:

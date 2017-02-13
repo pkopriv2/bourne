@@ -58,6 +58,7 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 	return &host{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
+		logger: ctx.Logger(),
 		core:   core,
 		server: server,
 		pool:   pool,

@@ -59,12 +59,11 @@ func (c *follower) start() {
 
 		timer := time.NewTimer(c.replica.ElectionTimeout)
 		c.logger.Debug("Resetting election timeout: %v", c.replica.ElectionTimeout)
-		for {
-			if c.ctrl.IsClosed() {
-				return
-			}
+		for ! c.ctrl.IsClosed() {
 			select {
 			case <-c.ctrl.Closed():
+				return
+			case <-c.replica.ctrl.Closed():
 				return
 			case req := <-c.replica.Replications:
 				c.handleReplication(req)

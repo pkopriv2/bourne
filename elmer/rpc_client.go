@@ -23,7 +23,7 @@ func connect(ctx common.Context, network net.Network, timeout time.Duration, add
 		}
 	}()
 
-	cl, err := net.NewClient(ctx, conn)
+	cl, err := net.NewClient(ctx, conn, net.Json)
 	if cl == nil || err != nil {
 		return nil, errors.Wrapf(err, "Unable to connect to [%v]", addr)
 	}

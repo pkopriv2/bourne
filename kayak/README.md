@@ -7,31 +7,31 @@ consistent state machines, without all the hassle of managing consensus.
 
 Distributed consensus is the process by which a group of machines is able to agree to a set of facts.  In the case
 of Kayak, and its progenitor, RAFT, the algorithm specifies an algorithm for keeping a log consistent across 
-members
+a set of members.  The log has the following guarantees:
 
+* All log items will eventually be received by all members in the same order they were received.
 
-## Member Health 
-
-During each dissemination period, members are also probed for health.  Due to the expense of being marked as failed, a member cannot be contacted, a health probe is sent to a random subset of members who will attempt to contact the suspected node.  Only when none of the members of the probe return success is the member deemed failed and evicted from the cluster.
 
 # Getting Started
 
-Convoy has been designed to be embedded in other projects as a basis for group memberships and service discovery.  To get started, pull the dependency with go get:
+Kayak has been designed to be embedded in other projects as a basis for distributed consensus.  To get started, pull the dependency with go get:
 
 ```sh
-go get http://github.com/pkopriv2/bourne/convoy
+go get http://github.com/pkopriv2/bourne/kayak
 ```
 
 Import it:
 
 ```go
-import "github.com/pkopriv2/bourne/convoy"
+import "github.com/pkopriv2/bourne/kayak"
 ```
 
-## Starting a Cluster.
+## Starting a Cluster
 
-To start a cluster, there must be a first member.  This is designated as the "seed" member.
-It's special in only that it is first.
+Kayak has been built with dynamic membership as a first-class property.  Therefore, clusters are grown rather
+than started. 
+
+To start a cluster, there must be a first member.  It's special in only that it is first.
 
 To start a seed member, simply invoke:
 

@@ -93,6 +93,8 @@ func (l *leader) start() {
 			select {
 			case <-l.ctrl.Closed():
 				return
+			case <-l.replica.ctrl.Closed():
+				return
 			case req := <-l.replica.LocalAppends:
 				l.handleLocalAppend(req)
 			case req := <-l.replica.Snapshots:

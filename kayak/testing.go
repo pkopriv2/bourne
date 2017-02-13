@@ -29,7 +29,7 @@ func JoinTransient(ctx common.Context, addr string, peers []string) (Host, error
 	return Join(ctx, opts, addr, peers)
 }
 
-func StartTransientCluster(ctx common.Context, size int) (peers []Host, err error) {
+func StartLocalCluster(ctx common.Context, size int) (peers []Host, err error) {
 	if size < 1 {
 		return []Host{}, nil
 	}
