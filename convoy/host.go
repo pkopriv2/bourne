@@ -305,6 +305,8 @@ func (h *localDir) String() string {
 // The host db simply manages access to the underlying local store.
 // Mostly it prevents consumers from erroneously disconnecting the
 // local database.
+
+// FIXME: wrong order of returns
 type localDb struct {
 	db *database
 }
