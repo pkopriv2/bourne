@@ -1,6 +1,7 @@
 package convoy
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -9,12 +10,12 @@ import (
 )
 
 // func TestHost_Close(t *testing.T) {
-	// ctx := common.NewContext(common.NewEmptyConfig())
-	// defer ctx.Close()
-	// host, err := StartTestHost(ctx, ":0")
-	// assert.Nil(t, err)
-	// assert.Nil(t, host.Close())
-	// assert.NotNil(t, host.Close())
+// ctx := common.NewContext(common.NewEmptyConfig())
+// defer ctx.Close()
+// host, err := StartTestHost(ctx, ":0")
+// assert.Nil(t, err)
+// assert.Nil(t, host.Close())
+// assert.NotNil(t, host.Close())
 // }
 
 func TestHost_Join_Two_Peers(t *testing.T) {
@@ -51,9 +52,9 @@ func TestHost_Join_Many_Peers(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts, err := StartTestCluster(ctx, 32)
+	hosts, err := StartTestCluster(ctx, 16)
 	assert.Nil(t, err)
-	assert.Equal(t, 32, len(hosts))
+	assert.Equal(t, 16, len(hosts))
 }
 
 func TestHost_Join_Listener(t *testing.T) {
@@ -181,7 +182,7 @@ func TestHost_Fail_Listener(t *testing.T) {
 	assert.False(t, hosts[0].(*host).ctrl.IsClosed())
 }
 
-func TestHost_Fail_Rejoin(t *testing.T) {
+func TestHost_Fail_Manual(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),
 	})
@@ -191,17 +192,6 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 
 	hosts, err := StartTestCluster(ctx, 8)
 	assert.Nil(t, err)
-
-	fails := make([]Listener, 0, len(hosts))
-	for _, h := range hosts {
-		dir, err := h.Directory()
-		assert.Nil(t, err)
-
-		l, err := dir.Failures()
-		assert.Nil(t, err)
-
-		fails = append(fails, l)
-	}
 
 	self0, err := hosts[0].Self()
 	assert.Nil(t, err)
@@ -213,14 +203,136 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 	defer timer.Close()
 	assert.Nil(t, dir1.FailMember(timer.Closed(), self0))
 
-	for _, l := range fails[1:] {
-		select {
-		case <-timer.Closed():
-			assert.Fail(t, "Failed to receive evict notification")
-			return
-		case id := <-l.Data():
-			assert.Equal(t, self0.Id(), id)
+	SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+		dir, err := h.Directory()
+		if err != nil {
+			return false
 		}
+
+		m, err := dir.GetMember(timer.Closed(), self0.Id())
+		if err != nil {
+			return false
+		}
+
+		if m.Id() == self0.Id() && m.Version() > self0.Version() {
+			return true
+		}
+		return false
+	})
+
+	assert.False(t, timer.IsClosed())
+}
+
+func TestHost_Fail_Rejoin_Automatic(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	hosts, err := StartTestCluster(ctx, 32)
+	assert.Nil(t, err)
+
+	self0, err := hosts[0].Self()
+	assert.Nil(t, err)
+
+	// shutdown the replica (requests should timeout)
+	hosts[0].(*host).iface.Shutdown()
+
+	timer := ctx.Timer(10 * time.Second)
+	defer timer.Close()
+
+	SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+		dir, err := h.Directory()
+		if err != nil {
+			return false
+		}
+
+		m, err := dir.GetMember(timer.Closed(), self0.Id())
+		if err != nil {
+			return false
+		}
+
+		if m.Id() == self0.Id() && m.Version() > self0.Version() {
+			return true
+		}
+		return false
+	})
+
+	assert.False(t, timer.IsClosed())
+}
+
+func TestHost_Store_Put_Single(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	hosts, err := StartTestCluster(ctx, 8)
+	assert.Nil(t, err)
+
+	self0, err := hosts[0].Self()
+	assert.Nil(t, err)
+
+	store0, err := hosts[0].Store()
+	assert.Nil(t, err)
+
+	timer := ctx.Timer(10 * time.Second)
+	defer timer.Close()
+
+	ok, item, err := store0.Put(timer.Closed(), "key", "val", 0)
+	assert.True(t, ok)
+	assert.Equal(t, Item{"val", 1, false}, item)
+	assert.Nil(t, err)
+
+	SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+		dir, err := h.Directory()
+		if err != nil {
+			return false
+		}
+
+		val, ok, err := dir.GetMemberValue(timer.Closed(), self0.Id(), "key")
+		if !ok || err != nil {
+			return false
+		}
+
+		return val == "val"
+	})
+
+	assert.False(t, timer.IsClosed())
+}
+
+func TestHost_Store_Put_Multi(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Info),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	hosts, err := StartTestCluster(ctx, 32)
+	assert.Nil(t, err)
+
+	num := 100
+
+	timer := ctx.Timer(30 * time.Second)
+	defer timer.Closed()
+
+	for _, h := range hosts {
+		go func(h Host) {
+			store, err := h.Store()
+			if err != nil {
+				t.FailNow()
+			}
+
+			for i := 0; i < num; i++ {
+				h.(*host).logger.Info("Putting [%v, %v]", h.Id().String()[:8], i)
+				store.Put(timer.Closed(), strconv.Itoa(i), "val", 0)
+			}
+		}(h)
 	}
 
 	SyncCluster(timer.Closed(), hosts, func(h Host) bool {
@@ -229,52 +341,17 @@ func TestHost_Fail_Rejoin(t *testing.T) {
 			return false
 		}
 
-		timer := ctx.Timer(30 * time.Second)
-		defer timer.Close()
-
-		all, err := dir.AllMembers(timer.Closed())
-		if err != nil {
-			return false
-		}
-
-		for _, m := range all {
-			if m.Id() == self0.Id() && m.Version() > self0.Version() {
-				return true
+		for _, h := range hosts {
+			for i := 0; i < num; i++ {
+				_, ok, err := dir.GetMemberValue(timer.Closed(), h.Id(), strconv.Itoa(i))
+				if !ok || err != nil {
+					return false
+				}
 			}
 		}
-		return false
+
+		return true
 	})
 
 	assert.False(t, timer.IsClosed())
 }
-
-// func TestHost_Store_Put(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Debug),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// hosts, err := StartTestCluster(ctx, 8)
-// assert.Nil(t, err)
-//
-// store0, err := hosts[0].Store()
-// assert.Nil(t, err)
-//
-// ok, item, err := store0.Put("key", "val", 0)
-// assert.True(t, ok)
-//
-// timer := ctx.Timer(10 * time.Second)
-// defer timer.Close()
-//
-// SyncCluster(timer.Closed(), hosts, func(h Host) bool {
-// dir, err := h.Directory()
-// if err != nil {
-// return false
-// }
-// return false
-// })
-//
-// assert.False(t, timer.IsClosed())
-// }

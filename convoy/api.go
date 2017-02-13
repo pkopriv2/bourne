@@ -130,18 +130,26 @@ type Directory interface {
 	// Starts listening for failures. (currently only availabe for local directory)
 	Failures() (Listener, error)
 
-	// Retrieves the member with the given id.  Nil if the member doesn't exist.
-	GetMember(cancel <-chan struct{}, id uuid.UUID) (Member, error)
-
-	// Returns all of the currently active members.
-	AllMembers(cancel <-chan struct{}) ([]Member, error)
-
 	// Evicts a member from the cluster.  The member will NOT automatically rejoin on eviction.
 	EvictMember(cancel <-chan struct{}, m Member) error
 
 	// Marks a member as being failed.  The next time the member contacts an
 	// infected member, he will be forced to leave the cluster and rejoin.
 	FailMember(cancel <-chan struct{}, m Member) error
+
+	// Retrieves the member with the given id.  Nil if the member doesn't exist.
+	GetMember(cancel <-chan struct{}, id uuid.UUID) (Member, error)
+
+	// Returns all of the currently active members.
+	AllMembers(cancel <-chan struct{}) ([]Member, error)
+
+	// // Retrieves the member value with the given key and a flag indicating
+	// // whether or not the item exists.
+	// FindByKey(cancel <-chan struct{}, key string) ([]Member, error)
+	//
+	// // Retrieves the member value with the given key and a flag indicating
+	// // whether or not the item exists.
+	// FindByValue(cancel <-chan struct{}, value string) ([]Member, error)
 
 	// Retrieves the member value with the given key and a flag indicating
 	// whether or not the item exists.
@@ -168,7 +176,7 @@ type Store interface {
 	//
 	// If the return value inclues an error, the other results should
 	// not be trusted.
-	Get(cancel <-chan struct{}, key string) (found bool, item Item, err error)
+	Get(cancel <-chan struct{}, key string) (bool, Item, error)
 
 	// Updates the value at the given key if the version matches.
 	// Returns a flag indicating whether or not the operation was

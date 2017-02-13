@@ -11,12 +11,12 @@ import (
 type rpcServer struct {
 	ctx     common.Context
 	logger  common.Logger
-	chs     *replicaIface
+	chs     *replica
 	timeout time.Duration
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, chs *replicaIface, list net.Listener, workers int) (net.Server, error) {
+func newServer(ctx common.Context, chs *replica, list net.Listener, workers int) (net.Server, error) {
 	ctx = ctx.Sub("Server")
 
 	server := &rpcServer{

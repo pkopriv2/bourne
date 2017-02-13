@@ -6,10 +6,6 @@ import (
 	"github.com/pkopriv2/bourne/common"
 )
 
-var (
-	databaseClosedError = errors.New("DB:CLOSED")
-)
-
 type database struct {
 	ctx    common.Context
 	ctrl   common.Control

@@ -106,36 +106,69 @@ func (h health) String() string {
 	return fmt.Sprintf("%v(%v) since %v", str, h.Version, h.Since)
 }
 
-func streamMemberships(ch <-chan []item) <-chan membership {
+func streamMemberships(l *itemListener) <-chan membership {
 	ret := make(chan membership)
 	go func() {
-		for batch := range ch {
+		defer close(ret)
+		for {
+			var batch []item
+			select {
+			case <-l.ctrl.Closed():
+				return
+			case batch = <-l.Data():
+			}
+
 			for _, i := range batch {
 				if i.Key == memberMembershipAttr {
 					ret <- membership{i.MemId, i.MemVer, !i.Del, i.Time}
 				}
 			}
 		}
-
-		close(ret)
 	}()
 	return ret
 }
 
-func streamHealth(ch <-chan []item) <-chan health {
+func streamHealth(l *itemListener) <-chan health {
 	ret := make(chan health)
 	go func() {
-		for batch := range ch {
+		defer close(ret)
+
+		for {
+			var batch []item
+			select {
+			case <-l.ctrl.Closed():
+				return
+			case batch = <-l.Data():
+			}
+
 			for _, i := range batch {
 				if i.Key == memberHealthAttr {
 					ret <- health{i.MemId, i.MemVer, !i.Del, i.Time}
 				}
 			}
 		}
-
-		close(ret)
 	}()
 	return ret
+}
+
+type itemListener struct {
+	ctrl common.Control
+	out  chan []item
+}
+
+func newItemListener(ctrl common.Control) *itemListener {
+	return &itemListener{
+		ctrl: ctrl.Sub(),
+		out: make(chan []item), // FIXME: Make buffered.  currently unbuffered to flesh out possible deadlocks
+	}
+}
+
+func (l *itemListener) Data() <-chan []item {
+	return l.out
+}
+
+func (l *itemListener) Ctrl() common.Control {
+	return l.ctrl
 }
 
 // the core storage type
@@ -166,12 +199,6 @@ func newStorage(ctx common.Context) *storage {
 		health:    make(map[uuid.UUID]health),
 		listeners: concurrent.NewList(8),
 	}
-
-	ctx.Control().Defer(func(error) {
-		for _, l := range s.Listeners() {
-			close(l)
-		}
-	})
 
 	coll := newStorageGc(s)
 	coll.start()
@@ -205,15 +232,11 @@ func (d *storage) Update(fn func(*update) error) (err error) {
 
 	// Because this is outside of update, ordering is no longer guaranteed.
 	// Consumers must be idempotent
-	for _, ch := range d.Listeners() {
-		if d.ctrl.IsClosed() {
-			return errors.WithStack(ClosedError)
-		}
-
+	for _, l := range d.Listeners() {
 		select {
 		case <-d.ctrl.Closed():
 			return errors.WithStack(ClosedError)
-		case ch <- ret:
+		case l.out <- ret:
 		}
 	}
 
@@ -240,17 +263,17 @@ func (s *storage) Health() (ret map[uuid.UUID]health) {
 	return
 }
 
-func (s *storage) Listeners() (ret []chan []item) {
+func (s *storage) Listeners() (ret []*itemListener) {
 	all := s.listeners.All()
-	ret = make([]chan []item, 0, len(all))
+	ret = make([]*itemListener, 0, len(all))
 	for _, l := range all {
-		ret = append(ret, l.(chan []item))
+		ret = append(ret, l.(*itemListener))
 	}
 	return
 }
 
-func (s *storage) Listen() chan []item {
-	ret := make(chan []item, 128)
+func (s *storage) Listen() *itemListener {
+	ret := newItemListener(s.ctrl)
 	s.listeners.Append(ret)
 	return ret
 }

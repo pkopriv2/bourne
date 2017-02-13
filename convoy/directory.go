@@ -66,10 +66,10 @@ func (d *directory) Close() error {
 }
 
 func (d *directory) Listen() <-chan []event {
-	ch := d.Core.Listen()
+	raw := d.Core.Listen()
 	ret := make(chan []event)
 	go func() {
-		for batch := range ch {
+		for batch := range raw.Data() {
 			ret <- dirItemsToEvents(batch)
 		}
 		close(ret)
@@ -262,6 +262,17 @@ func (d *directory) RecentlyEvicted() (ret []member) {
 func (d *directory) Get(id uuid.UUID) (ret member, ok bool) {
 	d.Core.View(func(u *view) {
 		ret, ok = dirGetActiveMember(u, id)
+	})
+	return
+}
+
+func (d *directory) GetItem(id uuid.UUID, key string) (val string, ok bool) {
+	d.Core.View(func(u *view) {
+		var item item
+		item, ok = u.GetActive(id, key)
+		if ok && ! item.Del {
+			val = item.Val
+		}
 	})
 	return
 }

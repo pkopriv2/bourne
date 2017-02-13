@@ -36,13 +36,13 @@ type host struct {
 	db *database
 
 	// request channels
-	iface *replicaIface
+	iface *replica
 
 	// the local server address
 	addr string
 
 	// constantly pushes the current value until the replica has been replaced.
-	inst chan *replicaEpoch
+	inst chan *epoch
 }
 
 func newHost(ctx common.Context, db *database, network net.Network, addr string, peers []string) (*host, error) {
@@ -83,7 +83,7 @@ func newHost(ctx common.Context, db *database, network net.Network, addr string,
 		db:     db,
 		iface:  chs,
 		addr:   list.Addr().String(),
-		inst:   make(chan *replicaEpoch),
+		inst:   make(chan *epoch),
 	}
 
 	if err := h.start(peers); err != nil {
@@ -112,7 +112,7 @@ func (h *host) start(peers []string) error {
 				err := cur.Ctrl.Failure()
 				h.logger.Info("Epoch [%v] died", cur.Self.version)
 
-				if err := errors.Cause(err); err != FailedError {
+				if err := errors.Cause(err); err == EvictedError {
 					h.ctrl.Fail(err)
 					return
 				}
@@ -122,8 +122,12 @@ func (h *host) start(peers []string) error {
 						return
 					}
 
-					h.logger.Info("Attempt [%v] to rejoin cluster.", i)
-					if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(cur.Dir.AllHealthy())); err == nil {
+					peers := membersCollect(cur.Dir.AllHealthy(), func(m member) bool {
+						return m.Id() != cur.Id()
+					})
+
+					h.logger.Info("Attempt [%v] to rejoin cluster: %v ...", i, peers[:3])
+					if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(peers)); err == nil {
 						cur = tmp
 						break
 					}
@@ -170,12 +174,12 @@ func (h *host) Store() (Store, error) {
 	return &localDb{h.db}, nil
 }
 
-func (h *host) epoch(ver int, peers []string) (*replicaEpoch, error) {
+func (h *host) epoch(ver int, peers []string) (*epoch, error) {
 	return initEpoch(h.iface, h.net, h.db, h.id, ver, h.addr, peers)
 }
 
 type localDir struct {
-	iface *replicaIface
+	iface *replica
 }
 
 func (h *localDir) Close() error {
@@ -242,13 +246,14 @@ func (h *localDir) AllMembers(cancel <-chan struct{}) ([]Member, error) {
 }
 
 func (h *localDir) GetMemberValue(cancel <-chan struct{}, id uuid.UUID, key string) (string, bool, error) {
-	type item struct{
+	type item struct {
 		val string
 		ok  bool
 	}
 	for !common.IsCanceled(cancel) {
 		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
-			return item{}
+			val, ok := dir.GetItem(id, key)
+			return item{val, ok}
 		})
 		if err != nil || raw == nil {
 			continue
@@ -268,7 +273,6 @@ func (h *localDir) String() string {
 	if err != nil || raw == nil {
 		return "Dir"
 	}
-
 	return raw.(string)
 }
 
