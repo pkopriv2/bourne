@@ -19,7 +19,10 @@ func TestHost_Close(t *testing.T) {
 	before := runtime.NumGoroutine()
 	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 
-	host, err := StartTransient(ctx, ":0")
+	stg, err := TestStorage(ctx)
+	assert.Nil(t, err)
+
+	host, err := Start(ctx, ":0", stg)
 	assert.Nil(t, err)
 
 	time.Sleep(5 * time.Second)
@@ -35,21 +38,18 @@ func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 2)
+	cluster, err := TestCluster(ctx, 2)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
 	assert.NotNil(t, Converge(timer.Closed(), cluster))
-
-	ctx.Close()
-	time.Sleep(5 * time.Second)
 }
 
 func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
@@ -60,7 +60,7 @@ func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
 func TestHost_Cluster_ConvergeFivePeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
-	cluster, err := StartLocalCluster(ctx, 5)
+	cluster, err := TestCluster(ctx, 5)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
@@ -71,7 +71,7 @@ func TestHost_Cluster_ConvergeFivePeers(t *testing.T) {
 func TestHost_Cluster_ConvergeSevenPeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
-	cluster, err := StartLocalCluster(ctx, 7)
+	cluster, err := TestCluster(ctx, 7)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
@@ -85,7 +85,7 @@ func TestHost_Cluster_Close(t *testing.T) {
 	before := runtime.NumGoroutine()
 	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 
-	cluster, err := StartLocalCluster(ctx, 7)
+	cluster, err := TestCluster(ctx, 7)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
@@ -110,7 +110,7 @@ func TestHost_Cluster_Leader_Failure(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(20 * time.Second)
@@ -137,7 +137,7 @@ func TestHost_Cluster_Leader_Append_Single(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
@@ -161,7 +161,7 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(60 * time.Second)
@@ -196,7 +196,7 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
@@ -252,7 +252,7 @@ func TestHost_Cluster_Append_Single(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
@@ -279,7 +279,7 @@ func TestCluster_Append_Multi(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
@@ -317,7 +317,7 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := StartLocalCluster(ctx, 3)
+	cluster, err := TestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
@@ -389,7 +389,7 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	// ctx := common.NewContext(conf)
 	// defer ctx.Close()
 //
-	// cluster, err := StartLocalCluster(ctx, 3)
+	// cluster, err := TestCluster(ctx, 3)
 	// if err != nil {
 		// t.FailNow()
 	// }

@@ -83,7 +83,7 @@
 //
 //  * Items arrive in the order they were received.
 //  * Items are never lost
-//  * Items never arrive more than once.
+//  * Items may arrive multiple times
 //
 // Kayak differs from raft in that it does NOT support full linearizability
 // with respect to duplicate items.  Therefore, a requirement of every state
@@ -111,10 +111,10 @@
 package kayak
 
 import (
-	"errors"
 	"fmt"
 	"io"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
@@ -136,41 +136,33 @@ func Cause(err error) error {
 	return extractError(err)
 }
 
-func Start(ctx common.Context, deps Dependencies, addr string) (Host, error) {
-	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Storage, addr)
+func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error) {
+	opts, err := buildOptions(ctx, fns)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
+	}
+
+	host, err := newHost(ctx, opts.net, opts.logStore, opts.storage, addr)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
 
 	return host, host.Start()
 }
 
-func Join(ctx common.Context, deps Dependencies, addr string, peers []string) (Host, error) {
-	host, err := newHost(ctx, deps.Network, deps.LogStore, deps.Storage, addr)
+func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)) (Host, error) {
+	opts, err := buildOptions(ctx, fns)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	host, err := newHost(ctx, opts.net, opts.logStore, opts.storage, addr)
 	if err != nil {
 		return nil, err
 	}
 
 	// FIXME: use all peer addrs.
 	return host, host.Join(peers[0])
-}
-
-func StartDefault(ctx common.Context, addr string) (Host, error) {
-	opts, err := NewDefaultDependencies(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return Start(ctx, opts, addr)
-}
-
-func JoinDefault(ctx common.Context, addr string, peers []string) (Host, error) {
-	opts, err := NewDefaultDependencies(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return Join(ctx, opts, addr, peers)
 }
 
 // A host is a member of a cluster that is actively participating in log replication.

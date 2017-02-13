@@ -5,31 +5,22 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
 // Transienting utilities for dependent projects...makes it easier to stand up local
 // clusters, etc...
 
-func StartTransient(ctx common.Context, addr string) (Host, error) {
-	opts, err := NewTransientDependencies(ctx)
+func TestStorage(ctx common.Context) (func(*Options), error) {
+	db, err := stash.OpenTransient(ctx)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "Error opening transient storage")
 	}
-
-	return Start(ctx, opts, addr)
+	return func(o *Options) { o.WithStorage(db) }, nil
 }
 
-func JoinTransient(ctx common.Context, addr string, peers []string) (Host, error) {
-	opts, err := NewTransientDependencies(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return Join(ctx, opts, addr, peers)
-}
-
-func StartLocalCluster(ctx common.Context, size int) (peers []Host, err error) {
+func TestCluster(ctx common.Context, size int) (peers []Host, err error) {
 	if size < 1 {
 		return []Host{}, nil
 	}
@@ -41,13 +32,13 @@ func StartLocalCluster(ctx common.Context, size int) (peers []Host, err error) {
 		}
 	}()
 
-	deps, err := NewTransientDependencies(ctx)
+	stg, err := TestStorage(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error initializing transient dependencies")
+		return nil, err
 	}
 
 	// start the first
-	first, err := Start(ctx, deps, ":0")
+	first, err := Start(ctx, ":0", stg)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error starting first host")
 	}
@@ -62,7 +53,7 @@ func StartLocalCluster(ctx common.Context, size int) (peers []Host, err error) {
 
 	hosts := []Host{first}
 	for i := 1; i < size; i++ {
-		host, err := Join(ctx, deps, ":0", first.Roster())
+		host, err := Join(ctx, ":0", first.Roster(), stg)
 		if err != nil {
 			return nil, errors.Wrapf(err, "Error starting [%v] host", i)
 		}

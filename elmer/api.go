@@ -2,32 +2,30 @@ package elmer
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
-	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
 )
 
-var (
-	ClosedError   = errors.New("Elmer:ClosedError")
-	TimeoutError  = errors.New("Elmer:TimeoutError")
-	CanceledError = errors.New("Elmer:CanceledError")
-)
-
-func Start(ctx common.Context, net net.Network, self kayak.Host) (Store, error) {
+func Start(ctx common.Context, self kayak.Host, opts ...func(*Options)) (Peer, error) {
 	return nil, nil
 }
 
-func Join(ctx common.Context, net net.Network, self kayak.Host, addrs []string) (Store, error) {
+func Join(ctx common.Context, self kayak.Host, addrs []string, opts ...func(*Options)) (Peer, error) {
 	return nil, nil
 }
 
-func Connect(ctx common.Context, net net.Network, addrs []string) (Store, error) {
+func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Store, error) {
 	return nil, nil
+}
+
+type Peer interface {
+	io.Closer
+	Store() (Store, error)
+	Shutdown() error
 }
 
 // A very simple key,value store abstraction. This store uses

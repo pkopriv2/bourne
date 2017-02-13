@@ -77,19 +77,19 @@ func (h *machine) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 
 	select {
 	case <-h.ctrl.Closed():
-		return nil, errors.WithStack(ClosedError)
+		return nil, errors.WithStack(common.ClosedError)
 	case <-cancel:
-		return nil, errors.WithStack(CanceledError)
+		return nil, errors.WithStack(common.CanceledError)
 	case ch <- req:
 		select {
 		case <-h.ctrl.Closed():
-			return nil, ClosedError
+			return nil, errors.WithStack(common.CanceledError)
 		case r := <-req.Acked():
 			return r, nil
 		case e := <-req.Failed():
 			return nil, e
 		case <-cancel:
-			return nil, errors.WithStack(CanceledError)
+			return nil, errors.WithStack(common.CanceledError)
 		}
 	}
 }
