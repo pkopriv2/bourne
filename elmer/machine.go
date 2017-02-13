@@ -1,6 +1,8 @@
 package elmer
 
 import (
+	"bytes"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
@@ -11,6 +13,7 @@ type machine struct {
 	ctrl   common.Control
 	logger common.Logger
 	peer   kayak.Host
+	addr   string
 	read   chan *common.Request
 	swap   chan *common.Request
 	pool   common.WorkPool
@@ -92,6 +95,30 @@ func (h *machine) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 			return nil, errors.WithStack(common.CanceledError)
 		}
 	}
+}
+
+func (s *machine) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, error) {
+	for !common.IsCanceled(cancel) {
+		item, _, err := s.Read(cancel, getRpc{key})
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		new := fn(item.Val)
+		if bytes.Equal(item.Val, new) {
+			return item, nil
+		}
+
+		item, ok, err := s.Swap(cancel, swapRpc{key, new, item.Prev})
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		if ok {
+			return item, nil
+		}
+	}
+	return Item{}, errors.WithStack(common.CanceledError)
 }
 
 func (s *machine) Read(cancel <-chan struct{}, read getRpc) (Item, bool, error) {

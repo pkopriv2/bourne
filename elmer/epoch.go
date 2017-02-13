@@ -1,22 +1,23 @@
 package elmer
 
 import (
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 )
 
 type epoch struct {
+	ctx    common.Context
 	ctrl   common.Control
 	logger common.Logger
 	idx    amoeba.Index
 	log    kayak.Log
 	sync   kayak.Sync
-	num    int
 }
 
-func openEpoch(ctx common.Context, log kayak.Log, sync kayak.Sync, num int) (*epoch, error) {
-	ctx = ctx.Sub("Epoch(%v)", num)
+func openEpoch(ctx common.Context, log kayak.Log, sync kayak.Sync, cycle int) (*epoch, error) {
+	ctx = ctx.Sub("Epoch(%v)", cycle)
 
 	start, ss, err := log.Snapshot()
 	if err != nil {
@@ -34,7 +35,6 @@ func openEpoch(ctx common.Context, log kayak.Log, sync kayak.Sync, num int) (*ep
 		idx:    idx,
 		log:    log,
 		sync:   sync,
-		num:    num,
 	}
 
 	if err := e.Start(start); err != nil {
@@ -47,11 +47,11 @@ func openEpoch(ctx common.Context, log kayak.Log, sync kayak.Sync, num int) (*ep
 func (e *epoch) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {
 	val, err := e.sync.Barrier(cancel)
 	if err != nil {
-		return Item{}, false, err
+		return Item{}, false, errors.WithStack(err)
 	}
 
 	if err := e.sync.Sync(cancel, val); err != nil {
-		return Item{}, false, err
+		return Item{}, false, errors.WithStack(err)
 	}
 
 	item, ok := read(e.idx, key)
@@ -61,7 +61,7 @@ func (e *epoch) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {
 func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
 	entry, err := e.log.Append(cancel, item.Bytes())
 	if err != nil {
-		return Item{}, false, err
+		return Item{}, false, errors.WithStack(err)
 	}
 
 	// TODO: Does this break linearizability???  Technically, another conflicting item
@@ -69,7 +69,7 @@ func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
 	// whether our update was accepted or not..
 
 	if err := e.sync.Sync(cancel, entry.Index); err != nil {
-		return Item{}, false, err
+		return Item{}, false, errors.WithStack(err)
 	}
 
 	actual, ok := read(e.idx, item.Key)

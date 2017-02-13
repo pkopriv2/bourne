@@ -76,11 +76,11 @@ func (i Item) Bytes() []byte {
 }
 
 func (i Item) Equal(o Item) bool {
-	if eq := i.Prev == o.Prev; !eq {
+	if i.Prev != o.Prev {
 		return false
 	}
 
-	if eq := bytes.Equal(i.Key, o.Key); !eq {
+	if ! bytes.Equal(i.Key, o.Key) {
 		return false
 	}
 

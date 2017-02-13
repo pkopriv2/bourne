@@ -18,7 +18,7 @@ type store struct {
 }
 
 func newStoreClient(ctx common.Context, network net.Network, timeout time.Duration, refresh time.Duration, addrs []string) *store {
-	ctx = ctx.Sub("Store")
+	ctx = ctx.Sub("Client")
 
 	roster := newRosterManager(ctx, network, timeout, refresh, addrs)
 	ctx.Control().Defer(func(error) {
