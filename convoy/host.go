@@ -109,32 +109,33 @@ func (h *host) start(peers []string) error {
 			case h.inst <- cur:
 				continue
 			case <-cur.Ctrl.Closed():
-				err := cur.Ctrl.Failure()
-				h.logger.Info("Epoch [%v] died", cur.Self.version)
+			}
 
-				if err := errors.Cause(err); err == EvictedError {
-					h.ctrl.Fail(err)
+			err := cur.Ctrl.Failure()
+			h.logger.Info("Epoch [%v] died", cur.Self.version)
+
+			if cause := common.Extract(err, EvictedError); cause == EvictedError {
+				h.ctrl.Fail(err)
+				return
+			}
+
+			peers := membersShuffle(membersCollect(cur.Dir.AllHealthy(), func(m member) bool {
+				return m.Id() != cur.Id()
+			}))
+
+			for i := 1; ; i++ {
+				if h.ctrl.IsClosed() {
 					return
 				}
 
-				for i := 1; ; i++ {
-					if h.ctrl.IsClosed() {
-						return
-					}
-
-					peers := membersCollect(cur.Dir.AllHealthy(), func(m member) bool {
-						return m.Id() != cur.Id()
-					})
-
-					h.logger.Info("Attempt [%v] to rejoin cluster: %v ...", i, peers[:3])
-					if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(peers)); err == nil {
-						cur = tmp
-						break
-					}
+				h.logger.Info("Attempt [%v] to rejoin cluster: %v ...", i, peers[:common.Min(3, len(peers))])
+				if tmp, err := h.epoch(cur.Self.version+i, membersAddrs(peers)); err == nil {
+					cur = tmp
+					break
 				}
-
-				h.logger.Info("Successfully rejoined cluster: %v", cur.Self)
 			}
+
+			h.logger.Info("Successfully rejoined cluster: %v", cur.Self)
 		}
 	}()
 	return nil

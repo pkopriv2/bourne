@@ -2,6 +2,7 @@ package convoy
 
 import (
 	"fmt"
+	"math/rand"
 	"strconv"
 	"time"
 
@@ -16,6 +17,14 @@ func membersCollect(arr []member, fn func(m member) bool) []member {
 		if fn(m) {
 			ret = append(ret, m)
 		}
+	}
+	return ret
+}
+
+func membersShuffle(all []member) []member {
+	ret := make([]member, len(all))
+	for i, j := range rand.Perm(len(all)) {
+		ret[i] = all[j]
 	}
 	return ret
 }

@@ -508,7 +508,7 @@ func (r *epoch) Close() error {
 }
 
 func (r *epoch) Join(peers []string) error {
-	r.Logger.Info("Joining cluster [%v]", peers)
+	r.Logger.Info("Joining cluster [%v] ...", peers[:common.Min(3, len(peers))])
 
 	try := func(addr string) error {
 		peer, err := connectMember(r.Ctx, r.Net, 30*time.Second, addr)
