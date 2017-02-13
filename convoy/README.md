@@ -37,27 +37,27 @@ Import it:
 import "github.com/pkopriv2/bourne/convoy"
 ```
 
-## Starting a Cluster.
+## Starting a Cluster
 
 To start a cluster, there must be a first member.  This is designated as the "seed" member.
 It's special in only that it is first.
 
 To start a seed member, simply invoke:
 
-```
-host := convoy.StartSeedHost(ctx, "seed.convoy.com:10240")
+```go
+host, err := convoy.Start(ctx, ":10240")
 ```
 
 At this point, the seed host knows nothing about any other hosts and will remain alone until
-it is contacted.  However, when the first member co
+it is contacted.
 
 
 ## Adding Members
 
 To add a member:
 
-```
-host := convoy.StartHost(ctx, "host1.convoy.com:10240", "seed.convoy.com:10240")
+```go
+host, err := convoy.Join(ctx, ":10240", "seed.convoy.com:10240")
 ```
 
 ## Using the Local Store
@@ -67,7 +67,7 @@ Every host manages a local key-value store that is replicated to all other membe
 
 * Retrieving the store
 ```
-store := host.Store()
+store,err := host.Store()
 ```
 
 * Getting an item from the store

@@ -155,6 +155,41 @@ type Directory interface {
 	GetMemberValue(cancel <-chan struct{}, id uuid.UUID, key string) (val string, ok bool, err error)
 }
 
+// A very simple key,value store abstraction. This store uses
+// optimistic locking to provide a single thread-safe api for
+// both local and remote stores.
+//
+// If this is the local store, closing the store will NOT disconnect
+// the replica, it simply prevents any changes to the store from
+// occurring.
+type Store interface {
+	io.Closer
+
+	// Returns true and the item or false an the zero value.
+	//
+	// If the return value inclues an error, the other results should
+	// not be trusted.
+	Get(cancel <-chan struct{}, key string) (bool, Item, error)
+
+	// Updates the value at the given key if the version matches.
+	// Returns a flag indicating whether or not the operation was
+	// successful (ie the version matched) and if so, the updated
+	// value.  Otherwise an error is returned.
+	//
+	// If the return value inclues an error, the other results should
+	// not be trusted.
+	Put(cancel <-chan struct{}, key string, val string, expected int) (bool, Item, error)
+
+	// Deletes the value at the given key if the version matches.
+	// Returns a flag indicating whether or not the operation was
+	// successful (ie the version matched) and if so, the updated
+	// value.  Otherwise an error is returned.
+	//
+	// If the return value inclues an error, the other results should
+	// not be trusted.
+	Del(cancel <-chan struct{}, key string, expected int) (bool, Item, error)
+}
+
 // membership status
 type Membership struct {
 	Id      uuid.UUID
@@ -204,40 +239,6 @@ type HealthListener interface {
 	Data() <-chan Health
 }
 
-// A very simple key,value store abstraction. This store uses
-// optimistic locking to provide a single thread-safe api for
-// both local and remote stores.
-//
-// If this is the local store, closing the store will NOT disconnect
-// the replica, it simply prevents any changes to the store from
-// occurring.
-type Store interface {
-	io.Closer
-
-	// Returns true and the item or false an the zero value.
-	//
-	// If the return value inclues an error, the other results should
-	// not be trusted.
-	Get(cancel <-chan struct{}, key string) (bool, Item, error)
-
-	// Updates the value at the given key if the version matches.
-	// Returns a flag indicating whether or not the operation was
-	// successful (ie the version matched) and if so, the updated
-	// value.  Otherwise an error is returned.
-	//
-	// If the return value inclues an error, the other results should
-	// not be trusted.
-	Put(cancel <-chan struct{}, key string, val string, expected int) (bool, Item, error)
-
-	// Deletes the value at the given key if the version matches.
-	// Returns a flag indicating whether or not the operation was
-	// successful (ie the version matched) and if so, the updated
-	// value.  Otherwise an error is returned.
-	//
-	// If the return value inclues an error, the other results should
-	// not be trusted.
-	Del(cancel <-chan struct{}, key string, expected int) (bool, Item, error)
-}
 
 // An item in a store.
 type Item struct {
