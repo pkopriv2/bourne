@@ -235,7 +235,7 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 	}
 
 	if score < 0 {
-		req.Fail(errors.Wrapf(TimeoutError, "Unable to merge peer: %v", update.peer))
+		req.Fail(errors.Wrapf(common.TimeoutError, "Unable to merge peer: %v", update.peer))
 		return
 	}
 

@@ -260,19 +260,19 @@ func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 
 	select {
 	case <-h.ctrl.Closed():
-		return nil, ClosedError
+		return nil, errors.WithStack(common.ClosedError)
 	case <-timer.C:
-		return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to accept [%v]", timeout)
+		return nil, errors.Wrapf(common.TimeoutError, "Request timed out waiting for machine to accept [%v]", timeout)
 	case ch <- req:
 		select {
 		case <-h.ctrl.Closed():
-			return nil, ClosedError
+			return nil, errors.WithStack(common.ClosedError)
 		case r := <-req.Acked():
 			return r, nil
 		case e := <-req.Failed():
-			return nil, e
+			return nil, errors.Wrap(e, "Request failed")
 		case <-timer.C:
-			return nil, errors.Wrapf(TimeoutError, "Request timed out waiting for machine to response [%v]", timeout)
+			return nil, errors.Wrapf(common.TimeoutError, "Request timed out waiting for machine to response [%v]", timeout)
 		}
 	}
 }

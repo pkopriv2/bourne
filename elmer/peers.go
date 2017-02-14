@@ -2,8 +2,19 @@ package elmer
 
 import (
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/scribe"
 )
+
+type peers []string
+
+func (r peers) Write(w scribe.Writer) {
+	w.WriteStrings("peers", []string(r))
+}
+
+func (r peers) Bytes() []byte {
+	return scribe.Write(r).Bytes()
+}
 
 func hasPeer(peers []string, p string) bool {
 	for _, cur := range peers {
@@ -40,14 +51,19 @@ func delPeer(cur []string, p string) []string {
 	return append(cur[:index], cur[index+1:]...)
 }
 
-type peers []string
-
-func (r peers) Write(w scribe.Writer) {
-	w.WriteStrings("peers", []string(r))
+func collectPeers(peers []string, fn func(string) string) []string {
+	ret := make([]string, 0, len(peers))
+	for _, cur := range peers {
+		ret = append(ret, fn(cur))
+	}
+	return ret
 }
 
-func (r peers) Bytes() []byte {
-	return scribe.Write(r).Bytes()
+func collectHostnames(peers []string) []string {
+	return collectPeers(peers, func(p string) string {
+		host, _, _ := net.SplitAddr(p)
+		return host
+	})
 }
 
 func readPeers(r scribe.Reader) (ret []string, err error) {

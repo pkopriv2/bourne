@@ -67,7 +67,7 @@ func (s *logClient) Snapshot() (int, EventStream, error) {
 func (c *logClient) Append(cancel <-chan struct{}, e Event) (entry Entry, err error) {
 	raw := c.pool.TakeOrCancel(cancel)
 	if raw == nil {
-		return Entry{}, errors.WithStack(CanceledError)
+		return Entry{}, errors.WithStack(common.CanceledError)
 	}
 	defer func() {
 		if err != nil {

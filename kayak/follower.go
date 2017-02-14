@@ -281,9 +281,9 @@ func (c *follower) streamSnapshotSegment(data chan<- Event, s installSnapshot) e
 	for i := 0; i < len(s.batch); i++ {
 		select {
 		case <-timer.C:
-			return errors.Wrapf(TimeoutError, "Timed out writing segment [%v]: [%v]", c.replica.RequestTimeout, s)
+			return errors.Wrapf(common.TimeoutError, "Timed out writing segment [%v]: [%v]", c.replica.RequestTimeout, s)
 		case <-c.ctrl.Closed():
-			return errors.Wrapf(ClosedError, "Unable to stream segment [%v]", s)
+			return errors.Wrapf(common.ClosedError, "Unable to stream segment [%v]", s)
 		case data <- s.batch[i]:
 		}
 	}

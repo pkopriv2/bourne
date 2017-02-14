@@ -124,18 +124,11 @@ import (
 var (
 	ClosedError    = errors.New("Kayak:ClosedError")
 	NotLeaderError = errors.New("Kayak:NotLeaderError")
-	NotSlaveError  = errors.New("Kayak:NotMemberError")
+	NotSlaveError  = errors.New("Kayak:NotSlaveError")
 	NoLeaderError  = errors.New("Kayak:NoLeaderError")
-	TimeoutError   = errors.New("Kayak:TimeoutError")
-	ExpiredError   = errors.New("Kayak:ExpiredError")
-	CanceledError  = errors.New("Kayak:CanceledError")
 )
 
-// // Extracts out the raw errors.
-// func Cause(err error) error {
-	// return extractError(err)
-// }
-
+// Starts the first member of a kayak cluster.  The given addr MUST be routable by external members
 func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error) {
 	opts, err := buildOptions(ctx, fns)
 	if err != nil {
@@ -150,6 +143,7 @@ func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error)
 	return host, host.Start()
 }
 
+// Joins a newly initialized member to an existing Kayak cluster.
 func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)) (Host, error) {
 	opts, err := buildOptions(ctx, fns)
 	if err != nil {

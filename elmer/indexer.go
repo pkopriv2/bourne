@@ -21,6 +21,8 @@ type indexer struct {
 }
 
 func newIndexer(ctx common.Context, peer kayak.Host, workers int) (*indexer, error) {
+	ctx = ctx.Sub("Indexer")
+
 	m := &indexer{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
@@ -30,6 +32,11 @@ func newIndexer(ctx common.Context, peer kayak.Host, workers int) (*indexer, err
 		swap:   make(chan *common.Request),
 		pool:   common.NewWorkPool(ctx.Control(), workers),
 	}
+
+	// bind the indexer's lifecycle to the kayak host
+	peer.Context().Control().Defer(func(e error) {
+		m.ctrl.Fail(e)
+	})
 
 	m.start()
 	return m, nil
@@ -52,31 +59,21 @@ func (s *indexer) start() {
 				continue
 			}
 
-			epoch, err := openEpoch(s.ctx, log, sync, iter)
+			epoch, err := openEpoch(s.ctx, s, log, sync, iter)
 			if err != nil {
 				s.logger.Error("Error retrieving log: %+v", err)
 				continue
 			}
 
-			for !s.ctrl.IsClosed() {
-				select {
-				case <-s.ctrl.Closed():
-					return
-				case req := <-s.read:
-					s.handleRead(epoch, req)
-					continue
-				case req := <-s.swap:
-					s.handleSwap(epoch, req)
-					continue
-				case <-epoch.ctrl.Closed():
-				}
+			select {
+			case <-s.ctrl.Closed():
+				return
+			case <-epoch.ctrl.Closed():
+			}
 
-				cause := common.Extract(epoch.ctrl.Failure(), common.ClosedError)
-				if cause == nil || cause == common.ClosedError {
-					return
-				} else {
-					break
-				}
+			cause := common.Extract(epoch.ctrl.Failure(), common.ClosedError)
+			if cause == nil || cause == common.ClosedError {
+				return
 			}
 		}
 	}()
@@ -179,40 +176,6 @@ func (s *indexer) UpdateRoster(cancel <-chan struct{}, fn func([]string) []strin
 	return err
 }
 
-func (s *indexer) handleRead(epoch *epoch, req *common.Request) {
-	err := s.pool.SubmitOrCancel(req.Canceled(), func() {
-		rpc := req.Body().(getRpc)
-
-		item, ok, err := epoch.Get(req.Canceled(), rpc.Key)
-		if err != nil {
-			req.Fail(err)
-			return
-		}
-
-		req.Ack(responseRpc{item, ok})
-	})
-	if err != nil {
-		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
-	}
-}
-
-func (s *indexer) handleSwap(epoch *epoch, req *common.Request) {
-	err := s.pool.SubmitOrCancel(req.Canceled(), func() {
-		rpc := req.Body().(swapRpc)
-
-		item, ok, err := epoch.Swap(req.Canceled(), Item{rpc.Key, rpc.Val, rpc.Prev})
-		if err != nil {
-			req.Fail(err)
-			return
-		}
-
-		req.Ack(responseRpc{item, ok})
-	})
-	if err != nil {
-		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
-	}
-}
-
 func (s *indexer) getLog() (kayak.Log, kayak.Sync, error) {
 	sync, err := s.peer.Sync()
 	if err != nil {
@@ -227,15 +190,17 @@ func (s *indexer) getLog() (kayak.Log, kayak.Sync, error) {
 
 // an epoch represents a single birth-death cycle of an indexer implementation.
 type epoch struct {
-	ctx    common.Context
-	ctrl   common.Control
-	logger common.Logger
-	idx    amoeba.Index
-	log    kayak.Log
-	sync   kayak.Sync
+	ctx      common.Context
+	ctrl     common.Control
+	logger   common.Logger
+	parent   *indexer
+	idx      amoeba.Index
+	log      kayak.Log
+	sync     kayak.Sync
+	requests common.WorkPool
 }
 
-func openEpoch(ctx common.Context, log kayak.Log, sync kayak.Sync, cycle int) (*epoch, error) {
+func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sync, cycle int) (*epoch, error) {
 	ctx = ctx.Sub("Epoch(%v)", cycle)
 
 	start, ss, err := log.Snapshot()
@@ -251,12 +216,13 @@ func openEpoch(ctx common.Context, log kayak.Log, sync kayak.Sync, cycle int) (*
 	e := &epoch{
 		ctrl:   ctx.Control(),
 		logger: ctx.Logger(),
+		parent: parent,
 		idx:    idx,
 		log:    log,
 		sync:   sync,
 	}
 
-	if err := e.Start(start); err != nil {
+	if err := e.start(start); err != nil {
 		return nil, err
 	}
 
@@ -303,19 +269,23 @@ func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
 	return item, true, nil
 }
 
+func (e *epoch) TryUpdate(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, bool, error) {
+	item, _, err := e.Get(cancel, key)
+	if err != nil {
+		return Item{}, false, errors.WithStack(err)
+	}
+
+	new := fn(item.Val)
+	if bytes.Equal(item.Val, new) {
+		return item, true, nil
+	}
+
+	return e.Swap(cancel, Item{key, new, item.Ver})
+}
+
 func (e *epoch) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, error) {
 	for !common.IsCanceled(cancel) {
-		item, _, err := e.Get(cancel, key)
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		new := fn(item.Val)
-		if bytes.Equal(item.Val, new) {
-			return item, nil
-		}
-
-		item, ok, err := e.Swap(cancel, Item{key, new, item.Ver})
+		item, ok, err := e.TryUpdate(cancel, key, fn)
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -326,8 +296,38 @@ func (e *epoch) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byt
 	}
 	return Item{}, errors.WithStack(common.CanceledError)
 }
+//
+// func (e *epoch) Roster(cancel <-chan struct{}) ([]string, error) {
+	// item, ok, err := e.Get(cancel, []byte("elmer.roster"))
+	// if err != nil {
+		// return nil, errors.WithStack(err)
+	// }
+//
+	// if !ok {
+		// return []string{}, nil
+	// }
+//
+	// return parseRosterBytes(item.Val)
+// }
+//
+// func (e *epoch) TryUpdateRoster(cancel <-chan struct{}, fn func([]string) []string) (bool, error) {
+	// _, ok, err := e.TryUpdate(cancel, []byte("elmer.roster"), func(cur []byte) []byte {
+		// roster, err := parseRosterBytes(cur)
+		// if err != nil || roster == nil {
+			// roster = []string{}
+		// }
+//
+		// next := fn(roster)
+		// if next == nil {
+			// return []byte{}
+		// }
+//
+		// return peers(next).Bytes()
+	// })
+	// return ok, err
+// }
 
-func (e *epoch) Start(index int) error {
+func (e *epoch) start(index int) error {
 	l, err := e.log.Listen(index, 1024)
 	if err != nil {
 		return err
@@ -336,10 +336,24 @@ func (e *epoch) Start(index int) error {
 		l.Close()
 	})
 
-	// start main routine
+	// start the request router
 	go func() {
 		defer e.ctrl.Close()
+		for {
+			select {
+			case <-e.ctrl.Closed():
+				return
+			case req := <-e.parent.swap:
+				e.handleSwap(req)
+			case req := <-e.parent.read:
+				e.handleRead(req)
+			}
+		}
+	}()
 
+	// start the indexer routine
+	go func() {
+		defer e.ctrl.Close()
 		for {
 			var entry kayak.Entry
 			select {
@@ -361,6 +375,40 @@ func (e *epoch) Start(index int) error {
 	}()
 
 	return nil
+}
+
+func (e *epoch) handleRead(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		rpc := req.Body().(getRpc)
+
+		item, ok, err := e.Get(req.Canceled(), rpc.Key)
+		if err != nil {
+			req.Fail(err)
+			return
+		}
+
+		req.Ack(responseRpc{item, ok})
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
+}
+
+func (e *epoch) handleSwap(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		rpc := req.Body().(swapRpc)
+
+		item, ok, err := e.Swap(req.Canceled(), Item{rpc.Key, rpc.Val, rpc.Prev})
+		if err != nil {
+			req.Fail(err)
+			return
+		}
+
+		req.Ack(responseRpc{item, ok})
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
 }
 
 func indexEntry(idx amoeba.Index, entry kayak.Entry) error {

@@ -8,7 +8,6 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-// a peer simply binds a network service with the core store machine.
 type peer struct {
 	ctx    common.Context
 	ctrl   common.Control

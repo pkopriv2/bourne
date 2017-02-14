@@ -36,7 +36,7 @@ func (s *syncer) Sync(cancel <-chan struct{}, index int) error {
 	}
 
 	if common.IsCanceled(cancel) {
-		return errors.WithStack(CanceledError)
+		return errors.WithStack(common.CanceledError)
 	}
 
 	return nil
@@ -45,7 +45,7 @@ func (s *syncer) Sync(cancel <-chan struct{}, index int) error {
 func (s *syncer) tryBarrier(cancel <-chan struct{}) (val int, err error) {
 	raw := s.pool.TakeOrCancel(cancel)
 	if raw == nil {
-		return 0, errors.WithStack(CanceledError)
+		return 0, errors.WithStack(common.CanceledError)
 	}
 	defer func() {
 		if err != nil {
