@@ -11,7 +11,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-func hasPeer(peers []peer, p peer) bool {
+func hasPeer(peers []Peer, p Peer) bool {
 	for _, cur := range peers {
 		if cur.Id == p.Id {
 			return true
@@ -20,7 +20,7 @@ func hasPeer(peers []peer, p peer) bool {
 	return false
 }
 
-func findPeer(peers []peer, p peer) int {
+func findPeer(peers []Peer, p Peer) int {
 	for i, cur := range peers {
 		if cur.Id == p.Id {
 			return i
@@ -29,7 +29,7 @@ func findPeer(peers []peer, p peer) int {
 	return -1
 }
 
-func addPeer(cur []peer, p peer) []peer {
+func addPeer(cur []Peer, p Peer) []Peer {
 	if hasPeer(cur, p) {
 		return cur
 	}
@@ -37,7 +37,7 @@ func addPeer(cur []peer, p peer) []peer {
 	return append(cur, p)
 }
 
-func delPeer(cur []peer, p peer) []peer {
+func delPeer(cur []Peer, p Peer) []Peer {
 	index := findPeer(cur, p)
 	if index == -1 {
 		return cur
@@ -46,7 +46,7 @@ func delPeer(cur []peer, p peer) []peer {
 	return append(cur[:index], cur[index+1:]...)
 }
 
-func equalPeers(l []peer, r []peer) bool {
+func equalPeers(l []Peer, r []Peer) bool {
 	if len(l) != len(r) {
 		return false
 	}
@@ -65,7 +65,7 @@ func clusterBytes(cluster peers) []byte {
 }
 
 // replicated configuration
-type peers []peer
+type peers []Peer
 
 func (p peers) Write(w scribe.Writer) {
 	w.WriteMessages("peers", p)
@@ -75,12 +75,12 @@ func (p peers) Bytes() []byte {
 	return scribe.Write(p).Bytes()
 }
 
-func readPeers(r scribe.Reader) (p []peer, e error) {
+func readPeers(r scribe.Reader) (p []Peer, e error) {
 	e = r.ParseMessages("peers", (*peers)(&p), peerParser)
 	return
 }
 
-func parsePeers(bytes []byte) (p []peer, e error) {
+func parsePeers(bytes []byte) (p []Peer, e error) {
 	if bytes == nil {
 		return nil, nil
 	}
@@ -94,20 +94,20 @@ func parsePeers(bytes []byte) (p []peer, e error) {
 }
 
 // A peer contains the identifying info of a cluster member.
-type peer struct {
+type Peer struct {
 	Id   uuid.UUID
 	Addr string
 }
 
-func newPeer(addr string) peer {
-	return peer{Id: uuid.NewV1(), Addr: addr}
+func newPeer(addr string) Peer {
+	return Peer{Id: uuid.NewV1(), Addr: addr}
 }
 
-func (p peer) String() string {
+func (p Peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
 }
 
-func (p peer) Client(ctx common.Context, network net.Network, timeout time.Duration) (*rpcClient, error) {
+func (p Peer) Client(ctx common.Context, network net.Network, timeout time.Duration) (*rpcClient, error) {
 	raw, err := network.Dial(timeout, p.Addr)
 	if raw == nil || err != nil {
 		return nil, errors.Wrapf(err, "Error connecting to peer [%v]", p)
@@ -150,13 +150,13 @@ func (p peer) Client(ctx common.Context, network net.Network, timeout time.Durat
 // }
 // }
 
-func (p peer) Write(w scribe.Writer) {
+func (p Peer) Write(w scribe.Writer) {
 	w.WriteUUID("id", p.Id)
 	w.WriteString("addr", p.Addr)
 }
 
 func peerParser(r scribe.Reader) (interface{}, error) {
-	var p peer
+	var p Peer
 	var e error
 	e = common.Or(e, r.ReadUUID("id", &p.Id))
 	e = common.Or(e, r.ReadString("addr", &p.Addr))

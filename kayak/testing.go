@@ -53,7 +53,7 @@ func TestCluster(ctx common.Context, size int) (peers []Host, err error) {
 
 	hosts := []Host{first}
 	for i := 1; i < size; i++ {
-		host, err := Join(ctx, ":0", first.Roster(), stg)
+		host, err := Join(ctx, ":0", first.Addrs(), stg)
 		if err != nil {
 			return nil, errors.Wrapf(err, "Error starting [%v] host", i)
 		}

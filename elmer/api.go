@@ -24,8 +24,21 @@ func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Store,
 
 type Peer interface {
 	io.Closer
-	Store() (Store, error)
+	// Id() uuid.UUID
+	// Roster() []string
+	Stores() (Catalogue, error)
 	Shutdown() error
+}
+
+// type Peer struct {
+// Id uuid.UUID
+// Addr []string
+// }
+
+type Catalogue interface {
+	Del([]byte) error
+	Get([]byte) (Store, error)
+	Init([]byte) (Store, error)
 }
 
 // A very simple key,value store abstraction. This store uses
@@ -60,12 +73,14 @@ type Store interface {
 
 // An item in a store.
 type Item struct {
-	Key []byte
-	Val []byte
-	Ver int
+	Store []byte
+	Key   []byte
+	Val   []byte
+	Ver   int
 }
 
 func (i Item) Write(w scribe.Writer) {
+	w.WriteBytes("store", i.Store)
 	w.WriteBytes("key", i.Key)
 	w.WriteBytes("val", i.Val)
 	w.WriteInt("ver", i.Ver)
@@ -77,6 +92,10 @@ func (i Item) Bytes() []byte {
 
 func (i Item) Equal(o Item) bool {
 	if i.Ver != o.Ver {
+		return false
+	}
+
+	if !bytes.Equal(i.Store, o.Store) {
 		return false
 	}
 
@@ -92,6 +111,7 @@ func (i Item) String() string {
 }
 
 func readItem(r scribe.Reader) (item Item, err error) {
+	err = common.Or(err, r.ReadBytes("store", &item.Store))
 	err = common.Or(err, r.ReadBytes("key", &item.Key))
 	err = common.Or(err, r.ReadBytes("val", &item.Val))
 	err = common.Or(err, r.ReadInt("ver", &item.Ver))

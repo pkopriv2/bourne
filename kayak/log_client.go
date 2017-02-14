@@ -103,7 +103,7 @@ func (p *logClientListener) start() {
 			case e = <-p.raw.Data():
 			}
 
-			if e.Kind != Std {
+			if e.kind != Std {
 				continue
 			}
 

@@ -4,33 +4,32 @@ import (
 	"bytes"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 )
 
 type indexer struct {
-	ctx    common.Context
-	ctrl   common.Control
-	logger common.Logger
-	peer   kayak.Host
-	addr   string
-	read   chan *common.Request
-	swap   chan *common.Request
-	pool   common.WorkPool
+	ctx     common.Context
+	ctrl    common.Control
+	logger  common.Logger
+	peer    kayak.Host
+	addr    string
+	read    chan *common.Request
+	swap    chan *common.Request
+	workers int
 }
 
 func newIndexer(ctx common.Context, peer kayak.Host, workers int) (*indexer, error) {
 	ctx = ctx.Sub("Indexer")
 
 	m := &indexer{
-		ctx:    ctx,
-		ctrl:   ctx.Control(),
-		logger: ctx.Logger(),
-		peer:   peer,
-		read:   make(chan *common.Request),
-		swap:   make(chan *common.Request),
-		pool:   common.NewWorkPool(ctx.Control(), workers),
+		ctx:     ctx,
+		ctrl:    ctx.Control(),
+		logger:  ctx.Logger(),
+		peer:    peer,
+		read:    make(chan *common.Request),
+		swap:    make(chan *common.Request),
+		workers: workers,
 	}
 
 	// bind the indexer's lifecycle to the kayak host
@@ -59,7 +58,7 @@ func (s *indexer) start() {
 				continue
 			}
 
-			epoch, err := openEpoch(s.ctx, s, log, sync, iter)
+			epoch, err := openEpoch(s.ctx, s, log, sync, iter, s.workers)
 			if err != nil {
 				s.logger.Error("Error retrieving log: %+v", err)
 				continue
@@ -122,9 +121,9 @@ func (s *indexer) Swap(cancel <-chan struct{}, swap swapRpc) (Item, bool, error)
 	return rpc.Item, rpc.Ok, nil
 }
 
-func (s *indexer) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, error) {
+func (s *indexer) Update(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
 	for !common.IsCanceled(cancel) {
-		item, _, err := s.Read(cancel, getRpc{key})
+		item, _, err := s.Read(cancel, getRpc{store, key})
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -134,7 +133,7 @@ func (s *indexer) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []b
 			return item, nil
 		}
 
-		item, ok, err := s.Swap(cancel, swapRpc{key, new, item.Ver})
+		item, ok, err := s.Swap(cancel, swapRpc{store, key, new, item.Ver})
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -144,36 +143,6 @@ func (s *indexer) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []b
 		}
 	}
 	return Item{}, errors.WithStack(common.CanceledError)
-}
-
-func (s *indexer) Roster(cancel <-chan struct{}) ([]string, error) {
-	item, ok, err := s.Read(cancel, getRpc{[]byte("elmer.roster")})
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	if !ok {
-		return []string{}, nil
-	}
-
-	return parseRosterBytes(item.Val)
-}
-
-func (s *indexer) UpdateRoster(cancel <-chan struct{}, fn func([]string) []string) error {
-	_, err := s.Update(cancel, []byte("elmer.roster"), func(cur []byte) []byte {
-		roster, err := parseRosterBytes(cur)
-		if err != nil || roster == nil {
-			roster = []string{}
-		}
-
-		next := fn(roster)
-		if next == nil {
-			return []byte{}
-		}
-
-		return peers(next).Bytes()
-	})
-	return err
 }
 
 func (s *indexer) getLog() (kayak.Log, kayak.Sync, error) {
@@ -190,17 +159,17 @@ func (s *indexer) getLog() (kayak.Log, kayak.Sync, error) {
 
 // an epoch represents a single birth-death cycle of an indexer implementation.
 type epoch struct {
-	ctx      common.Context
-	ctrl     common.Control
-	logger   common.Logger
-	parent   *indexer
-	idx      amoeba.Index
-	log      kayak.Log
-	sync     kayak.Sync
-	requests common.WorkPool
+	ctx       common.Context
+	ctrl      common.Control
+	logger    common.Logger
+	parent    *indexer
+	catalogue *catalogue
+	log       kayak.Log
+	sync      kayak.Sync
+	requests  common.WorkPool
 }
 
-func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sync, cycle int) (*epoch, error) {
+func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sync, workers int, cycle int) (*epoch, error) {
 	ctx = ctx.Sub("Epoch(%v)", cycle)
 
 	start, ss, err := log.Snapshot()
@@ -208,18 +177,19 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 		return nil, err
 	}
 
-	idx, err := build(ss)
+	catalogue, err := build(ss)
 	if err != nil {
 		return nil, err
 	}
 
 	e := &epoch{
-		ctrl:   ctx.Control(),
-		logger: ctx.Logger(),
-		parent: parent,
-		idx:    idx,
-		log:    log,
-		sync:   sync,
+		ctrl:      ctx.Control(),
+		logger:    ctx.Logger(),
+		parent:    parent,
+		catalogue: catalogue,
+		log:       log,
+		sync:      sync,
+		requests:  common.NewWorkPool(ctx.Control(), workers),
 	}
 
 	if err := e.start(start); err != nil {
@@ -229,7 +199,7 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 	return e, nil
 }
 
-func (e *epoch) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {
+func (e *epoch) Get(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
 	val, err := e.sync.Barrier(cancel)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
@@ -239,12 +209,13 @@ func (e *epoch) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	item, ok := read(e.idx, key)
+	s := e.catalogue.Init(store)
+	item, ok := s.Get(key)
 	return item, ok, nil
 }
 
-func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
-	entry, err := e.log.Append(cancel, item.Bytes())
+func (e *epoch) Swap(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
+	entry, err := e.log.Append(cancel, Item{store, key, val, ver}.Bytes())
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
@@ -252,25 +223,17 @@ func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
 	// TODO: Does this break linearizability???  Technically, another conflicting item
 	// can come in immediately after we sync and update the value - and we can't tell
 	// whether our update was accepted or not..
-
 	if err := e.sync.Sync(cancel, entry.Index); err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	actual, ok := read(e.idx, item.Key)
-	if !ok {
-		return Item{}, false, nil
-	}
-
-	if !actual.Equal(item) {
-		return Item{}, false, nil
-	}
-
-	return item, true, nil
+	s := e.catalogue.Init(store)
+	item, ok := s.Swap(key, val, ver)
+	return item, ok, nil
 }
 
-func (e *epoch) TryUpdate(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, bool, error) {
-	item, _, err := e.Get(cancel, key)
+func (e *epoch) TryUpdate(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
+	item, _, err := e.Get(cancel, store, key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
@@ -280,12 +243,12 @@ func (e *epoch) TryUpdate(cancel <-chan struct{}, key []byte, fn func([]byte) []
 		return item, true, nil
 	}
 
-	return e.Swap(cancel, Item{key, new, item.Ver})
+	return e.Swap(cancel, store, key, new, item.Ver)
 }
 
-func (e *epoch) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, error) {
+func (e *epoch) Update(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
 	for !common.IsCanceled(cancel) {
-		item, ok, err := e.TryUpdate(cancel, key, fn)
+		item, ok, err := e.TryUpdate(cancel, store, key, fn)
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -296,36 +259,6 @@ func (e *epoch) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byt
 	}
 	return Item{}, errors.WithStack(common.CanceledError)
 }
-//
-// func (e *epoch) Roster(cancel <-chan struct{}) ([]string, error) {
-	// item, ok, err := e.Get(cancel, []byte("elmer.roster"))
-	// if err != nil {
-		// return nil, errors.WithStack(err)
-	// }
-//
-	// if !ok {
-		// return []string{}, nil
-	// }
-//
-	// return parseRosterBytes(item.Val)
-// }
-//
-// func (e *epoch) TryUpdateRoster(cancel <-chan struct{}, fn func([]string) []string) (bool, error) {
-	// _, ok, err := e.TryUpdate(cancel, []byte("elmer.roster"), func(cur []byte) []byte {
-		// roster, err := parseRosterBytes(cur)
-		// if err != nil || roster == nil {
-			// roster = []string{}
-		// }
-//
-		// next := fn(roster)
-		// if next == nil {
-			// return []byte{}
-		// }
-//
-		// return peers(next).Bytes()
-	// })
-	// return ok, err
-// }
 
 func (e *epoch) start(index int) error {
 	l, err := e.log.Listen(index, 1024)
@@ -365,7 +298,7 @@ func (e *epoch) start(index int) error {
 			case entry = <-l.Data():
 			}
 
-			if err := indexEntry(e.idx, entry); err != nil {
+			if err := e.handleEntry(entry); err != nil {
 				e.logger.Error("Error parsing item from event stream [%v]: %+v", entry.Index, err)
 				continue
 			}
@@ -373,7 +306,6 @@ func (e *epoch) start(index int) error {
 			e.sync.Ack(entry.Index)
 		}
 	}()
-
 	return nil
 }
 
@@ -381,7 +313,7 @@ func (e *epoch) handleRead(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(getRpc)
 
-		item, ok, err := e.Get(req.Canceled(), rpc.Key)
+		item, ok, err := e.Get(req.Canceled(), rpc.Store, rpc.Key)
 		if err != nil {
 			req.Fail(err)
 			return
@@ -398,7 +330,7 @@ func (e *epoch) handleSwap(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(swapRpc)
 
-		item, ok, err := e.Swap(req.Canceled(), Item{rpc.Key, rpc.Val, rpc.Prev})
+		item, ok, err := e.Swap(req.Canceled(), rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
 		if err != nil {
 			req.Fail(err)
 			return
@@ -411,54 +343,21 @@ func (e *epoch) handleSwap(req *common.Request) {
 	}
 }
 
-func indexEntry(idx amoeba.Index, entry kayak.Entry) error {
+func (e *epoch) handleEntry(entry kayak.Entry) error {
 	item, err := parseItemBytes(entry.Event)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	swap(idx, item.Key, item.Val, item.Ver)
+	store := e.catalogue.Init(item.Store)
+	store.Put(item.Key, item.Val, item.Ver)
 	return nil
 }
 
-func swap(idx amoeba.Index, key []byte, val []byte, prev int) (item Item, ok bool) {
-	bytesKey := amoeba.BytesKey(item.Key)
-
-	item = Item{key, val, prev + 1}
-	idx.Update(func(u amoeba.Update) {
-		raw := u.Get(bytesKey)
-		if raw == nil {
-			if ok = prev == 0; ok {
-				u.Put(bytesKey, item)
-			}
-			return
-		}
-
-		if cur := raw.(Item); cur.Ver == prev {
-			u.Put(bytesKey, item)
-			ok = true
-			return
-		}
-	})
-	return
-}
-
-func read(idx amoeba.Index, key []byte) (item Item, ok bool) {
-	idx.Update(func(u amoeba.Update) {
-		raw := u.Get(amoeba.BytesKey(key))
-		if raw == nil {
-			return
-		}
-
-		item, ok = raw.(Item), true
-	})
-	return
-}
-
-func build(st kayak.EventStream) (amoeba.Index, error) {
+func build(st kayak.EventStream) (*catalogue, error) {
 	defer st.Close()
 
-	idx := amoeba.NewBTreeIndex(32)
+	catalogue := newCatalogue()
 	for {
 		var evt kayak.Event
 		select {
@@ -469,11 +368,10 @@ func build(st kayak.EventStream) (amoeba.Index, error) {
 
 		item, err := parseItemBytes(evt)
 		if err != nil {
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 
-		idx.Update(func(u amoeba.Update) {
-			u.Put(amoeba.BytesKey(item.Key), item)
-		})
+		store := catalogue.Init(item.Store)
+		store.Put(item.Key, item.Val, item.Ver)
 	}
 }

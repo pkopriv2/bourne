@@ -66,7 +66,7 @@ func (c *rpcClient) Status() (status, error) {
 	return readStatusResponse(resp.Body())
 }
 
-func (c *rpcClient) UpdateRoster(peer peer, join bool) error {
+func (c *rpcClient) UpdateRoster(peer Peer, join bool) error {
 	resp, err := c.raw.Send(rosterUpdate{peer, join}.Request())
 	if err != nil {
 		return err
@@ -136,7 +136,7 @@ type rpcClientPool struct {
 	raw common.ObjectPool
 }
 
-func newRpcClientPool(ctx common.Context, network net.Network, peer peer, size int) *rpcClientPool {
+func newRpcClientPool(ctx common.Context, network net.Network, peer Peer, size int) *rpcClientPool {
 	return &rpcClientPool{ctx, common.NewObjectPool(ctx.Control(), size, newRpcClientConstructor(ctx, network, peer))}
 }
 
@@ -165,7 +165,7 @@ func (c *rpcClientPool) Fail(cl *rpcClient) {
 	c.raw.Fail(cl)
 }
 
-func newRpcClientConstructor(ctx common.Context, network net.Network, peer peer) func() (io.Closer, error) {
+func newRpcClientConstructor(ctx common.Context, network net.Network, peer Peer) func() (io.Closer, error) {
 	return func() (io.Closer, error) {
 		if cl, err := peer.Client(ctx, network, 30*time.Second); cl != nil && err == nil {
 			return cl, err

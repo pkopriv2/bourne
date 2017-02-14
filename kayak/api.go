@@ -173,7 +173,12 @@ type Host interface {
 	Addr() string
 
 	// Addresses of all members in the cluster (*dynamic*)
-	Roster() []string
+	//
+	// *Deprecated:* Will remove before 1.0 release.  Please use #Roster()
+	Addrs() []string
+
+	// Returns the peer objects of all members in the cluster.
+	Roster() []Peer
 
 	// Returns the cluster synchronizer.
 	Sync() (Sync, error)
@@ -290,7 +295,7 @@ type Entry struct {
 	Index int
 	Event Event
 	Term  int
-	Kind  Kind
+	kind  Kind
 }
 
 var (
@@ -315,14 +320,14 @@ func (k Kind) String() string {
 }
 
 func (l Entry) String() string {
-	return fmt.Sprintf("Item(idx=%v,term=%v,kind=%v,size=%v)", l.Index, l.Term, l.Kind, len(l.Event))
+	return fmt.Sprintf("Item(idx=%v,term=%v,kind=%v,size=%v)", l.Index, l.Term, l.kind, len(l.Event))
 }
 
 func (l Entry) Write(w scribe.Writer) {
 	w.WriteInt("index", l.Index)
 	w.WriteBytes("event", l.Event)
 	w.WriteInt("term", l.Term)
-	w.WriteInt("kind", int(l.Kind))
+	w.WriteInt("kind", int(l.kind))
 }
 
 func (l Entry) Bytes() []byte {
@@ -333,7 +338,7 @@ func readEntry(r scribe.Reader) (entry Entry, err error) {
 	err = common.Or(err, r.ReadInt("index", &entry.Index))
 	err = common.Or(err, r.ReadInt("term", &entry.Term))
 	err = common.Or(err, r.ReadBytes("event", (*[]byte)(&entry.Event)))
-	err = common.Or(err, r.ReadInt("kind", (*int)(&entry.Kind)))
+	err = common.Or(err, r.ReadInt("kind", (*int)(&entry.kind)))
 	return
 }
 

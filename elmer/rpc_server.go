@@ -45,11 +45,12 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) Status(req net.Request) net.Response {
-	roster, err := s.self.Roster(nil)
-	if err != nil {
-		return net.NewErrorResponse(err)
-	}
-	return statusRpc{s.self.peer.Id(), roster}.Response()
+	return nil
+	// roster, err := s.self.Roster(nil)
+	// if err != nil {
+		// return net.NewErrorResponse(err)
+	// }
+	// return statusRpc{s.self.peer.Id(), roster}.Response()
 }
 
 func (s *server) Read(req net.Request) net.Response {

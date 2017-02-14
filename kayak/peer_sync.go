@@ -57,7 +57,7 @@ func (l *logSyncer) Close() error {
 	return nil
 }
 
-func (s *logSyncer) spawnSyncer(p peer) *peerSyncer {
+func (s *logSyncer) spawnSyncer(p Peer) *peerSyncer {
 	sync := newPeerSyncer(s.ctx, s.self, s.term, p)
 	go func() {
 		select {
@@ -79,7 +79,7 @@ func (s *logSyncer) spawnSyncer(p peer) *peerSyncer {
 	return sync
 }
 
-func (s *logSyncer) handleRosterChange(peers []peer) {
+func (s *logSyncer) handleRosterChange(peers []Peer) {
 	cur, active := s.Syncers(), make(map[uuid.UUID]*peerSyncer)
 
 	// Add any missing
@@ -103,7 +103,7 @@ func (s *logSyncer) handleRosterChange(peers []peer) {
 		}
 	}
 
-	after := make([]peer, 0, len(active))
+	after := make([]Peer, 0, len(active))
 	for _, syncer := range active {
 		after = append(after, syncer.peer)
 	}
@@ -200,7 +200,7 @@ func (s *logSyncer) SetSyncers(syncers map[uuid.UUID]*peerSyncer) {
 type peerSyncer struct {
 	logger    common.Logger
 	ctrl      common.Control
-	peer      peer
+	peer      Peer
 	term      term
 	self      *replica
 	prevIndex int
@@ -208,7 +208,7 @@ type peerSyncer struct {
 	prevLock  sync.RWMutex
 }
 
-func newPeerSyncer(ctx common.Context, self *replica, term term, peer peer) *peerSyncer {
+func newPeerSyncer(ctx common.Context, self *replica, term term, peer Peer) *peerSyncer {
 	sub := ctx.Sub("Sync(%v)", peer)
 	sync := &peerSyncer{
 		logger:    sub.Logger(),

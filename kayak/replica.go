@@ -37,7 +37,7 @@ type replica struct {
 	Id uuid.UUID
 
 	// the peer representing the local instance
-	Self peer
+	Self Peer
 
 	// the networking abstraction
 	Network net.Network
@@ -103,7 +103,7 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		return nil, errors.Wrapf(err, "Error retrieving peer id [%v]", addr)
 	}
 
-	self := peer{id, addr}
+	self := Peer{id, addr}
 	ctx = ctx.Sub("%v", self)
 	ctx.Logger().Info("Starting replica.")
 
@@ -115,7 +115,7 @@ func newReplica(ctx common.Context, net net.Network, store LogStore, db *bolt.DB
 		log.Close()
 	})
 
-	roster := newRoster([]peer{self})
+	roster := newRoster([]Peer{self})
 	ctx.Control().Defer(func(cause error) {
 		roster.Close()
 	})
@@ -191,12 +191,12 @@ func (h *replica) CurrentTerm() term {
 	return h.term // i assume return is bound prior to the deferred function....
 }
 
-func (h *replica) Cluster() []peer {
+func (h *replica) Cluster() []Peer {
 	all, _ := h.Roster.Get()
 	return all
 }
 
-func (h *replica) Leader() *peer {
+func (h *replica) Leader() *Peer {
 	if term := h.CurrentTerm(); term.Leader != nil {
 		peer, found := h.Peer(*term.Leader)
 		if !found {
@@ -210,18 +210,18 @@ func (h *replica) Leader() *peer {
 	return nil
 }
 
-func (h *replica) Peer(id uuid.UUID) (peer, bool) {
+func (h *replica) Peer(id uuid.UUID) (Peer, bool) {
 	for _, p := range h.Cluster() {
 		if p.Id == id {
 			return p, true
 		}
 	}
-	return peer{}, false
+	return Peer{}, false
 }
 
-func (h *replica) Others() []peer {
+func (h *replica) Others() []Peer {
 	cluster := h.Cluster()
-	others := make([]peer, 0, len(cluster))
+	others := make([]Peer, 0, len(cluster))
 	for _, p := range cluster {
 		if p.Id != h.Self.Id {
 			others = append(others, p)
@@ -238,7 +238,7 @@ func (h *replica) Broadcast(fn func(c *rpcClient) response) <-chan response {
 	peers := h.Others()
 	ret := make(chan response, len(peers))
 	for _, p := range peers {
-		go func(p peer) {
+		go func(p Peer) {
 			cl, err := p.Client(h.Ctx, h.Network, h.ConnTimeout)
 			if cl == nil || err != nil {
 				ret <- newResponse(h.term.Num, false)
@@ -277,11 +277,11 @@ func (h *replica) sendRequest(ch chan<- *common.Request, timeout time.Duration, 
 	}
 }
 
-func (h *replica) AddPeer(peer peer) error {
+func (h *replica) AddPeer(peer Peer) error {
 	return h.UpdateRoster(rosterUpdate{peer, true})
 }
 
-func (h *replica) DelPeer(peer peer) error {
+func (h *replica) DelPeer(peer Peer) error {
 	return h.UpdateRoster(rosterUpdate{peer, false})
 }
 
@@ -394,14 +394,14 @@ func getOrCreateReplicaId(store *termStore, addr string) (uuid.UUID, error) {
 	return id, nil
 }
 
-func getOrCreateStore(ctx common.Context, store LogStore, self peer) (*eventLog, error) {
+func getOrCreateStore(ctx common.Context, store LogStore, self Peer) (*eventLog, error) {
 	raw, err := store.Get(self.Id)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
 	}
 
 	if raw == nil {
-		raw, err = store.New(self.Id, clusterBytes([]peer{self}))
+		raw, err = store.New(self.Id, clusterBytes([]Peer{self}))
 		if err != nil {
 			return nil, errors.Wrapf(err, "Error opening stored log [%v]", self.Id)
 		}

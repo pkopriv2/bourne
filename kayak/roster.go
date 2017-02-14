@@ -50,7 +50,7 @@ func (r *rosterManager) start() {
 
 				l := newConfigListener(appends, ctrl)
 				for {
-					var peers []peer
+					var peers []Peer
 					select {
 					case <-ctrl.Closed():
 						return
@@ -71,7 +71,7 @@ func (r *rosterManager) start() {
 
 				// FIXME: Must play log out to make sure we aren't re-added!
 				for member := false; ; {
-					var peers []peer
+					var peers []Peer
 					select {
 					case <-ctrl.Closed():
 						return
@@ -106,7 +106,7 @@ func (r *rosterManager) start() {
 	}()
 }
 
-func (r *rosterManager) reloadRoster() ([]peer, int, error) {
+func (r *rosterManager) reloadRoster() ([]Peer, int, error) {
 	snapshot, err := r.self.Log.Snapshot()
 	if err != nil {
 		return nil, 0, errors.Wrapf(err, "Error getting snapshot")
@@ -143,15 +143,15 @@ func (r *rosterManager) listenCommits(offset int) (Listener, error) {
 }
 
 type roster struct {
-	raw []peer
+	raw []Peer
 	ver *ref
 }
 
-func newRoster(init []peer) *roster {
+func newRoster(init []Peer) *roster {
 	return &roster{raw: init, ver: newRef(0)}
 }
 
-func (c *roster) Wait(next int) ([]peer, int, bool) {
+func (c *roster) Wait(next int) ([]Peer, int, bool) {
 	_, ok := c.ver.WaitExceeds(next)
 	peers, ver := c.Get()
 	return peers, ver, ok
@@ -161,7 +161,7 @@ func (c *roster) Notify() {
 	c.ver.Notify()
 }
 
-func (c *roster) Set(peers []peer) {
+func (c *roster) Set(peers []Peer) {
 	c.ver.Update(func(cur int) int {
 		c.raw = peers
 		return cur + 1
@@ -169,7 +169,7 @@ func (c *roster) Set(peers []peer) {
 }
 
 // not taking copy as it is assumed that array is immutable
-func (c *roster) Get() (peers []peer, ver int) {
+func (c *roster) Get() (peers []Peer, ver int) {
 	c.ver.Update(func(cur int) int {
 		peers, ver = c.raw, cur
 		return cur
@@ -184,11 +184,11 @@ func (c *roster) Close() {
 type configListener struct {
 	raw  Listener
 	ctrl common.Control
-	ch   chan []peer
+	ch   chan []Peer
 }
 
 func newConfigListener(raw Listener, ctrl common.Control) *configListener {
-	l := &configListener{raw, ctrl, make(chan []peer)}
+	l := &configListener{raw, ctrl, make(chan []Peer)}
 	l.start()
 	return l
 }
@@ -201,7 +201,7 @@ func (c *configListener) Ctrl() common.Control {
 	return c.ctrl
 }
 
-func (c *configListener) Data() <-chan []peer {
+func (c *configListener) Data() <-chan []Peer {
 	return c.ch
 }
 
@@ -218,7 +218,7 @@ func (p *configListener) start() {
 			case next = <-p.raw.Data():
 			}
 
-			if next.Kind != Conf {
+			if next.kind != Conf {
 				continue
 			}
 

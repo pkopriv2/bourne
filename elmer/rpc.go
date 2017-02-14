@@ -57,10 +57,12 @@ func readStatusRpc(r scribe.Reader) (ret statusRpc, err error) {
 }
 
 type getRpc struct {
-	Key []byte
+	Store []byte
+	Key   []byte
 }
 
 func (g getRpc) Write(w scribe.Writer) {
+	w.WriteBytes("store", g.Store)
 	w.WriteBytes("key", g.Key)
 }
 
@@ -69,14 +71,16 @@ func (g getRpc) Request() net.Request {
 }
 
 func readGetRpc(r scribe.Reader) (ret getRpc, err error) {
+	err = r.ReadBytes("store", &ret.Store)
 	err = r.ReadBytes("key", &ret.Key)
 	return
 }
 
 type swapRpc struct {
-	Key  []byte
-	Val  []byte
-	Prev int
+	Store []byte
+	Key   []byte
+	Val   []byte
+	Prev  int
 }
 
 func (s swapRpc) Request() net.Request {

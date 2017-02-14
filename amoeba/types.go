@@ -66,8 +66,7 @@ func (i StringKey) Compare(s Key) int {
 // A byte array key type.
 type BytesKey []byte
 
-// Increments the byte array by one value.  This assumes big.Endian
-// encoding.
+// Increments the byte array by one value.  This assumes big.Endian encoding.
 func (i BytesKey) Inc() BytesKey {
 	return BytesKey(IncrementBytes(i))
 }

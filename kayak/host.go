@@ -65,6 +65,10 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 	}, nil
 }
 
+func (h *host) Fail(e error) {
+	h.ctrl.Fail(e)
+}
+
 func (h *host) Close() error {
 	return h.ctrl.Close()
 }
@@ -81,15 +85,19 @@ func (h *host) Addr() string {
 	return h.core.Self.Addr
 }
 
-func (h *host) Self() peer {
+func (h *host) Self() Peer {
 	return h.core.Self
 }
 
-func (h *host) Peers() []peer {
+func (h *host) Peers() []Peer {
 	return h.core.Others()
 }
 
-func (h *host) Cluster() []peer {
+func (h *host) Cluster() []Peer {
+	return h.core.Cluster()
+}
+
+func (h *host) Roster() []Peer {
 	return h.core.Cluster()
 }
 
@@ -101,7 +109,7 @@ func (h *host) Log() (Log, error) {
 	return newLogClient(h.core, h.pool), nil
 }
 
-func (h *host) Roster() []string {
+func (h *host) Addrs() []string {
 	addrs := make([]string, 0, 8)
 	for _, p := range h.core.Cluster() {
 		addrs = append(addrs, p.Addr)

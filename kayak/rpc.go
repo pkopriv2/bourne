@@ -50,7 +50,7 @@ func newStatusRequest() net.Request {
 type status struct {
 	id     uuid.UUID
 	term   term
-	config []peer
+	config []Peer
 }
 
 func (u status) Response() net.Response {
@@ -170,8 +170,8 @@ func (r requestVote) Request() net.Request {
 //
 // These come from active clients.
 type appendEvent struct {
-	Event  Event
-	Kind   Kind
+	Event Event
+	Kind  Kind
 }
 
 func readAppendEvent(r scribe.Reader) (ret appendEvent, err error) {
@@ -257,7 +257,7 @@ func readInstallSnapshot(r scribe.Reader) (ret installSnapshot, err error) {
 }
 
 type rosterUpdate struct {
-	peer peer
+	peer Peer
 	join bool
 }
 
