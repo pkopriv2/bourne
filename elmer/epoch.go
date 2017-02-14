@@ -1,11 +1,15 @@
 package elmer
 
 import (
+	"bytes"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 )
+
+// FIXME: Add gc capabilities to index.
 
 type epoch struct {
 	ctx    common.Context
@@ -24,7 +28,7 @@ func openEpoch(ctx common.Context, log kayak.Log, sync kayak.Sync, cycle int) (*
 		return nil, err
 	}
 
-	idx, err := build(ss)
+	idx, err := buildIndex(ss)
 	if err != nil {
 		return nil, err
 	}
@@ -84,14 +88,43 @@ func (e *epoch) Swap(cancel <-chan struct{}, item Item) (Item, bool, error) {
 	return item, true, nil
 }
 
+func (e *epoch) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, error) {
+	for !common.IsCanceled(cancel) {
+		item, _, err := e.Get(cancel, key)
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		new := fn(item.Val)
+		if bytes.Equal(item.Val, new) {
+			return item, nil
+		}
+
+		item, ok, err := e.Swap(cancel, Item{key, new, item.Ver})
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		if ok {
+			return item, nil
+		}
+	}
+	return Item{}, errors.WithStack(common.CanceledError)
+}
+
 func (e *epoch) Start(index int) error {
 	l, err := e.log.Listen(index, 1024)
 	if err != nil {
 		return err
 	}
+	e.ctrl.Defer(func(error) {
+		l.Close()
+	})
 
+	// start main routine
 	go func() {
-		defer l.Close()
+		defer e.ctrl.Close()
+
 		for {
 			var entry kayak.Entry
 			select {
@@ -109,7 +142,7 @@ func (e *epoch) Start(index int) error {
 				continue
 			}
 
-			swap(e.idx, item.Key, item.Val, item.Prev)
+			swap(e.idx, item.Key, item.Val, item.Ver)
 			e.sync.Ack(entry.Index)
 		}
 	}()
@@ -130,7 +163,7 @@ func swap(idx amoeba.Index, key []byte, val []byte, prev int) (item Item, ok boo
 			return
 		}
 
-		if cur := raw.(Item); cur.Prev == prev {
+		if cur := raw.(Item); cur.Ver == prev {
 			u.Put(bytesKey, item)
 			ok = true
 			return
@@ -151,7 +184,7 @@ func read(idx amoeba.Index, key []byte) (item Item, ok bool) {
 	return
 }
 
-func build(st kayak.EventStream) (amoeba.Index, error) {
+func buildIndex(st kayak.EventStream) (amoeba.Index, error) {
 	defer st.Close()
 
 	idx := amoeba.NewBTreeIndex(32)

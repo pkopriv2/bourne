@@ -97,30 +97,6 @@ func (h *machine) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 	}
 }
 
-func (s *machine) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, error) {
-	for !common.IsCanceled(cancel) {
-		item, _, err := s.Read(cancel, getRpc{key})
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		new := fn(item.Val)
-		if bytes.Equal(item.Val, new) {
-			return item, nil
-		}
-
-		item, ok, err := s.Swap(cancel, swapRpc{key, new, item.Prev})
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		if ok {
-			return item, nil
-		}
-	}
-	return Item{}, errors.WithStack(common.CanceledError)
-}
-
 func (s *machine) Read(cancel <-chan struct{}, read getRpc) (Item, bool, error) {
 	raw, err := s.sendRequest(s.read, cancel, read)
 	if err != nil {
@@ -139,6 +115,60 @@ func (s *machine) Swap(cancel <-chan struct{}, swap swapRpc) (Item, bool, error)
 
 	rpc := raw.(responseRpc)
 	return rpc.Item, rpc.Ok, nil
+}
+
+func (s *machine) Update(cancel <-chan struct{}, key []byte, fn func([]byte) []byte) (Item, error) {
+	for !common.IsCanceled(cancel) {
+		item, _, err := s.Read(cancel, getRpc{key})
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		new := fn(item.Val)
+		if bytes.Equal(item.Val, new) {
+			return item, nil
+		}
+
+		item, ok, err := s.Swap(cancel, swapRpc{key, new, item.Ver})
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		if ok {
+			return item, nil
+		}
+	}
+	return Item{}, errors.WithStack(common.CanceledError)
+}
+
+func (s *machine) Roster(cancel <-chan struct{}) ([]string, error) {
+	item, ok, err := s.Read(cancel, getRpc{[]byte("elmer.roster")})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if !ok {
+		return []string{}, nil
+	}
+
+	return parseRosterBytes(item.Val)
+}
+
+func (s *machine) UpdateRoster(cancel <-chan struct{}, fn func([]string) []string) error {
+	_, err := s.Update(cancel, []byte("elmer.roster"), func(cur []byte) []byte {
+		roster, err := parseRosterBytes(cur)
+		if err != nil || roster == nil {
+			roster = []string{}
+		}
+
+		next := fn(roster)
+		if next == nil {
+			return []byte{}
+		}
+
+		return peers(next).Bytes()
+	})
+	return err
 }
 
 func (s *machine) handleRead(epoch *epoch, req *common.Request) {

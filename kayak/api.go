@@ -131,10 +131,10 @@ var (
 	CanceledError  = errors.New("Kayak:CanceledError")
 )
 
-// Extracts out the raw errors.
-func Cause(err error) error {
-	return extractError(err)
-}
+// // Extracts out the raw errors.
+// func Cause(err error) error {
+	// return extractError(err)
+// }
 
 func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error) {
 	opts, err := buildOptions(ctx, fns)

@@ -39,7 +39,7 @@ func (r *rosterManager) Close() error {
 }
 
 func (r *rosterManager) start(base []string) {
-	cur := base
+	cur := r.refreshRoster(base)
 
 	go func() {
 		defer r.ctrl.Close()

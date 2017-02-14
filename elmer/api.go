@@ -46,7 +46,7 @@ type Store interface {
 	//
 	// If the return value inclues an error, the other results should
 	// not be trusted.
-	Put(cancel <-chan struct{}, key []byte, val []byte, prev int) (Item, bool, error)
+	Put(cancel <-chan struct{}, key []byte, val []byte, ver int) (Item, bool, error)
 
 	// Deletes the value at the given key if the version matches.
 	// Returns a flag indicating whether or not the operation was
@@ -55,20 +55,20 @@ type Store interface {
 	//
 	// If the return value inclues an error, the other results should
 	// not be trusted.
-	Del(cancel <-chan struct{}, key []byte, prev int) (bool, error)
+	Del(cancel <-chan struct{}, key []byte, ver int) (bool, error)
 }
 
 // An item in a store.
 type Item struct {
-	Key  []byte
-	Val  []byte
-	Prev int
+	Key []byte
+	Val []byte
+	Ver int
 }
 
 func (i Item) Write(w scribe.Writer) {
 	w.WriteBytes("key", i.Key)
 	w.WriteBytes("val", i.Val)
-	w.WriteInt("prev", i.Prev)
+	w.WriteInt("ver", i.Ver)
 }
 
 func (i Item) Bytes() []byte {
@@ -76,11 +76,11 @@ func (i Item) Bytes() []byte {
 }
 
 func (i Item) Equal(o Item) bool {
-	if i.Prev != o.Prev {
+	if i.Ver != o.Ver {
 		return false
 	}
 
-	if ! bytes.Equal(i.Key, o.Key) {
+	if !bytes.Equal(i.Key, o.Key) {
 		return false
 	}
 
@@ -88,13 +88,13 @@ func (i Item) Equal(o Item) bool {
 }
 
 func (i Item) String() string {
-	return fmt.Sprintf("(%v,%v)", i.Key, i.Prev)
+	return fmt.Sprintf("(%v,%v)", i.Key, i.Ver)
 }
 
 func readItem(r scribe.Reader) (item Item, err error) {
 	err = common.Or(err, r.ReadBytes("key", &item.Key))
 	err = common.Or(err, r.ReadBytes("val", &item.Val))
-	err = common.Or(err, r.ReadInt("prev", &item.Prev))
+	err = common.Or(err, r.ReadInt("ver", &item.Ver))
 	return
 }
 

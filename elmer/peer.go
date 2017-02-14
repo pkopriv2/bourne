@@ -3,13 +3,10 @@ package elmer
 import (
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/scribe"
 )
-
 
 // a peer simply binds a network service with the core store machine.
 type peer struct {
@@ -54,14 +51,35 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		server.Close()
 	})
 
-	return &peer{
+	p := &peer{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
 		logger: ctx.Logger(),
 		net:    net,
 		core:   core,
 		server: server,
-	}, nil
+	}
+
+	return p, p.start(listener.Addr().String())
+}
+
+func (p *peer) start(addr string) error {
+	// remove peer from roster on close.
+	defer p.ctrl.Defer(func(error) {
+		timer := p.ctx.Timer(5 * time.Minute)
+		defer timer.Close()
+
+		p.core.UpdateRoster(timer.Closed(), func(cur []string) []string {
+			return delPeer(cur, addr)
+		})
+	})
+
+	// add peer to roster (clients can now discover this peer)
+	timer := p.ctx.Timer(5 * time.Minute)
+	defer timer.Close()
+	return p.core.UpdateRoster(timer.Closed(), func(cur []string) []string {
+		return addPeer(cur, addr)
+	})
 }
 
 func (p *peer) Close() error {
@@ -74,34 +92,4 @@ func (p *peer) Store() (Store, error) {
 
 func (p *peer) Shutdown() error {
 	return p.ctrl.Close()
-}
-
-type roster struct {
-	peers []string
-}
-
-func (r roster) Write(w scribe.Writer) {
-	w.WriteStrings("peers", r.peers)
-}
-
-func (r roster) Bytes() {
-	scribe.Write(r).Bytes()
-}
-
-func readRoster(r scribe.Reader) (ret roster, err error) {
-	err = r.ReadStrings("peers", &ret.peers)
-	return
-}
-
-func parseRosterBytes(bytes []byte) (ret roster, err error) {
-	msg, err := scribe.Parse(bytes)
-	if err != nil {
-		return roster{}, errors.WithStack(err)
-	}
-
-	ret, err = readRoster(msg)
-	if err != nil {
-		return roster{}, errors.WithStack(err)
-	}
-	return
 }

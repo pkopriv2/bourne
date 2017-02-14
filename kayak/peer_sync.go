@@ -63,7 +63,7 @@ func (s *logSyncer) spawnSyncer(p peer) *peerSyncer {
 		select {
 		case <-sync.ctrl.Closed():
 			s.logger.Error("Syncer died: %+v", sync.ctrl.Failure())
-			if cause := extractError(sync.ctrl.Failure()); cause == nil || cause == NotLeaderError {
+			if cause := common.Extract(sync.ctrl.Failure(), NotLeaderError); cause == nil || cause == NotLeaderError {
 				s.logger.Info("Shutting down log sync'er")
 				s.ctrl.Fail(sync.ctrl.Failure())
 				return

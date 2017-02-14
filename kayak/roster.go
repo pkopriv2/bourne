@@ -97,7 +97,7 @@ func (r *rosterManager) start() {
 			case <-r.self.ctrl.Closed():
 				return
 			case <-ctrl.Closed():
-				if cause := extractError(ctrl.Failure()); cause != OutOfBoundsError {
+				if cause := common.Extract(ctrl.Failure(), OutOfBoundsError); cause != OutOfBoundsError {
 					r.self.ctrl.Fail(err)
 					return
 				}
