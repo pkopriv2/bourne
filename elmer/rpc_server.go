@@ -9,11 +9,11 @@ import (
 type server struct {
 	ctx    common.Context
 	logger common.Logger
-	self   *machine
+	self   *indexer
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, listener net.Listener, self *machine, workers int) (net.Server, error) {
+func newServer(ctx common.Context, listener net.Listener, self *indexer, workers int) (net.Server, error) {
 	ctx = ctx.Sub("Rpc")
 
 	server := &server{

@@ -15,7 +15,7 @@ type peer struct {
 	logger common.Logger
 	net    net.Network
 	self   kayak.Host
-	core   *machine
+	core   *indexer
 	server net.Server
 }
 
@@ -35,7 +35,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		listener.Close()
 	})
 
-	core, err := newStoreMachine(ctx, self, 20)
+	core, err := newIndexer(ctx, self, 20)
 	if err != nil {
 		return nil, err
 	}
