@@ -65,12 +65,13 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 	}, nil
 }
 
-func (h *host) Fail(e error) {
+func (h *host) Fail(e error) error {
 	h.ctrl.Fail(e)
+	return h.ctrl.Failure()
 }
 
 func (h *host) Close() error {
-	return h.ctrl.Close()
+	return h.Fail(h.Leave())
 }
 
 func (h *host) Id() uuid.UUID {

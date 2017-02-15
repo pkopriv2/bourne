@@ -181,6 +181,32 @@ func TestHost_Cluster_Leader_Failure(t *testing.T) {
 	assert.NotEqual(t, leader, after)
 }
 
+func TestHost_Cluster_Leader_Leave(t *testing.T) {
+	ctx := common.NewContext(common.NewEmptyConfig())
+	defer ctx.Close()
+
+	cluster, err := StartTestCluster(ctx, 3)
+	assert.Nil(t, err)
+
+	timer := ctx.Timer(10 * time.Second)
+	leader1 := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, leader1.Close())
+
+	time.Sleep(5*time.Second)
+
+	clusterAfter := Collect(cluster, func(h Host) bool {
+		return h.Id() != leader1.Id()
+	})
+
+	leader2 := ElectLeader(timer.Closed(), clusterAfter)
+	assert.NotEqual(t, leader1.Id(), leader2.Id())
+
+	roster := leader2.Roster()
+	for _, p := range roster {
+		assert.NotEqual(t, leader1.Id(), p.Id)
+	}
+}
+
 func TestHost_Cluster_Leader_Append_Single(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),

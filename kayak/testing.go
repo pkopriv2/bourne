@@ -183,3 +183,13 @@ func Index(cluster []Host, fn func(h Host) bool) int {
 
 	return -1
 }
+
+func Collect(cluster []Host, fn func(h Host) bool) []Host {
+	ret := make([]Host, 0, len(cluster))
+	for _, h := range cluster {
+		if fn(h) {
+			ret = append(ret, h)
+		}
+	}
+	return ret
+}
