@@ -16,7 +16,7 @@ type indexer struct {
 	logger        common.Logger
 	peer          kayak.Host
 	storeEnsure   chan *common.Request
-	storeGet      chan *common.Request
+	storeExists   chan *common.Request
 	storeDel      chan *common.Request
 	storeItemRead chan *common.Request
 	storeItemSwap chan *common.Request
@@ -32,7 +32,7 @@ func newIndexer(ctx common.Context, peer kayak.Host, workers int) (*indexer, err
 		logger:        ctx.Logger(),
 		peer:          peer,
 		storeEnsure:   make(chan *common.Request),
-		storeGet:      make(chan *common.Request),
+		storeExists:   make(chan *common.Request),
 		storeDel:      make(chan *common.Request),
 		storeItemRead: make(chan *common.Request),
 		storeItemSwap: make(chan *common.Request),
@@ -78,7 +78,6 @@ func (s *indexer) start() {
 			}
 
 			s.logger.Error("Epoch died: %+v", epoch.ctrl.Failure())
-
 			cause := common.Extract(epoch.ctrl.Failure(), common.ClosedError)
 			if cause == nil || cause == common.ClosedError {
 				return
@@ -108,6 +107,24 @@ func (h *indexer) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 			return nil, errors.WithStack(common.CanceledError)
 		}
 	}
+}
+
+func (s *indexer) StoreDel(cancel <-chan struct{}, store []byte) error {
+	_, err := s.sendRequest(s.storeDel, cancel, store)
+	return err
+}
+
+func (s *indexer) StoreEnsure(cancel <-chan struct{}, store []byte) error {
+	_, err := s.sendRequest(s.storeEnsure, cancel, store)
+	return err
+}
+
+func (s *indexer) StoreExists(cancel <-chan struct{}, store []byte) (bool, error) {
+	raw, err := s.sendRequest(s.storeExists, cancel, store)
+	if err != nil {
+		return false, err
+	}
+	return raw.(bool), nil
 }
 
 func (s *indexer) StoreReadItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
@@ -208,7 +225,7 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 	return e, nil
 }
 
-func (e *epoch) StoreGet(store []byte) bool {
+func (e *epoch) StoreExists(store []byte) bool {
 	s := e.catalog.Get(store)
 	return s == nil
 }
@@ -300,8 +317,8 @@ func (e *epoch) start(index int) error {
 				e.handleStoreSwapItem(req)
 			case req := <-e.parent.storeItemRead:
 				e.handleStoreGetItem(req)
-			case req := <-e.parent.storeGet:
-				e.handleStoreGet(req)
+			case req := <-e.parent.storeExists:
+				e.handleStoreExists(req)
 			case req := <-e.parent.storeDel:
 				e.handleStoreDel(req)
 			case req := <-e.parent.storeEnsure:
@@ -339,6 +356,8 @@ func (e *epoch) start(index int) error {
 			}
 		}
 	}()
+
+
 	return nil
 }
 
@@ -376,9 +395,9 @@ func (e *epoch) handleStoreSwapItem(req *common.Request) {
 	}
 }
 
-func (e *epoch) handleStoreGet(req *common.Request) {
+func (e *epoch) handleStoreExists(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		req.Ack(e.StoreGet(req.Body().([]byte)))
+		req.Ack(e.StoreExists(req.Body().([]byte)))
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))

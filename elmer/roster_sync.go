@@ -9,7 +9,7 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-type rosterManager struct {
+type rosterSync struct {
 	ctx     common.Context
 	ctrl    common.Control
 	logger  common.Logger
@@ -19,9 +19,9 @@ type rosterManager struct {
 	roster  chan []string
 }
 
-func newRosterManager(ctx common.Context, net net.Network, timeout time.Duration, freq time.Duration, base []string) *rosterManager {
+func newRosterSync(ctx common.Context, net net.Network, timeout time.Duration, freq time.Duration, base []string) *rosterSync {
 	ctx = ctx.Sub("RosterManager")
-	r := &rosterManager{
+	r := &rosterSync{
 		ctx:     ctx,
 		ctrl:    ctx.Control(),
 		logger:  ctx.Logger(),
@@ -34,11 +34,11 @@ func newRosterManager(ctx common.Context, net net.Network, timeout time.Duration
 	return r
 }
 
-func (r *rosterManager) Close() error {
+func (r *rosterSync) Close() error {
 	return r.ctrl.Close()
 }
 
-func (r *rosterManager) start(base []string) {
+func (r *rosterSync) start(base []string) {
 	cur := r.refreshRoster(base)
 
 	go func() {
@@ -59,7 +59,7 @@ func (r *rosterManager) start(base []string) {
 	}()
 }
 
-func (r *rosterManager) refreshRoster(prev []string) []string {
+func (r *rosterSync) refreshRoster(prev []string) []string {
 	ret := prev
 	for _, peer := range rosterShuffle(prev) {
 		cl, err := connect(r.ctx, r.net, r.timeout, peer)
@@ -79,7 +79,7 @@ func (r *rosterManager) refreshRoster(prev []string) []string {
 	return ret
 }
 
-func (r *rosterManager) Roster() ([]string, error) {
+func (r *rosterSync) Roster() ([]string, error) {
 	select {
 	case <-r.ctrl.Closed():
 		return nil, errors.WithStack(common.ClosedError)

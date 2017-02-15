@@ -71,7 +71,7 @@ func readPeers(r scribe.Reader) (ret []string, err error) {
 	return
 }
 
-func parseRosterBytes(bytes []byte) (ret []string, err error) {
+func parsePeersBytes(bytes []byte) (ret []string, err error) {
 	if bytes == nil {
 		return []string{}, nil
 	}

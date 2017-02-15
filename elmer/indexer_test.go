@@ -28,11 +28,7 @@ func TestIndexer_SmokeTest(t *testing.T) {
 	indexer, err := newIndexer(ctx, raw, 10)
 	assert.Nil(t, err)
 
-	// indexer.SwapItem(timer.Closed(), []byte("store"), []byte("key"), []byte)
-
-	_, ok, err := indexer.StoreReadItem(timer.Closed(), []byte("store"), []byte("key"))
-	indexer.logger.Info("Err: %+v", err)
-
+	ok, err := indexer.StoreExists(timer.Closed(), []byte("store"))
 	assert.Nil(t, err)
 	assert.False(t, ok)
 }
