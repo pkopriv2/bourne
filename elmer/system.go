@@ -27,6 +27,7 @@ func (r *roster) Add(cancel <-chan struct{}, peer string) error {
 		return errors.Wrapf(err, "Unable to add peer [%v]", peer)
 	}
 
+	r.logger.Info("Adding peer [%v]", peer)
 	_, err := r.indexer.StoreUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {
@@ -43,6 +44,7 @@ func (r *roster) Del(cancel <-chan struct{}, peer string) error {
 		return errors.Wrapf(err, "Unable to del peer [%v]", peer)
 	}
 
+	r.logger.Info("Removing peer [%v]", peer)
 	_, err := r.indexer.StoreUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {

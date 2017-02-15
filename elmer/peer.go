@@ -16,6 +16,7 @@ type peer struct {
 	self   kayak.Host
 	core   *indexer
 	server net.Server
+	roster *roster
 }
 
 func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) (h *peer, err error) {
@@ -57,29 +58,24 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		net:    net,
 		core:   core,
 		server: server,
+		roster: newRoster(core),
 	}
 
 	return p, p.start(listener.Addr().String())
 }
 
 func (p *peer) start(addr string) error {
-	return nil
-	// // remove peer from roster on close.
-	// defer p.ctrl.Defer(func(error) {
-		// timer := p.ctx.Timer(5 * time.Minute)
-		// defer timer.Close()
-//
-		// p.core.UpdateRoster(timer.Closed(), func(cur []string) []string {
-			// return delPeer(cur, addr)
-		// })
-	// })
-//
-	// // add peer to roster (clients can now discover this peer)
-	// timer := p.ctx.Timer(5 * time.Minute)
-	// defer timer.Close()
-	// return p.core.UpdateRoster(timer.Closed(), func(cur []string) []string {
-		// return addPeer(cur, addr)
-	// })
+	// remove peer from roster on close.
+	defer p.ctrl.Defer(func(error) {
+		timer := p.ctx.Timer(5 * time.Minute)
+		defer timer.Close()
+		p.roster.Del(timer.Closed(), addr)
+	})
+
+	// add peer to roster (clients can now discover this peer)
+	timer := p.ctx.Timer(5 * time.Minute)
+	defer timer.Close()
+	return p.roster.Add(timer.Closed(), addr)
 }
 
 func (p *peer) Close() error {
