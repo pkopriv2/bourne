@@ -147,6 +147,25 @@ func (s *indexer) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte
 	return rpc.Item, rpc.Ok, nil
 }
 
+func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (bool, error) {
+	item, _, err := s.StoreReadItem(cancel, store, key)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	new := fn(item.Val)
+	if new == nil {
+		return true, nil
+	}
+
+	_, ok, err := s.StoreSwapItem(cancel, store, key, new, item.Ver)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	return ok, nil
+}
+
 func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
 	for !common.IsCanceled(cancel) {
 		item, _, err := s.StoreReadItem(cancel, store, key)
@@ -235,7 +254,7 @@ func (e *epoch) StoreDel(store []byte) {
 }
 
 func (e *epoch) StoreEnsure(store []byte) {
-	e.catalog.Init(store)
+	e.catalog.Ensure(store)
 }
 
 func (e *epoch) StoreGetItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
@@ -270,45 +289,18 @@ func (e *epoch) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, 
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	s := e.catalog.Init(store)
+	s := e.catalog.Ensure(store)
 	item, ok := s.Swap(key, val, ver)
 	return item, ok, nil
-}
-
-func (e *epoch) StoreTryUpdate(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
-	item, _, err := e.StoreGetItem(cancel, store, key)
-	if err != nil {
-		return Item{}, false, errors.WithStack(err)
-	}
-
-	new := fn(item.Val)
-	if bytes.Equal(item.Val, new) {
-		return item, true, nil
-	}
-
-	return e.StoreSwapItem(cancel, store, key, new, item.Ver)
-}
-
-func (e *epoch) StoreUpdate(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
-	for !common.IsCanceled(cancel) {
-		item, ok, err := e.StoreTryUpdate(cancel, store, key, fn)
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		if ok {
-			return item, nil
-		}
-	}
-	return Item{}, errors.WithStack(common.CanceledError)
 }
 
 func (e *epoch) start(index int) error {
 	// start the request router
 	go func() {
 		defer e.ctrl.Close()
-
+		defer e.logger.Info("Request router shutting down")
 		e.logger.Info("Starting request router")
+
 		for {
 			select {
 			case <-e.ctrl.Closed():
@@ -331,7 +323,6 @@ func (e *epoch) start(index int) error {
 	go func() {
 		defer e.ctrl.Close()
 		defer e.logger.Info("Indexer shutting down")
-
 		e.logger.Info("Starting indexer")
 
 		l, err := e.log.Listen(index, 1024)
@@ -357,13 +348,14 @@ func (e *epoch) start(index int) error {
 		}
 	}()
 
-
 	return nil
 }
 
 func (e *epoch) handleStoreGetItem(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(getRpc)
+
+		e.logger.Info("Handling get: %v", rpc)
 
 		item, ok, err := e.StoreGetItem(req.Canceled(), rpc.Store, rpc.Key)
 		if err != nil {
@@ -382,6 +374,7 @@ func (e *epoch) handleStoreSwapItem(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(swapRpc)
 
+		e.logger.Info("Handling swap: %+v", rpc)
 		item, ok, err := e.StoreSwapItem(req.Canceled(), rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
 		if err != nil {
 			req.Fail(err)
@@ -435,7 +428,7 @@ func (e *epoch) handleEntry(entry kayak.Entry) error {
 		return errors.WithStack(err)
 	}
 
-	store := e.catalog.Init(item.Store)
+	store := e.catalog.Ensure(item.Store)
 	store.Put(item.Key, item.Val, item.Ver)
 	return nil
 }

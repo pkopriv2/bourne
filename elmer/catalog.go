@@ -31,7 +31,7 @@ func (c *catalog) Get(name []byte) *store {
 	}
 }
 
-func (c *catalog) Init(name []byte) *store {
+func (c *catalog) Ensure(name []byte) *store {
 	if store := c.Get(name); store != nil {
 		return store
 	}

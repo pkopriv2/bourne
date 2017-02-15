@@ -14,16 +14,16 @@ func TestCatalogue_Get_NoExist(t *testing.T) {
 
 func TestCatalogue_New_NoExist(t *testing.T) {
 	catalogue := newCatalog()
-	store := catalogue.Init([]byte("store"))
+	store := catalogue.Ensure([]byte("store"))
 	assert.NotNil(t, store)
 }
 
 func TestCatalogue_New_Exist(t *testing.T) {
 	catalogue := newCatalog()
-	store1 := catalogue.Init([]byte("store"))
+	store1 := catalogue.Ensure([]byte("store"))
 	assert.NotNil(t, store1)
 
-	store2 := catalogue.Init([]byte("store"))
+	store2 := catalogue.Ensure([]byte("store"))
 	assert.Equal(t, store1, store2)
 }
 
