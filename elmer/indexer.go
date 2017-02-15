@@ -2,34 +2,41 @@ package elmer
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 )
 
+// The indexer is the primary interface to the catalog and stores
 type indexer struct {
-	ctx     common.Context
-	ctrl    common.Control
-	logger  common.Logger
-	peer    kayak.Host
-	addr    string
-	read    chan *common.Request
-	swap    chan *common.Request
-	workers int
+	ctx           common.Context
+	ctrl          common.Control
+	logger        common.Logger
+	peer          kayak.Host
+	storeEnsure   chan *common.Request
+	storeGet      chan *common.Request
+	storeDel      chan *common.Request
+	storeItemRead chan *common.Request
+	storeItemSwap chan *common.Request
+	workers       int
 }
 
 func newIndexer(ctx common.Context, peer kayak.Host, workers int) (*indexer, error) {
 	ctx = ctx.Sub("Indexer")
 
 	m := &indexer{
-		ctx:     ctx,
-		ctrl:    ctx.Control(),
-		logger:  ctx.Logger(),
-		peer:    peer,
-		read:    make(chan *common.Request),
-		swap:    make(chan *common.Request),
-		workers: workers,
+		ctx:           ctx,
+		ctrl:          ctx.Control(),
+		logger:        ctx.Logger(),
+		peer:          peer,
+		storeEnsure:   make(chan *common.Request),
+		storeGet:      make(chan *common.Request),
+		storeDel:      make(chan *common.Request),
+		storeItemRead: make(chan *common.Request),
+		storeItemSwap: make(chan *common.Request),
+		workers:       workers,
 	}
 
 	// bind the indexer's lifecycle to the kayak host
@@ -60,7 +67,7 @@ func (s *indexer) start() {
 
 			epoch, err := openEpoch(s.ctx, s, log, sync, iter, s.workers)
 			if err != nil {
-				s.logger.Error("Error retrieving log: %+v", err)
+				s.logger.Error("Error opening epoch: %+v", err)
 				continue
 			}
 
@@ -94,15 +101,15 @@ func (h *indexer) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 		case r := <-req.Acked():
 			return r, nil
 		case e := <-req.Failed():
-			return nil, e
+			return nil, errors.WithStack(e)
 		case <-cancel:
 			return nil, errors.WithStack(common.CanceledError)
 		}
 	}
 }
 
-func (s *indexer) Read(cancel <-chan struct{}, read getRpc) (Item, bool, error) {
-	raw, err := s.sendRequest(s.read, cancel, read)
+func (s *indexer) ReadItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
+	raw, err := s.sendRequest(s.storeItemRead, cancel, getRpc{store, key})
 	if err != nil {
 		return Item{}, false, err
 	}
@@ -111,8 +118,8 @@ func (s *indexer) Read(cancel <-chan struct{}, read getRpc) (Item, bool, error) 
 	return rpc.Item, rpc.Ok, nil
 }
 
-func (s *indexer) Swap(cancel <-chan struct{}, swap swapRpc) (Item, bool, error) {
-	raw, err := s.sendRequest(s.swap, cancel, swap)
+func (s *indexer) SwapItem(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
+	raw, err := s.sendRequest(s.storeItemSwap, cancel, swapRpc{store, key, val, ver})
 	if err != nil {
 		return Item{}, false, err
 	}
@@ -121,9 +128,9 @@ func (s *indexer) Swap(cancel <-chan struct{}, swap swapRpc) (Item, bool, error)
 	return rpc.Item, rpc.Ok, nil
 }
 
-func (s *indexer) Update(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
+func (s *indexer) UpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
 	for !common.IsCanceled(cancel) {
-		item, _, err := s.Read(cancel, getRpc{store, key})
+		item, _, err := s.ReadItem(cancel, store, key)
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -133,7 +140,7 @@ func (s *indexer) Update(cancel <-chan struct{}, store []byte, key []byte, fn fu
 			return item, nil
 		}
 
-		item, ok, err := s.Swap(cancel, swapRpc{store, key, new, item.Ver})
+		item, ok, err := s.SwapItem(cancel, store, key, new, item.Ver)
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -159,14 +166,14 @@ func (s *indexer) getLog() (kayak.Log, kayak.Sync, error) {
 
 // an epoch represents a single birth-death cycle of an indexer implementation.
 type epoch struct {
-	ctx       common.Context
-	ctrl      common.Control
-	logger    common.Logger
-	parent    *indexer
-	catalogue *catalogue
-	log       kayak.Log
-	sync      kayak.Sync
-	requests  common.WorkPool
+	ctx      common.Context
+	ctrl     common.Control
+	logger   common.Logger
+	parent   *indexer
+	catalog  *catalog
+	log      kayak.Log
+	sync     kayak.Sync
+	requests common.WorkPool
 }
 
 func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sync, workers int, cycle int) (*epoch, error) {
@@ -174,32 +181,45 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 
 	start, ss, err := log.Snapshot()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "Unable to retrieve snapshot")
 	}
 
 	catalogue, err := build(ss)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "Unable to build catalog")
 	}
 
 	e := &epoch{
-		ctrl:      ctx.Control(),
-		logger:    ctx.Logger(),
-		parent:    parent,
-		catalogue: catalogue,
-		log:       log,
-		sync:      sync,
-		requests:  common.NewWorkPool(ctx.Control(), workers),
+		ctrl:     ctx.Control(),
+		logger:   ctx.Logger(),
+		parent:   parent,
+		catalog:  catalogue,
+		log:      log,
+		sync:     sync,
+		requests: common.NewWorkPool(ctx.Control(), workers),
 	}
 
 	if err := e.start(start); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "Error starting epoch lifecycle")
 	}
 
 	return e, nil
 }
 
-func (e *epoch) Get(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
+func (e *epoch) StoreGet(store []byte) bool {
+	s := e.catalog.Get(store)
+	return s == nil
+}
+
+func (e *epoch) StoreDel(store []byte) {
+	e.catalog.Del(store)
+}
+
+func (e *epoch) StoreEnsure(store []byte) {
+	e.catalog.Init(store)
+}
+
+func (e *epoch) StoreGetItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
 	val, err := e.sync.Barrier(cancel)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
@@ -209,12 +229,12 @@ func (e *epoch) Get(cancel <-chan struct{}, store []byte, key []byte) (Item, boo
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	s := e.catalogue.Init(store)
+	s := e.catalog.Init(store)
 	item, ok := s.Get(key)
 	return item, ok, nil
 }
 
-func (e *epoch) Swap(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
+func (e *epoch) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
 	entry, err := e.log.Append(cancel, Item{store, key, val, ver}.Bytes())
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
@@ -227,13 +247,13 @@ func (e *epoch) Swap(cancel <-chan struct{}, store []byte, key []byte, val []byt
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	s := e.catalogue.Init(store)
+	s := e.catalog.Init(store)
 	item, ok := s.Swap(key, val, ver)
 	return item, ok, nil
 }
 
 func (e *epoch) TryUpdate(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
-	item, _, err := e.Get(cancel, store, key)
+	item, _, err := e.StoreGetItem(cancel, store, key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
@@ -243,7 +263,7 @@ func (e *epoch) TryUpdate(cancel <-chan struct{}, store []byte, key []byte, fn f
 		return item, true, nil
 	}
 
-	return e.Swap(cancel, store, key, new, item.Ver)
+	return e.StoreSwapItem(cancel, store, key, new, item.Ver)
 }
 
 func (e *epoch) Update(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
@@ -276,15 +296,21 @@ func (e *epoch) start(index int) error {
 			select {
 			case <-e.ctrl.Closed():
 				return
-			case req := <-e.parent.swap:
-				e.handleSwap(req)
-			case req := <-e.parent.read:
-				e.handleRead(req)
+			case req := <-e.parent.storeItemSwap:
+				e.handleStoreSwapItem(req)
+			case req := <-e.parent.storeItemRead:
+				e.handleStoreGetItem(req)
+			case req := <-e.parent.storeGet:
+				e.handleStoreGet(req)
+			case req := <-e.parent.storeDel:
+				e.handleStoreDel(req)
+			case req := <-e.parent.storeEnsure:
+				e.handleStoreEnsure(req)
 			}
 		}
 	}()
 
-	// start the indexer routine
+	// start the indexing routine
 	go func() {
 		defer e.ctrl.Close()
 		for {
@@ -309,11 +335,11 @@ func (e *epoch) start(index int) error {
 	return nil
 }
 
-func (e *epoch) handleRead(req *common.Request) {
+func (e *epoch) handleStoreGetItem(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(getRpc)
 
-		item, ok, err := e.Get(req.Canceled(), rpc.Store, rpc.Key)
+		item, ok, err := e.StoreGetItem(req.Canceled(), rpc.Store, rpc.Key)
 		if err != nil {
 			req.Fail(err)
 			return
@@ -326,17 +352,46 @@ func (e *epoch) handleRead(req *common.Request) {
 	}
 }
 
-func (e *epoch) handleSwap(req *common.Request) {
+func (e *epoch) handleStoreSwapItem(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(swapRpc)
 
-		item, ok, err := e.Swap(req.Canceled(), rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
+		item, ok, err := e.StoreSwapItem(req.Canceled(), rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
 		if err != nil {
 			req.Fail(err)
 			return
 		}
 
 		req.Ack(responseRpc{item, ok})
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
+}
+
+func (e *epoch) handleStoreGet(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		req.Ack(e.StoreGet(req.Body().([]byte)))
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
+}
+
+func (e *epoch) handleStoreDel(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		e.StoreDel(req.Body().([]byte))
+		req.Ack(nil)
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
+}
+
+func (e *epoch) handleStoreEnsure(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		e.StoreEnsure(req.Body().([]byte))
+		req.Ack(nil)
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
@@ -349,15 +404,15 @@ func (e *epoch) handleEntry(entry kayak.Entry) error {
 		return errors.WithStack(err)
 	}
 
-	store := e.catalogue.Init(item.Store)
+	store := e.catalog.Init(item.Store)
 	store.Put(item.Key, item.Val, item.Ver)
 	return nil
 }
 
-func build(st kayak.EventStream) (*catalogue, error) {
+func build(st kayak.EventStream) (*catalog, error) {
 	defer st.Close()
 
-	catalogue := newCatalogue()
+	catalog := newCatalog()
 	for {
 		var evt kayak.Event
 		select {
@@ -366,12 +421,15 @@ func build(st kayak.EventStream) (*catalogue, error) {
 		case evt = <-st.Data():
 		}
 
-		item, err := parseItemBytes(evt)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
+		fmt.Println("EVENT: ", evt)
 
-		store := catalogue.Init(item.Store)
-		store.Put(item.Key, item.Val, item.Ver)
+		// item, err := parseItemBytes(evt)
+		// if err != nil {
+			// return nil, errors.WithStack(err)
+		// }
+//
+		// store := catalogue.Init(item.Store)
+		// store.Put(item.Key, item.Val, item.Ver)
 	}
+	return catalog, st.Ctrl().Failure()
 }

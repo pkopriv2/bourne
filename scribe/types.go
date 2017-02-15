@@ -3,6 +3,7 @@ package scribe
 import (
 	"bytes"
 	"encoding/gob"
+	"encoding/json"
 
 	"github.com/pkg/errors"
 )
@@ -194,7 +195,7 @@ func (o Object) Dump() interface{} {
 
 func (o Object) Bytes() []byte {
 	buf := new(bytes.Buffer)
-	enc := gob.NewEncoder(buf)
+	enc := json.NewEncoder(buf)
 	enc.Encode(o.Dump())
 	return buf.Bytes()
 }
@@ -204,7 +205,7 @@ func newEmptyObject() Object {
 }
 
 func parseObjectFromBytes(val []byte) (Object, error) {
-	dec := gob.NewDecoder(bytes.NewBuffer(val))
+	dec := json.NewDecoder(bytes.NewBuffer(val))
 
 	var raw map[string]interface{}
 	err := dec.Decode(&raw)

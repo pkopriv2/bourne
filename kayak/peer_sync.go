@@ -343,6 +343,7 @@ func (s *peerSyncer) score() (int, error) {
 			return 0, common.Or(ClosedError, s.ctrl.Failure())
 		}
 
+
 		max, _, err := s.self.Log.Last()
 		if err != nil {
 			return 0, err
@@ -356,22 +357,28 @@ func (s *peerSyncer) score() (int, error) {
 	prevDelta := math.MaxInt32
 
 	score := 0
-	for rounds := 0; rounds < 10; rounds++ {
+	for rounds := 0; rounds < 30; rounds++ {
+		s.heartbeat()
+
 		curDelta, err := delta()
 		if err != nil {
 			return 0, err
 		}
 
 		// This is totally arbitrary.
-		if curDelta < 8 && score >= 1 {
+		if curDelta < 2 && score >= 1 {
 			break
 		}
 
-		if curDelta < 128 && score >= 2 {
+		if curDelta < 8 && score >= 3 {
 			break
 		}
 
-		if curDelta < 1024 && score >= 3 {
+		if curDelta < 128 && score >= 4 {
+			break
+		}
+
+		if curDelta < 1024 && score >= 5 {
 			break
 		}
 
@@ -382,7 +389,7 @@ func (s *peerSyncer) score() (int, error) {
 		}
 
 		s.logger.Info("Delta [%v] after [%v] rounds.  Score: [%v]", curDelta, rounds+1, score)
-		time.Sleep(1 * time.Second)
+		time.Sleep(s.self.ElectionTimeout/5)
 		prevDelta = curDelta
 	}
 

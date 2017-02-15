@@ -20,7 +20,23 @@ func TestStorage(ctx common.Context) (func(*Options), error) {
 	return func(o *Options) { o.WithStorage(db) }, nil
 }
 
-func TestCluster(ctx common.Context, size int) (peers []Host, err error) {
+func StartTestHost(ctx common.Context) (Host, error) {
+	storage, err := TestStorage(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return Start(ctx, ":0", storage)
+}
+
+func JoinTestHost(ctx common.Context, peer string) (Host, error) {
+	storage, err := TestStorage(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return Join(ctx, ":0", []string{peer}, storage)
+}
+
+func StartTestCluster(ctx common.Context, size int) (peers []Host, err error) {
 	if size < 1 {
 		return []Host{}, nil
 	}
@@ -46,7 +62,7 @@ func TestCluster(ctx common.Context, size int) (peers []Host, err error) {
 		first.Close()
 	})
 
-	first = Converge(ctx.Control().Closed(), []Host{first})
+	first = ElectLeader(ctx.Control().Closed(), []Host{first})
 	if first == nil {
 		return nil, errors.Wrap(NoLeaderError, "First member failed to become leader")
 	}
@@ -67,7 +83,7 @@ func TestCluster(ctx common.Context, size int) (peers []Host, err error) {
 	return hosts, nil
 }
 
-func Converge(cancel <-chan struct{}, cluster []Host) Host {
+func ElectLeader(cancel <-chan struct{}, cluster []Host) Host {
 	var term int = 0
 	var leader *uuid.UUID
 

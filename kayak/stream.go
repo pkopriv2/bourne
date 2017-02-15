@@ -55,7 +55,7 @@ func (l *snapshotStream) start() {
 	go func() {
 		defer l.Close()
 
-		for i := 0; i < l.snapshot.Size(); i++ {
+		for i := 0; i < l.snapshot.Size(); {
 			if l.ctrl.IsClosed() {
 				return
 			}

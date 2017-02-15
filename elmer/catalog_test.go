@@ -7,19 +7,19 @@ import (
 )
 
 func TestCatalogue_Get_NoExist(t *testing.T) {
-	catalogue := newCatalogue()
+	catalogue := newCatalog()
 	store := catalogue.Get([]byte{})
 	assert.Nil(t, store)
 }
 
 func TestCatalogue_New_NoExist(t *testing.T) {
-	catalogue := newCatalogue()
+	catalogue := newCatalog()
 	store := catalogue.Init([]byte("store"))
 	assert.NotNil(t, store)
 }
 
 func TestCatalogue_New_Exist(t *testing.T) {
-	catalogue := newCatalogue()
+	catalogue := newCatalog()
 	store1 := catalogue.Init([]byte("store"))
 	assert.NotNil(t, store1)
 
@@ -28,6 +28,6 @@ func TestCatalogue_New_Exist(t *testing.T) {
 }
 
 func TestCatalogue_Del_NoExist(t *testing.T) {
-	catalogue := newCatalogue()
+	catalogue := newCatalog()
 	catalogue.Del([]byte("store"))
 }

@@ -24,21 +24,14 @@ func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Store,
 
 type Peer interface {
 	io.Closer
-	// Id() uuid.UUID
-	// Roster() []string
-	Stores() (Catalogue, error)
+	Catalog() (Catalog, error)
 	Shutdown() error
 }
 
-// type Peer struct {
-// Id uuid.UUID
-// Addr []string
-// }
-
-type Catalogue interface {
+type Catalog interface {
 	Del([]byte) error
 	Get([]byte) (Store, error)
-	Init([]byte) (Store, error)
+	Ensure([]byte) (Store, error)
 }
 
 // A very simple key,value store abstraction. This store uses
@@ -77,6 +70,7 @@ type Item struct {
 	Key   []byte
 	Val   []byte
 	Ver   int
+	// Ttl   time.Duration
 }
 
 func (i Item) Write(w scribe.Writer) {

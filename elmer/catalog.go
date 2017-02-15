@@ -6,22 +6,22 @@ import (
 	"github.com/pkopriv2/bourne/amoeba"
 )
 
-type catalogue struct {
+type catalog struct {
 	stores     map[string]*store
 	storesLock sync.RWMutex
 }
 
-func newCatalogue() *catalogue {
-	return &catalogue{stores: make(map[string]*store)}
+func newCatalog() *catalog {
+	return &catalog{stores: make(map[string]*store)}
 }
 
-func (c *catalogue) Del(name []byte) {
+func (c *catalog) Del(name []byte) {
 	c.storesLock.Lock()
 	defer c.storesLock.Unlock()
 	delete(c.stores, string(name))
 }
 
-func (c *catalogue) Get(name []byte) *store {
+func (c *catalog) Get(name []byte) *store {
 	c.storesLock.RLock()
 	defer c.storesLock.RUnlock()
 	if store, ok := c.stores[string(name)]; ok {
@@ -31,7 +31,7 @@ func (c *catalogue) Get(name []byte) *store {
 	}
 }
 
-func (c *catalogue) Init(name []byte) *store {
+func (c *catalog) Init(name []byte) *store {
 	if store := c.Get(name); store != nil {
 		return store
 	}

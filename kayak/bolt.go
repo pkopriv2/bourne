@@ -712,7 +712,7 @@ type snapshotDat struct {
 	maxIndex int
 	maxTerm  int
 	size     int
-	config   []byte
+	config   []byte // not-nil
 }
 
 func readSnapshotDat(r scribe.Reader) (interface{}, error) {

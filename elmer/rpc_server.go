@@ -59,7 +59,7 @@ func (s *server) Read(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	item, ok, err := s.self.Read(nil, rpc)
+	item, ok, err := s.self.ReadItem(nil, rpc.Store, rpc.Key)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -73,7 +73,7 @@ func (s *server) Swap(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	item, ok, err := s.self.Swap(nil, rpc)
+	item, ok, err := s.self.SwapItem(nil, rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

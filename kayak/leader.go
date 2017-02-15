@@ -239,6 +239,7 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 		return
 	}
 
+	c.logger.Info("Joining peer [%v] with peer [%v]", update.peer, score)
 	if _, e := c.replica.Append(clusterBytes(all), Conf); e != nil {
 		req.Fail(e)
 		return

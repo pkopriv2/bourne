@@ -34,49 +34,101 @@ func TestHost_Close(t *testing.T) {
 	assert.True(t, before <= runtime.NumGoroutine())
 }
 
+func TestHost_ReadSnapshot_Empty(t *testing.T) {
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
+	host, err := StartTestHost(ctx)
+	assert.Nil(t, err)
+
+	log, err := host.Log()
+	assert.Nil(t, err)
+
+	index, stream, err := log.Snapshot()
+	assert.Nil(t, err)
+	assert.Equal(t, -1, index)
+
+	select {
+	case <-stream.Ctrl().Closed():
+	case <-stream.Data():
+		assert.Fail(t, "Should not have received item")
+	}
+}
+
+func TestHost_ReadSnapshot(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		Config.BaseElectionTimeout: 500 * time.Millisecond,
+	})
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	timer := ctx.Timer(30*time.Second)
+
+	host, err := StartTestHost(ctx)
+	assert.Nil(t, err)
+
+	log, err := host.Log()
+	assert.Nil(t, err)
+	for i := 0; i < 3; i++ {
+		log.Append(timer.Closed(), stash.IntBytes(i))
+	}
+
+	assert.Nil(t, log.Compact(1, NewEventChannel([]Event{}), 0))
+
+	index, stream, err := log.Snapshot()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, index)
+
+	select {
+	case <-stream.Ctrl().Closed():
+	case <-stream.Data():
+		assert.Fail(t, "Should not received item")
+	}
+}
+
 func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 2)
+	cluster, err := StartTestCluster(ctx, 2)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, Converge(timer.Closed(), cluster))
+	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
 }
 
 func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, Converge(timer.Closed(), cluster))
+	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
 }
 
 func TestHost_Cluster_ConvergeFivePeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
-	cluster, err := TestCluster(ctx, 5)
+	cluster, err := StartTestCluster(ctx, 5)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, Converge(timer.Closed(), cluster))
+	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
 }
 
 func TestHost_Cluster_ConvergeSevenPeers(t *testing.T) {
 	ctx := common.NewContext(common.NewEmptyConfig())
 	defer ctx.Close()
-	cluster, err := TestCluster(ctx, 7)
+	cluster, err := StartTestCluster(ctx, 7)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, Converge(timer.Closed(), cluster))
+	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
 }
 
 func TestHost_Cluster_Close(t *testing.T) {
@@ -85,12 +137,12 @@ func TestHost_Cluster_Close(t *testing.T) {
 	before := runtime.NumGoroutine()
 	pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 
-	cluster, err := TestCluster(ctx, 7)
+	cluster, err := StartTestCluster(ctx, 7)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, Converge(timer.Closed(), cluster))
+	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
 
 	time.Sleep(5 * time.Second)
 	ctx.Close()
@@ -110,20 +162,20 @@ func TestHost_Cluster_Leader_Failure(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(20 * time.Second)
 	defer timer.Close()
 
-	leader := Converge(timer.Closed(), cluster)
+	leader := ElectLeader(timer.Closed(), cluster)
 	assert.NotNil(t, leader)
 
 	leader.Close()
 	ctx.Logger().Info("Leader killed. Waiting for re-election")
 	time.Sleep(5 * time.Second)
 
-	after := Converge(timer.Closed(), cluster)
+	after := ElectLeader(timer.Closed(), cluster)
 
 	assert.NotNil(t, after)
 	assert.NotEqual(t, leader, after)
@@ -137,13 +189,13 @@ func TestHost_Cluster_Leader_Append_Single(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
 
-	leader := Converge(timer.Closed(), cluster)
+	leader := ElectLeader(timer.Closed(), cluster)
 	assert.NotNil(t, leader)
 
 	item, err := leader.(*host).core.Append(Event{0, 1}, Std)
@@ -161,13 +213,13 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(60 * time.Second)
 	defer timer.Close()
 
-	leader := Converge(timer.Closed(), cluster)
+	leader := ElectLeader(timer.Closed(), cluster)
 	assert.NotNil(t, leader)
 
 	numThreads := 10
@@ -196,13 +248,13 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := Converge(timer.Closed(), cluster)
+	leader := ElectLeader(timer.Closed(), cluster)
 	assert.NotNil(t, leader)
 
 	numThreads := 10
@@ -252,13 +304,13 @@ func TestHost_Cluster_Append_Single(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := Converge(timer.Closed(), cluster)
+	leader := ElectLeader(timer.Closed(), cluster)
 	assert.NotNil(t, leader)
 
 	log, err := leader.Log()
@@ -279,13 +331,13 @@ func TestCluster_Append_Multi(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := Converge(timer.Closed(), cluster)
+	leader := ElectLeader(timer.Closed(), cluster)
 	assert.NotNil(t, leader)
 
 	log, err := leader.Log()
@@ -317,13 +369,13 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	cluster, err := TestCluster(ctx, 3)
+	cluster, err := StartTestCluster(ctx, 3)
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := Converge(timer.Closed(), cluster)
+	leader := ElectLeader(timer.Closed(), cluster)
 	assert.NotNil(t, leader)
 
 	log, err := leader.Log()
@@ -366,47 +418,88 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	assert.False(t, common.IsCanceled(timer.Closed()))
 }
 
+func TestHost_Cluster_Join_Busy(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	timer := ctx.Timer(30*time.Second)
+
+	cluster, err := StartTestCluster(ctx, 2)
+	assert.Nil(t, err)
+
+	leader := ElectLeader(timer.Closed(), cluster)
+	assert.NotNil(t, leader)
+
+	log, err := leader.Log()
+	assert.Nil(t, err)
+
+	numThreads := 100
+	numItemsPerThread := 100
+
+	for i := 0; i < numThreads; i++ {
+		go func() {
+			for j := 0; j < numItemsPerThread; j++ {
+				_, err := log.Append(timer.Closed(), Event(stash.Int(numThreads*i+j)))
+				if err != nil {
+					panic(err)
+				}
+			}
+		}()
+	}
+
+	SyncMajority(timer.Closed(), cluster, SyncTo(numThreads*numItemsPerThread/4))
+	assert.Nil(t, err)
+
+	joined, err := JoinTestHost(ctx, leader.Addr())
+	assert.Nil(t, err)
+
+	SyncMajority(timer.Closed(), []Host{joined}, SyncTo(numThreads*numItemsPerThread-1))
+}
+
 // func benchmarkCluster_Append(log Log, threads int, itemsPerThread int, t *testing.B) {
-	// for i := 0; i < threads; i++ {
-		// go func() {
-			// for j := 0; j < itemsPerThread; j++ {
-				// for k := 0; k < t.N; k++ {
-					// _, err := log.Append(nil, Event(stash.Int(threads*i+j)))
-					// if err != nil {
-						// panic(err)
-					// }
-				// }
-			// }
-		// }()
-	// }
+// for i := 0; i < threads; i++ {
+// go func() {
+// for j := 0; j < itemsPerThread; j++ {
+// for k := 0; k < t.N; k++ {
+// _, err := log.Append(nil, Event(stash.Int(threads*i+j)))
+// if err != nil {
+// panic(err)
+// }
+// }
+// }
+// }()
+// }
 // }
 //
 // func Benchmark_Append_3_10_10(t *testing.B) {
-	// conf := common.NewConfig(map[string]interface{}{
-		// "bourne.log.level": int(common.Debug),
-	// })
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Debug),
+// })
 //
-	// ctx := common.NewContext(conf)
-	// defer ctx.Close()
+// ctx := common.NewContext(conf)
+// defer ctx.Close()
 //
-	// cluster, err := TestCluster(ctx, 3)
-	// if err != nil {
-		// t.FailNow()
-	// }
+// cluster, err := TestCluster(ctx, 3)
+// if err != nil {
+// t.FailNow()
+// }
 //
-	// leader := Converge(nil, cluster)
-	// if leader == nil {
-		// t.FailNow()
-	// }
+// leader := Converge(nil, cluster)
+// if leader == nil {
+// t.FailNow()
+// }
 //
-	// log, err := leader.Log()
-	// if err != nil {
-		// t.FailNow()
-	// }
+// log, err := leader.Log()
+// if err != nil {
+// t.FailNow()
+// }
 //
-	// t.ResetTimer()
-	// leader.(*host).logger.Info("Starting benchmark (peers=3,threads=10,items=10)")
-	// benchmarkCluster_Append(log, 10, 10, t)
+// t.ResetTimer()
+// leader.(*host).logger.Info("Starting benchmark (peers=3,threads=10,items=10)")
+// benchmarkCluster_Append(log, 10, 10, t)
 // }
 
 func SyncTo(index int) func(p Host) bool {

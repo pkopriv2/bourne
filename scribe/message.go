@@ -1,7 +1,7 @@
 package scribe
 
 import (
-	"encoding/base64"
+	"encoding/hex"
 	"reflect"
 	"strconv"
 
@@ -170,7 +170,7 @@ func (w writer) WriteInts(field string, val []int) {
 }
 
 func (w writer) WriteBytes(field string, val []byte) {
-	w.WriteString(field, base64.StdEncoding.EncodeToString(val))
+	w.WriteString(field, hex.EncodeToString(val))
 }
 
 func (w writer) WriteUUID(field string, val uuid.UUID) {
@@ -297,7 +297,7 @@ func (m message) ReadBytes(field string, val *[]byte) error {
 		return err
 	}
 
-	bytes, err := base64.StdEncoding.DecodeString(str)
+	bytes, err := hex.DecodeString(str)
 	if err != nil {
 		return errors.Wrapf(err, "Unable to decode [%v] to bytes", str)
 	}
