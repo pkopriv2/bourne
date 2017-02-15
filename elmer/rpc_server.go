@@ -73,7 +73,7 @@ func (s *server) Swap(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	item, ok, err := s.self.StoreSwapItem(nil, rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
+	item, ok, err := s.self.StoreSwapItem(nil, rpc.Store, rpc.Key, rpc.Val, rpc.Ver)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

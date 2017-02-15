@@ -80,7 +80,7 @@ type swapRpc struct {
 	Store []byte
 	Key   []byte
 	Val   []byte
-	Prev  int
+	Ver  int
 }
 
 func (s swapRpc) Request() net.Request {
@@ -88,15 +88,17 @@ func (s swapRpc) Request() net.Request {
 }
 
 func (s swapRpc) Write(w scribe.Writer) {
+	w.WriteBytes("store", s.Store)
 	w.WriteBytes("key", s.Key)
 	w.WriteBytes("val", s.Val)
-	w.WriteInt("prev", s.Prev)
+	w.WriteInt("ver", s.Ver)
 }
 
 func readSwapRpc(r scribe.Reader) (ret swapRpc, err error) {
-	err = r.ReadBytes("key", &ret.Key)
+	err = r.ReadBytes("store", &ret.Store)
+	err = common.Or(err, r.ReadBytes("key", &ret.Key))
 	err = common.Or(err, r.ReadBytes("val", &ret.Val))
-	err = common.Or(err, r.ReadInt("prev", &ret.Prev))
+	err = common.Or(err, r.ReadInt("prev", &ret.Ver))
 	return
 }
 

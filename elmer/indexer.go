@@ -246,7 +246,7 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 
 func (e *epoch) StoreExists(store []byte) bool {
 	s := e.catalog.Get(store)
-	return s == nil
+	return s != nil
 }
 
 func (e *epoch) StoreDel(store []byte) {
@@ -285,13 +285,13 @@ func (e *epoch) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, 
 	// TODO: Does this break linearizability???  Technically, another conflicting item
 	// can come in immediately after we sync and update the value - and we can't tell
 	// whether our update was accepted or not..
+	s := e.catalog.Ensure(store)
 	if err := e.sync.Sync(cancel, entry.Index); err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	s := e.catalog.Ensure(store)
-	item, ok := s.Swap(key, val, ver)
-	return item, ok, nil
+	item, ok := s.Get(key)
+	return item, ok && item.Ver == ver+1, nil
 }
 
 func (e *epoch) start(index int) error {
@@ -340,7 +340,6 @@ func (e *epoch) start(index int) error {
 				e.ctrl.Fail(l.Ctrl().Failure())
 				return
 			case entry := <-l.Data():
-				e.logger.Info("Indexing entry: %v", entry)
 				if err := e.handleEntry(entry); err != nil {
 					e.logger.Error("Error parsing item from event stream [%v]: %+v", entry.Index, err)
 				}
@@ -354,8 +353,6 @@ func (e *epoch) start(index int) error {
 func (e *epoch) handleStoreGetItem(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(getRpc)
-
-		e.logger.Info("Handling get: %v", rpc)
 
 		item, ok, err := e.StoreGetItem(req.Canceled(), rpc.Store, rpc.Key)
 		if err != nil {
@@ -374,8 +371,7 @@ func (e *epoch) handleStoreSwapItem(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(swapRpc)
 
-		e.logger.Info("Handling swap: %+v", rpc)
-		item, ok, err := e.StoreSwapItem(req.Canceled(), rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
+		item, ok, err := e.StoreSwapItem(req.Canceled(), rpc.Store, rpc.Key, rpc.Val, rpc.Ver)
 		if err != nil {
 			req.Fail(err)
 			return
@@ -419,6 +415,8 @@ func (e *epoch) handleStoreEnsure(req *common.Request) {
 
 func (e *epoch) handleEntry(entry kayak.Entry) error {
 	defer e.sync.Ack(entry.Index)
+
+	e.logger.Debug("Indexing entry: %v", entry)
 	if entry.Kind != kayak.Std {
 		return nil
 	}
@@ -428,6 +426,7 @@ func (e *epoch) handleEntry(entry kayak.Entry) error {
 		return errors.WithStack(err)
 	}
 
+	// TODO: build a store cache
 	store := e.catalog.Ensure(item.Store)
 	store.Put(item.Key, item.Val, item.Ver)
 	return nil

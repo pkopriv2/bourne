@@ -77,20 +77,20 @@ func (s *store) Del(key []byte, ver int) bool {
 	return ok
 }
 
-func swap(idx amoeba.Index, store []byte, key []byte, val []byte, prev int) (item Item, ok bool) {
-	bytesKey := amoeba.BytesKey(item.Key)
+func swap(idx amoeba.Index, store []byte, key []byte, val []byte, ver int) (item Item, ok bool) {
+	bytesKey := amoeba.BytesKey(key)
 
-	item = Item{store, key, val, prev + 1}
+	item = Item{store, key, val, ver + 1}
 	idx.Update(func(u amoeba.Update) {
 		raw := u.Get(bytesKey)
 		if raw == nil {
-			if ok = prev == 0; ok {
+			if ok = ver == 0; ok {
 				u.Put(bytesKey, item)
 			}
 			return
 		}
 
-		if cur := raw.(Item); cur.Ver == prev {
+		if cur := raw.(Item); cur.Ver == ver {
 			u.Put(bytesKey, item)
 			ok = true
 			return

@@ -49,7 +49,7 @@ func (r *roster) Del(cancel <-chan struct{}, peer string) error {
 	}
 
 	r.logger.Info("Removing peer [%v]", peer)
-	_, err := r.indexer.StoreUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
+	_, err := r.indexer.StoreTryUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {
 			curPeers = []string{}
