@@ -368,7 +368,7 @@ func newLeaderConstructor(self *replica) func() (io.Closer, error) {
 		for cl == nil {
 			leader := self.Leader()
 			if leader == nil {
-				time.Sleep(self.ElectionTimeout)
+				time.Sleep(self.ElectionTimeout/5)
 				continue
 			}
 

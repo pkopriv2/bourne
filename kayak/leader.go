@@ -86,9 +86,10 @@ func (l *leader) start() {
 	go func() {
 		defer l.ctrl.Close()
 
-		timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-		l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 		for !l.ctrl.IsClosed() {
+
+			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
+			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.ctrl.Closed():

@@ -196,7 +196,7 @@ func (e *eventLog) Last() (int, int, error) {
 
 func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
 	if e.ctrl.IsClosed() {
-		return nil, ClosedError
+		return nil, errors.WithStack(ClosedError)
 	}
 
 	return newRefListener(e, e.commit, from, buf), nil
@@ -204,7 +204,7 @@ func (e *eventLog) ListenCommits(from int, buf int) (Listener, error) {
 
 func (e *eventLog) ListenAppends(from int, buf int) (Listener, error) {
 	if e.ctrl.IsClosed() {
-		return nil, ClosedError
+		return nil, errors.WithStack(ClosedError)
 	}
 
 	return newRefListener(e, e.head, from, buf), nil
@@ -250,20 +250,24 @@ func (s *snapshot) Events(cancel <-chan struct{}) <-chan Event {
 }
 
 type refListener struct {
-	log  *eventLog
-	pos  *ref
-	buf  int
-	ch   chan Entry
-	ctrl common.Control
+	log    *eventLog
+	pos    *ref
+	buf    int
+	ch     chan Entry
+	ctrl   common.Control
+	logger common.Logger
 }
 
 func newRefListener(log *eventLog, pos *ref, from int, buf int) *refListener {
+	ctx := log.ctx.Sub("Listener")
+
 	l := &refListener{
-		log:  log,
-		pos:  pos,
-		buf:  buf,
-		ch:   make(chan Entry, buf),
-		ctrl: log.ctrl.Sub(),
+		log:    log,
+		pos:    pos,
+		buf:    buf,
+		ch:     make(chan Entry, buf),
+		ctrl:   ctx.Control(),
+		logger: ctx.Logger(),
 	}
 	l.start(from)
 	return l
@@ -273,25 +277,29 @@ func (l *refListener) start(from int) {
 	go func() {
 		defer l.Close()
 
-		for cur := from; ; {
-			next, ok := l.pos.WaitUntil(cur)
+		for beg := from; ; {
+			l.logger.Debug("Next [%v]", beg)
+
+			next, ok := l.pos.WaitUntil(beg)
 			if !ok || l.ctrl.IsClosed() || l.log.ctrl.IsClosed() {
 				return
 			}
 
+			l.logger.Debug("Update: [%v->%v]", beg, next)
+
 			// FIXME: Can still miss truncations
-			if next < cur {
-				l.ctrl.Fail(errors.Wrapf(OutOfBoundsError, "Log truncated to [%v] was [%v]", next, cur))
+			if next < beg {
+				l.ctrl.Fail(errors.Wrapf(OutOfBoundsError, "Log truncated to [%v] was [%v]", next, beg))
 				return
 			}
 
-			for cur <= next {
+			for beg <= next {
 				if l.ctrl.IsClosed() || l.log.ctrl.IsClosed() {
 					return
 				}
 
 				// scan the next batch
-				batch, err := l.log.Scan(cur, common.Min(next, cur+l.buf))
+				batch, err := l.log.Scan(beg, common.Min(next, beg+l.buf))
 				if err != nil {
 					l.ctrl.Fail(err)
 					return
@@ -309,7 +317,7 @@ func (l *refListener) start(from int) {
 				}
 
 				// update current
-				cur = cur + len(batch)
+				beg = beg + len(batch)
 			}
 		}
 	}()

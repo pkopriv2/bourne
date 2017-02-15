@@ -2,12 +2,17 @@ package elmer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 	"github.com/pkopriv2/bourne/scribe"
+)
+
+var (
+	NoStoreError = errors.New("Elmer:NoStoreError")
 )
 
 func Start(ctx common.Context, self kayak.Host, opts ...func(*Options)) (Peer, error) {

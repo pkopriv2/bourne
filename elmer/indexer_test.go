@@ -10,20 +10,29 @@ import (
 )
 
 func TestIndexer_SmokeTest(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
 
-	ctx := common.NewContext(common.NewEmptyConfig())
+	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	timer := ctx.Timer(30*time.Second)
+	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
 
 	raw, err := kayak.StartTestHost(ctx)
 	assert.Nil(t, err)
 
-	indexer, err := newIndexer(ctx, raw, 1)
+	kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
+
+	indexer, err := newIndexer(ctx, raw, 10)
 	assert.Nil(t, err)
 
-	_, ok, err := indexer.ReadItem(timer.Closed(), []byte("store"), []byte("key"))
+	// indexer.SwapItem(timer.Closed(), []byte("store"), []byte("key"), []byte)
+
+	_, ok, err := indexer.StoreReadItem(timer.Closed(), []byte("store"), []byte("key"))
+	indexer.logger.Info("Err: %+v", err)
+
 	assert.Nil(t, err)
 	assert.False(t, ok)
 }

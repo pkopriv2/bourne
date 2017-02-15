@@ -218,7 +218,7 @@ func (p *configListener) start() {
 			case next = <-p.raw.Data():
 			}
 
-			if next.kind != Conf {
+			if next.Kind != Conf {
 				continue
 			}
 

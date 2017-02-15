@@ -55,6 +55,15 @@ func (s *logClient) Listen(start int, buf int) (Listener, error) {
 	return newLogClientListener(raw), nil
 }
 
+// func (c *logClient) NoOp(cancel <-chan struct{}) error {
+// _, err := c.append(cancel, Event{}, Std)
+// return err
+// }
+//
+func (c *logClient) Append(cancel <-chan struct{}, e Event) (Entry, error) {
+	return c.append(cancel, e, Std)
+}
+
 func (s *logClient) Snapshot() (int, EventStream, error) {
 	snapshot, err := s.self.Log.Snapshot()
 	if err != nil {
@@ -64,7 +73,7 @@ func (s *logClient) Snapshot() (int, EventStream, error) {
 	return snapshot.LastIndex(), newSnapshotStream(s.ctrl, snapshot, 1024), nil
 }
 
-func (c *logClient) Append(cancel <-chan struct{}, e Event) (entry Entry, err error) {
+func (c *logClient) append(cancel <-chan struct{}, e Event, k Kind) (entry Entry, err error) {
 	raw := c.pool.TakeOrCancel(cancel)
 	if raw == nil {
 		return Entry{}, errors.WithStack(common.CanceledError)
@@ -76,7 +85,7 @@ func (c *logClient) Append(cancel <-chan struct{}, e Event) (entry Entry, err er
 			c.pool.Return(raw)
 		}
 	}()
-	resp, err := raw.(*rpcClient).Append(appendEvent{e, Std})
+	resp, err := raw.(*rpcClient).Append(appendEvent{e, k})
 	if err != nil {
 		return Entry{}, err
 	}
@@ -90,7 +99,9 @@ type logClientListener struct {
 }
 
 func newLogClientListener(raw Listener) *logClientListener {
-	return &logClientListener{raw, make(chan Entry, 128)}
+	l := &logClientListener{raw, make(chan Entry, 128)}
+	l.start()
+	return l
 }
 
 func (p *logClientListener) start() {
@@ -103,8 +114,8 @@ func (p *logClientListener) start() {
 			case e = <-p.raw.Data():
 			}
 
-			if e.kind != Std {
-				continue
+			if e.Kind != Std {
+				e = Entry{e.Index, []byte{}, e.Term, NoOp}
 			}
 
 			select {

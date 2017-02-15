@@ -375,7 +375,7 @@ func (b *boltLog) append(tx *bolt.Tx, e Event, term int, k Kind) (Entry, error) 
 		return Entry{}, err
 	}
 
-	item := Entry{max+1, e, term, k}
+	item := Entry{max + 1, e, term, k}
 	return item, b.insert(tx, []Entry{item})
 }
 

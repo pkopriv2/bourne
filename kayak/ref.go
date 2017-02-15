@@ -45,7 +45,7 @@ func (c *ref) WaitUntilOrCancel(cancel <-chan struct{}, until int) (val int, ali
 	defer c.lock.L.Unlock()
 	for {
 		val, alive, canceled := c.val, !c.dead, common.IsCanceled(cancel)
-		if val >= until || ! alive || canceled {
+		if val >= until || !alive || canceled {
 			return val, alive
 		}
 		c.lock.Wait()

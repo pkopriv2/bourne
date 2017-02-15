@@ -65,7 +65,7 @@ func (s *indexer) start() {
 				continue
 			}
 
-			epoch, err := openEpoch(s.ctx, s, log, sync, iter, s.workers)
+			epoch, err := openEpoch(s.ctx, s, log, sync, s.workers, iter)
 			if err != nil {
 				s.logger.Error("Error opening epoch: %+v", err)
 				continue
@@ -76,6 +76,8 @@ func (s *indexer) start() {
 				return
 			case <-epoch.ctrl.Closed():
 			}
+
+			s.logger.Error("Epoch died: %+v", epoch.ctrl.Failure())
 
 			cause := common.Extract(epoch.ctrl.Failure(), common.ClosedError)
 			if cause == nil || cause == common.ClosedError {
@@ -108,7 +110,7 @@ func (h *indexer) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 	}
 }
 
-func (s *indexer) ReadItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
+func (s *indexer) StoreReadItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
 	raw, err := s.sendRequest(s.storeItemRead, cancel, getRpc{store, key})
 	if err != nil {
 		return Item{}, false, err
@@ -118,7 +120,7 @@ func (s *indexer) ReadItem(cancel <-chan struct{}, store []byte, key []byte) (It
 	return rpc.Item, rpc.Ok, nil
 }
 
-func (s *indexer) SwapItem(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
+func (s *indexer) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
 	raw, err := s.sendRequest(s.storeItemSwap, cancel, swapRpc{store, key, val, ver})
 	if err != nil {
 		return Item{}, false, err
@@ -128,9 +130,9 @@ func (s *indexer) SwapItem(cancel <-chan struct{}, store []byte, key []byte, val
 	return rpc.Item, rpc.Ok, nil
 }
 
-func (s *indexer) UpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
+func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
 	for !common.IsCanceled(cancel) {
-		item, _, err := s.ReadItem(cancel, store, key)
+		item, _, err := s.StoreReadItem(cancel, store, key)
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -140,7 +142,7 @@ func (s *indexer) UpdateItem(cancel <-chan struct{}, store []byte, key []byte, f
 			return item, nil
 		}
 
-		item, ok, err := s.SwapItem(cancel, store, key, new, item.Ver)
+		item, ok, err := s.StoreSwapItem(cancel, store, key, new, item.Ver)
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -179,7 +181,7 @@ type epoch struct {
 func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sync, workers int, cycle int) (*epoch, error) {
 	ctx = ctx.Sub("Epoch(%v)", cycle)
 
-	start, ss, err := log.Snapshot()
+	last, ss, err := log.Snapshot()
 	if err != nil {
 		return nil, errors.Wrap(err, "Unable to retrieve snapshot")
 	}
@@ -199,7 +201,7 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 		requests: common.NewWorkPool(ctx.Control(), workers),
 	}
 
-	if err := e.start(start); err != nil {
+	if err := e.start(last + 1); err != nil {
 		return nil, errors.Wrap(err, "Error starting epoch lifecycle")
 	}
 
@@ -229,7 +231,11 @@ func (e *epoch) StoreGetItem(cancel <-chan struct{}, store []byte, key []byte) (
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	s := e.catalog.Init(store)
+	s := e.catalog.Get(store)
+	if s == nil {
+		return Item{}, false, errors.WithStack(NoStoreError)
+	}
+
 	item, ok := s.Get(key)
 	return item, ok, nil
 }
@@ -252,7 +258,7 @@ func (e *epoch) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, 
 	return item, ok, nil
 }
 
-func (e *epoch) TryUpdate(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
+func (e *epoch) StoreTryUpdate(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
 	item, _, err := e.StoreGetItem(cancel, store, key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
@@ -266,9 +272,9 @@ func (e *epoch) TryUpdate(cancel <-chan struct{}, store []byte, key []byte, fn f
 	return e.StoreSwapItem(cancel, store, key, new, item.Ver)
 }
 
-func (e *epoch) Update(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
+func (e *epoch) StoreUpdate(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
 	for !common.IsCanceled(cancel) {
-		item, ok, err := e.TryUpdate(cancel, store, key, fn)
+		item, ok, err := e.StoreTryUpdate(cancel, store, key, fn)
 		if err != nil {
 			return Item{}, errors.WithStack(err)
 		}
@@ -281,17 +287,11 @@ func (e *epoch) Update(cancel <-chan struct{}, store []byte, key []byte, fn func
 }
 
 func (e *epoch) start(index int) error {
-	l, err := e.log.Listen(index, 1024)
-	if err != nil {
-		return err
-	}
-	e.ctrl.Defer(func(error) {
-		l.Close()
-	})
-
 	// start the request router
 	go func() {
 		defer e.ctrl.Close()
+
+		e.logger.Info("Starting request router")
 		for {
 			select {
 			case <-e.ctrl.Closed():
@@ -313,23 +313,30 @@ func (e *epoch) start(index int) error {
 	// start the indexing routine
 	go func() {
 		defer e.ctrl.Close()
+		defer e.logger.Info("Indexer shutting down")
+
+		e.logger.Info("Starting indexer")
+
+		l, err := e.log.Listen(index, 1024)
+		if err != nil {
+			e.ctrl.Fail(err)
+			return
+		}
+
+		defer l.Close()
 		for {
-			var entry kayak.Entry
 			select {
 			case <-e.ctrl.Closed():
 				return
 			case <-l.Ctrl().Closed():
 				e.ctrl.Fail(l.Ctrl().Failure())
 				return
-			case entry = <-l.Data():
+			case entry := <-l.Data():
+				e.logger.Info("Indexing entry: %v", entry)
+				if err := e.handleEntry(entry); err != nil {
+					e.logger.Error("Error parsing item from event stream [%v]: %+v", entry.Index, err)
+				}
 			}
-
-			if err := e.handleEntry(entry); err != nil {
-				e.logger.Error("Error parsing item from event stream [%v]: %+v", entry.Index, err)
-				continue
-			}
-
-			e.sync.Ack(entry.Index)
 		}
 	}()
 	return nil
@@ -399,6 +406,11 @@ func (e *epoch) handleStoreEnsure(req *common.Request) {
 }
 
 func (e *epoch) handleEntry(entry kayak.Entry) error {
+	defer e.sync.Ack(entry.Index)
+	if entry.Kind != kayak.Std {
+		return nil
+	}
+
 	item, err := parseItemBytes(entry.Event)
 	if err != nil {
 		return errors.WithStack(err)
@@ -413,21 +425,21 @@ func build(st kayak.EventStream) (*catalog, error) {
 	defer st.Close()
 
 	catalog := newCatalog()
-	for {
+	for !st.Ctrl().IsClosed() {
+
 		var evt kayak.Event
 		select {
 		case <-st.Ctrl().Closed():
-			break
 		case evt = <-st.Data():
+			fmt.Println("EVENT: ", evt)
+			// evt.Raw()
 		}
-
-		fmt.Println("EVENT: ", evt)
 
 		// item, err := parseItemBytes(evt)
 		// if err != nil {
-			// return nil, errors.WithStack(err)
+		// return nil, errors.WithStack(err)
 		// }
-//
+		//
 		// store := catalogue.Init(item.Store)
 		// store.Put(item.Key, item.Val, item.Ver)
 	}

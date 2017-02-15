@@ -96,4 +96,3 @@ func (l *snapshotStream) Ctrl() common.Control {
 func (l *snapshotStream) Data() <-chan Event {
 	return l.ch
 }
-

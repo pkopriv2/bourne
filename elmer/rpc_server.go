@@ -48,7 +48,7 @@ func (s *server) Status(req net.Request) net.Response {
 	return nil
 	// roster, err := s.self.Roster(nil)
 	// if err != nil {
-		// return net.NewErrorResponse(err)
+	// return net.NewErrorResponse(err)
 	// }
 	// return statusRpc{s.self.peer.Id(), roster}.Response()
 }
@@ -59,7 +59,7 @@ func (s *server) Read(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	item, ok, err := s.self.ReadItem(nil, rpc.Store, rpc.Key)
+	item, ok, err := s.self.StoreReadItem(nil, rpc.Store, rpc.Key)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
@@ -73,7 +73,7 @@ func (s *server) Swap(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	item, ok, err := s.self.SwapItem(nil, rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
+	item, ok, err := s.self.StoreSwapItem(nil, rpc.Store, rpc.Key, rpc.Val, rpc.Prev)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

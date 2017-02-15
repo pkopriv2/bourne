@@ -55,6 +55,24 @@ func TestHost_ReadSnapshot_Empty(t *testing.T) {
 	}
 }
 
+func TestHost_SyncBarrier_Empty(t *testing.T) {
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
+	timer := ctx.Timer(30*time.Second)
+	defer timer.Close()
+
+	host, err := StartTestHost(ctx)
+	assert.Nil(t, err)
+
+	sync, err := host.Sync()
+	assert.Nil(t, err)
+
+	val, err := sync.Barrier(timer.Closed())
+	assert.Nil(t, err)
+	assert.Equal(t, -1, val)
+}
+
 func TestHost_ReadSnapshot(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		Config.BaseElectionTimeout: 500 * time.Millisecond,
