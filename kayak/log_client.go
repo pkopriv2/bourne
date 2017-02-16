@@ -55,11 +55,6 @@ func (s *logClient) Listen(start int, buf int) (Listener, error) {
 	return newLogClientListener(raw), nil
 }
 
-// func (c *logClient) NoOp(cancel <-chan struct{}) error {
-// _, err := c.append(cancel, Event{}, Std)
-// return err
-// }
-//
 func (c *logClient) Append(cancel <-chan struct{}, e Event) (Entry, error) {
 	return c.append(cancel, e, Std)
 }

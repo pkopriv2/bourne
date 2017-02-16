@@ -278,14 +278,14 @@ func (l *refListener) start(from int) {
 		defer l.Close()
 
 		for beg := from; ; {
-			l.logger.Debug("Next [%v]", beg)
+			// l.logger.Debug("Next [%v]", beg)
 
 			next, ok := l.pos.WaitUntil(beg)
 			if !ok || l.ctrl.IsClosed() || l.log.ctrl.IsClosed() {
 				return
 			}
 
-			l.logger.Debug("Update: [%v->%v]", beg, next)
+			// l.logger.Debug("Update: [%v->%v]", beg, next)
 
 			// FIXME: Can still miss truncations
 			if next < beg {

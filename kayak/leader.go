@@ -86,10 +86,8 @@ func (l *leader) start() {
 	go func() {
 		defer l.ctrl.Close()
 
+		timer := time.NewTimer(l.replica.ElectionTimeout / 5)
 		for !l.ctrl.IsClosed() {
-
-			timer := time.NewTimer(l.replica.ElectionTimeout / 5)
-			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
 
 			select {
 			case <-l.ctrl.Closed():
@@ -114,7 +112,8 @@ func (l *leader) start() {
 				return
 			}
 
-			timer.Reset(l.replica.ElectionTimeout)
+			l.logger.Debug("Resetting timeout [%v]", l.replica.ElectionTimeout/5)
+			timer.Reset(l.replica.ElectionTimeout/5)
 		}
 	}()
 
@@ -281,14 +280,11 @@ func (c *leader) handleRequestVote(req *common.Request) {
 }
 
 func (c *leader) broadcastHeartbeat() bool {
-	timer := c.ctx.Timer(c.replica.ElectionTimeout)
-	defer timer.Close()
-
 	syncers := c.syncer.Syncers()
 	ch := make(chan response)
 	for _, p := range syncers {
 		go func(p *peerSyncer) {
-			resp, err := p.heartbeat(timer.Closed())
+			resp, err := p.heartbeat(c.ctrl.Closed())
 			if err != nil {
 				ch <- newResponse(c.term.Num, false)
 			} else {
@@ -297,6 +293,8 @@ func (c *leader) broadcastHeartbeat() bool {
 		}(p)
 	}
 
+	timer := c.ctx.Timer(c.replica.ElectionTimeout)
+	defer timer.Close()
 	for i := 0; i < c.replica.Majority()-1; {
 		select {
 		case <-c.ctrl.Closed():
