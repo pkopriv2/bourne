@@ -24,7 +24,6 @@ type indexer struct {
 
 func newIndexer(ctx common.Context, peer kayak.Host, workers int) (*indexer, error) {
 	ctx = ctx.Sub("Indexer")
-
 	m := &indexer{
 		ctx:           ctx,
 		ctrl:          ctx.Control(),
@@ -412,6 +411,7 @@ func (e *epoch) handleEntry(entry kayak.Entry) error {
 	}
 
 	// TODO: build a store cache
+	e.logger.Debug("Indexing item: %v", item)
 	store := e.catalog.Ensure(item.Store)
 	store.Put(item.Key, item.Val, item.Ver)
 	return nil

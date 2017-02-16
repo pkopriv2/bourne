@@ -146,7 +146,7 @@ func readSwapRpc(r scribe.Reader) (ret swapRpc, err error) {
 	err = r.ReadBytes("store", &ret.Store)
 	err = common.Or(err, r.ReadBytes("key", &ret.Key))
 	err = common.Or(err, r.ReadBytes("val", &ret.Val))
-	err = common.Or(err, r.ReadInt("prev", &ret.Ver))
+	err = common.Or(err, r.ReadInt("ver", &ret.Ver))
 	return
 }
 

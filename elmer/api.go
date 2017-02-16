@@ -85,6 +85,10 @@ type Item struct {
 	// Ttl   time.Duration
 }
 
+func (i Item) String() string {
+	return fmt.Sprintf("Item(store=%v,key=%v,ver=%v): %v bytes", string(i.Store), string(i.Key), i.Ver, len(i.Val))
+}
+
 func (i Item) Write(w scribe.Writer) {
 	w.WriteBytes("store", i.Store)
 	w.WriteBytes("key", i.Key)
@@ -110,10 +114,6 @@ func (i Item) Equal(o Item) bool {
 	}
 
 	return bytes.Equal(i.Val, o.Val)
-}
-
-func (i Item) String() string {
-	return fmt.Sprintf("(%v,%v)", i.Key, i.Ver)
 }
 
 func readItem(r scribe.Reader) (item Item, err error) {

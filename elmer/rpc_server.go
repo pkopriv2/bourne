@@ -70,6 +70,7 @@ func (s *server) StoreExists(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
+	s.logger.Info("Handling store exists")
 	ok, err := s.self.StoreExists(timer.Closed(), rpc.Store)
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -87,6 +88,7 @@ func (s *server) StoreDel(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
+	s.logger.Info("Handling store del")
 	if err := s.self.StoreDel(timer.Closed(), rpc.Store); err != nil {
 		return net.NewErrorResponse(err)
 	} else {
@@ -103,6 +105,7 @@ func (s *server) StoreEnsure(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
+	s.logger.Info("Handling store ensure")
 	if err := s.self.StoreEnsure(timer.Closed(), rpc.Store); err != nil {
 		return net.NewErrorResponse(err)
 	} else {

@@ -17,6 +17,7 @@ type peer struct {
 	core   *indexer
 	server net.Server
 	roster *roster
+	pool   common.ObjectPool
 }
 
 func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) (h *peer, err error) {
@@ -51,6 +52,12 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		server.Close()
 	})
 
+	pool := common.NewObjectPool(ctx.Control(), 10,
+		newStaticClusterPool(ctx, net, 30*time.Second, []string{listener.Addr().String()}))
+	ctx.Control().Defer(func(cause error) {
+		pool.Close()
+	})
+
 	p := &peer{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
@@ -59,6 +66,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		core:   core,
 		server: server,
 		roster: newRoster(core),
+		pool:   pool,
 	}
 
 	return p, p.start(listener.Addr().String())
@@ -78,14 +86,14 @@ func (p *peer) start(addr string) error {
 	return p.roster.Add(timer.Closed(), addr)
 }
 
-func (p *peer) Close() error {
-	return p.ctrl.Close()
-}
-
-func (p *peer) Store() (Store, error) {
-	return nil, nil
+func (p *peer) Catalog() (Catalog, error) {
+	return &catalogClient{p.ctrl.Sub(), p.pool}, nil
 }
 
 func (p *peer) Shutdown() error {
+	panic("not implemented")
+}
+
+func (p *peer) Close() error {
 	return p.ctrl.Close()
 }
