@@ -46,7 +46,7 @@ func TestClient_Catalog_Store_Put(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	timer := ctx.Timer(30 * time.Second)
+	timer := ctx.Timer(60 * time.Second)
 	defer timer.Close()
 
 	cluster := NewTestCluster(ctx, 3)

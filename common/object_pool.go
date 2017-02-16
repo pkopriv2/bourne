@@ -124,6 +124,7 @@ func (p *objectPool) spawn() (io.Closer, error) {
 
 func (p *objectPool) closePool() (err error) {
 	for item := p.raw.Front(); item != nil; item = p.raw.Front() {
+		p.raw.Remove(item)
 		err = item.Value.(io.Closer).Close()
 	}
 	return
