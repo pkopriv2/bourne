@@ -207,6 +207,7 @@ type peerSyncer struct {
 	prevIndex int
 	prevTerm  int
 	prevLock  sync.RWMutex
+	pool      common.ObjectPool // *rpcClient
 }
 
 func newPeerSyncer(ctx common.Context, self *replica, term term, peer Peer) *peerSyncer {
@@ -219,6 +220,7 @@ func newPeerSyncer(ctx common.Context, self *replica, term term, peer Peer) *pee
 		term:      term,
 		prevIndex: -1,
 		prevTerm:  -1,
+		pool:      peer.ClientPool(ctx, self.Network, 30*time.Second, 2),
 	}
 	sync.start()
 	return sync
@@ -241,14 +243,28 @@ func (l *peerSyncer) SetPrevIndexAndTerm(index int, term int) {
 	l.prevTerm = term
 }
 
-func (s *peerSyncer) heartbeat() (resp response, err error) {
-	cl, err := s.peer.Client(s.self.Ctx, s.self.Network, s.self.ConnTimeout)
-	if err != nil {
-		return response{}, err
+func (s *peerSyncer) send(cancel <-chan struct{}, fn func(cl *rpcClient) error) error {
+	raw := s.pool.TakeOrCancel(cancel)
+	if raw == nil {
+		return errors.WithStack(common.CanceledError)
 	}
 
-	resp, err = cl.Replicate(newHeartBeat(s.self.Id, s.term.Num, s.self.Log.Committed()))
+	if err := fn(raw.(*rpcClient)); err != nil {
+		s.pool.Fail(raw)
+		return errors.WithStack(err)
+	} else {
+		s.pool.Return(raw)
+		return nil
+	}
+}
+
+func (s *peerSyncer) heartbeat(cancel <-chan struct{}) (resp response, err error) {
+	err = s.send(cancel, func(cl *rpcClient) error {
+		resp, err = cl.Replicate(newHeartBeat(s.self.Id, s.term.Num, s.self.Log.Committed()))
+		return err
+	})
 	return
+
 }
 
 // Per raft: A leader never overwrites or deletes entries in its log; it only appends new entries. §3.5
@@ -336,14 +352,13 @@ func (s *peerSyncer) start() {
 	}()
 }
 
-func (s *peerSyncer) score() (int, error) {
+func (s *peerSyncer) score(cancel <-chan struct{}) (int, error) {
 
 	// delta just calulcates distance from sync position to max
 	delta := func() (int, error) {
 		if s.ctrl.IsClosed() {
 			return 0, common.Or(ClosedError, s.ctrl.Failure())
 		}
-
 
 		max, _, err := s.self.Log.Last()
 		if err != nil {
@@ -359,7 +374,7 @@ func (s *peerSyncer) score() (int, error) {
 
 	score := 0
 	for rounds := 0; rounds < 30; rounds++ {
-		s.heartbeat()
+		s.heartbeat(cancel)
 
 		curDelta, err := delta()
 		if err != nil {
@@ -390,7 +405,7 @@ func (s *peerSyncer) score() (int, error) {
 		}
 
 		s.logger.Info("Delta [%v] after [%v] rounds.  Score: [%v]", curDelta, rounds+1, score)
-		time.Sleep(s.self.ElectionTimeout/5)
+		time.Sleep(s.self.ElectionTimeout / 5)
 		prevDelta = curDelta
 	}
 

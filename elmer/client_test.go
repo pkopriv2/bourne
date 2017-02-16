@@ -49,7 +49,7 @@ func TestClient_Catalog_Store_Put(t *testing.T) {
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	cluster := NewTestCluster(ctx, 1)
+	cluster := NewTestCluster(ctx, 3)
 	assert.Equal(t, 3, len(cluster))
 
 	cl := newPeerClient(ctx, net.NewTcpNetwork(), 30*time.Second, 30*time.Second, collectAddrs(cluster))
@@ -61,10 +61,17 @@ func TestClient_Catalog_Store_Put(t *testing.T) {
 	store, err := catalog.Ensure(timer.Closed(), []byte("store"))
 	assert.Nil(t, err)
 
-	for i := 0; i < 10; i++ {
-		ctx.Logger().Info("Putting: %v", i)
-		store.Put(timer.Closed(), stash.IntBytes(i), stash.IntBytes(i), 0)
+	numThreads := 100
+	numItemsPerThread := 100
+	for i := 0; i < numThreads; i++ {
+		go func(i int) {
+			for j := 0; j < numItemsPerThread; j++ {
+				store.Put(timer.Closed(), stash.IntBytes(numThreads*i+j), stash.IntBytes(numThreads*i+j), 0)
+			}
+		}(i)
 	}
+
+	<-timer.Closed()
 }
 
 func collectAddrs(peers []*peer) []string {

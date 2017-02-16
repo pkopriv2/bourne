@@ -400,18 +400,17 @@ func (e *epoch) handleStoreEnsure(req *common.Request) {
 func (e *epoch) handleEntry(entry kayak.Entry) error {
 	defer e.sync.Ack(entry.Index)
 
-	e.logger.Debug("Indexing entry: %v", entry)
 	if entry.Kind != kayak.Std {
 		return nil
 	}
 
+	e.logger.Debug("Indexing entry: %v", entry)
 	item, err := parseItemBytes(entry.Event)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	// TODO: build a store cache
-	e.logger.Debug("Indexing item: %v", item)
 	store := e.catalog.Ensure(item.Store)
 	store.Put(item.Key, item.Val, item.Ver)
 	return nil

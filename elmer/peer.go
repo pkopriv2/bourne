@@ -22,7 +22,6 @@ type peer struct {
 }
 
 func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) (h *peer, err error) {
-	ctx = ctx.Sub("Elmer")
 	defer func() {
 		if err != nil {
 			ctx.Control().Fail(err)
@@ -38,6 +37,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 	})
 
 	addr = listener.Addr().String()
+	ctx = ctx.Sub("Elmer(%v)", addr)
 
 	core, err := newIndexer(ctx, self, 20)
 	if err != nil {

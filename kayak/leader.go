@@ -185,6 +185,7 @@ func (c *leader) handleRemoteAppend(req *common.Request) {
 func (c *leader) handleLocalAppend(req *common.Request) {
 	err := c.appendPool.SubmitOrCancel(req.Canceled(), func() {
 		req.Return(c.syncer.Append(req.Body().(appendEvent)))
+		c.broadcastHeartbeat()
 	})
 
 	if err != nil {
@@ -221,13 +222,13 @@ func (c *leader) handleRosterUpdate(req *common.Request) {
 	c.syncer.handleRosterChange(all)
 	sync := c.syncer.Syncer(update.peer.Id)
 
-	_, err = sync.heartbeat()
+	_, err = sync.heartbeat(req.Canceled())
 	if err != nil {
 		req.Fail(err)
 		return
 	}
 
-	score, err := sync.score()
+	score, err := sync.score(req.Canceled())
 	if err != nil {
 		req.Fail(err)
 		becomeFollower(c.replica)
@@ -280,16 +281,22 @@ func (c *leader) handleRequestVote(req *common.Request) {
 }
 
 func (c *leader) broadcastHeartbeat() bool {
-	ch := c.replica.Broadcast(func(cl *rpcClient) response {
-		resp, err := cl.Replicate(newHeartBeat(c.replica.Id, c.term.Num, c.replica.Log.Committed()))
-		if err != nil {
-			return newResponse(c.term.Num, false)
-		} else {
-			return resp
-		}
-	})
+	timer := c.ctx.Timer(c.replica.ElectionTimeout)
+	defer timer.Close()
 
-	timer := time.NewTimer(c.replica.ElectionTimeout)
+	syncers := c.syncer.Syncers()
+	ch := make(chan response)
+	for _, p := range syncers {
+		go func(p *peerSyncer) {
+			resp, err := p.heartbeat(timer.Closed())
+			if err != nil {
+				ch <- newResponse(c.term.Num, false)
+			} else {
+				ch <- resp
+			}
+		}(p)
+	}
+
 	for i := 0; i < c.replica.Majority()-1; {
 		select {
 		case <-c.ctrl.Closed():
@@ -303,7 +310,7 @@ func (c *leader) broadcastHeartbeat() bool {
 			}
 
 			i++
-		case <-timer.C:
+		case <-timer.Closed():
 			c.logger.Error("Unable to retrieve enough heartbeat responses.")
 			c.replica.Term(c.term.Num, nil, c.term.VotedFor)
 			becomeFollower(c.replica)

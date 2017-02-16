@@ -99,7 +99,7 @@ type logClientListener struct {
 }
 
 func newLogClientListener(raw Listener) *logClientListener {
-	l := &logClientListener{raw, make(chan Entry, 128)}
+	l := &logClientListener{raw, make(chan Entry)}
 	l.start()
 	return l
 }
@@ -109,7 +109,7 @@ func (p *logClientListener) start() {
 		for {
 			var e Entry
 			select {
-			case <-p.Ctrl().Closed():
+			case <-p.raw.Ctrl().Closed():
 				return
 			case e = <-p.raw.Data():
 			}
@@ -119,7 +119,7 @@ func (p *logClientListener) start() {
 			}
 
 			select {
-			case <-p.Ctrl().Closed():
+			case <-p.raw.Ctrl().Closed():
 				return
 			case p.dat <- e:
 			}

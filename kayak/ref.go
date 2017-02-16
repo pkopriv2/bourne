@@ -37,9 +37,14 @@ func (c *ref) WaitUntil(cur int) (val int, alive bool) {
 }
 
 func (c *ref) WaitUntilOrCancel(cancel <-chan struct{}, until int) (val int, alive bool) {
+	ctrl := common.NewControl(nil)
+	defer ctrl.Close()
 	go func() {
-		<-cancel
-		c.Notify()
+		select {
+		case <-cancel:
+			c.Notify()
+		case <-ctrl.Closed():
+		}
 	}()
 	c.lock.L.Lock()
 	defer c.lock.L.Unlock()
@@ -61,7 +66,6 @@ func (c *ref) Close() {
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
 	c.dead = true
-	c.lock.Broadcast()
 }
 
 func (c *ref) Update(fn func(int) int) int {

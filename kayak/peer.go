@@ -2,6 +2,7 @@ package kayak
 
 import (
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/pkg/errors"
@@ -105,6 +106,17 @@ func newPeer(addr string) Peer {
 
 func (p Peer) String() string {
 	return fmt.Sprintf("Peer(%v, %v)", p.Id.String()[:8], p.Addr)
+}
+
+func (p Peer) ClientPool(ctx common.Context, net net.Network, timeout time.Duration, num int) common.ObjectPool {
+	return common.NewObjectPool(ctx.Control(), num, func() (io.Closer, error) {
+		cl, err := p.Client(ctx, net, timeout)
+		if err == nil {
+			return cl, nil
+		} else {
+			return nil, err
+		}
+	})
 }
 
 func (p Peer) Client(ctx common.Context, network net.Network, timeout time.Duration) (*rpcClient, error) {

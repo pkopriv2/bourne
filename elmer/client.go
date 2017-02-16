@@ -1,7 +1,6 @@
 package elmer
 
 import (
-	"fmt"
 	"io"
 	"math/rand"
 	"time"
@@ -16,7 +15,6 @@ func tryRpc(pool common.ObjectPool, cancel <-chan struct{}, fn func(*rpcClient) 
 	if raw == nil {
 		return errors.WithStack(common.CanceledError)
 	}
-
 	var err error
 	defer func() {
 		if err != nil {
@@ -160,12 +158,10 @@ func (s *storeClient) Put(cancel <-chan struct{}, key []byte, val []byte, ver in
 	var item Item
 	var ok bool
 	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
-		then := time.Now()
 		responseRpc, err := r.StoreSwapItem(swapRpc{s.name, key, val, ver})
 		if err != nil {
 			return err
 		}
-		fmt.Println("REQUEST TIME: ", time.Now().Sub(then))
 		item, ok = responseRpc.Item, responseRpc.Ok
 		return nil
 	})
