@@ -35,27 +35,30 @@ type peerClient struct {
 	pool   common.ObjectPool // T: *rpcClient
 }
 
-func newPeerClient(ctx common.Context, network net.Network, timeout time.Duration, refresh time.Duration, addrs []string) *peerClient {
+func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, max int, addrs []string) *peerClient {
 	ctx = ctx.Sub("Client")
+
+	pool := common.NewObjectPool(ctx.Control(), max,
+		newStaticClusterPool(ctx, net, timeout, addrs))
+	ctx.Control().Defer(func(error) {
+		pool.Close()
+	})
+
 	return &peerClient{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
 		logger: ctx.Logger(),
-		pool:   common.NewObjectPool(ctx.Control(), 10, newStaticClusterPool(ctx, network, timeout, addrs)),
+		pool:   pool,
 	}
 }
-
-// roster := newRosterSync(ctx, network, timeout, refresh, addrs)
-// ctx.Control().Defer(func(error) {
-// roster.Close()
-// })
 
 func (p *peerClient) Close() error {
 	return p.ctrl.Close()
 }
 
 func (p *peerClient) Catalog() (Catalog, error) {
-	return &catalogClient{p.ctrl.Sub(), p.pool}, nil
+	ctx := p.ctx.Sub("Catalog")
+	return &catalogClient{ctx, ctx.Control(), ctx.Logger(), p.pool}, nil
 }
 
 func (p *peerClient) Shutdown() error {
@@ -63,8 +66,15 @@ func (p *peerClient) Shutdown() error {
 }
 
 type catalogClient struct {
-	ctrl common.Control
-	pool common.ObjectPool // T: *rpcClient
+	ctx    common.Context
+	ctrl   common.Control
+	logger common.Logger
+	pool   common.ObjectPool // T: *rpcClient
+}
+
+func newCatalogClient(ctx common.Context, pool common.ObjectPool) *catalogClient {
+	ctx = ctx.Sub("Catalog")
+	return &catalogClient{ctx, ctx.Control(), ctx.Logger(), pool}
 }
 
 func (c *catalogClient) Close() error {
@@ -103,7 +113,7 @@ func (c *catalogClient) Get(cancel <-chan struct{}, store []byte) (Store, error)
 		return nil, nil
 	}
 
-	return &storeClient{store, c.ctrl.Sub(), c.pool}, nil
+	return newStoreClient(c.ctx, c.pool, store), nil
 }
 
 func (c *catalogClient) Ensure(cancel <-chan struct{}, store []byte) (Store, error) {
@@ -118,23 +128,34 @@ func (c *catalogClient) Ensure(cancel <-chan struct{}, store []byte) (Store, err
 		return nil, errors.WithStack(err)
 	}
 
-	return &storeClient{store, c.ctrl.Sub(), c.pool}, nil
+	return newStoreClient(c.ctx, c.pool, store), nil
 }
 
 type storeClient struct {
-	name []byte
-	ctrl common.Control
-	pool common.ObjectPool // T: *rpcClient
+	name   []byte
+	logger common.Logger
+	ctrl   common.Control
+	pool   common.ObjectPool // T: *rpcClient
+}
+
+func newStoreClient(ctx common.Context, pool common.ObjectPool, name []byte) *storeClient {
+	ctx = ctx.Sub("StoreClient: %v", string(name))
+	return &storeClient{name, ctx.Logger(), ctx.Control(), pool}
 }
 
 func (s *storeClient) Close() error {
 	return s.ctrl.Close()
 }
 
+func (s *storeClient) Name() []byte {
+	return s.name
+}
+
 func (s *storeClient) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {
 	if s.ctrl.IsClosed() {
 		return Item{}, false, errors.WithStack(common.ClosedError)
 	}
+	defer common.Elapsed(s.logger, "Get", time.Now())
 
 	var item Item
 	var ok bool
@@ -154,9 +175,11 @@ func (s *storeClient) Put(cancel <-chan struct{}, key []byte, val []byte, ver in
 	if s.ctrl.IsClosed() {
 		return Item{}, false, errors.WithStack(common.ClosedError)
 	}
+	defer common.Elapsed(s.logger, "Put", time.Now())
 
 	var item Item
 	var ok bool
+
 	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
 		responseRpc, err := r.StoreSwapItem(swapRpc{s.name, key, val, ver})
 		if err != nil {
@@ -172,6 +195,7 @@ func (s *storeClient) Del(cancel <-chan struct{}, key []byte, ver int) (bool, er
 	if s.ctrl.IsClosed() {
 		return false, errors.WithStack(common.ClosedError)
 	}
+	defer common.Elapsed(s.logger, "Del", time.Now())
 
 	var ok bool
 	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {

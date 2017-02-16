@@ -67,6 +67,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		logger: ctx.Logger(),
 		net:    net,
 		core:   core,
+		self:   self,
 		server: server,
 		roster: newRoster(core),
 		pool:   pool,
@@ -91,7 +92,7 @@ func (p *peer) start(addr string) error {
 }
 
 func (p *peer) Catalog() (Catalog, error) {
-	return &catalogClient{p.ctrl.Sub(), p.pool}, nil
+	return newCatalogClient(p.ctx, p.pool), nil
 }
 
 func (p *peer) Shutdown() error {

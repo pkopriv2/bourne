@@ -103,7 +103,7 @@ func (h *host) Roster() []Peer {
 }
 
 func (h *host) Sync() (Sync, error) {
-	return newSyncer(h.pool), nil
+	return newSyncer(h.pool, h.core.Log.commit), nil
 }
 
 func (h *host) Log() (Log, error) {

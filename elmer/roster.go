@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	systemStore = []byte("Elmer")
+	rosterStore    = []byte("Elmer.Roster")
 	rosterStoreKey = []byte("Elmer.Roster.Key")
 )
 
@@ -23,19 +23,20 @@ func newRoster(i *indexer) *roster {
 }
 
 func (r *roster) Add(cancel <-chan struct{}, peer string) error {
-	if err := r.indexer.StoreEnsure(cancel, systemStore); err != nil {
+	if err := r.indexer.StoreEnsure(cancel, rosterStore); err != nil {
 		return errors.Wrapf(err, "Unable to add peer [%v]", peer)
 	}
 
 	r.logger.Info("Adding peer [%v]", peer)
-	_, _, err := r.indexer.StoreUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
+	_, _, err := r.indexer.StoreUpdateItem(cancel, rosterStore, rosterStoreKey, func(cur []byte) []byte {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {
 			curPeers = []string{}
 		}
-		// if hasPeer(curPeers, peer) {
-			// return nil
-		// }
+
+		if hasPeer(curPeers, peer) {
+			return nil
+		}
 
 		return peers(addPeer(curPeers, peer)).Bytes()
 	})
@@ -43,15 +44,19 @@ func (r *roster) Add(cancel <-chan struct{}, peer string) error {
 }
 
 func (r *roster) Del(cancel <-chan struct{}, peer string) error {
-	if err := r.indexer.StoreEnsure(cancel, systemStore); err != nil {
+	if err := r.indexer.StoreEnsure(cancel, rosterStore); err != nil {
 		return errors.Wrapf(err, "Unable to del peer [%v]", peer)
 	}
 
 	r.logger.Info("Removing peer [%v]", peer)
-	_, _, err := r.indexer.StoreUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
+	_, _, err := r.indexer.StoreUpdateItem(cancel, rosterStore, rosterStoreKey, func(cur []byte) []byte {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {
 			curPeers = []string{}
+		}
+
+		if !hasPeer(curPeers, peer) {
+			return nil
 		}
 
 		return peers(delPeer(curPeers, peer)).Bytes()

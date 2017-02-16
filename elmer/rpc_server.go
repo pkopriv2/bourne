@@ -135,12 +135,9 @@ func (s *server) StoreSwapItem(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	then := time.Now()
 	item, ok, err := s.self.StoreSwapItem(timer.Closed(), rpc.Store, rpc.Key, rpc.Val, rpc.Ver)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
-
-	s.logger.Info("Handling store ensure: %v", time.Now().Sub(then))
 	return responseRpc{item, ok}.Response()
 }

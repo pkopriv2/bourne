@@ -25,7 +25,8 @@ func TestClient_Catalog(t *testing.T) {
 	cluster := NewTestCluster(ctx, 3)
 	assert.Equal(t, 3, len(cluster))
 
-	cl := newPeerClient(ctx, net.NewTcpNetwork(), 30*time.Second, 30*time.Second, collectAddrs(cluster))
+	cl, err := Connect(ctx, collectAddrs(cluster))
+	assert.Nil(t, err)
 
 	catalog, err := cl.Catalog()
 	assert.Nil(t, err)
@@ -46,14 +47,14 @@ func TestClient_Catalog_Store_Put(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	timer := ctx.Timer(20 * time.Second)
+	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
 	cluster := NewTestCluster(ctx, 3)
 	assert.Equal(t, 3, len(cluster))
 
-	cl := newPeerClient(ctx, net.NewTcpNetwork(), 30*time.Second, 30*time.Second, collectAddrs(cluster))
-	defer cl.Close()
+	cl, err := Connect(ctx, collectAddrs(cluster))
+	assert.Nil(t, err)
 
 	catalog, err := cl.Catalog()
 	assert.Nil(t, err)
@@ -61,7 +62,7 @@ func TestClient_Catalog_Store_Put(t *testing.T) {
 	store, err := catalog.Ensure(timer.Closed(), []byte("store"))
 	assert.Nil(t, err)
 
-	numThreads := 100
+	numThreads := 10
 	numItemsPerThread := 100
 	for i := 0; i < numThreads; i++ {
 		go func(i int) {
@@ -71,7 +72,8 @@ func TestClient_Catalog_Store_Put(t *testing.T) {
 		}(i)
 	}
 
-	<-timer.Closed()
+	sync, err := cluster[0].self.Sync()
+	assert.Nil(t, sync.Sync(timer.Closed(), numThreads*numItemsPerThread-1))
 }
 
 func collectAddrs(peers []*peer) []string {

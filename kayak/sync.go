@@ -10,8 +10,8 @@ type syncer struct {
 	ref  *ref
 }
 
-func newSyncer(pool common.ObjectPool) *syncer {
-	return &syncer{pool, newRef(-1)}
+func newSyncer(pool common.ObjectPool, ref *ref) *syncer {
+	return &syncer{pool, ref}
 }
 
 func (s *syncer) Barrier(cancel <-chan struct{}) (int, error) {

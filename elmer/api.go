@@ -2,10 +2,10 @@ package elmer
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 	"github.com/pkopriv2/bourne/scribe"
@@ -24,7 +24,12 @@ func Join(ctx common.Context, self kayak.Host, addrs []string, opts ...func(*Opt
 }
 
 func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {
-	return nil, nil
+	options, err := buildOptions(ctx, opts)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return newPeerClient(ctx, options.Net, options.ConnTimeout, options.ConnPool, addrs), nil
 }
 
 type Peer interface {
@@ -41,6 +46,9 @@ type Peer interface {
 type Catalog interface {
 	io.Closer
 
+	// // Lists all the currently existing  stores.
+	// All(cancel <-chan struct{}) ([]Store, error)
+
 	// Ensures the given store is deleted.  If the store doesn't exist, an error is NOT returned.
 	Del(cancel <-chan struct{}, store []byte) error
 
@@ -56,6 +64,12 @@ type Catalog interface {
 // both local and remote stores.
 type Store interface {
 	io.Closer
+
+	// The name of the store
+	Name() []byte
+
+	// Ensures the given store is deleted.  If the store doesn't exist, an error is NOT returned.
+	// All(cancel <-chan struct{}) ([]Item, error)
 
 	// Returns the item or nil if it doesn't exist.
 	//
