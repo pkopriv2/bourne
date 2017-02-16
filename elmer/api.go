@@ -29,15 +29,25 @@ func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, 
 
 type Peer interface {
 	io.Closer
+
+	// Retrieves the store catalog.
 	Catalog() (Catalog, error)
+
+	// Shuts the peer down.
 	Shutdown() error
 }
 
 // The catalog of stores.
 type Catalog interface {
 	io.Closer
+
+	// Ensures the given store is deleted.  If the store doesn't exist, an error is NOT returned.
 	Del(cancel <-chan struct{}, store []byte) error
+
+	// Retrieve the given store, or nil if it doesn't exist.
 	Get(cancel <-chan struct{}, store []byte) (Store, error)
+
+	// Ensures the given store exists and returns it.
 	Ensure(cancel <-chan struct{}, store []byte) (Store, error)
 }
 

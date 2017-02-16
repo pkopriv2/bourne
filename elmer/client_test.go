@@ -40,13 +40,13 @@ func TestClient_Catalog(t *testing.T) {
 
 func TestClient_Catalog_Store_Put(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		"bourne.log.level": int(common.Info),
 	})
 
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	timer := ctx.Timer(60 * time.Second)
+	timer := ctx.Timer(20 * time.Second)
 	defer timer.Close()
 
 	cluster := NewTestCluster(ctx, 3)
