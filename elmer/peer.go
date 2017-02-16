@@ -18,6 +18,7 @@ type peer struct {
 	server net.Server
 	roster *roster
 	pool   common.ObjectPool
+	addr   string
 }
 
 func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) (h *peer, err error) {
@@ -36,6 +37,8 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		listener.Close()
 	})
 
+	addr = listener.Addr().String()
+
 	core, err := newIndexer(ctx, self, 20)
 	if err != nil {
 		return nil, err
@@ -53,7 +56,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 	})
 
 	pool := common.NewObjectPool(ctx.Control(), 10,
-		newStaticClusterPool(ctx, net, 30*time.Second, []string{listener.Addr().String()}))
+		newStaticClusterPool(ctx, net, 30*time.Second, []string{addr}))
 	ctx.Control().Defer(func(cause error) {
 		pool.Close()
 	})
@@ -67,9 +70,10 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		server: server,
 		roster: newRoster(core),
 		pool:   pool,
+		addr:   addr,
 	}
 
-	return p, p.start(listener.Addr().String())
+	return p, p.start(addr)
 }
 
 func (p *peer) start(addr string) error {

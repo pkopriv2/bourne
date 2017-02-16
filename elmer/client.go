@@ -1,6 +1,7 @@
 package elmer
 
 import (
+	"fmt"
 	"io"
 	"math/rand"
 	"time"
@@ -38,12 +39,6 @@ type peerClient struct {
 
 func newPeerClient(ctx common.Context, network net.Network, timeout time.Duration, refresh time.Duration, addrs []string) *peerClient {
 	ctx = ctx.Sub("Client")
-
-	// roster := newRosterSync(ctx, network, timeout, refresh, addrs)
-	// ctx.Control().Defer(func(error) {
-		// roster.Close()
-	// })
-
 	return &peerClient{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
@@ -51,6 +46,11 @@ func newPeerClient(ctx common.Context, network net.Network, timeout time.Duratio
 		pool:   common.NewObjectPool(ctx.Control(), 10, newStaticClusterPool(ctx, network, timeout, addrs)),
 	}
 }
+
+// roster := newRosterSync(ctx, network, timeout, refresh, addrs)
+// ctx.Control().Defer(func(error) {
+// roster.Close()
+// })
 
 func (p *peerClient) Close() error {
 	return p.ctrl.Close()
@@ -101,7 +101,7 @@ func (c *catalogClient) Get(cancel <-chan struct{}, store []byte) (Store, error)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if ! ok {
+	if !ok {
 		return nil, nil
 	}
 
@@ -160,11 +160,12 @@ func (s *storeClient) Put(cancel <-chan struct{}, key []byte, val []byte, ver in
 	var item Item
 	var ok bool
 	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
+		then := time.Now()
 		responseRpc, err := r.StoreSwapItem(swapRpc{s.name, key, val, ver})
 		if err != nil {
 			return err
 		}
-
+		fmt.Println("REQUEST TIME: ", time.Now().Sub(then))
 		item, ok = responseRpc.Item, responseRpc.Ok
 		return nil
 	})
@@ -187,8 +188,6 @@ func (s *storeClient) Del(cancel <-chan struct{}, key []byte, ver int) (bool, er
 	})
 	return ok, err
 }
-
-
 
 func newStaticClusterPool(ctx common.Context, net net.Network, timeout time.Duration, addrs []string) func() (io.Closer, error) {
 	return func() (io.Closer, error) {

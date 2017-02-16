@@ -1,5 +1,7 @@
 package common
 
+import "github.com/pkg/errors"
+
 // Implements a very simple request/response object.
 type Request struct {
 	body   interface{}
@@ -54,5 +56,28 @@ func (r *Request) Response() (interface{}, error) {
 		return nil, err
 	case val := <-r.resp:
 		return val, nil
+	}
+}
+
+func SendRequest(ctrl Control, ch chan<- *Request, cancel <-chan struct{}, val interface{}) (interface{}, error) {
+	req := NewRequest(val)
+	defer req.Cancel()
+
+	select {
+	case <-ctrl.Closed():
+		return nil, errors.WithStack(ClosedError)
+	case <-cancel:
+		return nil, errors.WithStack(CanceledError)
+	case ch <- req:
+		select {
+		case <-ctrl.Closed():
+			return nil, errors.WithStack(CanceledError)
+		case r := <-req.Acked():
+			return r, nil
+		case e := <-req.Failed():
+			return nil, errors.WithStack(e)
+		case <-cancel:
+			return nil, errors.WithStack(CanceledError)
+		}
 	}
 }

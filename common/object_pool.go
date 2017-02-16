@@ -17,22 +17,22 @@ type ObjectPool interface {
 }
 
 type objectPool struct {
-	ctrl   Control
-	fn     func() (io.Closer, error)
-	raw    *list.List
-	max    int
-	take   chan io.Closer
-	ret    chan io.Closer
+	ctrl Control
+	fn   func() (io.Closer, error)
+	raw  *list.List
+	max  int
+	take chan *Request
+	ret  chan io.Closer
 }
 
 func NewObjectPool(ctrl Control, max int, fn func() (io.Closer, error)) ObjectPool {
 	p := &objectPool{
-		ctrl:   ctrl.Sub(),
-		fn:     fn,
-		max:    max,
-		raw:    list.New(),
-		take:   make(chan io.Closer),
-		ret:    make(chan io.Closer, max),
+		ctrl: ctrl.Sub(),
+		fn:   fn,
+		max:  max,
+		raw:  list.New(),
+		take: make(chan *Request),
+		ret:  make(chan io.Closer, max),
 	}
 	ctrl.Defer(func(error) {
 		p.closePool()
@@ -44,21 +44,11 @@ func NewObjectPool(ctrl Control, max int, fn func() (io.Closer, error)) ObjectPo
 
 func (p *objectPool) start() {
 	go func() {
-		var take chan io.Closer
+		var take chan *Request
 		var next io.Closer
 		for out := 0; ; {
-			// p.logger.Debug("Currently live objects [%v]", out)
-
 			take = nil
-			next = nil
 			if out < p.max {
-				for next == nil {
-					if p.ctrl.IsClosed() {
-						return
-					}
-
-					next, _ = p.takeOrSpawnFromPool()
-				}
 				take = p.take
 			}
 
@@ -68,13 +58,14 @@ func (p *objectPool) start() {
 					next.Close()
 				}
 				return
-			case take <- next:
-				out++
 			case conn := <-p.ret:
 				out--
 				if conn != nil {
 					p.returnToPool(conn)
 				}
+			case req := <-take:
+				out++
+				req.Return(p.takeOrSpawnFromPool())
 			}
 		}
 	}()
@@ -89,35 +80,27 @@ func (p *objectPool) Close() error {
 }
 
 func (p *objectPool) Take() io.Closer {
-	select {
-	case <-p.ctrl.Closed():
-		return nil
-	case conn := <-p.take:
-		return conn
+	if raw, err := SendRequest(p.ctrl, p.take, p.ctrl.Closed(), nil); err == nil {
+		return raw.(io.Closer)
 	}
+	return nil
 }
 
 func (p *objectPool) TakeOrCancel(cancel <-chan struct{}) (conn io.Closer) {
-	select {
-	case <-cancel:
-		return nil
-	case <-p.ctrl.Closed():
-		return nil
-	case conn := <-p.take:
-		return conn
+	if raw, err := SendRequest(p.ctrl, p.take, cancel, nil); err == nil {
+		return raw.(io.Closer)
 	}
+	return nil
 }
 
 func (p *objectPool) TakeTimeout(dur time.Duration) (conn io.Closer) {
-	timer := time.NewTimer(dur)
-	select {
-	case <-timer.C:
-		return nil
-	case <-p.ctrl.Closed():
-		return nil
-	case conn := <-p.take:
-		return conn
+	timer := NewTimer(p.ctrl, dur)
+	defer timer.Close()
+
+	if raw, err := SendRequest(p.ctrl, p.take, timer.Closed(), nil); err == nil {
+		return raw.(io.Closer)
 	}
+	return nil
 }
 
 func (p *objectPool) Fail(c io.Closer) {

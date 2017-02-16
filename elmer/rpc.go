@@ -57,7 +57,7 @@ func (u statusRpc) Write(w scribe.Writer) {
 }
 
 func readStatusRpc(r scribe.Reader) (ret statusRpc, err error) {
-	err = common.Or(err, r.ReadUUID("id", &ret.id))
+	err = r.ReadUUID("id", &ret.id)
 	err = common.Or(err, r.ReadStrings("peers", &ret.peers))
 	return
 }
@@ -120,7 +120,7 @@ func (g getRpc) Request() net.Request {
 
 func readGetRpc(r scribe.Reader) (ret getRpc, err error) {
 	err = r.ReadBytes("store", &ret.Store)
-	err = r.ReadBytes("key", &ret.Key)
+	err = common.Or(err, r.ReadBytes("key", &ret.Key))
 	return
 }
 

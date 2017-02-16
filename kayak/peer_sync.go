@@ -14,6 +14,7 @@ import (
 
 // the log syncer should be rebuilt every time a leader comes to power.
 type logSyncer struct {
+
 	// the context (injected by parent and spawned)
 	ctx common.Context
 

@@ -206,7 +206,7 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 		return nil, errors.Wrap(err, "Unable to retrieve snapshot")
 	}
 
-	catalogue, err := build(ss)
+	catalog, err := build(ss)
 	if err != nil {
 		return nil, errors.Wrap(err, "Unable to build catalog")
 	}
@@ -215,7 +215,7 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 		ctrl:     ctx.Control(),
 		logger:   ctx.Logger(),
 		parent:   parent,
-		catalog:  catalogue,
+		catalog:  catalog,
 		log:      log,
 		sync:     sync,
 		requests: common.NewWorkPool(ctx.Control(), workers),
@@ -269,11 +269,11 @@ func (e *epoch) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, 
 	// TODO: Does this break linearizability???  Technically, another conflicting item
 	// can come in immediately after we sync and update the value - and we can't tell
 	// whether our update was accepted or not..
-	s := e.catalog.Ensure(store)
 	if err := e.sync.Sync(cancel, entry.Index); err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
 
+	s := e.catalog.Ensure(store)
 	item, ok := s.Get(key)
 	return item, ok && item.Ver == ver+1, nil
 }

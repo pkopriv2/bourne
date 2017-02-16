@@ -105,7 +105,6 @@ func (s *server) StoreEnsure(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	s.logger.Info("Handling store ensure")
 	if err := s.self.StoreEnsure(timer.Closed(), rpc.Store); err != nil {
 		return net.NewErrorResponse(err)
 	} else {
@@ -119,11 +118,13 @@ func (s *server) StoreReaditem(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	item, ok, err := s.self.StoreReadItem(nil, rpc.Store, rpc.Key)
+	timer := s.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	item, ok, err := s.self.StoreReadItem(timer.Closed(), rpc.Store, rpc.Key)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
-
 	return responseRpc{item, ok}.Response()
 }
 
@@ -133,10 +134,15 @@ func (s *server) StoreSwapItem(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	item, ok, err := s.self.StoreSwapItem(nil, rpc.Store, rpc.Key, rpc.Val, rpc.Ver)
+	timer := s.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	then := time.Now()
+	item, ok, err := s.self.StoreSwapItem(timer.Closed(), rpc.Store, rpc.Key, rpc.Val, rpc.Ver)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
+	s.logger.Info("Handling store ensure: %v", time.Now().Sub(then))
 	return responseRpc{item, ok}.Response()
 }

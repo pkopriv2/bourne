@@ -23,11 +23,7 @@ func Join(ctx common.Context, self kayak.Host, addrs []string, opts ...func(*Opt
 	return nil, nil
 }
 
-func ConnectClient(ctx common.Context, addrs []string, opts ...func(*Options)) (Catalog, error) {
-	return nil, nil
-}
-
-func ConnectAdmin(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {
+func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {
 	return nil, nil
 }
 
@@ -40,7 +36,6 @@ type Peer interface {
 // The catalog of stores.
 type Catalog interface {
 	io.Closer
-
 	Del(cancel <-chan struct{}, store []byte) error
 	Get(cancel <-chan struct{}, store []byte) (Store, error)
 	Ensure(cancel <-chan struct{}, store []byte) (Store, error)
@@ -86,7 +81,7 @@ type Item struct {
 }
 
 func (i Item) String() string {
-	return fmt.Sprintf("Item(store=%v,key=%v,ver=%v): %v bytes", string(i.Store), string(i.Key), i.Ver, len(i.Val))
+	return fmt.Sprintf("Item(store=%v,key=%v,ver=%v): %v bytes", string(i.Store), i.Key, i.Ver, len(i.Val))
 }
 
 func (i Item) Write(w scribe.Writer) {

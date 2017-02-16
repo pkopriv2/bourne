@@ -6,6 +6,7 @@ import (
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
+	"github.com/pkopriv2/bourne/stash"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,7 +33,6 @@ func TestIndexer_SmokeTest(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, ok)
 }
-
 
 func TestIndexer_StoreEnsure(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
@@ -113,4 +113,28 @@ func TestIndexer_StoreGet(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, ok2)
 	assert.Equal(t, item1, item2)
+}
+
+func TestIndexer_Stuff(t *testing.T) {
+	conf := common.NewConfig(map[string]interface{}{
+		"bourne.log.level": int(common.Debug),
+	})
+
+	ctx := common.NewContext(conf)
+	defer ctx.Close()
+
+	timer := ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	raw, err := kayak.StartTestHost(ctx)
+	assert.Nil(t, err)
+
+	kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
+
+	indexer, err := newIndexer(ctx, raw, 10)
+	assert.Nil(t, err)
+
+	for i := 0; i < 10240; i++ {
+		indexer.StoreSwapItem(timer.Closed(), []byte("store"), stash.IntBytes(i), stash.IntBytes(i), 0)
+	}
 }
