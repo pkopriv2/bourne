@@ -9,16 +9,22 @@ import (
 
 // server endpoints
 const (
-	actStatus  = "elmer.status"
-	actIdxGet  = "elmer.idx.get"
-	actIdxSwap = "elmer.idx.swap"
+	actStatus          = "elmer.status"
+	actStoreExistsItem = "elmer.store.get.item"
+	actStoreSwapItem   = "elmer.store.swap.item"
+	actStoreExists     = "elmer.store.get"
+	actStoreDel        = "elmer.store.del"
+	actStoreEnsure     = "elmer.store.ensure"
 )
 
 // Meta messages
 var (
-	metaStatus  = newMeta(actStatus)
-	metaIdxGet  = newMeta(actIdxGet)
-	metaIdxSwap = newMeta(actIdxSwap)
+	metaStatus          = newMeta(actStatus)
+	metaStoreExistsItem = newMeta(actStoreExistsItem)
+	metaStoreSwapItem   = newMeta(actStoreSwapItem)
+	metaStoreExists     = newMeta(actStoreExists)
+	metaStoreDel        = newMeta(actStoreDel)
+	metaStoreEnsure     = newMeta(actStoreEnsure)
 )
 
 func newMeta(action string) scribe.Message {
@@ -56,6 +62,48 @@ func readStatusRpc(r scribe.Reader) (ret statusRpc, err error) {
 	return
 }
 
+type storeRequestRpc struct {
+	Store []byte
+}
+
+func (s storeRequestRpc) Exists() net.Request {
+	return net.NewRequest(metaStoreExists, scribe.Write(s))
+}
+
+func (s storeRequestRpc) Del() net.Request {
+	return net.NewRequest(metaStoreDel, scribe.Write(s))
+}
+
+func (s storeRequestRpc) Ensure() net.Request {
+	return net.NewRequest(metaStoreEnsure, scribe.Write(s))
+}
+
+func (s storeRequestRpc) Write(w scribe.Writer) {
+	w.WriteBytes("store", s.Store)
+}
+
+func readStoreRequestRpc(r scribe.Reader) (ret storeRequestRpc, err error) {
+	err = r.ReadBytes("store", &ret.Store)
+	return
+}
+
+type storeResponseRpc struct {
+	Ok bool
+}
+
+func (s storeResponseRpc) Response() net.Response {
+	return net.NewStandardResponse(scribe.Write(s))
+}
+
+func (s storeResponseRpc) Write(w scribe.Writer) {
+	w.WriteBool("store", s.Ok)
+}
+
+func readStoreResponseRpc(r scribe.Reader) (ret storeResponseRpc, err error) {
+	err = r.ReadBool("store", &ret.Ok)
+	return
+}
+
 type getRpc struct {
 	Store []byte
 	Key   []byte
@@ -67,7 +115,7 @@ func (g getRpc) Write(w scribe.Writer) {
 }
 
 func (g getRpc) Request() net.Request {
-	return net.NewRequest(metaIdxGet, scribe.Write(g))
+	return net.NewRequest(metaStoreExistsItem, scribe.Write(g))
 }
 
 func readGetRpc(r scribe.Reader) (ret getRpc, err error) {
@@ -80,11 +128,11 @@ type swapRpc struct {
 	Store []byte
 	Key   []byte
 	Val   []byte
-	Ver  int
+	Ver   int
 }
 
 func (s swapRpc) Request() net.Request {
-	return net.NewRequest(metaIdxSwap, scribe.Write(s))
+	return net.NewRequest(metaStoreSwapItem, scribe.Write(s))
 }
 
 func (s swapRpc) Write(w scribe.Writer) {

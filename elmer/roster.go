@@ -28,15 +28,14 @@ func (r *roster) Add(cancel <-chan struct{}, peer string) error {
 	}
 
 	r.logger.Info("Adding peer [%v]", peer)
-	_, err := r.indexer.StoreTryUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
+	_, _, err := r.indexer.StoreUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {
 			curPeers = []string{}
 		}
-
-		if hasPeer(curPeers, peer) {
-			return nil
-		}
+		// if hasPeer(curPeers, peer) {
+			// return nil
+		// }
 
 		return peers(addPeer(curPeers, peer)).Bytes()
 	})
@@ -49,7 +48,7 @@ func (r *roster) Del(cancel <-chan struct{}, peer string) error {
 	}
 
 	r.logger.Info("Removing peer [%v]", peer)
-	_, err := r.indexer.StoreTryUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
+	_, _, err := r.indexer.StoreUpdateItem(cancel, systemStore, rosterStoreKey, func(cur []byte) []byte {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {
 			curPeers = []string{}

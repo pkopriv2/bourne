@@ -1,7 +1,6 @@
 package elmer
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/pkg/errors"
@@ -147,47 +146,33 @@ func (s *indexer) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte
 	return rpc.Item, rpc.Ok, nil
 }
 
-func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (bool, error) {
+func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
 	item, _, err := s.StoreReadItem(cancel, store, key)
 	if err != nil {
-		return false, errors.WithStack(err)
+		return Item{}, false, errors.WithStack(err)
 	}
 
 	new := fn(item.Val)
 	if new == nil {
-		return true, nil
+		return Item{}, true, nil
 	}
 
-	_, ok, err := s.StoreSwapItem(cancel, store, key, new, item.Ver)
+	item, ok, err := s.StoreSwapItem(cancel, store, key, new, item.Ver)
 	if err != nil {
-		return false, errors.WithStack(err)
+		return Item{}, false, errors.WithStack(err)
 	}
 
-	return ok, nil
+	return item, ok, nil
 }
 
-func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, error) {
+func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
 	for !common.IsCanceled(cancel) {
-		item, _, err := s.StoreReadItem(cancel, store, key)
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		new := fn(item.Val)
-		if bytes.Equal(item.Val, new) {
-			return item, nil
-		}
-
-		item, ok, err := s.StoreSwapItem(cancel, store, key, new, item.Ver)
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
+		item, ok, _ := s.StoreTryUpdateItem(cancel, store, key, fn)
 		if ok {
-			return item, nil
+			return item, ok, nil
 		}
 	}
-	return Item{}, errors.WithStack(common.CanceledError)
+	return Item{}, false, errors.WithStack(common.CanceledError)
 }
 
 func (s *indexer) getLog() (kayak.Log, kayak.Sync, error) {

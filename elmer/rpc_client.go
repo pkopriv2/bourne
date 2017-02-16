@@ -52,27 +52,66 @@ func (c *rpcClient) Status() (statusRpc, error) {
 	return readStatusRpc(resp.Body())
 }
 
-func (c *rpcClient) Read(g getRpc) (responseRpc, error) {
-	resp, err := c.raw.Send(g.Request())
+func (c *rpcClient) StoreExists(s storeRequestRpc) (storeResponseRpc, error) {
+	resp, err := c.raw.Send(s.Exists())
 	if err != nil {
-		return responseRpc{}, err
+		return storeResponseRpc{}, errors.WithStack(err)
 	}
 
 	if err := resp.Error(); err != nil {
-		return responseRpc{}, err
+		return storeResponseRpc{}, errors.WithStack(err)
+	}
+
+	return readStoreResponseRpc(resp.Body())
+}
+
+func (c *rpcClient) StoreDel(s storeRequestRpc) error {
+	resp, err := c.raw.Send(s.Del())
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := resp.Error(); err != nil {
+		return errors.WithStack(err)
+	} else {
+		return nil
+	}
+}
+
+func (c *rpcClient) StoreEnsure(s storeRequestRpc) error {
+	resp, err := c.raw.Send(s.Ensure())
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := resp.Error(); err != nil {
+		return errors.WithStack(err)
+	} else {
+		return nil
+	}
+}
+
+func (c *rpcClient) StoreGetItem(g getRpc) (responseRpc, error) {
+	resp, err := c.raw.Send(g.Request())
+	if err != nil {
+		return responseRpc{}, errors.WithStack(err)
+	}
+
+	if err := resp.Error(); err != nil {
+		return responseRpc{}, errors.WithStack(err)
 	}
 
 	return readResponseRpc(resp.Body())
 }
 
-func (c *rpcClient) Swap(s swapRpc) (responseRpc, error) {
+func (c *rpcClient) StoreSwapItem(s swapRpc) (responseRpc, error) {
 	resp, err := c.raw.Send(s.Request())
 	if err != nil {
-		return responseRpc{}, err
+		return responseRpc{}, errors.WithStack(err)
 	}
 
 	if err := resp.Error(); err != nil {
-		return responseRpc{}, err
+		return responseRpc{}, errors.WithStack(err)
 	}
 
 	return readResponseRpc(resp.Body())

@@ -23,7 +23,11 @@ func Join(ctx common.Context, self kayak.Host, addrs []string, opts ...func(*Opt
 	return nil, nil
 }
 
-func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Store, error) {
+func ConnectClient(ctx common.Context, addrs []string, opts ...func(*Options)) (Catalog, error) {
+	return nil, nil
+}
+
+func ConnectAdmin(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {
 	return nil, nil
 }
 
@@ -33,10 +37,13 @@ type Peer interface {
 	Shutdown() error
 }
 
+// The catalog of stores.
 type Catalog interface {
-	Del([]byte) error
-	Get([]byte) (Store, error)
-	Ensure([]byte) (Store, error)
+	io.Closer
+
+	Del(cancel <-chan struct{}, store []byte) error
+	Get(cancel <-chan struct{}, store []byte) (Store, error)
+	Ensure(cancel <-chan struct{}, store []byte) (Store, error)
 }
 
 // A very simple key,value store abstraction. This store uses

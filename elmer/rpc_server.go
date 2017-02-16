@@ -1,6 +1,8 @@
 package elmer
 
 import (
+	"time"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
@@ -36,24 +38,79 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 			return net.NewErrorResponse(errors.Errorf("Unknown action %v", action))
 		case actStatus:
 			return s.Status(req)
-		case actIdxGet:
-			return s.Read(req)
-		case actIdxSwap:
-			return s.Swap(req)
+		case actStoreExists:
+			return s.StoreExists(req)
+		case actStoreDel:
+			return s.StoreDel(req)
+		case actStoreEnsure:
+			return s.StoreEnsure(req)
+		case actStoreExistsItem:
+			return s.StoreReaditem(req)
+		case actStoreSwapItem:
+			return s.StoreSwapItem(req)
 		}
 	}
 }
 
 func (s *server) Status(req net.Request) net.Response {
-	return nil
 	// roster, err := s.self.Roster(nil)
 	// if err != nil {
 	// return net.NewErrorResponse(err)
 	// }
 	// return statusRpc{s.self.peer.Id(), roster}.Response()
+	return nil
 }
 
-func (s *server) Read(req net.Request) net.Response {
+func (s *server) StoreExists(req net.Request) net.Response {
+	rpc, err := readStoreRequestRpc(req.Body())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	timer := s.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	ok, err := s.self.StoreExists(timer.Closed(), rpc.Store)
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return storeResponseRpc{ok}.Response()
+}
+
+func (s *server) StoreDel(req net.Request) net.Response {
+	rpc, err := readStoreRequestRpc(req.Body())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	timer := s.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	if err := s.self.StoreDel(timer.Closed(), rpc.Store); err != nil {
+		return net.NewErrorResponse(err)
+	} else {
+		return net.NewEmptyResponse()
+	}
+}
+
+func (s *server) StoreEnsure(req net.Request) net.Response {
+	rpc, err := readStoreRequestRpc(req.Body())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	timer := s.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	if err := s.self.StoreEnsure(timer.Closed(), rpc.Store); err != nil {
+		return net.NewErrorResponse(err)
+	} else {
+		return net.NewEmptyResponse()
+	}
+}
+
+func (s *server) StoreReaditem(req net.Request) net.Response {
 	rpc, err := readGetRpc(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -67,7 +124,7 @@ func (s *server) Read(req net.Request) net.Response {
 	return responseRpc{item, ok}.Response()
 }
 
-func (s *server) Swap(req net.Request) net.Response {
+func (s *server) StoreSwapItem(req net.Request) net.Response {
 	rpc, err := readSwapRpc(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
