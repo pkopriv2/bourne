@@ -55,11 +55,11 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		server.Close()
 	})
 
-	pool := common.NewObjectPool(ctx.Control(), 10,
-		newStaticClusterPool(ctx, net, 30*time.Second, []string{addr}))
-	ctx.Control().Defer(func(cause error) {
-		pool.Close()
-	})
+	// pool := common.NewObjectPool(ctx.Control(), 10,
+		// newStaticClusterPool(ctx, net, 30*time.Second, []string{addr}))
+	// ctx.Control().Defer(func(cause error) {
+		// pool.Close()
+	// })
 
 	p := &peer{
 		ctx:    ctx,
@@ -70,7 +70,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		self:   self,
 		server: server,
 		roster: newRoster(core),
-		pool:   pool,
+		// pool:   pool,
 		addr:   addr,
 	}
 
@@ -89,10 +89,6 @@ func (p *peer) start(addr string) error {
 	timer := p.ctx.Timer(5 * time.Minute)
 	defer timer.Close()
 	return p.roster.Add(timer.Closed(), addr)
-}
-
-func (p *peer) Catalog() (Catalog, error) {
-	return newCatalogClient(p.ctx, p.pool), nil
 }
 
 func (p *peer) Shutdown() error {

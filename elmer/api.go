@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	NoStoreError = errors.New("Elmer:NoStoreError")
+	InvariantError = errors.New("Elmer:InvariantError")
 )
 
 func Start(ctx common.Context, self kayak.Host, opts ...func(*Options)) (Peer, error) {
@@ -24,39 +24,23 @@ func Join(ctx common.Context, self kayak.Host, addrs []string, opts ...func(*Opt
 }
 
 func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {
-	options, err := buildOptions(ctx, opts)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+	// options, err := buildOptions(ctx, opts)
+	// if err != nil {
+	// return nil, errors.WithStack(err)
+	// }
 
-	return newPeerClient(ctx, options.Net, options.ConnTimeout, options.ConnPool, addrs), nil
+	return nil, nil
+	// return newPeerClient(ctx, options.Net, options.ConnTimeout, options.ConnPool, addrs), nil
 }
 
 type Peer interface {
 	io.Closer
 
-	// Retrieves the store catalog.
-	Catalog() (Catalog, error)
+	// Retrieves the root store.
+	Root() (Store, error)
 
 	// Shuts the peer down.
 	Shutdown() error
-}
-
-// The catalog of stores.
-type Catalog interface {
-	io.Closer
-
-	// // Lists all the currently existing  stores.
-	// All(cancel <-chan struct{}) ([]Store, error)
-
-	// Ensures the given store is deleted.  If the store doesn't exist, an error is NOT returned.
-	Del(cancel <-chan struct{}, store []byte) error
-
-	// Retrieve the given store, or nil if it doesn't exist.
-	Get(cancel <-chan struct{}, store []byte) (Store, error)
-
-	// Ensures the given store exists and returns it.
-	Ensure(cancel <-chan struct{}, store []byte) (Store, error)
 }
 
 // A very simple key,value store abstraction. This store uses
@@ -67,6 +51,15 @@ type Store interface {
 
 	// The name of the store
 	Name() []byte
+
+	// Creates a nested store if it doesn't exist.
+	GetStore(cancel <-chan struct{}, name []byte) (Store, error)
+
+	// Creates a nested store.
+	CreateStore(cancel <-chan struct{}, name []byte) (Store, error)
+
+	// Deletes the nested store.
+	DeleteStore(cancel <-chan struct{}, name []byte) error
 
 	// Ensures the given store is deleted.  If the store doesn't exist, an error is NOT returned.
 	// All(cancel <-chan struct{}) ([]Item, error)
@@ -97,22 +90,22 @@ type Store interface {
 
 // An item in a store.
 type Item struct {
-	Store []byte
-	Key   []byte
-	Val   []byte
-	Ver   int
-	// Ttl   time.Duration
+	Key []byte
+	Val []byte
+	Ver int
+	Del bool
+	// ttl   time.Duration
 }
 
 func (i Item) String() string {
-	return fmt.Sprintf("Item(store=%v,key=%v,ver=%v): %v bytes", string(i.Store), i.Key, i.Ver, len(i.Val))
+	return fmt.Sprintf("Item(key=%v,ver=%v): %v bytes", i.Key, i.Ver, len(i.Val))
 }
 
 func (i Item) Write(w scribe.Writer) {
-	w.WriteBytes("store", i.Store)
 	w.WriteBytes("key", i.Key)
 	w.WriteBytes("val", i.Val)
 	w.WriteInt("ver", i.Ver)
+	w.WriteBool("del", i.Del)
 }
 
 func (i Item) Bytes() []byte {
@@ -120,26 +113,17 @@ func (i Item) Bytes() []byte {
 }
 
 func (i Item) Equal(o Item) bool {
-	if i.Ver != o.Ver {
-		return false
-	}
-
-	if !bytes.Equal(i.Store, o.Store) {
-		return false
-	}
-
-	if !bytes.Equal(i.Key, o.Key) {
-		return false
-	}
-
-	return bytes.Equal(i.Val, o.Val)
+	return i.Ver == o.Ver &&
+		i.Del == o.Del &&
+		bytes.Equal(i.Key, o.Key) &&
+		bytes.Equal(i.Val, o.Val)
 }
 
 func readItem(r scribe.Reader) (item Item, err error) {
-	err = common.Or(err, r.ReadBytes("store", &item.Store))
 	err = common.Or(err, r.ReadBytes("key", &item.Key))
 	err = common.Or(err, r.ReadBytes("val", &item.Val))
 	err = common.Or(err, r.ReadInt("ver", &item.Ver))
+	err = common.Or(err, r.ReadBool("del", &item.Del))
 	return
 }
 

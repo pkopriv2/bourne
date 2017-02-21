@@ -56,91 +56,20 @@ func (p *peerClient) Close() error {
 	return p.ctrl.Close()
 }
 
-func (p *peerClient) Catalog() (Catalog, error) {
-	ctx := p.ctx.Sub("Catalog")
-	return &catalogClient{ctx, ctx.Control(), ctx.Logger(), p.pool}, nil
-}
-
 func (p *peerClient) Shutdown() error {
 	panic("Not implemented")
 }
 
-type catalogClient struct {
-	ctx    common.Context
-	ctrl   common.Control
-	logger common.Logger
-	pool   common.ObjectPool // T: *rpcClient
-}
-
-func newCatalogClient(ctx common.Context, pool common.ObjectPool) *catalogClient {
-	ctx = ctx.Sub("Catalog")
-	return &catalogClient{ctx, ctx.Control(), ctx.Logger(), pool}
-}
-
-func (c *catalogClient) Close() error {
-	return c.ctrl.Close()
-}
-
-func (c *catalogClient) Del(cancel <-chan struct{}, store []byte) error {
-	if c.ctrl.IsClosed() {
-		return errors.WithStack(common.ClosedError)
-	}
-
-	return tryRpc(c.pool, cancel, func(r *rpcClient) error {
-		return r.StoreDel(storeRequestRpc{store})
-	})
-}
-
-func (c *catalogClient) Get(cancel <-chan struct{}, store []byte) (Store, error) {
-	if c.ctrl.IsClosed() {
-		return nil, errors.WithStack(common.ClosedError)
-	}
-
-	var ok bool
-	err := tryRpc(c.pool, cancel, func(r *rpcClient) error {
-		resp, err := r.StoreExists(storeRequestRpc{store})
-		if err != nil {
-			return err
-		}
-
-		ok = resp.Ok
-		return nil
-	})
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	if !ok {
-		return nil, nil
-	}
-
-	return newStoreClient(c.ctx, c.pool, store), nil
-}
-
-func (c *catalogClient) Ensure(cancel <-chan struct{}, store []byte) (Store, error) {
-	if c.ctrl.IsClosed() {
-		return nil, errors.WithStack(common.ClosedError)
-	}
-
-	err := tryRpc(c.pool, cancel, func(r *rpcClient) error {
-		return r.StoreEnsure(storeRequestRpc{store})
-	})
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return newStoreClient(c.ctx, c.pool, store), nil
-}
-
 type storeClient struct {
-	name   []byte
+	path   []segment
 	logger common.Logger
 	ctrl   common.Control
 	pool   common.ObjectPool // T: *rpcClient
 }
 
-func newStoreClient(ctx common.Context, pool common.ObjectPool, name []byte) *storeClient {
-	ctx = ctx.Sub("StoreClient: %v", string(name))
-	return &storeClient{name, ctx.Logger(), ctx.Control(), pool}
+func newStoreClient(ctx common.Context, pool common.ObjectPool, path []segment) *storeClient {
+	ctx = ctx.Sub("StoreClient(%v)", path)
+	return &storeClient{path, ctx.Logger(), ctx.Control(), pool}
 }
 
 func (s *storeClient) Close() error {
@@ -148,65 +77,85 @@ func (s *storeClient) Close() error {
 }
 
 func (s *storeClient) Name() []byte {
-	return s.name
+	return path(s.path).Leaf().Elem
+}
+
+func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (Store, error) {
+	// err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
+	// responseRpc, err := r.Store(getRpc{s.path, key})
+	// if err != nil {
+	// return err
+	// }
+	//
+	// item, ok = responseRpc.Item, responseRpc.Ok
+	// return nil
+	// })
+	// return nil, err
+	panic("not implemented")
+}
+
+func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (Store, error) {
+	panic("not implemented")
+}
+
+func (s *storeClient) DeleteStore(cancel <-chan struct{}, name []byte) error {
+	panic("not implemented")
 }
 
 func (s *storeClient) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {
 	if s.ctrl.IsClosed() {
 		return Item{}, false, errors.WithStack(common.ClosedError)
 	}
-	defer common.Elapsed(s.logger, "Get", time.Now())
-
-	var item Item
-	var ok bool
-	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
-		responseRpc, err := r.StoreGetItem(getRpc{s.name, key})
-		if err != nil {
-			return err
-		}
-
-		item, ok = responseRpc.Item, responseRpc.Ok
-		return nil
-	})
-	return item, ok, err
+	return s.Read(cancel, key)
 }
 
-func (s *storeClient) Put(cancel <-chan struct{}, key []byte, val []byte, ver int) (Item, bool, error) {
-	if s.ctrl.IsClosed() {
-		return Item{}, false, errors.WithStack(common.ClosedError)
-	}
-	defer common.Elapsed(s.logger, "Put", time.Now())
-
-	var item Item
-	var ok bool
-
-	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
-		responseRpc, err := r.StoreSwapItem(swapRpc{s.name, key, val, ver})
-		if err != nil {
-			return err
-		}
-		item, ok = responseRpc.Item, responseRpc.Ok
-		return nil
-	})
-	return item, ok, err
-}
-
-func (s *storeClient) Del(cancel <-chan struct{}, key []byte, ver int) (bool, error) {
+func (s *storeClient) Del(cancel <-chan struct{}, key []byte, prev int) (bool, error) {
 	if s.ctrl.IsClosed() {
 		return false, errors.WithStack(common.ClosedError)
 	}
-	defer common.Elapsed(s.logger, "Del", time.Now())
+	_, o, e := s.Swap(cancel, key, []byte{}, prev, true)
+	return o, e
+}
 
-	var ok bool
+func (s *storeClient) Put(cancel <-chan struct{}, key []byte, val []byte, prev int) (Item, bool, error) {
+	if s.ctrl.IsClosed() {
+		return Item{}, false, errors.WithStack(common.ClosedError)
+	}
+	return s.Swap(cancel, key, val, prev, false)
+}
+
+func (s *storeClient) Read(cancel <-chan struct{}, key []byte) (Item, bool, error) {
+	defer common.Elapsed(s.logger, "Get", time.Now())
+
+	item, ok := Item{}, false
 	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
-		responseRpc, err := r.StoreSwapItem(swapRpc{s.name, key, nil, ver})
+		responseRpc, err := r.StoreItemRead(itemReadRpc{s.path, key})
 		if err != nil {
 			return err
 		}
-		ok = responseRpc.Ok
+
+		item, ok = responseRpc.Item, responseRpc.Ok
 		return nil
 	})
-	return ok, err
+	return item, ok, err
+}
+
+func (s *storeClient) Swap(cancel <-chan struct{}, key []byte, val []byte, prev int, del bool) (Item, bool, error) {
+	if s.ctrl.IsClosed() {
+		return Item{}, false, errors.WithStack(common.ClosedError)
+	}
+	defer common.Elapsed(s.logger, "Swap", time.Now())
+
+	item, ok := Item{}, false
+	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
+		responseRpc, err := r.StoreItemSwap(swapRpc{s.path, Item{key, val, prev, del}})
+		if err != nil {
+			return err
+		}
+		item, ok = responseRpc.Item, responseRpc.Ok
+		return nil
+	})
+	return item, ok, err
 }
 
 func newStaticClusterPool(ctx common.Context, net net.Network, timeout time.Duration, addrs []string) func() (io.Closer, error) {

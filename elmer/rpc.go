@@ -9,22 +9,22 @@ import (
 
 // server endpoints
 const (
-	actStatus          = "elmer.status"
-	actStoreExistsItem = "elmer.store.get.item"
-	actStoreSwapItem   = "elmer.store.swap.item"
-	actStoreExists     = "elmer.store.get"
-	actStoreDel        = "elmer.store.del"
-	actStoreEnsure     = "elmer.store.ensure"
+	actStatus        = "elmer.status"
+	actStoreInfo     = "elmer.store.exists"
+	actStoreDelete   = "elmer.store.delete"
+	actStoreCreate   = "elmer.store.create"
+	actStoreItemRead = "elmer.store.item.read"
+	actStoreItemSwap = "elmer.store.item.swap"
 )
 
 // Meta messages
 var (
-	metaStatus          = newMeta(actStatus)
-	metaStoreExistsItem = newMeta(actStoreExistsItem)
-	metaStoreSwapItem   = newMeta(actStoreSwapItem)
-	metaStoreExists     = newMeta(actStoreExists)
-	metaStoreDel        = newMeta(actStoreDel)
-	metaStoreEnsure     = newMeta(actStoreEnsure)
+	metaStatus        = newMeta(actStatus)
+	metaStoreInfo     = newMeta(actStoreInfo)
+	metaStoreDelete   = newMeta(actStoreDelete)
+	metaStoreCreate   = newMeta(actStoreCreate)
+	metaStoreItemSwap = newMeta(actStoreItemSwap)
+	metaStoreItemRead = newMeta(actStoreItemRead)
 )
 
 func newMeta(action string) scribe.Message {
@@ -62,109 +62,124 @@ func readStatusRpc(r scribe.Reader) (ret statusRpc, err error) {
 	return
 }
 
-type storeRequestRpc struct {
-	Store []byte
+type partialStoreRpc struct {
+	Parent []segment
+	Child  []byte
 }
 
-func (s storeRequestRpc) Exists() net.Request {
-	return net.NewRequest(metaStoreExists, scribe.Write(s))
+func (s partialStoreRpc) Request() net.Request {
+	return net.NewRequest(metaStoreInfo, scribe.Write(s))
 }
 
-func (s storeRequestRpc) Del() net.Request {
-	return net.NewRequest(metaStoreDel, scribe.Write(s))
+func (s partialStoreRpc) Write(w scribe.Writer) {
+	w.WriteMessages("parent", s.Parent)
+	w.WriteBytes("child", s.Child)
 }
 
-func (s storeRequestRpc) Ensure() net.Request {
-	return net.NewRequest(metaStoreEnsure, scribe.Write(s))
-}
-
-func (s storeRequestRpc) Write(w scribe.Writer) {
-	w.WriteBytes("store", s.Store)
-}
-
-func readStoreRequestRpc(r scribe.Reader) (ret storeRequestRpc, err error) {
-	err = r.ReadBytes("store", &ret.Store)
+func readPartialStoreRpc(r scribe.Reader) (ret partialStoreRpc, err error) {
+	err = r.ParseMessages("parent", &ret.Parent, segmentParser)
+	err = common.Or(err, r.ReadBytes("child", &ret.Child))
 	return
 }
 
-type storeResponseRpc struct {
-	Ok bool
+type storeInfoRpc struct {
+	Path    []segment
+	Enabled bool
+	Found   bool
 }
 
-func (s storeResponseRpc) Response() net.Response {
+func (s storeInfoRpc) Response() net.Response {
 	return net.NewStandardResponse(scribe.Write(s))
 }
 
-func (s storeResponseRpc) Write(w scribe.Writer) {
-	w.WriteBool("store", s.Ok)
+func (s storeInfoRpc) Write(w scribe.Writer) {
+	w.WriteMessages("path", s.Path)
+	w.WriteBool("enabled", s.Enabled)
+	w.WriteBool("found", s.Found)
 }
 
-func readStoreResponseRpc(r scribe.Reader) (ret storeResponseRpc, err error) {
-	err = r.ReadBool("store", &ret.Ok)
+func readStoreInfoRpc(r scribe.Reader) (ret storeInfoRpc, err error) {
+	err = r.ParseMessages("path", &ret.Enabled, segmentParser)
+	err = common.Or(err, r.ReadBool("ok", &ret.Enabled))
 	return
 }
 
-type getRpc struct {
-	Store []byte
+type storeRpc struct {
+	Store []segment
+}
+
+func (s storeRpc) Delete() net.Request {
+	return net.NewRequest(metaStoreDelete, scribe.Write(s))
+}
+
+func (s storeRpc) Create() net.Request {
+	return net.NewRequest(metaStoreCreate, scribe.Write(s))
+}
+
+func (s storeRpc) Write(w scribe.Writer) {
+	w.WriteMessages("path", s.Store)
+}
+
+func readStoreRequestRpc(r scribe.Reader) (ret storeRpc, err error) {
+	err = r.ParseMessages("store", &ret.Store, segmentParser)
+	return
+}
+
+type itemReadRpc struct {
+	Store []segment
 	Key   []byte
 }
 
-func (g getRpc) Write(w scribe.Writer) {
-	w.WriteBytes("store", g.Store)
+func (g itemReadRpc) Write(w scribe.Writer) {
+	w.WriteMessages("store", g.Store)
 	w.WriteBytes("key", g.Key)
 }
 
-func (g getRpc) Request() net.Request {
-	return net.NewRequest(metaStoreExistsItem, scribe.Write(g))
+func (g itemReadRpc) Request() net.Request {
+	return net.NewRequest(metaStoreItemRead, scribe.Write(g))
 }
 
-func readGetRpc(r scribe.Reader) (ret getRpc, err error) {
-	err = r.ReadBytes("store", &ret.Store)
+func readItemReadRpc(r scribe.Reader) (ret itemReadRpc, err error) {
+	err = r.ParseMessages("store", &ret.Store, segmentParser)
 	err = common.Or(err, r.ReadBytes("key", &ret.Key))
 	return
 }
 
 type swapRpc struct {
-	Store []byte
-	Key   []byte
-	Val   []byte
-	Ver   int
+	Store []segment
+	Swap  Item
 }
 
 func (s swapRpc) Request() net.Request {
-	return net.NewRequest(metaStoreSwapItem, scribe.Write(s))
+	return net.NewRequest(metaStoreItemSwap, scribe.Write(s))
 }
 
 func (s swapRpc) Write(w scribe.Writer) {
-	w.WriteBytes("store", s.Store)
-	w.WriteBytes("key", s.Key)
-	w.WriteBytes("val", s.Val)
-	w.WriteInt("ver", s.Ver)
+	w.WriteMessages("store", s.Store)
+	w.WriteMessage("swap", s.Swap)
 }
 
 func readSwapRpc(r scribe.Reader) (ret swapRpc, err error) {
-	err = r.ReadBytes("store", &ret.Store)
-	err = common.Or(err, r.ReadBytes("key", &ret.Key))
-	err = common.Or(err, r.ReadBytes("val", &ret.Val))
-	err = common.Or(err, r.ReadInt("ver", &ret.Ver))
+	err = r.ParseMessages("store", &ret.Store, segmentParser)
+	err = common.Or(err, r.ParseMessage("swap", &ret.Swap, itemParser))
 	return
 }
 
-type responseRpc struct {
+type itemRpc struct {
 	Item Item
 	Ok   bool
 }
 
-func (r responseRpc) Response() net.Response {
+func (r itemRpc) Response() net.Response {
 	return net.NewStandardResponse(scribe.Write(r))
 }
 
-func (s responseRpc) Write(w scribe.Writer) {
+func (s itemRpc) Write(w scribe.Writer) {
 	w.WriteMessage("item", s.Item)
 	w.WriteBool("ok", s.Ok)
 }
 
-func readResponseRpc(r scribe.Reader) (ret responseRpc, err error) {
+func readItemRpc(r scribe.Reader) (ret itemRpc, err error) {
 	err = r.ParseMessage("item", &ret.Item, itemParser)
 	err = common.Or(err, r.ReadBool("ok", &ret.Ok))
 	return

@@ -1,12 +1,75 @@
 package elmer
 
 import (
-	"fmt"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
+	"github.com/pkopriv2/bourne/scribe"
 )
+
+type command struct {
+	Path []segment
+	Raw  Item
+}
+
+func newStoreEnableCommand(path []segment) command {
+	return command{path, Item{[]byte{}, []byte{}, 0, false}}
+}
+
+func newStoreDisableCommand(path []segment) command {
+	return command{path, Item{[]byte{}, []byte{}, 0, true}}
+}
+
+func newStoreItemSwapCommand(path []segment, swap Item) command {
+	return command{path, swap}
+}
+
+func (c command) Write(w scribe.Writer) {
+	w.WriteMessage("path", path(c.Path))
+	w.WriteMessage("raw", c.Raw)
+}
+
+func (c command) Bytes() []byte {
+	return scribe.Write(c).Bytes()
+}
+
+func readCommand(r scribe.Reader) (c command, e error) {
+	e = r.ParseMessage("path", (*path)(&c.Path), pathParser)
+	e = common.Or(e, r.ParseMessage("raw", &c.Raw, itemParser))
+	return
+}
+
+func parseCommandBytes(bytes []byte) (command, error) {
+	msg, err := scribe.Parse(bytes)
+	if err != nil {
+		return command{}, err
+	}
+
+	return readCommand(msg)
+}
+
+type partialStorePath struct {
+	Parent []segment
+	Child  []byte
+}
+
+type storeItemRead struct {
+	Path []segment
+	Key  []byte
+}
+
+type storeItemSwap struct {
+	Path []segment
+	Swap Item
+}
+
+type storeItemResponse struct {
+	Item Item
+	Ok   bool
+}
+
+// FIXME: the created indices MUST be expressable as kayak events...catalog
+// updates are not currently expressed
 
 // The indexer is the primary interface to the catalog and stores
 type indexer struct {
@@ -14,9 +77,9 @@ type indexer struct {
 	ctrl          common.Control
 	logger        common.Logger
 	peer          kayak.Host
-	storeEnsure   chan *common.Request
-	storeExists   chan *common.Request
-	storeDel      chan *common.Request
+	storeInfo     chan *common.Request
+	storeEnable   chan *common.Request
+	storeDisable  chan *common.Request
 	storeItemRead chan *common.Request
 	storeItemSwap chan *common.Request
 	workers       int
@@ -29,9 +92,9 @@ func newIndexer(ctx common.Context, peer kayak.Host, workers int) (*indexer, err
 		ctrl:          ctx.Control(),
 		logger:        ctx.Logger(),
 		peer:          peer,
-		storeEnsure:   make(chan *common.Request),
-		storeExists:   make(chan *common.Request),
-		storeDel:      make(chan *common.Request),
+		storeEnable:   make(chan *common.Request),
+		storeDisable:  make(chan *common.Request),
+		storeInfo:     make(chan *common.Request),
 		storeItemRead: make(chan *common.Request),
 		storeItemSwap: make(chan *common.Request),
 		workers:       workers,
@@ -107,56 +170,66 @@ func (h *indexer) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 	}
 }
 
-func (s *indexer) StoreDel(cancel <-chan struct{}, store []byte) error {
-	_, err := s.sendRequest(s.storeDel, cancel, store)
-	return err
+func (s *indexer) StoreInfo(cancel <-chan struct{}, parent []segment, child []byte) (int, bool, bool, error) {
+	raw, err := s.sendRequest(s.storeInfo, cancel, partialStorePath{parent, child})
+	if err != nil || raw == nil {
+		return 0, false, false, err
+	}
+
+	info := raw.(storeInfo)
+	return info.Ver, info.Store != nil, true, nil
 }
 
-func (s *indexer) StoreEnsure(cancel <-chan struct{}, store []byte) error {
-	_, err := s.sendRequest(s.storeEnsure, cancel, store)
-	return err
-}
-
-func (s *indexer) StoreExists(cancel <-chan struct{}, store []byte) (bool, error) {
-	raw, err := s.sendRequest(s.storeExists, cancel, store)
+func (s *indexer) StoreEnableOrCreate(cancel <-chan struct{}, path []segment) (bool, error) {
+	raw, err := s.sendRequest(s.storeEnable, cancel, path)
 	if err != nil {
 		return false, err
 	}
+
 	return raw.(bool), nil
 }
 
-func (s *indexer) StoreReadItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
-	raw, err := s.sendRequest(s.storeItemRead, cancel, getRpc{store, key})
+func (s *indexer) StoreDisable(cancel <-chan struct{}, path []segment) (bool, error) {
+	raw, err := s.sendRequest(s.storeDisable, cancel, path)
+	if err != nil {
+		return false, err
+	}
+
+	return raw.(bool), nil
+}
+
+func (s *indexer) StoreItemRead(cancel <-chan struct{}, path []segment, key []byte) (Item, bool, error) {
+	raw, err := s.sendRequest(s.storeItemRead, cancel, storeItemRead{path, key})
 	if err != nil {
 		return Item{}, false, err
 	}
 
-	rpc := raw.(responseRpc)
-	return rpc.Item, rpc.Ok, nil
+	resp := raw.(storeItemResponse)
+	return resp.Item, resp.Ok, nil
 }
 
-func (s *indexer) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
-	raw, err := s.sendRequest(s.storeItemSwap, cancel, swapRpc{store, key, val, ver})
+func (s *indexer) StoreItemSwap(cancel <-chan struct{}, path []segment, swap Item) (Item, bool, error) {
+	raw, err := s.sendRequest(s.storeItemSwap, cancel, storeItemSwap{path, swap})
 	if err != nil {
 		return Item{}, false, err
 	}
 
-	rpc := raw.(responseRpc)
-	return rpc.Item, rpc.Ok, nil
+	resp := raw.(storeItemResponse)
+	return resp.Item, resp.Ok, nil
 }
 
-func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
-	item, _, err := s.StoreReadItem(cancel, store, key)
+func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store []segment, key []byte, fn func([]byte) ([]byte, bool)) (Item, bool, error) {
+	item, _, err := s.StoreItemRead(cancel, store, key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	new := fn(item.Val)
-	if new == nil {
+	val, del := fn(item.Val)
+	if val == nil {
 		return Item{}, true, nil
 	}
 
-	item, ok, err := s.StoreSwapItem(cancel, store, key, new, item.Ver)
+	item, ok, err := s.StoreItemSwap(cancel, store, Item{key, val, item.Ver, del})
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
@@ -164,7 +237,7 @@ func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store []byte, key [
 	return item, ok, nil
 }
 
-func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store []byte, key []byte, fn func([]byte) []byte) (Item, bool, error) {
+func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store []segment, key []byte, fn func([]byte) ([]byte, bool)) (Item, bool, error) {
 	for !common.IsCanceled(cancel) {
 		item, ok, _ := s.StoreTryUpdateItem(cancel, store, key, fn)
 		if ok {
@@ -192,7 +265,7 @@ type epoch struct {
 	ctrl     common.Control
 	logger   common.Logger
 	parent   *indexer
-	catalog  *catalog
+	root     *store
 	log      kayak.Log
 	sync     kayak.Sync
 	requests common.WorkPool
@@ -206,7 +279,7 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 		return nil, errors.Wrap(err, "Unable to retrieve snapshot")
 	}
 
-	catalog, err := build(ss)
+	root, size, err := build(ss)
 	if err != nil {
 		return nil, errors.Wrap(err, "Unable to build catalog")
 	}
@@ -215,33 +288,74 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 		ctrl:     ctx.Control(),
 		logger:   ctx.Logger(),
 		parent:   parent,
-		catalog:  catalog,
+		root:     root,
 		log:      log,
 		sync:     sync,
 		requests: common.NewWorkPool(ctx.Control(), workers),
 	}
 
-	if err := e.start(last + 1); err != nil {
+	if err := e.start(last+1, size); err != nil {
 		return nil, errors.Wrap(err, "Error starting epoch lifecycle")
 	}
 
 	return e, nil
 }
 
-func (e *epoch) StoreExists(store []byte) bool {
-	s := e.catalog.Get(store)
-	return s != nil
+func (e *epoch) appendAndSync(cancel <-chan struct{}, c command) error {
+	entry, err := e.log.Append(cancel, c.Bytes())
+	if err != nil {
+		return err
+	}
+
+	// TODO: Does this break linearizability???  Technically, another conflicting item
+	// can come in immediately after we sync and update the value - and we can't tell
+	// whether our update was accepted or not..
+	return e.sync.Sync(cancel, entry.Index)
 }
 
-func (e *epoch) StoreDel(store []byte) {
-	e.catalog.Del(store)
+func (e *epoch) StoreGet(path []segment) *store {
+	return storeTraverse(e.root, path)
 }
 
-func (e *epoch) StoreEnsure(store []byte) {
-	e.catalog.Ensure(store)
+// FIXME: should query for barrier?
+func (e *epoch) StoreInfo(parent []segment, name []byte) (storeInfo, bool) {
+	store := e.StoreGet(parent)
+	if store == nil {
+		return storeInfo{}, false
+	}
+
+	return store.ChildInfo(name)
 }
 
-func (e *epoch) StoreGetItem(cancel <-chan struct{}, store []byte, key []byte) (Item, bool, error) {
+func (e *epoch) StoreEnableOrCreate(cancel <-chan struct{}, path []segment) (bool, error) {
+	if err := e.appendAndSync(cancel, newStoreEnableCommand(path)); err != nil {
+		return false, err
+	}
+
+	parent, leaf := path[:len(path)], path[len(path)-1]
+
+	info, found := e.StoreInfo(parent, leaf.Elem)
+	if !found || info.Store == nil {
+		return false, nil
+	}
+	return leaf.Ver == info.Ver, nil
+}
+
+func (e *epoch) StoreDisable(cancel <-chan struct{}, path []segment) (bool, error) {
+	if err := e.appendAndSync(cancel, newStoreDisableCommand(path)); err != nil {
+		return false, err
+	}
+
+	parent, leaf := path[:len(path)], path[len(path)-1]
+
+	info, found := e.StoreInfo(parent, leaf.Elem)
+	if !found || info.Store != nil {
+		return false, nil
+	}
+	return leaf.Ver == info.Ver, nil
+}
+
+func (e *epoch) StoreItemRead(cancel <-chan struct{}, path []segment, key []byte) (Item, bool, error) {
 	val, err := e.sync.Barrier(cancel)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
@@ -251,34 +365,30 @@ func (e *epoch) StoreGetItem(cancel <-chan struct{}, store []byte, key []byte) (
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	s := e.catalog.Get(store)
-	if s == nil {
-		return Item{}, false, errors.WithStack(NoStoreError)
+	store := e.StoreGet(path)
+	if store == nil {
+		return Item{}, false, errors.Wrapf(InvariantError, "No such store [%v]", path)
 	}
-
-	item, ok := s.Get(key)
+	item, ok := store.Get(key)
 	return item, ok, nil
 }
 
-func (e *epoch) StoreSwapItem(cancel <-chan struct{}, store []byte, key []byte, val []byte, ver int) (Item, bool, error) {
-	entry, err := e.log.Append(cancel, Item{store, key, val, ver}.Bytes())
+func (e *epoch) StoreItemSwap(cancel <-chan struct{}, path []segment, item Item) (Item, bool, error) {
+	if err := e.appendAndSync(cancel, newStoreItemSwapCommand(path, item)); err != nil {
+		return Item{}, false, errors.WithStack(err)
+	}
+
+	actual, ok, err := e.StoreItemRead(cancel, path, item.Key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
-
-	// TODO: Does this break linearizability???  Technically, another conflicting item
-	// can come in immediately after we sync and update the value - and we can't tell
-	// whether our update was accepted or not..
-	if err := e.sync.Sync(cancel, entry.Index); err != nil {
-		return Item{}, false, errors.WithStack(err)
+	if !ok || actual.Ver != item.Ver+1 {
+		return Item{}, false, nil
 	}
-
-	s := e.catalog.Ensure(store)
-	item, ok := s.Get(key)
-	return item, ok && item.Ver == ver+1, nil
+	return actual, true, nil
 }
 
-func (e *epoch) start(index int) error {
+func (e *epoch) start(index int, size int) error {
 	// start the request router
 	go func() {
 		defer e.ctrl.Close()
@@ -289,16 +399,16 @@ func (e *epoch) start(index int) error {
 			select {
 			case <-e.ctrl.Closed():
 				return
-			case req := <-e.parent.storeItemSwap:
-				e.handleStoreSwapItem(req)
+			case req := <-e.parent.storeInfo:
+				e.handleStoreInfo(req)
+			case req := <-e.parent.storeEnable:
+				e.handleStoreEnable(req)
+			case req := <-e.parent.storeDisable:
+				e.handleStoreDisable(req)
 			case req := <-e.parent.storeItemRead:
-				e.handleStoreGetItem(req)
-			case req := <-e.parent.storeExists:
-				e.handleStoreExists(req)
-			case req := <-e.parent.storeDel:
-				e.handleStoreDel(req)
-			case req := <-e.parent.storeEnsure:
-				e.handleStoreEnsure(req)
+				e.handleStoreItemRead(req)
+			case req := <-e.parent.storeItemSwap:
+				e.handleStoreItemSwap(req)
 			}
 		}
 	}()
@@ -331,66 +441,75 @@ func (e *epoch) start(index int) error {
 		}
 	}()
 
+	// // start the compacting routine
+	// go func() {
+	// defer e.ctrl.Close()
+	// defer e.logger.Info("Compactor shutting down")
+	// e.logger.Info("Starting compactor")
+	//
+	// for lastIndex, lastSize := index, size; ; {
+	// if err := e.sync.Sync(e.ctrl.Closed(), lastIndex+2*lastSize); err != nil {
+	// e.ctrl.Fail(err)
+	// return
+	// }
+	//
+	// }
+	// }()
+
 	return nil
 }
 
-func (e *epoch) handleStoreGetItem(req *common.Request) {
+func (e *epoch) handleStoreInfo(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		rpc := req.Body().(getRpc)
+		// req.Ack(e.StoreExists(req.Body().([]segment)))
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
+}
 
-		item, ok, err := e.StoreGetItem(req.Canceled(), rpc.Store, rpc.Key)
+func (e *epoch) handleStoreEnable(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		req.Return(e.StoreEnableOrCreate(req.Canceled(), req.Body().([]segment)))
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
+}
+
+func (e *epoch) handleStoreDisable(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		req.Return(e.StoreDisable(req.Canceled(), req.Body().([]segment)))
+	})
+	if err != nil {
+		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
+	}
+}
+
+func (e *epoch) handleStoreItemRead(req *common.Request) {
+	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
+		rpc := req.Body().(storeItemRead)
+		item, ok, err := e.StoreItemRead(req.Canceled(), rpc.Path, rpc.Key)
 		if err != nil {
 			req.Fail(err)
 			return
 		}
-
-		req.Ack(responseRpc{item, ok})
+		req.Ack(itemRpc{item, ok})
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
 	}
 }
 
-func (e *epoch) handleStoreSwapItem(req *common.Request) {
+func (e *epoch) handleStoreItemSwap(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		rpc := req.Body().(swapRpc)
-
-		item, ok, err := e.StoreSwapItem(req.Canceled(), rpc.Store, rpc.Key, rpc.Val, rpc.Ver)
+		rpc := req.Body().(storeItemSwap)
+		item, ok, err := e.StoreItemSwap(req.Canceled(), rpc.Path, rpc.Swap)
 		if err != nil {
 			req.Fail(err)
 			return
 		}
-
-		req.Ack(responseRpc{item, ok})
-	})
-	if err != nil {
-		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
-	}
-}
-
-func (e *epoch) handleStoreExists(req *common.Request) {
-	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		req.Ack(e.StoreExists(req.Body().([]byte)))
-	})
-	if err != nil {
-		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
-	}
-}
-
-func (e *epoch) handleStoreDel(req *common.Request) {
-	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		e.StoreDel(req.Body().([]byte))
-		req.Ack(nil)
-	})
-	if err != nil {
-		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
-	}
-}
-
-func (e *epoch) handleStoreEnsure(req *common.Request) {
-	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		e.StoreEnsure(req.Body().([]byte))
-		req.Ack(nil)
+		req.Ack(itemRpc{item, ok})
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
@@ -399,44 +518,61 @@ func (e *epoch) handleStoreEnsure(req *common.Request) {
 
 func (e *epoch) handleEntry(entry kayak.Entry) error {
 	defer e.sync.Ack(entry.Index)
-
 	if entry.Kind != kayak.Std {
 		return nil
 	}
 
 	e.logger.Debug("Indexing entry: %v", entry)
-	item, err := parseItemBytes(entry.Event)
+	cmd, err := parseCommandBytes(entry.Event)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	// TODO: build a store cache
-	store := e.catalog.Ensure(item.Store)
-	store.Put(item.Key, item.Val, item.Ver)
-	return nil
+	return apply(e.root, cmd)
 }
 
-func build(st kayak.EventStream) (*catalog, error) {
-	defer st.Close()
+func build(stream kayak.EventStream) (*store, int, error) {
+	defer stream.Close()
 
-	catalog := newCatalog()
-	for !st.Ctrl().IsClosed() {
+	root, size := newStore([]segment{}), 0
 
+Outer:
+	for ; !stream.Ctrl().IsClosed(); size++ {
 		var evt kayak.Event
 		select {
-		case <-st.Ctrl().Closed():
-		case evt = <-st.Data():
-			fmt.Println("EVENT: ", evt)
-			// evt.Raw()
+		case <-stream.Ctrl().Closed():
+			break Outer
+		case evt = <-stream.Data():
 		}
 
-		// item, err := parseItemBytes(evt)
-		// if err != nil {
-		// return nil, errors.WithStack(err)
-		// }
-		//
-		// store := catalogue.Init(item.Store)
-		// store.Put(item.Key, item.Val, item.Ver)
+		cmd, err := parseCommandBytes(evt)
+		if err != nil {
+			return nil, 0, errors.WithStack(err)
+		}
+
+		apply(root, cmd)
 	}
-	return catalog, st.Ctrl().Failure()
+
+	return root, size, stream.Ctrl().Failure()
+}
+
+func apply(root *store, cmd command) error {
+	return nil
+	// if bytes.Equal(cmd.Raw.Key, []byte{}) {
+	// if !cmd.Raw.Del {
+	// storeCreate(root, cmd.Path)
+	// }
+	//
+	// if err := storeDelete(root, cmd.Path); err != nil {
+	// return errors.WithStack(err)
+	// } else {
+	// return nil
+	// }
+	// }
+	//
+	// if _, _, err := swapStoreItem(root, cmd.Path, cmd.Raw.Key, cmd.Raw.Val, cmd.Raw.Ver); err != nil {
+	// return errors.WithStack(err)
+	// } else {
+	// return nil
+	// }
 }
