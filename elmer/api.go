@@ -13,6 +13,7 @@ import (
 
 var (
 	InvariantError = errors.New("Elmer:InvariantError")
+	PathError      = errors.New("Elmer:PathError")
 )
 
 func Start(ctx common.Context, self kayak.Host, opts ...func(*Options)) (Peer, error) {

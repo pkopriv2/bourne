@@ -3,6 +3,7 @@ package elmer
 import (
 	"testing"
 
+	"github.com/pkopriv2/bourne/common"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -82,6 +83,38 @@ func TestStore_ChildDisable(t *testing.T) {
 	_, ok := store.ChildEnableOrCreate([]byte("store"), -1)
 	assert.True(t, ok)
 	assert.True(t, store.ChildDisable([]byte("store"), 0))
+}
+
+func TestStore_Load_MissingElem(t *testing.T) {
+	store := newStore([]segment{})
+
+	_, err := store.Load(emptyPath.Child([]byte{0}, 0))
+	assert.Equal(t, PathError, common.Extract(err, PathError))
+}
+
+func TestStore_Load_Child(t *testing.T) {
+	store := newStore([]segment{})
+
+	child, ok := store.ChildEnableOrCreate([]byte("child"), -1)
+	assert.True(t, ok)
+
+	loaded, err := store.Load(child.Path())
+	assert.Nil(t, err)
+	assert.Equal(t, child, loaded)
+}
+
+func TestStore_Load_GrandChild(t *testing.T) {
+	store := newStore([]segment{})
+
+	child, ok := store.ChildEnableOrCreate([]byte("child"), -1)
+	assert.True(t, ok)
+
+	grandchild, ok := child.ChildEnableOrCreate([]byte("grandchild"), -1)
+	assert.True(t, ok)
+
+	loaded, err := store.Load(grandchild.Path())
+	assert.Nil(t, err)
+	assert.Equal(t, grandchild, loaded)
 }
 
 // func TestStore_Get_NoExist(t *testing.T) {
