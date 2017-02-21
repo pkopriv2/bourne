@@ -136,6 +136,10 @@ func (s *store) ChildEnableOrCreate(name []byte, prev int) (ret *store, ok bool)
 	s.catalog.Update(func(u amoeba.Update) {
 		raw := u.Get(amoeba.BytesKey(name))
 		if raw == nil {
+			if prev != 0 {
+				return
+			}
+
 			ret, ok = s.ChildInit(name, prev+1), true
 			u.Put(amoeba.BytesKey(name), ret.Item())
 			return

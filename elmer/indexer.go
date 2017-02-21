@@ -1,6 +1,8 @@
 package elmer
 
 import (
+	"bytes"
+
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
@@ -400,15 +402,15 @@ func (e *epoch) start(index int, size int) error {
 			case <-e.ctrl.Closed():
 				return
 			case req := <-e.parent.storeInfo:
-				e.handleStoreInfo(req)
+				e.reqStoreInfo(req)
 			case req := <-e.parent.storeEnable:
-				e.handleStoreEnable(req)
+				e.reqStoreEnable(req)
 			case req := <-e.parent.storeDisable:
-				e.handleStoreDisable(req)
+				e.reqStoreDisable(req)
 			case req := <-e.parent.storeItemRead:
-				e.handleStoreItemRead(req)
+				e.reqStoreItemRead(req)
 			case req := <-e.parent.storeItemSwap:
-				e.handleStoreItemSwap(req)
+				e.reqStoreItemSwap(req)
 			}
 		}
 	}()
@@ -434,7 +436,7 @@ func (e *epoch) start(index int, size int) error {
 				e.ctrl.Fail(l.Ctrl().Failure())
 				return
 			case entry := <-l.Data():
-				if err := e.handleEntry(entry); err != nil {
+				if err := e.processEntry(entry); err != nil {
 					e.logger.Error("Error parsing item from event stream [%v]: %+v", entry.Index, err)
 				}
 			}
@@ -459,16 +461,22 @@ func (e *epoch) start(index int, size int) error {
 	return nil
 }
 
-func (e *epoch) handleStoreInfo(req *common.Request) {
+func (e *epoch) reqStoreInfo(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		// req.Ack(e.StoreExists(req.Body().([]segment)))
+		path := req.Body().(partialStorePath)
+		info, ok := e.StoreInfo(path.Parent, path.Child)
+		if ok {
+			req.Ack(info)
+		} else {
+			req.Ack(nil)
+		}
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
 	}
 }
 
-func (e *epoch) handleStoreEnable(req *common.Request) {
+func (e *epoch) reqStoreEnable(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		req.Return(e.StoreEnableOrCreate(req.Canceled(), req.Body().([]segment)))
 	})
@@ -477,7 +485,7 @@ func (e *epoch) handleStoreEnable(req *common.Request) {
 	}
 }
 
-func (e *epoch) handleStoreDisable(req *common.Request) {
+func (e *epoch) reqStoreDisable(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		req.Return(e.StoreDisable(req.Canceled(), req.Body().([]segment)))
 	})
@@ -486,7 +494,7 @@ func (e *epoch) handleStoreDisable(req *common.Request) {
 	}
 }
 
-func (e *epoch) handleStoreItemRead(req *common.Request) {
+func (e *epoch) reqStoreItemRead(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(storeItemRead)
 		item, ok, err := e.StoreItemRead(req.Canceled(), rpc.Path, rpc.Key)
@@ -501,7 +509,7 @@ func (e *epoch) handleStoreItemRead(req *common.Request) {
 	}
 }
 
-func (e *epoch) handleStoreItemSwap(req *common.Request) {
+func (e *epoch) reqStoreItemSwap(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(storeItemSwap)
 		item, ok, err := e.StoreItemSwap(req.Canceled(), rpc.Path, rpc.Swap)
@@ -516,7 +524,7 @@ func (e *epoch) handleStoreItemSwap(req *common.Request) {
 	}
 }
 
-func (e *epoch) handleEntry(entry kayak.Entry) error {
+func (e *epoch) processEntry(entry kayak.Entry) error {
 	defer e.sync.Ack(entry.Index)
 	if entry.Kind != kayak.Std {
 		return nil
@@ -528,7 +536,61 @@ func (e *epoch) handleEntry(entry kayak.Entry) error {
 		return errors.WithStack(err)
 	}
 
-	return apply(e.root, cmd)
+	return e.processCommand(cmd)
+}
+
+func (e *epoch) processCommand(cmd command) error {
+	e.logger.Debug("Applying command: %v", cmd)
+
+	// Handle: store create/delete
+	if bytes.Equal(cmd.Raw.Key, []byte{}) {
+		if !cmd.Raw.Del {
+			e.logger.Debug("Enabling store: %v", path(cmd.Path))
+			_, err := e.processStoreEnable(cmd.Path)
+			return err
+		} else {
+			e.logger.Debug("Disabling store: %v", path(cmd.Path))
+			_, err := e.processStoreDisable(cmd.Path)
+			return err
+		}
+	}
+
+	// Handle: item swap.
+	_, err := e.processStoreSwap(cmd.Path, cmd.Raw)
+	return err
+}
+
+func (e *epoch) processStoreEnable(path []segment) (bool, error) {
+	parent, leaf := path[:len(path)-1], path[len(path)-1]
+
+	store := e.StoreGet(parent)
+	if store == nil {
+		return false, errors.Wrapf(InvariantError, "Store does not exist [%v]", parent)
+	}
+
+	_, ok := store.ChildEnableOrCreate(leaf.Elem, leaf.Ver)
+	return ok, nil
+}
+
+func (e *epoch) processStoreDisable(path []segment) (bool, error) {
+	parent, leaf := path[:len(path)-1], path[len(path)-1]
+
+	store := e.StoreGet(parent)
+	if store == nil {
+		return false, errors.Wrapf(InvariantError, "Store does not exist [%v]", parent)
+	}
+
+	return store.ChildDisable(leaf.Elem, leaf.Ver), nil
+}
+
+func (e *epoch) processStoreSwap(path []segment, swap Item) (bool, error) {
+	store := e.StoreGet(path)
+	if store == nil {
+		return false, errors.Wrapf(InvariantError, "Store does not exist [%v]", path)
+	}
+
+	_, ok := store.Swap(swap.Key, swap.Val, swap.Ver)
+	return ok, nil
 }
 
 func build(stream kayak.EventStream) (*store, int, error) {
@@ -536,43 +598,22 @@ func build(stream kayak.EventStream) (*store, int, error) {
 
 	root, size := newStore([]segment{}), 0
 
-Outer:
-	for ; !stream.Ctrl().IsClosed(); size++ {
-		var evt kayak.Event
-		select {
-		case <-stream.Ctrl().Closed():
-			break Outer
-		case evt = <-stream.Data():
-		}
-
-		cmd, err := parseCommandBytes(evt)
-		if err != nil {
-			return nil, 0, errors.WithStack(err)
-		}
-
-		apply(root, cmd)
-	}
+	// Outer:
+	// for ; !stream.Ctrl().IsClosed(); size++ {
+	// var evt kayak.Event
+	// select {
+	// case <-stream.Ctrl().Closed():
+	// break Outer
+	// case evt = <-stream.Data():
+	// }
+	//
+	// cmd, err := parseCommandBytes(evt)
+	// if err != nil {
+	// return nil, 0, errors.WithStack(err)
+	// }
+	//
+	// apply(root, cmd)
+	// }
 
 	return root, size, stream.Ctrl().Failure()
-}
-
-func apply(root *store, cmd command) error {
-	return nil
-	// if bytes.Equal(cmd.Raw.Key, []byte{}) {
-	// if !cmd.Raw.Del {
-	// storeCreate(root, cmd.Path)
-	// }
-	//
-	// if err := storeDelete(root, cmd.Path); err != nil {
-	// return errors.WithStack(err)
-	// } else {
-	// return nil
-	// }
-	// }
-	//
-	// if _, _, err := swapStoreItem(root, cmd.Path, cmd.Raw.Key, cmd.Raw.Val, cmd.Raw.Ver); err != nil {
-	// return errors.WithStack(err)
-	// } else {
-	// return nil
-	// }
 }
