@@ -1,23 +1,31 @@
 package elmer
 
 import (
-	"fmt"
-
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/amoeba"
-	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/scribe"
 )
 
-type storeInfo struct {
-	Ver   int
-	Store *store
+type storeDat struct {
+	Ver int
+	Raw *store
 }
 
+type storeInfo struct {
+	Path    path
+	Enabled bool
+}
+
+func (i storeInfo) Version() int {
+	return i.Path.Last().Ver
+}
+
+// FIXME: Currently CANNOT synchronize across store boundaries.  May need to rethink
+// index design.
 type store struct {
-	path    []segment
-	catalog amoeba.Index
-	data    amoeba.Index
+	// the path represents the versioned location in the meta hierarchy
+	path path
+	meta amoeba.Index
+	data amoeba.Index
 }
 
 func newStore(path []segment) *store {
@@ -28,11 +36,15 @@ func (s *store) Close() error {
 	return nil
 }
 
-func (s *store) Item() storeInfo {
-	return storeInfo{s.Version(), s}
+func (s *store) Dat() storeDat {
+	return storeDat{s.Version(), s}
 }
 
-func (s *store) Path() []segment {
+func (s *store) Info() storeInfo {
+	return storeInfo{s.Path(), true}
+}
+
+func (s *store) Path() path {
 	return s.path
 }
 
@@ -69,25 +81,25 @@ func (s *store) RecurseInfo(parent path, child []byte) (storeInfo, bool, error) 
 	return info, ok, nil
 }
 
-func (s *store) RecurseEnable(path path) (*store, bool, error) {
-	dest, err := s.Load(path.Parent())
+func (s *store) RecurseEnable(prev path) (*store, bool, error) {
+	dest, err := s.Load(prev.Parent())
 	if err != nil {
 		return nil, false, err
 	}
 
-	leaf := path.Leaf()
-	store, ok := dest.ChildEnableOrCreate(leaf.Elem, leaf.Ver-1)
+	store, ok := dest.ChildEnable(prev.Tail())
 	return store, ok, nil
 }
 
-func (s *store) RecurseDisable(path path) (bool, error) {
+func (s *store) RecurseDisable(path path) (storeInfo, bool, error) {
 	dest, err := s.Load(path.Parent())
 	if err != nil {
-		return false, err
+		return storeInfo{}, false, err
 	}
 
-	leaf := path.Leaf()
-	return dest.ChildDisable(leaf.Elem, leaf.Ver), nil
+	leaf := path.Last()
+	info, ok := dest.ChildDisable(leaf.Elem, leaf.Ver)
+	return info, ok, nil
 }
 
 func (s *store) RecurseItemRead(path path, key []byte) (Item, bool, error) {
@@ -100,86 +112,96 @@ func (s *store) RecurseItemRead(path path, key []byte) (Item, bool, error) {
 	return item, ok, nil
 }
 
-func (s *store) RecurseItemSwap(path path, key []byte, val []byte, del bool, ver int) (Item, bool, error) {
+func (s *store) RecurseItemSwap(path path, key []byte, val []byte, del bool, prev int) (Item, bool, error) {
 	dest, err := s.Load(path)
 	if err != nil {
 		return Item{}, false, errors.Wrapf(err, "Error while swapping key [%v]", key)
 	}
 
-	item, ok := dest.Swap(key, val, del, ver)
+	item, ok := dest.Swap(key, val, del, prev)
 	return item, ok, nil
 }
 
-func (s *store) ChildPath(name []byte, ver int) []segment {
-	return path(s.path).Child(name, ver)
+func (s *store) ChildPath(name []byte, ver int) path {
+	return path(s.path).Sub(name, ver)
 }
 
 func (s *store) ChildInit(name []byte, ver int) *store {
-	return newStore(path(s.path).Child(name, ver))
+	return newStore(path(s.path).Sub(name, ver))
 }
 
 func (s *store) ChildInfo(name []byte) (info storeInfo, ok bool) {
-	s.catalog.Read(func(u amoeba.View) {
+	s.meta.Read(func(u amoeba.View) {
 		raw := u.Get(amoeba.BytesKey(name))
 		if raw == nil {
 			return
 		}
 
-		info, ok = raw.(storeInfo), true
+		item := raw.(storeDat)
+		if item.Raw == nil {
+			info, ok = storeInfo{s.Path().Sub(name, item.Ver), false}, true
+		} else {
+			info, ok = storeInfo{item.Raw.Path(), true}, true
+		}
 	})
 	return
 }
 
 func (s *store) ChildGet(name []byte, ver int) (ret *store) {
-	s.catalog.Read(func(u amoeba.View) {
+	s.meta.Read(func(u amoeba.View) {
 		raw := u.Get(amoeba.BytesKey(name))
 		if raw == nil {
 			return
 		}
 
-		ret = raw.(storeInfo).Store
+		item := raw.(storeDat)
+		if item.Ver != ver {
+			return
+		}
+
+		ret = item.Raw
 	})
 	return
 }
 
-func (s *store) ChildEnableOrCreate(name []byte, prev int) (ret *store, ok bool) {
-	s.catalog.Update(func(u amoeba.Update) {
+func (s *store) ChildEnable(name []byte, prev int) (ret *store, ok bool) {
+	s.meta.Update(func(u amoeba.Update) {
 		raw := u.Get(amoeba.BytesKey(name))
 		if raw == nil {
-			if prev != -1 {
-				return
-			}
+			// if prev != -1 {
+			// return
+			// }
 
 			ret, ok = s.ChildInit(name, prev+1), true
-			u.Put(amoeba.BytesKey(name), ret.Item())
+			u.Put(amoeba.BytesKey(name), ret.Dat())
 			return
 		}
 
-		item := raw.(storeInfo)
+		item := raw.(storeDat)
 		if item.Ver != prev {
 			return
 		}
 
 		ret, ok = s.ChildInit(name, prev+1), true
-		u.Put(amoeba.BytesKey(name), ret.Item())
+		u.Put(amoeba.BytesKey(name), ret.Dat())
 	})
 	return
 }
 
-func (s *store) ChildDisable(name []byte, prev int) (ok bool) {
-	s.catalog.Update(func(u amoeba.Update) {
+func (s *store) ChildDisable(name []byte, prev int) (info storeInfo, ok bool) {
+	s.meta.Update(func(u amoeba.Update) {
 		raw := u.Get(amoeba.BytesKey(name))
 		if raw == nil {
 			return
 		}
 
-		item := raw.(storeInfo)
+		item := raw.(storeDat)
 		if item.Ver != prev {
 			return
 		}
 
-		u.Put(amoeba.BytesKey(name), storeInfo{prev + 1, nil})
-		ok = true
+		u.Put(amoeba.BytesKey(name), storeDat{prev + 1, nil})
+		info, ok = storeInfo{s.Path().Sub(name, prev+1), false}, true
 	})
 	return
 }
@@ -216,69 +238,12 @@ func (s *store) Swap(key []byte, val []byte, del bool, prev int) (item Item, ok 
 	return
 }
 
-func storeAll(idx amoeba.Index) (items []Item, ok bool) {
-	ret := make([]Item, 0, idx.Size())
-	idx.Read(func(u amoeba.View) {
-		u.Scan(func(s amoeba.Scan, k amoeba.Key, i interface{}) {
-			ret = append(ret, i.(Item))
-		})
-	})
-	return
-}
-
-var emptyPath = path([]segment{})
-
-type segment struct {
-	Elem []byte
-	Ver  int
-}
-
-func (s segment) Write(w scribe.Writer) {
-	w.WriteBytes("elem", s.Elem)
-	w.WriteInt("ver", s.Ver)
-}
-
-func readSegment(r scribe.Reader) (s segment, e error) {
-	e = r.ReadBytes("elem", &s.Elem)
-	e = common.Or(e, r.ReadInt("ver", &s.Ver))
-	return
-}
-
-func segmentParser(r scribe.Reader) (interface{}, error) {
-	return readSegment(r)
-}
-
-type path []segment
-
-func (p path) String() string {
-	if len(p) == 0 {
-		return ""
-	}
-
-	return fmt.Sprintf("%v:%v/%v", p[0].Elem, p[0].Ver, path(p[1:]))
-}
-
-func (p path) Parent() path {
-	return p[:len(p)-1]
-}
-
-func (p path) Child(elem []byte, ver int) path {
-	return append(p, segment{elem, ver})
-}
-
-func (p path) Leaf() segment {
-	return p[len(p)-1]
-}
-
-func (p path) Write(w scribe.Writer) {
-	w.WriteMessages("raw", []segment(p))
-}
-
-func readPath(r scribe.Reader) (p path, e error) {
-	e = r.ParseMessages("raw", (*[]segment)(&p), segmentParser)
-	return
-}
-
-func pathParser(r scribe.Reader) (interface{}, error) {
-	return readPath(r)
-}
+// func storeAll(idx amoeba.Index) (items []Item, ok bool) {
+// ret := make([]Item, 0, idx.Size())
+// idx.Read(func(u amoeba.View) {
+// u.Scan(func(s amoeba.Scan, k amoeba.Key, i interface{}) {
+// ret = append(ret, i.(Item))
+// })
+// })
+// return
+// }

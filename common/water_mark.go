@@ -54,12 +54,13 @@ func (c *WaterMark) Notify() {
 	c.lock.Broadcast()
 }
 
-func (c *WaterMark) Close() {
+func (c *WaterMark) Close() error {
 	c.lock.L.Lock()
 	defer c.lock.Broadcast()
 	defer c.lock.L.Unlock()
 	c.dead = true
 	c.lock.Broadcast()
+	return nil
 }
 
 func (c *WaterMark) Update(fn func(int) int) int {

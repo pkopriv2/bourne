@@ -23,49 +23,48 @@ func TestPath_Empty_String(t *testing.T) {
 
 func TestStore_ChildEnableOrCreate_NoPrevious(t *testing.T) {
 	store := newStore([]segment{})
-	sub, ok := store.ChildEnableOrCreate([]byte("store"), -1)
+	sub, ok := store.ChildEnable([]byte("store"), -1)
 	assert.True(t, ok)
 	assert.NotNil(t, sub)
 }
 
 func TestStore_ChildEnableOrCreate_CompareFail(t *testing.T) {
 	root := newStore([]segment{})
-	_, ok := root.ChildEnableOrCreate([]byte("store"), -1)
+	_, ok := root.ChildEnable([]byte("store"), -1)
 	assert.True(t, ok)
 
-	_, ok = root.ChildEnableOrCreate([]byte("store"), 1)
+	_, ok = root.ChildEnable([]byte("store"), 1)
 	assert.False(t, ok)
 }
 
 func TestStore_ChildEnableOrCreate(t *testing.T) {
 	root := newStore([]segment{})
-	_, ok := root.ChildEnableOrCreate([]byte("store"), -1)
+	_, ok := root.ChildEnable([]byte("store"), -1)
 	assert.True(t, ok)
 
-	_, ok = root.ChildEnableOrCreate([]byte("store"), 0)
+	_, ok = root.ChildEnable([]byte("store"), 0)
 	assert.True(t, ok)
 }
 
 func TestStore_ChildInfo_NoExist(t *testing.T) {
 	root := newStore([]segment{})
-	info, found := root.ChildInfo([]byte("store"))
+	_, found := root.ChildInfo([]byte("store"))
 	assert.False(t, found)
-	assert.Nil(t, info.Store)
 }
 
 func TestStore_ChildInfo(t *testing.T) {
 	root := newStore([]segment{})
-	_, ok := root.ChildEnableOrCreate([]byte("store"), -1)
+	_, ok := root.ChildEnable([]byte("store"), -1)
 	assert.True(t, ok)
 
 	info, found := root.ChildInfo([]byte("store"))
 	assert.True(t, found)
-	assert.NotNil(t, info.Store)
+	assert.Equal(t, 0, info.Version())
 }
 
 func TestStore_ChildGet_Exist(t *testing.T) {
 	store := newStore([]segment{})
-	_, ok := store.ChildEnableOrCreate([]byte("store"), -1)
+	_, ok := store.ChildEnable([]byte("store"), -1)
 	assert.True(t, ok)
 
 	sub := store.ChildGet([]byte("store"), 0)
@@ -74,28 +73,33 @@ func TestStore_ChildGet_Exist(t *testing.T) {
 
 func TestStore_ChildDisable_NoExist(t *testing.T) {
 	store := newStore([]segment{})
-	assert.False(t, store.ChildDisable([]byte("store"), -1))
+	_, ok := store.ChildDisable([]byte("store"), -1)
+	assert.False(t, ok)
 }
 
 func TestStore_ChildDisable(t *testing.T) {
 	store := newStore([]segment{})
 
-	_, ok := store.ChildEnableOrCreate([]byte("store"), -1)
+	child, ok := store.ChildEnable([]byte("store"), -1)
 	assert.True(t, ok)
-	assert.True(t, store.ChildDisable([]byte("store"), 0))
+	assert.Equal(t, emptyPath.Sub([]byte("store"), 0), child.Path())
+
+	info, ok := store.ChildDisable([]byte("store"), 0)
+	assert.True(t, ok)
+	assert.Equal(t, 1, info.Version())
 }
 
 func TestStore_Load_MissingElem(t *testing.T) {
 	store := newStore([]segment{})
 
-	_, err := store.Load(emptyPath.Child([]byte{0}, 0))
+	_, err := store.Load(emptyPath.Sub([]byte{0}, 0))
 	assert.Equal(t, PathError, common.Extract(err, PathError))
 }
 
 func TestStore_Load_Child(t *testing.T) {
 	store := newStore([]segment{})
 
-	child, ok := store.ChildEnableOrCreate([]byte("child"), -1)
+	child, ok := store.ChildEnable([]byte("child"), -1)
 	assert.True(t, ok)
 
 	loaded, err := store.Load(child.Path())
@@ -106,10 +110,10 @@ func TestStore_Load_Child(t *testing.T) {
 func TestStore_Load_GrandChild(t *testing.T) {
 	store := newStore([]segment{})
 
-	child, ok := store.ChildEnableOrCreate([]byte("child"), -1)
+	child, ok := store.ChildEnable([]byte("child"), -1)
 	assert.True(t, ok)
 
-	grandchild, ok := child.ChildEnableOrCreate([]byte("grandchild"), -1)
+	grandchild, ok := child.ChildEnable([]byte("grandchild"), -1)
 	assert.True(t, ok)
 
 	loaded, err := store.Load(grandchild.Path())
@@ -117,6 +121,49 @@ func TestStore_Load_GrandChild(t *testing.T) {
 	assert.Equal(t, grandchild, loaded)
 }
 
+// func TestStore_RecurseEnable_Child(t *testing.T) {
+// store := newStore([]segment{})
+//
+// child, ok, err := store.RecurseEnable(emptyPath.Child([]byte("child"), 0))
+// assert.Nil(t, err)
+// assert.True(t, ok)
+//
+// loaded, err := store.Load(child.Path())
+// assert.Nil(t, err)
+// assert.Equal(t, child, loaded)
+// }
+//
+// func TestStore_RecurseEnable_GrandChild(t *testing.T) {
+// store := newStore([]segment{})
+//
+// child, ok := store.ChildEnable([]byte("child"), -1)
+// assert.True(t, ok)
+//
+// grandchild, ok, err := store.RecurseEnable(child.Path().Child([]byte("grandchild"), 0))
+// assert.True(t, ok)
+//
+// loaded, err := store.Load(grandchild.Path())
+// assert.Nil(t, err)
+// assert.Equal(t, grandchild, loaded)
+// }
+
+// func TestStore_RecurseInfo_GrandChild(t *testing.T) {
+// store := newStore([]segment{})
+//
+// child, ok := store.ChildEnable([]byte("child"), -1)
+// assert.True(t, ok)
+//
+// grandchild, ok, err := store.RecurseEnable(child.Path().Child([]byte("grandchild"), 0))
+// assert.True(t, ok)
+// assert.Nil(t, err)
+//
+// info, ok, err := store.RecurseInfo(child.Path(), grandchild.Path().Leaf().Elem)
+// assert.True(t, ok)
+// assert.Nil(t, err)
+//
+// assert.Equal(t, grandchild.Info(), info)
+// }
+//
 // func TestStore_Get_NoExist(t *testing.T) {
 // catalog := newCatalog()
 //

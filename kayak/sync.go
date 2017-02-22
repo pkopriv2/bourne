@@ -7,11 +7,11 @@ import (
 
 type syncer struct {
 	pool common.ObjectPool // T: *rpcClient
-	ref  *ref
+	ref  *common.WaterMark
 }
 
-func newSyncer(pool common.ObjectPool, ref *ref) *syncer {
-	return &syncer{pool, ref}
+func newSyncer(pool common.ObjectPool) *syncer {
+	return &syncer{pool, common.NewWaterMark(-1)}
 }
 
 func (s *syncer) Barrier(cancel <-chan struct{}) (int, error) {
@@ -21,6 +21,10 @@ func (s *syncer) Barrier(cancel <-chan struct{}) (int, error) {
 			return val, nil
 		}
 	}
+}
+
+func (s *syncer) Close() error {
+	return s.ref.Close()
 }
 
 func (s *syncer) Ack(index int) {

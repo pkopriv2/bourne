@@ -469,9 +469,9 @@ func TestHost_Cluster_Join_Busy(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	timer := ctx.Timer(30*time.Second)
+	timer := ctx.Timer(300*time.Second)
 
-	cluster, err := StartTestCluster(ctx, 2)
+	cluster, err := StartTestCluster(ctx, 5)
 	assert.Nil(t, err)
 
 	leader := ElectLeader(timer.Closed(), cluster)

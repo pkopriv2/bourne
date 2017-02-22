@@ -77,7 +77,7 @@ func (s *storeClient) Close() error {
 }
 
 func (s *storeClient) Name() []byte {
-	return path(s.path).Leaf().Elem
+	return path(s.path).Last().Elem
 }
 
 func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (Store, error) {

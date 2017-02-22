@@ -83,21 +83,17 @@ func (c *rpcClient) StoreDelete(s storeRpc) (bool, error) {
 	return ok, nil
 }
 
-func (c *rpcClient) StoreCreate(s storeRpc) (bool, error) {
+func (c *rpcClient) StoreCreate(s storeRpc) (storeInfoRpc, error) {
 	resp, err := c.raw.Send(s.Create())
 	if err != nil {
-		return false, errors.WithStack(err)
+		return storeInfoRpc{}, errors.WithStack(err)
 	}
 
 	if err := resp.Error(); err != nil {
-		return false, errors.WithStack(err)
+		return storeInfoRpc{}, errors.WithStack(err)
 	}
 
-	ok, err := scribe.ReadBoolMessage(resp.Body())
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	return ok, nil
+	return readStoreInfoRpc(resp.Body())
 }
 
 func (c *rpcClient) StoreItemRead(g itemReadRpc) (itemRpc, error) {

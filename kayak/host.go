@@ -15,7 +15,8 @@ type host struct {
 	logger common.Logger
 	server net.Server
 	core   *replica
-	pool   common.ObjectPool
+	sync   *syncer
+	pool   common.ObjectPool // T: *rpcClient
 }
 
 func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, addr string) (h *host, err error) {
@@ -55,6 +56,11 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		pool.Close()
 	})
 
+	sync := newSyncer(pool)
+	ctx.Control().Defer(func(cause error) {
+		sync.Close()
+	})
+
 	return &host{
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
@@ -62,6 +68,7 @@ func newHost(ctx common.Context, net net.Network, store LogStore, db *bolt.DB, a
 		core:   core,
 		server: server,
 		pool:   pool,
+		sync:   sync,
 	}, nil
 }
 
@@ -103,7 +110,7 @@ func (h *host) Roster() []Peer {
 }
 
 func (h *host) Sync() (Sync, error) {
-	return newSyncer(h.pool, h.core.Log.commit), nil
+	return h.sync, nil
 }
 
 func (h *host) Log() (Log, error) {

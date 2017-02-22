@@ -71,12 +71,12 @@ func (s *server) StoreInfo(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	ver, enabled, found, err := s.self.StoreInfo(timer.Closed(), rpc.Parent, rpc.Child)
+	info, found, err := s.self.StoreInfo(timer.Closed(), rpc.Parent, rpc.Child)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
 
-	return storeInfoRpc{path(rpc.Parent).Child(rpc.Child, ver), enabled, found}.Response()
+	return storeInfoRpc{info.Path, info.Enabled, found}.Response()
 }
 
 func (s *server) StoreCreate(req net.Request) net.Response {
@@ -88,11 +88,12 @@ func (s *server) StoreCreate(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	ok, err := s.self.StoreEnableOrCreate(timer.Closed(), rpc.Store)
+	info, ok, err := s.self.StoreEnable(timer.Closed(), rpc.Store)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
-	return net.NewStandardResponse(scribe.Write(scribe.BoolMessage(ok)))
+
+	return storeInfoRpc{info.Path, info.Enabled, ok}.Response()
 }
 
 func (s *server) StoreDelete(req net.Request) net.Response {
