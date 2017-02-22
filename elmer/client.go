@@ -52,6 +52,10 @@ func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, m
 	}
 }
 
+func (p *peerClient) Root() (Store, error) {
+	return newStoreClient(p.ctx, p.pool, emptyPath), nil
+}
+
 func (p *peerClient) Close() error {
 	return p.ctrl.Close()
 }
@@ -61,7 +65,7 @@ func (p *peerClient) Shutdown() error {
 }
 
 type storeClient struct {
-	path   []segment
+	path   path
 	logger common.Logger
 	ctrl   common.Control
 	pool   common.ObjectPool // T: *rpcClient
@@ -80,22 +84,47 @@ func (s *storeClient) Name() []byte {
 	return path(s.path).Last().Elem
 }
 
-func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (Store, error) {
-	// err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
-	// responseRpc, err := r.Store(getRpc{s.path, key})
-	// if err != nil {
-	// return err
-	// }
-	//
-	// item, ok = responseRpc.Item, responseRpc.Ok
-	// return nil
-	// })
-	// return nil, err
-	panic("not implemented")
+func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
+	err = tryRpc(s.pool, cancel, func(r *rpcClient) error {
+		infoRpc, err := r.StoreInfo(partialStoreRpc{s.path, name})
+		if err != nil {
+			return err
+		}
+
+		if ! infoRpc.Found || ! infoRpc.Enabled {
+			return nil
+		}
+
+		ret = &storeClient{infoRpc.Path, s.logger, s.ctrl, s.pool}
+		return nil
+	})
+	return
 }
 
-func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (Store, error) {
-	panic("not implemented")
+func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
+	err = tryRpc(s.pool, cancel, func(r *rpcClient) error {
+		infoRpc, err := r.StoreInfo(partialStoreRpc{s.path, name})
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		if infoRpc.Found && infoRpc.Enabled {
+			return errors.Wrapf(InvariantError, "Store already exists [%v]", name)
+		}
+
+		infoRpc, err = r.StoreEnable(storeRpc{infoRpc.Path.Parent().Child(name, infoRpc.Path.Last().Ver)})
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		if ! infoRpc.Found || ! infoRpc.Enabled {
+			return errors.Wrapf(InvariantError, "Error creating store [%v]", name)
+		}
+
+		ret = &storeClient{infoRpc.Path, s.logger, s.ctrl, s.pool}
+		return nil
+	})
+	return
 }
 
 func (s *storeClient) DeleteStore(cancel <-chan struct{}, name []byte) error {

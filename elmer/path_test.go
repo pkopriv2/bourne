@@ -25,19 +25,19 @@ func TestSegment_Equals(t *testing.T) {
 }
 
 func TestPath_Equals_DiffLength(t *testing.T) {
-	path1 := emptyPath.Sub([]byte("one"), 1).Sub([]byte("two"), 2)
-	path2 := emptyPath.Sub([]byte("one"), 2)
+	path1 := emptyPath.Child([]byte("one"), 1).Child([]byte("two"), 2)
+	path2 := emptyPath.Child([]byte("one"), 2)
 	assert.False(t, path1.Equals(path2))
 }
 
 func TestPath_Equals_DiffTail(t *testing.T) {
-	path1 := emptyPath.Sub([]byte("one"), 1).Sub([]byte("two"), 2)
-	path2 := emptyPath.Sub([]byte("one"), 1).Sub([]byte("two"), 3)
+	path1 := emptyPath.Child([]byte("one"), 1).Child([]byte("two"), 2)
+	path2 := emptyPath.Child([]byte("one"), 1).Child([]byte("two"), 3)
 	assert.False(t, path1.Equals(path2))
 }
 
 func TestPath_Equals(t *testing.T) {
-	path1 := emptyPath.Sub([]byte("one"), 1).Sub([]byte("two"), 2)
-	path2 := emptyPath.Sub([]byte("one"), 1).Sub([]byte("two"), 2)
+	path1 := emptyPath.Child([]byte("one"), 1).Child([]byte("two"), 2)
+	path2 := emptyPath.Child([]byte("one"), 1).Child([]byte("two"), 2)
 	assert.True(t, path1.Equals(path2))
 }

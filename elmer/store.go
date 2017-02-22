@@ -5,11 +5,6 @@ import (
 	"github.com/pkopriv2/bourne/amoeba"
 )
 
-type storeDat struct {
-	Ver int
-	Raw *store
-}
-
 type storeInfo struct {
 	Path    path
 	Enabled bool
@@ -17,6 +12,11 @@ type storeInfo struct {
 
 func (i storeInfo) Version() int {
 	return i.Path.Last().Ver
+}
+
+type storeDat struct {
+	Ver int
+	Raw *store
 }
 
 // FIXME: Currently CANNOT synchronize across store boundaries.  May need to rethink
@@ -123,11 +123,11 @@ func (s *store) RecurseItemSwap(path path, key []byte, val []byte, del bool, pre
 }
 
 func (s *store) ChildPath(name []byte, ver int) path {
-	return path(s.path).Sub(name, ver)
+	return path(s.path).Child(name, ver)
 }
 
 func (s *store) ChildInit(name []byte, ver int) *store {
-	return newStore(path(s.path).Sub(name, ver))
+	return newStore(path(s.path).Child(name, ver))
 }
 
 func (s *store) ChildInfo(name []byte) (info storeInfo, ok bool) {
@@ -139,7 +139,7 @@ func (s *store) ChildInfo(name []byte) (info storeInfo, ok bool) {
 
 		item := raw.(storeDat)
 		if item.Raw == nil {
-			info, ok = storeInfo{s.Path().Sub(name, item.Ver), false}, true
+			info, ok = storeInfo{s.Path().Child(name, item.Ver), false}, true
 		} else {
 			info, ok = storeInfo{item.Raw.Path(), true}, true
 		}
@@ -201,7 +201,7 @@ func (s *store) ChildDisable(name []byte, prev int) (info storeInfo, ok bool) {
 		}
 
 		u.Put(amoeba.BytesKey(name), storeDat{prev + 1, nil})
-		info, ok = storeInfo{s.Path().Sub(name, prev+1), false}, true
+		info, ok = storeInfo{s.Path().Child(name, prev+1), false}, true
 	})
 	return
 }

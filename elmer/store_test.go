@@ -7,20 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestPath_Empty_String(t *testing.T) {
-	assert.Equal(t, "", emptyPath.String())
-}
-
-// func TestPath_Single_String(t *testing.T) {
-// path := emptyPath.Sub([]byte{0}, 0)
-// assert.Equal(t, "", path.String())
-// }
-//
-// func TestPath_Multi_String(t *testing.T) {
-// path := emptyPath.Sub([]byte{0}, 0).Sub([]byte{1}, 1)
-// assert.Equal(t, "", path.String())
-// }
-
 func TestStore_ChildEnableOrCreate_NoPrevious(t *testing.T) {
 	store := newStore([]segment{})
 	sub, ok := store.ChildEnable([]byte("store"), -1)
@@ -82,7 +68,7 @@ func TestStore_ChildDisable(t *testing.T) {
 
 	child, ok := store.ChildEnable([]byte("store"), -1)
 	assert.True(t, ok)
-	assert.Equal(t, emptyPath.Sub([]byte("store"), 0), child.Path())
+	assert.Equal(t, emptyPath.Child([]byte("store"), 0), child.Path())
 
 	info, ok := store.ChildDisable([]byte("store"), 0)
 	assert.True(t, ok)
@@ -92,7 +78,7 @@ func TestStore_ChildDisable(t *testing.T) {
 func TestStore_Load_MissingElem(t *testing.T) {
 	store := newStore([]segment{})
 
-	_, err := store.Load(emptyPath.Sub([]byte{0}, 0))
+	_, err := store.Load(emptyPath.Child([]byte{0}, 0))
 	assert.Equal(t, PathError, common.Extract(err, PathError))
 }
 

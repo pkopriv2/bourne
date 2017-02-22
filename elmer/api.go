@@ -25,13 +25,12 @@ func Join(ctx common.Context, self kayak.Host, addrs []string, opts ...func(*Opt
 }
 
 func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {
-	// options, err := buildOptions(ctx, opts)
-	// if err != nil {
-	// return nil, errors.WithStack(err)
-	// }
+	options, err := buildOptions(ctx, opts)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
-	return nil, nil
-	// return newPeerClient(ctx, options.Net, options.ConnTimeout, options.ConnPool, addrs), nil
+	return newPeerClient(ctx, options.Net, options.ConnTimeout, options.ConnPool, addrs), nil
 }
 
 type Peer interface {
@@ -115,9 +114,9 @@ func (i Item) Bytes() []byte {
 
 func (i Item) Equal(o Item) bool {
 	return i.Ver == o.Ver &&
-		i.Del == o.Del &&
-		bytes.Equal(i.Key, o.Key) &&
-		bytes.Equal(i.Val, o.Val)
+	i.Del == o.Del &&
+	bytes.Equal(i.Key, o.Key) &&
+	bytes.Equal(i.Val, o.Val)
 }
 
 func readItem(r scribe.Reader) (item Item, err error) {

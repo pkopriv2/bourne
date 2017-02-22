@@ -6,7 +6,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/scribe"
 )
 
 type server struct {
@@ -90,7 +89,7 @@ func (s *server) StoreCreate(req net.Request) net.Response {
 
 	info, ok, err := s.self.StoreEnable(timer.Closed(), rpc.Store)
 	if err != nil {
-		return net.NewErrorResponse(err)
+		return net.NewErrorResponse(errors.WithStack(err))
 	}
 
 	return storeInfoRpc{info.Path, info.Enabled, ok}.Response()
@@ -105,11 +104,11 @@ func (s *server) StoreDelete(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	ok, err := s.self.StoreDisable(timer.Closed(), rpc.Store)
+	info, ok, err := s.self.StoreDisable(timer.Closed(), rpc.Store)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}
-	return net.NewStandardResponse(scribe.Write(scribe.BoolMessage(ok)))
+	return storeInfoRpc{info.Path, info.Enabled, ok}.Response()
 }
 
 func (s *server) StoreItemRead(req net.Request) net.Response {

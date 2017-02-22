@@ -16,7 +16,7 @@ type partialPath struct {
 }
 
 func (p partialPath) Path(ver int) path {
-	return p.Parent.Sub(p.Child, ver)
+	return p.Parent.Child(p.Child, ver)
 }
 
 func (p partialPath) Write(w scribe.Writer) {
@@ -46,7 +46,7 @@ func (p path) Equals(o path) bool {
 	}
 
 	for i := len(p) - 1; i > 0; i-- {
-		if ! p[i].Equals(o[i]) {
+		if !p[i].Equals(o[i]) {
 			return false
 		}
 	}
@@ -54,6 +54,10 @@ func (p path) Equals(o path) bool {
 }
 
 func (p path) Parent() path {
+	if len(p) == 0 {
+		return path{}
+	}
+
 	return p[:len(p)-1]
 }
 
@@ -70,7 +74,7 @@ func (p path) Last() segment {
 	return p[len(p)-1]
 }
 
-func (p path) Sub(elem []byte, ver int) path {
+func (p path) Child(elem []byte, ver int) path {
 	return append(p, segment{elem, ver})
 }
 

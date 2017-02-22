@@ -83,7 +83,7 @@ func readPartialStoreRpc(r scribe.Reader) (ret partialStoreRpc, err error) {
 }
 
 type storeInfoRpc struct {
-	Path    []segment
+	Path    path
 	Enabled bool
 	Found   bool
 }
@@ -93,19 +93,20 @@ func (s storeInfoRpc) Response() net.Response {
 }
 
 func (s storeInfoRpc) Write(w scribe.Writer) {
-	w.WriteMessages("path", s.Path)
+	w.WriteMessage("path", s.Path)
 	w.WriteBool("enabled", s.Enabled)
 	w.WriteBool("found", s.Found)
 }
 
 func readStoreInfoRpc(r scribe.Reader) (ret storeInfoRpc, err error) {
-	err = r.ParseMessages("path", &ret.Enabled, segmentParser)
-	err = common.Or(err, r.ReadBool("ok", &ret.Enabled))
+	err = r.ParseMessage("path", &ret.Path, pathParser)
+	err = common.Or(err, r.ReadBool("enabled", &ret.Enabled))
+	err = common.Or(err, r.ReadBool("found", &ret.Found))
 	return
 }
 
 type storeRpc struct {
-	Store []segment
+	Store path
 }
 
 func (s storeRpc) Delete() net.Request {
@@ -117,11 +118,11 @@ func (s storeRpc) Create() net.Request {
 }
 
 func (s storeRpc) Write(w scribe.Writer) {
-	w.WriteMessages("path", s.Store)
+	w.WriteMessage("path", s.Store)
 }
 
 func readStoreRequestRpc(r scribe.Reader) (ret storeRpc, err error) {
-	err = r.ParseMessages("store", &ret.Store, segmentParser)
+	err = r.ParseMessage("path", &ret.Store, pathParser)
 	return
 }
 

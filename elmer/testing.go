@@ -9,7 +9,6 @@ func TestCluster(ctx common.Context, size int) (peers []Peer, err error) {
 	if size < 1 {
 		return []Peer{}, nil
 	}
-	return nil, nil
 
 	// ctx = ctx.Sub("Cluster(size=%v)", size)
 	// defer func() {
@@ -51,4 +50,5 @@ func TestCluster(ctx common.Context, size int) (peers []Peer, err error) {
 	// }
 	//
 	// return hosts, nil
+	return nil, nil
 }

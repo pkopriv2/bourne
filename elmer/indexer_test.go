@@ -53,7 +53,7 @@ func TestIndexer_StoreCreate(t *testing.T) {
 	indexer, err := newIndexer(ctx, raw, 10)
 	assert.Nil(t, err)
 
-	path := emptyPath.Sub([]byte{0}, 0)
+	path := emptyPath.Child([]byte{0}, 0)
 
 	info, ok, err := indexer.StoreEnable(timer.Closed(), path)
 	assert.Nil(t, err)
@@ -84,18 +84,16 @@ func TestIndexer_StoreSwapItem(t *testing.T) {
 	indexer, err := newIndexer(ctx, raw, 10)
 	assert.Nil(t, err)
 
-	path := emptyPath.Sub([]byte{0}, 0)
-
-	_, ok, err := indexer.StoreEnable(timer.Closed(), path)
+	info, ok, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte{0}, -1))
 	assert.Nil(t, err)
 	assert.True(t, ok)
 
-	item1, ok1, err := indexer.StoreItemSwap(timer.Closed(), path, Item{[]byte("key"), []byte("val"), 0, false})
+	item1, ok1, err := indexer.StoreItemSwap(timer.Closed(), info.Path, Item{[]byte("key"), []byte("val"), 0, false})
 	assert.Nil(t, err)
 	assert.True(t, ok1)
 	assert.Equal(t, item1.Ver, 1)
 
-	item2, ok2, err := indexer.StoreItemSwap(timer.Closed(), path, Item{[]byte("key"), []byte("val2"), 1, false})
+	item2, ok2, err := indexer.StoreItemSwap(timer.Closed(), info.Path, Item{[]byte("key"), []byte("val2"), 1, false})
 	assert.Nil(t, err)
 	assert.True(t, ok2)
 	assert.Equal(t, item2.Ver, 2)

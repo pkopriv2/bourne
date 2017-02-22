@@ -169,17 +169,8 @@ func (h *indexer) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 
 func (s *indexer) StoreInfo(cancel <-chan struct{}, parent path, child []byte) (storeInfo, bool, error) {
 	raw, err := s.sendRequest(s.storeInfo, cancel, partialPath{parent, child})
-	if err != nil || raw == nil {
-		return storeInfo{}, false, err
-	}
-
-	return raw.(storeInfo), true, nil
-}
-
-func (s *indexer) StoreEnable(cancel <-chan struct{}, prev path) (storeInfo, bool, error) {
-	raw, err := s.sendRequest(s.storeEnable, cancel, prev)
-	if err != nil {
-		return storeInfo{}, false, err
+	if err != nil{
+		return storeInfo{}, false, errors.WithStack(err)
 	}
 
 	if raw == nil {
@@ -189,13 +180,30 @@ func (s *indexer) StoreEnable(cancel <-chan struct{}, prev path) (storeInfo, boo
 	return raw.(storeInfo), true, nil
 }
 
-func (s *indexer) StoreDisable(cancel <-chan struct{}, path path) (bool, error) {
-	raw, err := s.sendRequest(s.storeDisable, cancel, path)
-	if err != nil {
-		return false, err
+func (s *indexer) StoreEnable(cancel <-chan struct{}, prev path) (storeInfo, bool, error) {
+	raw, err := s.sendRequest(s.storeEnable, cancel, prev)
+	if err != nil{
+		return storeInfo{}, false, errors.WithStack(err)
 	}
 
-	return raw.(bool), nil
+	if raw == nil {
+		return storeInfo{}, false, nil
+	}
+
+	return raw.(storeInfo), true, nil
+}
+
+func (s *indexer) StoreDisable(cancel <-chan struct{}, path path) (storeInfo, bool, error) {
+	raw, err := s.sendRequest(s.storeDisable, cancel, path)
+	if err != nil{
+		return storeInfo{}, false, errors.WithStack(err)
+	}
+
+	if raw == nil {
+		return storeInfo{}, false, nil
+	}
+
+	return raw.(storeInfo), true, nil
 }
 
 func (s *indexer) StoreItemRead(cancel <-chan struct{}, path path, key []byte) (Item, bool, error) {
@@ -319,30 +327,28 @@ func (e *epoch) StoreInfo(parent path, child []byte) (storeInfo, bool, error) {
 }
 
 func (e *epoch) StoreEnableAndSync(cancel <-chan struct{}, path path) (storeInfo, bool, error) {
+	e.logger.Debug("Enabling store [%v]", path)
 	if err := e.AppendAndSync(cancel, newStoreEnableCommand(path)); err != nil {
 		return storeInfo{}, false, err
 	}
 
-	panic("Not implemented")
+	name, ver := path.Tail()
 
-	// leaf := path.Leaf()
-	//
-	// info, found, err := e.root.RecurseInfo(path.Parent(), leaf.Elem)
-	// if err != nil {
-	// return storeInfo{}, false, errors.WithStack(err)
-	// }
-	// if !found || !info.Enabled {
-	// return storeInfo{}, false, nil
-	// }
-	// return info, leaf.Ver == info.Ver, nil
+	info, found, err := e.root.RecurseInfo(path.Parent(), name)
+	if err != nil {
+		return storeInfo{}, false, errors.WithStack(err)
+	}
+	if !found || !info.Enabled {
+		return storeInfo{}, false, nil
+	}
+	return info, info.Version() == ver+1, nil
 }
 
 func (e *epoch) StoreDisableAndSync(cancel <-chan struct{}, path path) (bool, error) {
 	if err := e.AppendAndSync(cancel, newStoreDisableCommand(path)); err != nil {
 		return false, errors.WithStack(err)
 	}
-
-	panic("Not implemented")
+	return false, nil
 
 	// leaf := path.Leaf()
 	//
@@ -379,7 +385,7 @@ func (e *epoch) StoreItemSwapAndSync(cancel <-chan struct{}, path path, item Ite
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	actual, ok, err := e.StoreSyncAndRead(cancel, path, item.Key)
+	actual, ok, err := e.root.RecurseItemRead(path, item.Key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
@@ -483,11 +489,17 @@ func (e *epoch) reqStoreInfo(req *common.Request) {
 
 func (e *epoch) reqStoreEnable(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		// info, ok, err := e.StoreEnableAndSync(req.Canceled(), req.Body().(path))
-		// if err != nil {
-		// req.Fail(err)
-		// }
-		// req.Return()
+		info, ok, err := e.StoreEnableAndSync(req.Canceled(), req.Body().(path))
+		if err != nil {
+			req.Fail(err)
+			return
+		}
+
+		if ok {
+			req.Ack(info)
+		} else {
+			req.Ack(nil)
+		}
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
@@ -534,11 +546,7 @@ func (e *epoch) reqStoreItemSwap(req *common.Request) {
 }
 
 func (e *epoch) processEntry(entry kayak.Entry) error {
-	defer func() {
-		e.logger.Info("Acking index: %v", entry.Index)
-		e.sync.Ack(entry.Index)
-	}()
-
+	defer e.sync.Ack(entry.Index)
 	if entry.Kind != kayak.Std {
 		return nil
 	}
@@ -553,37 +561,22 @@ func (e *epoch) processEntry(entry kayak.Entry) error {
 }
 
 func (e *epoch) processCommand(cmd command) error {
-	e.logger.Debug("Applying command: %v", cmd)
-
 	// Handle: store create/delete
 	if bytes.Equal(cmd.Raw.Key, []byte{}) {
 		if !cmd.Raw.Del {
-			e.logger.Debug("Enabling store: %v", path(cmd.Path))
-			return e.processStoreEnable(cmd.Path)
+			e.logger.Debug("Enabling store: %v", cmd.Path)
+			_, _, err := e.root.RecurseEnable(cmd.Path)
+			return err
 		} else {
-			e.logger.Debug("Disabling store: %v", path(cmd.Path))
-			return e.processStoreDisable(cmd.Path)
+			e.logger.Debug("Disabling store: %v", cmd.Path)
+			_, _, err := e.root.RecurseDisable(cmd.Path)
+			return err
 		}
 	}
 
 	// Handle: item swap.
-	return e.processStoreSwap(cmd.Path, cmd.Raw)
-}
-
-func (e *epoch) processStoreEnable(path path) error {
-	_, _, err := e.root.RecurseEnable(path)
-	return err
-}
-
-func (e *epoch) processStoreDisable(path path) error {
-	// leaf := path.Leaf()
-	// _, err := e.root.RecurseEnable(path.Parent(), leaf.Elem, leaf.Ver)
-	_,_, err := e.root.RecurseDisable(path)
-	return err
-}
-
-func (e *epoch) processStoreSwap(path path, swap Item) error {
-	_, _, err := e.root.RecurseItemSwap(path, swap.Key, swap.Val, swap.Del, swap.Ver)
+	e.logger.Debug("Swapping item [%v]: (%v,%v)", cmd.Path, cmd.Raw.Key, cmd.Raw.Ver)
+	_, _, err := e.root.RecurseItemSwap(cmd.Path, cmd.Raw.Key, cmd.Raw.Val, cmd.Raw.Del, cmd.Raw.Ver)
 	return err
 }
 
