@@ -94,6 +94,7 @@ type Item struct {
 	Val []byte
 	Ver int
 	Del bool
+	seq int
 	// ttl   time.Duration
 }
 
@@ -106,6 +107,7 @@ func (i Item) Write(w scribe.Writer) {
 	w.WriteBytes("val", i.Val)
 	w.WriteInt("ver", i.Ver)
 	w.WriteBool("del", i.Del)
+	w.WriteInt("seq", i.seq)
 }
 
 func (i Item) Bytes() []byte {
@@ -114,9 +116,9 @@ func (i Item) Bytes() []byte {
 
 func (i Item) Equal(o Item) bool {
 	return i.Ver == o.Ver &&
-	i.Del == o.Del &&
-	bytes.Equal(i.Key, o.Key) &&
-	bytes.Equal(i.Val, o.Val)
+		i.Del == o.Del &&
+		bytes.Equal(i.Key, o.Key) &&
+		bytes.Equal(i.Val, o.Val)
 }
 
 func readItem(r scribe.Reader) (item Item, err error) {
@@ -124,6 +126,7 @@ func readItem(r scribe.Reader) (item Item, err error) {
 	err = common.Or(err, r.ReadBytes("val", &item.Val))
 	err = common.Or(err, r.ReadInt("ver", &item.Ver))
 	err = common.Or(err, r.ReadBool("del", &item.Del))
+	err = common.Or(err, r.ReadInt("ver", &item.seq))
 	return
 }
 

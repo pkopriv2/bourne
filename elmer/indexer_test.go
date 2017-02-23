@@ -1,40 +1,18 @@
 package elmer
 
 import (
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
+	"github.com/pkopriv2/bourne/stash"
 	"github.com/stretchr/testify/assert"
 )
 
-// func TestIndexer_SmokeTest(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Debug),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// timer := ctx.Timer(10 * time.Second)
-// defer timer.Close()
-//
-// raw, err := kayak.StartTestHost(ctx)
-// assert.Nil(t, err)
-//
-// kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
-//
-// indexer, err := newIndexer(ctx, raw, 10)
-// assert.Nil(t, err)
-//
-// ok, err := indexer.StoreExists(timer.Closed(), emptyPath.Sub([]byte{1}, 0))
-// assert.Nil(t, err)
-// assert.False(t, ok)
-// }
-//
-//
-func TestIndexer_StoreCreate(t *testing.T) {
+func TestIndexer(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
 		"bourne.log.level": int(common.Debug),
 	})
@@ -42,113 +20,243 @@ func TestIndexer_StoreCreate(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	timer := ctx.Timer(10 * time.Second)
-	defer timer.Close()
-
 	raw, err := kayak.StartTestHost(ctx)
-	assert.Nil(t, err)
+	if err != nil {
+		t.FailNow()
+	}
+
+	timer := ctx.Timer(30 * time.Second)
+	defer timer.Closed()
 
 	kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
 
 	indexer, err := newIndexer(ctx, raw, 10)
-	assert.Nil(t, err)
+	if err != nil {
+		t.FailNow()
+	}
 
-	path := emptyPath.Child([]byte{0}, 0)
+	t.Run("StoreEnable_Canceled", func(t *testing.T) {
+		timer := ctx.Timer(time.Nanosecond)
+		defer timer.Close()
 
-	info, ok, err := indexer.StoreEnable(timer.Closed(), path)
-	assert.Nil(t, err)
-	assert.True(t, ok)
-
-	info, ok, err = indexer.StoreInfo(timer.Closed(), path.Parent(), path.Last().Elem)
-	assert.Nil(t, err)
-	assert.True(t, ok)
-	assert.True(t, info.Enabled)
-}
-
-func TestIndexer_StoreSwapItem(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
+		_, _, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte{0}, 0))
+		assert.Equal(t, common.CanceledError, common.Extract(err, common.CanceledError))
 	})
 
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
+	t.Run("StoreEnable_First_BadVersion", func(t *testing.T) {
+		_, ok, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte{0}, 0))
+		assert.Nil(t, err)
+		assert.False(t, ok)
+	})
 
-	timer := ctx.Timer(10 * time.Second)
-	defer timer.Close()
+	t.Run("StoreEnable_First", func(t *testing.T) {
+		path := emptyPath.Child([]byte{0}, -1)
+		info, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
 
-	raw, err := kayak.StartTestHost(ctx)
-	assert.Nil(t, err)
+		expected := storeInfo{path.Parent().Child([]byte{0}, 0), true}
+		assert.Equal(t, expected, info)
+	})
 
-	kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
+	t.Run("StoreEnable_AlreadyEnabled", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreEnable_AlreadyEnabled"), -1)
 
-	indexer, err := newIndexer(ctx, raw, 10)
-	assert.Nil(t, err)
+		child, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
 
-	info, ok, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte{0}, -1))
-	assert.Nil(t, err)
-	assert.True(t, ok)
+		_, ok, err = indexer.StoreEnable(timer.Closed(), child.Path)
+		assert.Nil(t, err)
+		assert.False(t, ok)
+	})
 
-	item1, ok1, err := indexer.StoreItemSwap(timer.Closed(), info.Path, Item{[]byte("key"), []byte("val"), 0, false})
-	assert.Nil(t, err)
-	assert.True(t, ok1)
-	assert.Equal(t, item1.Ver, 1)
+	t.Run("StoreEnable_PathError", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreEnable_PathError"), -1).Child([]byte{0}, -1)
 
-	item2, ok2, err := indexer.StoreItemSwap(timer.Closed(), info.Path, Item{[]byte("key"), []byte("val2"), 1, false})
-	assert.Nil(t, err)
-	assert.True(t, ok2)
-	assert.Equal(t, item2.Ver, 2)
+		_, _, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Equal(t, PathError, common.Extract(err, PathError))
+	})
+
+	t.Run("StoreDisable_NoExist", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreDisable_NoExist"), 0)
+
+		_, ok, err := indexer.StoreDisable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("StoreDisable", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreDisable"), -1)
+
+		enabled, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		disabled, ok, err := indexer.StoreDisable(timer.Closed(), enabled.Path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, storeInfo{enabled.Path.Parent().Child(enabled.Path.Last().Elem, 1), false}, disabled)
+	})
+
+	t.Run("StoreDisable_AlreadyDisabled", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreDisable_AlreadyDisabled"), -1)
+
+		enabled, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		disabled, ok, err := indexer.StoreDisable(timer.Closed(), enabled.Path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		_, ok, err = indexer.StoreDisable(timer.Closed(), disabled.Path)
+		assert.Nil(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("StoreInfo_NoExist", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreInfo_NoExist"), 0)
+
+		_, ok, err := indexer.StoreInfo(timer.Closed(), path.Parent(), path.Last().Elem)
+		assert.Nil(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("StoreInfo", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreInfo"), -1)
+
+		enabled, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		info, ok, err := indexer.StoreInfo(timer.Closed(), path.Parent(), path.Last().Elem)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, storeInfo{enabled.Path, true}, info)
+	})
+
+	t.Run("StoreItemRead_PathError", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreItemRead_StoreNoExist"), -1)
+
+		_, _, err := indexer.StoreItemRead(timer.Closed(), path, []byte("key"))
+		assert.Equal(t, PathError, common.Extract(err, PathError))
+	})
+
+	t.Run("StoreItemRead_NoExist", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreItemRead_NoExist"), -1)
+
+		info, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		_, ok, err = indexer.StoreItemRead(timer.Closed(), info.Path, []byte("key"))
+		assert.Nil(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("StoreItemSwapAndRead", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreItemSwapAndRead"), -1)
+
+		info, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		_, ok, err = indexer.StoreItemSwap(timer.Closed(), info.Path, []byte("key"), []byte("val"), -1, false)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		_, ok, err = indexer.StoreItemRead(timer.Closed(), info.Path, []byte("key"))
+		assert.Nil(t, err)
+		assert.True(t, ok)
+	})
+
+	t.Run("StoreItemSwap_Atomicity", func(t *testing.T) {
+		path := emptyPath.Child([]byte("StoreItemSwap_Atomicity"), -1)
+
+		info, ok, err := indexer.StoreEnable(timer.Closed(), path)
+		assert.Nil(t, err)
+		assert.True(t, ok)
+
+		numRoutines := 10
+		numIncPerRoutine := 10
+
+		var wait sync.WaitGroup
+		for i := 0; i < numRoutines; i++ {
+			wait.Add(1)
+			go func(i int) {
+				defer wait.Done()
+
+				err = indexerIncrementN(timer.Closed(), indexer, info.Path, []byte("key"), numIncPerRoutine)
+				if err != nil {
+					ctx.Logger().Error("ERROR: %+v", err)
+					return
+				}
+			}(i)
+		}
+
+		wait.Wait()
+		val, _, err := indexerReadInt(timer.Closed(), indexer, info.Path, []byte("key"))
+		assert.Nil(t, err)
+		assert.Equal(t, numRoutines*numIncPerRoutine, val)
+	})
 }
 
-// func TestIndexer_StoreGet(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Debug),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// timer := ctx.Timer(10 * time.Second)
-// defer timer.Close()
-//
-// raw, err := kayak.StartTestHost(ctx)
-// assert.Nil(t, err)
-//
-// kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
-//
-// indexer, err := newIndexer(ctx, raw, 10)
-// assert.Nil(t, err)
-//
-// item1, ok1, err := indexer.StoreSwapItem(timer.Closed(), []byte("store"), []byte("key"), []byte("val"), 0)
-// assert.Nil(t, err)
-// assert.True(t, ok1)
-// assert.Equal(t, item1.Ver, 1)
-//
-// item2, ok2, err := indexer.StoreReadItem(timer.Closed(), []byte("store"), []byte("key"))
-// assert.Nil(t, err)
-// assert.True(t, ok2)
-// assert.Equal(t, item1, item2)
-// }
+func indexerIncrementN(cancel <-chan struct{}, indexer *indexer, path path, key []byte, n int) error {
+	for i := 0; i < n; i++ {
+		for {
+			ok, err := indexerIncrementInt(cancel, indexer, path, key)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			if ok {
+				break
+			}
+		}
+	}
+	return nil
+}
 
-// func TestIndexer_Stuff(t *testing.T) {
-// conf := common.NewConfig(map[string]interface{}{
-// "bourne.log.level": int(common.Debug),
-// })
-//
-// ctx := common.NewContext(conf)
-// defer ctx.Close()
-//
-// timer := ctx.Timer(30 * time.Second)
-// defer timer.Close()
-//
-// raw, err := kayak.StartTestHost(ctx)
-// assert.Nil(t, err)
-//
-// kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
-//
-// indexer, err := newIndexer(ctx, raw, 10)
-// assert.Nil(t, err)
-//
-// for i := 0; i < 10240; i++ {
-// indexer.StoreSwapItem(timer.Closed(), []byte("store"), stash.IntBytes(i), stash.IntBytes(i), 0)
-// }
-// }
+func indexerIncrementInt(cancel <-chan struct{}, indexer *indexer, path path, key []byte) (bool, error) {
+	val, ver, err := indexerReadInt(cancel, indexer, path, key)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	_, ok, err := indexerSwapInt(cancel, indexer, path, key, val+1, ver)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	return ok, nil
+}
+
+func indexerReadInt(cancel <-chan struct{}, indexer *indexer, path path, key []byte) (int, int, error) {
+	item, ok, err := indexer.StoreItemRead(cancel, path, key)
+	if err != nil {
+		return 0, -1, errors.WithStack(err)
+	}
+
+	if !ok {
+		return 0, -1, nil
+	}
+
+	val, err := stash.ParseInt(item.Val)
+	if err != nil {
+		return 0, -1, errors.WithStack(err)
+	}
+
+	return val, item.Ver, nil
+}
+
+func indexerSwapInt(cancel <-chan struct{}, indexer *indexer, path path, key []byte, val int, ver int) (int, bool, error) {
+	item, ok, err := indexer.StoreItemSwap(cancel, path, key, stash.IntBytes(val), ver, false)
+	if err != nil {
+		return -1, false, errors.WithStack(err)
+	}
+
+	if !ok {
+		return -1, false, nil
+	}
+
+	return item.Ver, true, nil
+}

@@ -147,8 +147,11 @@ func readItemReadRpc(r scribe.Reader) (ret itemReadRpc, err error) {
 }
 
 type swapRpc struct {
-	Store []segment
-	Swap  Item
+	Store path
+	Key   []byte
+	Val   []byte
+	Ver   int
+	Del   bool
 }
 
 func (s swapRpc) Request() net.Request {
@@ -156,13 +159,19 @@ func (s swapRpc) Request() net.Request {
 }
 
 func (s swapRpc) Write(w scribe.Writer) {
-	w.WriteMessages("store", s.Store)
-	w.WriteMessage("swap", s.Swap)
+	w.WriteMessage("store", s.Store)
+	w.WriteBytes("key", s.Key)
+	w.WriteBytes("val", s.Val)
+	w.WriteInt("ver", s.Ver)
+	w.WriteBool("del", s.Del)
 }
 
 func readSwapRpc(r scribe.Reader) (ret swapRpc, err error) {
 	err = r.ParseMessages("store", &ret.Store, segmentParser)
-	err = common.Or(err, r.ParseMessage("swap", &ret.Swap, itemParser))
+	err = common.Or(err, r.ReadBytes("key", &ret.Key))
+	err = common.Or(err, r.ReadBytes("val", &ret.Val))
+	err = common.Or(err, r.ReadInt("ver", &ret.Ver))
+	err = common.Or(err, r.ReadBool("del", &ret.Del))
 	return
 }
 

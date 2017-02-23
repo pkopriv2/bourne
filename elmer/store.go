@@ -24,7 +24,11 @@ type storeDat struct {
 type store struct {
 	// the path represents the versioned location in the meta hierarchy
 	path path
+
+	// the meta index hosts the store data (which builds a hierarchy)
 	meta amoeba.Index
+
+	// the raw data index.
 	data amoeba.Index
 }
 
@@ -63,7 +67,7 @@ func (s *store) Name() []byte {
 func (s *store) Load(path path) (*store, error) {
 	cur := s
 	for _, elem := range path {
-		cur = cur.ChildGet(elem.Elem, elem.Ver)
+		cur = cur.ChildLoad(elem.Elem, elem.Ver)
 		if cur == nil {
 			return nil, errors.Wrapf(PathError, "Path %v contains missing store: %v", path, elem)
 		}
@@ -108,17 +112,17 @@ func (s *store) RecurseItemRead(path path, key []byte) (Item, bool, error) {
 		return Item{}, false, errors.Wrapf(err, "Error while reading key [%v]", key)
 	}
 
-	item, ok := dest.Get(key)
+	item, ok := dest.Read(key)
 	return item, ok, nil
 }
 
-func (s *store) RecurseItemSwap(path path, key []byte, val []byte, del bool, prev int) (Item, bool, error) {
+func (s *store) RecurseItemSwap(path path, key []byte, val []byte, del bool, seq int, prev int) (Item, bool, error) {
 	dest, err := s.Load(path)
 	if err != nil {
 		return Item{}, false, errors.Wrapf(err, "Error while swapping key [%v]", key)
 	}
 
-	item, ok := dest.Swap(key, val, del, prev)
+	item, ok := dest.Swap(key, val, del, seq, prev)
 	return item, ok, nil
 }
 
@@ -147,7 +151,7 @@ func (s *store) ChildInfo(name []byte) (info storeInfo, ok bool) {
 	return
 }
 
-func (s *store) ChildGet(name []byte, ver int) (ret *store) {
+func (s *store) ChildLoad(name []byte, ver int) (ret *store) {
 	s.meta.Read(func(u amoeba.View) {
 		raw := u.Get(amoeba.BytesKey(name))
 		if raw == nil {
@@ -168,9 +172,9 @@ func (s *store) ChildEnable(name []byte, prev int) (ret *store, ok bool) {
 	s.meta.Update(func(u amoeba.Update) {
 		raw := u.Get(amoeba.BytesKey(name))
 		if raw == nil {
-			// if prev != -1 {
-			// return
-			// }
+			if prev != -1 {
+				return
+			}
 
 			ret, ok = s.ChildInit(name, prev+1), true
 			u.Put(amoeba.BytesKey(name), ret.Dat())
@@ -178,7 +182,7 @@ func (s *store) ChildEnable(name []byte, prev int) (ret *store, ok bool) {
 		}
 
 		item := raw.(storeDat)
-		if item.Ver != prev {
+		if item.Ver != prev || item.Raw != nil {
 			return
 		}
 
@@ -196,7 +200,7 @@ func (s *store) ChildDisable(name []byte, prev int) (info storeInfo, ok bool) {
 		}
 
 		item := raw.(storeDat)
-		if item.Ver != prev {
+		if item.Ver != prev || item.Raw == nil {
 			return
 		}
 
@@ -206,7 +210,7 @@ func (s *store) ChildDisable(name []byte, prev int) (info storeInfo, ok bool) {
 	return
 }
 
-func (s *store) Get(key []byte) (item Item, ok bool) {
+func (s *store) Read(key []byte) (item Item, ok bool) {
 	s.data.Read(func(u amoeba.View) {
 		raw := u.Get(amoeba.BytesKey(key))
 		if raw == nil {
@@ -218,14 +222,17 @@ func (s *store) Get(key []byte) (item Item, ok bool) {
 	return
 }
 
-func (s *store) Swap(key []byte, val []byte, del bool, prev int) (item Item, ok bool) {
-	item = Item{key, val, prev + 1, false}
+func (s *store) Swap(key []byte, val []byte, del bool, seq int, prev int) (item Item, ok bool) {
+	item = Item{key, val, prev + 1, false, seq}
 	s.data.Update(func(u amoeba.Update) {
 		raw := u.Get(amoeba.BytesKey(key))
 		if raw == nil {
-			if ok = prev == 0; ok {
-				u.Put(amoeba.BytesKey(key), item)
+			if prev != -1 {
+				return
 			}
+
+			ok = true
+			u.Put(amoeba.BytesKey(key), item)
 			return
 		}
 

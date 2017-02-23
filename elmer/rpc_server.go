@@ -136,7 +136,7 @@ func (s *server) StoreItemSwap(req net.Request) net.Response {
 	timer := s.ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	item, ok, err := s.self.StoreItemSwap(timer.Closed(), rpc.Store, rpc.Swap)
+	item, ok, err := s.self.StoreItemSwap(timer.Closed(), rpc.Store, rpc.Key, rpc.Val, rpc.Ver, rpc.Del)
 	if err != nil {
 		return net.NewErrorResponse(err)
 	}

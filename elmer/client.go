@@ -177,7 +177,7 @@ func (s *storeClient) Swap(cancel <-chan struct{}, key []byte, val []byte, prev 
 
 	item, ok := Item{}, false
 	err := tryRpc(s.pool, cancel, func(r *rpcClient) error {
-		responseRpc, err := r.StoreItemSwap(swapRpc{s.path, Item{key, val, prev, del}})
+		responseRpc, err := r.StoreItemSwap(swapRpc{s.path, key, val, prev, del})
 		if err != nil {
 			return err
 		}

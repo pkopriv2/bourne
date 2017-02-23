@@ -15,15 +15,15 @@ type command struct {
 }
 
 func newStoreEnableCommand(path []segment) command {
-	return command{path, Item{[]byte{}, []byte{}, 0, false}}
+	return command{path, Item{[]byte{}, []byte{}, 0, false, 0}}
 }
 
 func newStoreDisableCommand(path []segment) command {
-	return command{path, Item{[]byte{}, []byte{}, 0, true}}
+	return command{path, Item{[]byte{}, []byte{}, 0, true, 0}}
 }
 
-func newStoreItemSwapCommand(path []segment, swap Item) command {
-	return command{path, swap}
+func newStoreItemSwapCommand(path []segment, key []byte, val []byte, ver int, del bool) command {
+	return command{path, Item{key, val, ver, del, 0}}
 }
 
 func (c command) Write(w scribe.Writer) {
@@ -57,12 +57,10 @@ type storeItemRead struct {
 
 type storeItemSwap struct {
 	Path []segment
-	Swap Item
-}
-
-type storeItemResponse struct {
-	Item Item
-	Ok   bool
+	Key  []byte
+	Val  []byte
+	Ver  int
+	Del  bool
 }
 
 // FIXME: the created indices MUST be expressable as kayak events...catalog
@@ -156,7 +154,7 @@ func (h *indexer) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 	case ch <- req:
 		select {
 		case <-h.ctrl.Closed():
-			return nil, errors.WithStack(common.CanceledError)
+			return nil, errors.WithStack(common.ClosedError)
 		case r := <-req.Acked():
 			return r, nil
 		case e := <-req.Failed():
@@ -169,7 +167,7 @@ func (h *indexer) sendRequest(ch chan<- *common.Request, cancel <-chan struct{},
 
 func (s *indexer) StoreInfo(cancel <-chan struct{}, parent path, child []byte) (storeInfo, bool, error) {
 	raw, err := s.sendRequest(s.storeInfo, cancel, partialPath{parent, child})
-	if err != nil{
+	if err != nil {
 		return storeInfo{}, false, errors.WithStack(err)
 	}
 
@@ -182,7 +180,7 @@ func (s *indexer) StoreInfo(cancel <-chan struct{}, parent path, child []byte) (
 
 func (s *indexer) StoreEnable(cancel <-chan struct{}, prev path) (storeInfo, bool, error) {
 	raw, err := s.sendRequest(s.storeEnable, cancel, prev)
-	if err != nil{
+	if err != nil {
 		return storeInfo{}, false, errors.WithStack(err)
 	}
 
@@ -195,7 +193,7 @@ func (s *indexer) StoreEnable(cancel <-chan struct{}, prev path) (storeInfo, boo
 
 func (s *indexer) StoreDisable(cancel <-chan struct{}, path path) (storeInfo, bool, error) {
 	raw, err := s.sendRequest(s.storeDisable, cancel, path)
-	if err != nil{
+	if err != nil {
 		return storeInfo{}, false, errors.WithStack(err)
 	}
 
@@ -212,18 +210,24 @@ func (s *indexer) StoreItemRead(cancel <-chan struct{}, path path, key []byte) (
 		return Item{}, false, err
 	}
 
-	resp := raw.(storeItemResponse)
-	return resp.Item, resp.Ok, nil
+	if raw == nil {
+		return Item{}, false, nil
+	}
+
+	return raw.(Item), true, nil
 }
 
-func (s *indexer) StoreItemSwap(cancel <-chan struct{}, path path, swap Item) (Item, bool, error) {
-	raw, err := s.sendRequest(s.storeItemSwap, cancel, storeItemSwap{path, swap})
+func (s *indexer) StoreItemSwap(cancel <-chan struct{}, path path, key []byte, val []byte, ver int, del bool) (Item, bool, error) {
+	raw, err := s.sendRequest(s.storeItemSwap, cancel, storeItemSwap{path, key, val, ver, del})
 	if err != nil {
 		return Item{}, false, err
 	}
 
-	resp := raw.(storeItemResponse)
-	return resp.Item, resp.Ok, nil
+	if raw == nil {
+		return Item{}, false, nil
+	}
+
+	return raw.(Item), true, nil
 }
 
 func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, bool)) (Item, bool, error) {
@@ -237,7 +241,7 @@ func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []b
 		return Item{}, true, nil
 	}
 
-	item, ok, err := s.StoreItemSwap(cancel, store, Item{key, val, item.Ver, del})
+	item, ok, err := s.StoreItemSwap(cancel, store, key, val, item.Ver, del)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
@@ -309,30 +313,31 @@ func openEpoch(ctx common.Context, parent *indexer, log kayak.Log, sync kayak.Sy
 	return e, nil
 }
 
-func (e *epoch) AppendAndSync(cancel <-chan struct{}, c command) error {
+func (e *epoch) AppendAndSync(cancel <-chan struct{}, c command) (int, error) {
 	entry, err := e.log.Append(cancel, c.Bytes())
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// TODO: Does this break linearizability???  Technically, another conflicting item
 	// can come in immediately after we sync and update the value - and we can't tell
 	// whether our update was accepted or not..
-	return e.sync.Sync(cancel, entry.Index)
+	return entry.Index, e.sync.Sync(cancel, entry.Index)
 }
 
-// FIXME: should query for barrier?
+// FIXME: should query for barrier? (YES)
 func (e *epoch) StoreInfo(parent path, child []byte) (storeInfo, bool, error) {
 	return e.root.RecurseInfo(parent, child)
 }
 
 func (e *epoch) StoreEnableAndSync(cancel <-chan struct{}, path path) (storeInfo, bool, error) {
 	e.logger.Debug("Enabling store [%v]", path)
-	if err := e.AppendAndSync(cancel, newStoreEnableCommand(path)); err != nil {
-		return storeInfo{}, false, err
+
+	if _, err := e.AppendAndSync(cancel, newStoreEnableCommand(path)); err != nil {
+		return storeInfo{}, false, errors.WithStack(err)
 	}
 
-	name, ver := path.Tail()
+	name, prev := path.Tail()
 
 	info, found, err := e.root.RecurseInfo(path.Parent(), name)
 	if err != nil {
@@ -341,25 +346,24 @@ func (e *epoch) StoreEnableAndSync(cancel <-chan struct{}, path path) (storeInfo
 	if !found || !info.Enabled {
 		return storeInfo{}, false, nil
 	}
-	return info, info.Version() == ver+1, nil
+	return info, info.Version() == prev+1, nil
 }
 
-func (e *epoch) StoreDisableAndSync(cancel <-chan struct{}, path path) (bool, error) {
-	if err := e.AppendAndSync(cancel, newStoreDisableCommand(path)); err != nil {
-		return false, errors.WithStack(err)
+func (e *epoch) StoreDisableAndSync(cancel <-chan struct{}, path path) (storeInfo, bool, error) {
+	if _, err := e.AppendAndSync(cancel, newStoreDisableCommand(path)); err != nil {
+		return storeInfo{}, false, errors.WithStack(err)
 	}
-	return false, nil
 
-	// leaf := path.Leaf()
-	//
-	// info, found, err := e.root.RecurseInfo(path.Parent(), leaf.Elem)
-	// if err != nil {
-	// return false, errors.WithStack(err)
-	// }
-	// if !found || !info.Enabled {
-	// return false, nil
-	// }
-	// return leaf.Ver == info.Ver, nil
+	name, prev := path.Tail()
+
+	info, found, err := e.root.RecurseInfo(path.Parent(), name)
+	if err != nil {
+		return storeInfo{}, false, errors.WithStack(err)
+	}
+	if !found {
+		return storeInfo{}, false, nil
+	}
+	return info, info.Version() == prev+1, nil
 }
 
 func (e *epoch) StoreSyncAndRead(cancel <-chan struct{}, path path, key []byte) (Item, bool, error) {
@@ -380,19 +384,26 @@ func (e *epoch) StoreSyncAndRead(cancel <-chan struct{}, path path, key []byte) 
 	return item, ok, nil
 }
 
-func (e *epoch) StoreItemSwapAndSync(cancel <-chan struct{}, path path, item Item) (Item, bool, error) {
-	if err := e.AppendAndSync(cancel, newStoreItemSwapCommand(path, item)); err != nil {
-		return Item{}, false, errors.WithStack(err)
-	}
-
-	actual, ok, err := e.root.RecurseItemRead(path, item.Key)
+func (e *epoch) StoreItemSwapAndSync(cancel <-chan struct{}, path path, key []byte, val []byte, ver int, del bool) (Item, bool, error) {
+	index, err := e.AppendAndSync(cancel, newStoreItemSwapCommand(path, key, val, ver, del))
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
-	if !ok || actual.Ver != item.Ver+1 {
-		return Item{}, false, nil
+
+	e.logger.Debug("Appended swap: %v", index)
+
+	actual, ok, err := e.root.RecurseItemRead(path, key)
+	if err != nil {
+		return Item{}, false, errors.WithStack(err)
 	}
-	return actual, true, nil
+
+	e.logger.Debug("Read swap: %v", actual.seq)
+
+	if ! ok {
+		return actual, false, nil
+	}
+
+	return actual, actual.seq == index, nil
 }
 
 func (e *epoch) start(index int, size int) error {
@@ -508,7 +519,17 @@ func (e *epoch) reqStoreEnable(req *common.Request) {
 
 func (e *epoch) reqStoreDisable(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
-		req.Return(e.StoreDisableAndSync(req.Canceled(), req.Body().(path)))
+		info, ok, err := e.StoreDisableAndSync(req.Canceled(), req.Body().(path))
+		if err != nil {
+			req.Fail(err)
+			return
+		}
+
+		if ok {
+			req.Ack(info)
+		} else {
+			req.Ack(nil)
+		}
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
@@ -523,7 +544,12 @@ func (e *epoch) reqStoreItemRead(req *common.Request) {
 			req.Fail(err)
 			return
 		}
-		req.Ack(storeItemResponse{item, ok})
+
+		if ok {
+			req.Ack(item)
+		} else {
+			req.Ack(nil)
+		}
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
@@ -533,12 +559,17 @@ func (e *epoch) reqStoreItemRead(req *common.Request) {
 func (e *epoch) reqStoreItemSwap(req *common.Request) {
 	err := e.requests.SubmitOrCancel(req.Canceled(), func() {
 		rpc := req.Body().(storeItemSwap)
-		item, ok, err := e.StoreItemSwapAndSync(req.Canceled(), rpc.Path, rpc.Swap)
+		item, ok, err := e.StoreItemSwapAndSync(req.Canceled(), rpc.Path, rpc.Key, rpc.Val, rpc.Ver, rpc.Del)
 		if err != nil {
 			req.Fail(err)
 			return
 		}
-		req.Ack(storeItemResponse{item, ok})
+
+		if ok {
+			req.Ack(item)
+		} else {
+			req.Ack(nil)
+		}
 	})
 	if err != nil {
 		req.Fail(errors.Wrapf(err, "Error submitting to machine."))
@@ -557,10 +588,10 @@ func (e *epoch) processEntry(entry kayak.Entry) error {
 		return errors.WithStack(err)
 	}
 
-	return e.processCommand(cmd)
+	return e.processCommand(entry.Index, cmd)
 }
 
-func (e *epoch) processCommand(cmd command) error {
+func (e *epoch) processCommand(index int, cmd command) error {
 	// Handle: store create/delete
 	if bytes.Equal(cmd.Raw.Key, []byte{}) {
 		if !cmd.Raw.Del {
@@ -575,8 +606,8 @@ func (e *epoch) processCommand(cmd command) error {
 	}
 
 	// Handle: item swap.
-	e.logger.Debug("Swapping item [%v]: (%v,%v)", cmd.Path, cmd.Raw.Key, cmd.Raw.Ver)
-	_, _, err := e.root.RecurseItemSwap(cmd.Path, cmd.Raw.Key, cmd.Raw.Val, cmd.Raw.Del, cmd.Raw.Ver)
+	e.logger.Debug("Swapping item [%v]: (key=%v,seq=%v,prev=%v)", cmd.Path, cmd.Raw.Key, index, cmd.Raw.Ver)
+	_, _, err := e.root.RecurseItemSwap(cmd.Path, cmd.Raw.Key, cmd.Raw.Val, cmd.Raw.Del, index, cmd.Raw.Ver)
 	return err
 }
 
