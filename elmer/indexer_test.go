@@ -33,23 +33,23 @@ func TestIndexer(t *testing.T) {
 		timer := ctx.Timer(time.Nanosecond)
 		defer timer.Close()
 
-		_, _, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte{0}, 0))
+		_, _, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte("StoreEnable_Canceled"), 0))
 		assert.Equal(t, common.CanceledError, common.Extract(err, common.CanceledError))
 	})
 
 	t.Run("StoreEnable_First_BadVersion", func(t *testing.T) {
-		_, ok, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte{0}, 0))
+		_, ok, err := indexer.StoreEnable(timer.Closed(), emptyPath.Child([]byte("StoreEnable_First_BadVersion"), 0))
 		assert.Nil(t, err)
 		assert.False(t, ok)
 	})
 
 	t.Run("StoreEnable_First", func(t *testing.T) {
-		path := emptyPath.Child([]byte{0}, -1)
+		path := emptyPath.Child([]byte("StoreEnable_First"), -1)
 		info, ok, err := indexer.StoreEnable(timer.Closed(), path)
 		assert.Nil(t, err)
 		assert.True(t, ok)
 
-		expected := storeInfo{path.Parent().Child([]byte{0}, 0), true}
+		expected := storeInfo{emptyPath.Child([]byte("StoreEnable_First"), 0), true}
 		assert.Equal(t, expected, info)
 	})
 

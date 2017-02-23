@@ -36,7 +36,7 @@ func (c command) Bytes() []byte {
 }
 
 func readCommand(r scribe.Reader) (c command, e error) {
-	e = r.ParseMessage("path", (*path)(&c.Path), pathParser)
+	e = r.ParseMessage("path", &c.Path, pathParser)
 	e = common.Or(e, r.ParseMessage("raw", &c.Raw, itemParser))
 	return
 }
@@ -115,7 +115,7 @@ func (s *indexer) start() {
 		for iter := 0; !s.ctrl.IsClosed(); iter++ {
 			s.logger.Info("Starting epoch [%v]", iter)
 
-			log, sync, err := s.getLog()
+			log, sync, err := s.initLog()
 			if err != nil {
 				s.logger.Error("Error retrieving log: %+v", err)
 				continue
@@ -259,7 +259,7 @@ func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store path, key []byte
 	return Item{}, false, errors.WithStack(common.CanceledError)
 }
 
-func (s *indexer) getLog() (kayak.Log, kayak.Sync, error) {
+func (s *indexer) initLog() (kayak.Log, kayak.Sync, error) {
 	sync, err := s.peer.Sync()
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "Error retrieving peer syncer [%v]", s.peer.Id())
@@ -387,15 +387,15 @@ func (e *epoch) StoreItemSwapAndSync(cancel <-chan struct{}, path path, key []by
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	e.logger.Debug("Appended swap: %v", index)
+	// e.logger.Debug("Appended swap: %v", index)
 
 	actual, ok, err := e.root.RecurseItemRead(path, key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	e.logger.Debug("Read swap: %v", actual.seq)
-	if ! ok {
+	// e.logger.Debug("Read swap: %v", actual.seq)
+	if !ok {
 		return actual, false, nil
 	}
 
@@ -461,7 +461,7 @@ func (e *epoch) start(index int, size int) error {
 		defer e.logger.Info("Compactor shutting down")
 		e.logger.Info("Starting compactor")
 
-		for lastIndex := index; ; lastIndex = lastIndex+1000 {
+		for lastIndex := index; ; lastIndex = lastIndex + 1000 {
 			if err := e.sync.Sync(e.ctrl.Closed(), lastIndex+1000); err != nil {
 				e.ctrl.Fail(err)
 				return

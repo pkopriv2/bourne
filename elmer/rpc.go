@@ -7,7 +7,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// server endpoints
+// Server endpoints
 const (
 	actStatus        = "elmer.status"
 	actStoreInfo     = "elmer.store.exists"

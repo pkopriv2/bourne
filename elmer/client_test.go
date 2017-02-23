@@ -129,6 +129,7 @@ func Inc(store Store, cancel <-chan struct{}, key []byte) (int, error) {
 		if err != nil {
 			return 0, errors.WithStack(err)
 		}
+
 		var cur int
 		if ok {
 			tmp, err := stash.ParseInt(item.Val)
