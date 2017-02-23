@@ -20,19 +20,13 @@ func TestIndexer(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	raw, err := kayak.StartTestHost(ctx)
+	timer := ctx.Timer(60*time.Second)
+	defer timer.Close()
+
+	indexer, err := newTestIndexer(ctx, timer.Closed())
 	if err != nil {
-		t.FailNow()
-	}
-
-	timer := ctx.Timer(30 * time.Second)
-	defer timer.Closed()
-
-	kayak.ElectLeader(timer.Closed(), []kayak.Host{raw})
-
-	indexer, err := newIndexer(ctx, raw, 10)
-	if err != nil {
-		t.FailNow()
+		t.Fail()
+		return
 	}
 
 	t.Run("StoreEnable_Canceled", func(t *testing.T) {
@@ -179,7 +173,7 @@ func TestIndexer(t *testing.T) {
 		assert.True(t, ok)
 
 		numRoutines := 10
-		numIncPerRoutine := 10
+		numIncPerRoutine := 100
 
 		var wait sync.WaitGroup
 		for i := 0; i < numRoutines; i++ {
@@ -200,6 +194,24 @@ func TestIndexer(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, numRoutines*numIncPerRoutine, val)
 	})
+}
+
+func newTestIndexer(ctx common.Context, cancel <-chan struct{}) (*indexer, error) {
+	raw, err := kayak.StartTestHost(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	leader := kayak.ElectLeader(cancel, []kayak.Host{raw})
+	if leader == nil || common.IsClosed(cancel) {
+		return nil, errors.WithStack(common.CanceledError)
+	}
+
+	indexer, err := newIndexer(ctx, raw, 10)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return indexer, nil
 }
 
 func indexerIncrementN(cancel <-chan struct{}, indexer *indexer, path path, key []byte, n int) error {

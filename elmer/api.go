@@ -126,7 +126,7 @@ func readItem(r scribe.Reader) (item Item, err error) {
 	err = common.Or(err, r.ReadBytes("val", &item.Val))
 	err = common.Or(err, r.ReadInt("ver", &item.Ver))
 	err = common.Or(err, r.ReadBool("del", &item.Del))
-	err = common.Or(err, r.ReadInt("ver", &item.seq))
+	err = common.Or(err, r.ReadInt("seq", &item.seq))
 	return
 }
 

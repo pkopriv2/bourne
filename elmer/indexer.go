@@ -319,9 +319,6 @@ func (e *epoch) AppendAndSync(cancel <-chan struct{}, c command) (int, error) {
 		return 0, err
 	}
 
-	// TODO: Does this break linearizability???  Technically, another conflicting item
-	// can come in immediately after we sync and update the value - and we can't tell
-	// whether our update was accepted or not..
 	return entry.Index, e.sync.Sync(cancel, entry.Index)
 }
 
@@ -338,7 +335,6 @@ func (e *epoch) StoreEnableAndSync(cancel <-chan struct{}, path path) (storeInfo
 	}
 
 	name, prev := path.Tail()
-
 	info, found, err := e.root.RecurseInfo(path.Parent(), name)
 	if err != nil {
 		return storeInfo{}, false, errors.WithStack(err)
@@ -350,12 +346,13 @@ func (e *epoch) StoreEnableAndSync(cancel <-chan struct{}, path path) (storeInfo
 }
 
 func (e *epoch) StoreDisableAndSync(cancel <-chan struct{}, path path) (storeInfo, bool, error) {
+	e.logger.Debug("Disabling store [%v]", path)
+
 	if _, err := e.AppendAndSync(cancel, newStoreDisableCommand(path)); err != nil {
 		return storeInfo{}, false, errors.WithStack(err)
 	}
 
 	name, prev := path.Tail()
-
 	info, found, err := e.root.RecurseInfo(path.Parent(), name)
 	if err != nil {
 		return storeInfo{}, false, errors.WithStack(err)
@@ -398,7 +395,6 @@ func (e *epoch) StoreItemSwapAndSync(cancel <-chan struct{}, path path, key []by
 	}
 
 	e.logger.Debug("Read swap: %v", actual.seq)
-
 	if ! ok {
 		return actual, false, nil
 	}
@@ -459,20 +455,24 @@ func (e *epoch) start(index int, size int) error {
 		}
 	}()
 
-	// // start the compacting routine
-	// go func() {
-	// defer e.ctrl.Close()
-	// defer e.logger.Info("Compactor shutting down")
-	// e.logger.Info("Starting compactor")
-	//
-	// for lastIndex, lastSize := index, size; ; {
-	// if err := e.sync.Sync(e.ctrl.Closed(), lastIndex+2*lastSize); err != nil {
-	// e.ctrl.Fail(err)
-	// return
-	// }
-	//
-	// }
-	// }()
+	// start the compacting routine
+	go func() {
+		defer e.ctrl.Close()
+		defer e.logger.Info("Compactor shutting down")
+		e.logger.Info("Starting compactor")
+
+		for lastIndex := index; ; lastIndex = lastIndex+1000 {
+			if err := e.sync.Sync(e.ctrl.Closed(), lastIndex+1000); err != nil {
+				e.ctrl.Fail(err)
+				return
+			}
+
+			e.logger.Info("Compacting until: %v", lastIndex)
+			if err := e.log.Compact(lastIndex, kayak.NewEventChannel([]kayak.Event{}), 0); err != nil {
+				e.logger.Info("Error compacting: %+v", err)
+			}
+		}
+	}()
 
 	return nil
 }
