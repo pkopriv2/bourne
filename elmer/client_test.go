@@ -8,149 +8,132 @@ import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/stash"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestClient_StoreCreate_NoExist(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	timer := ctx.Timer(30 * time.Second)
-	defer timer.Close()
-
-	cluster := NewTestCluster(ctx, 3)
-	assert.Equal(t, 3, len(cluster))
-
-	cl, err := Connect(ctx, collectAddrs(cluster))
-	assert.Nil(t, err)
-
-	root, err := cl.Root()
-	assert.Nil(t, err)
-
-	store, err := root.CreateStore(timer.Closed(), []byte("store"))
-	assert.Nil(t, err)
-
-	_, ok, err := store.Get(timer.Closed(), []byte("key"))
-	assert.Nil(t, err)
-	assert.False(t, ok)
+func TestClient(t *testing.T) {
+	t.Run("Client_Basic_1", testClient_Basic(t, 1))
+	t.Run("Client_Basic_2", testClient_Basic(t, 2))
+	t.Run("Client_Basic_3", testClient_Basic(t, 3))
+	t.Run("Client_Basic_4", testClient_Basic(t, 4))
+	t.Run("Client_Basic_5", testClient_Basic(t, 5))
 }
 
-func TestClient_Catalog_Store_Put(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
-	})
+func testClient_Basic(t *testing.T, size int) func(t *testing.T) {
+	return func(t *testing.T) {
+		ctx := common.NewEmptyContext()
+		defer ctx.Close()
 
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	timer := ctx.Timer(30 * time.Second)
-	defer timer.Close()
-
-	cluster := NewTestCluster(ctx, 3)
-	assert.Equal(t, 3, len(cluster))
-
-	cl, err := Connect(ctx, collectAddrs(cluster))
-	assert.Nil(t, err)
-
-	root, err := cl.Root()
-	assert.Nil(t, err)
-
-	store, err := root.CreateStore(timer.Closed(), []byte("store"))
-	assert.Nil(t, err)
-
-	val := make([]byte, 1024)
-
-	numThreads := 1
-	numItemsPerThread := 1000
-	for i := 0; i < numThreads; i++ {
-		go func(i int) {
-			for j := 0; j < numItemsPerThread; j++ {
-				store.Put(timer.Closed(), stash.IntBytes(numThreads*i+j), val, 0)
-			}
-		}(i)
-	}
-
-	sync, err := cluster[0].self.Sync()
-	assert.Nil(t, sync.Sync(timer.Closed(), numThreads*numItemsPerThread-1))
-}
-
-func TestClient_Catalog_Store_Increment(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Info),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	timer := ctx.Timer(30 * time.Second)
-	defer timer.Close()
-
-	cluster := NewTestCluster(ctx, 3)
-	assert.Equal(t, 3, len(cluster))
-
-	cl, err := Connect(ctx, collectAddrs(cluster))
-	assert.Nil(t, err)
-
-	root, err := cl.Root()
-	assert.Nil(t, err)
-
-	store, err := root.CreateStore(timer.Closed(), []byte("store"))
-	assert.Nil(t, err)
-
-	numThreads := 3
-	numIncPerThread := 3
-	for i := 0; i < numThreads; i++ {
-		go func(i int) {
-			for j := 0; j < numIncPerThread; j++ {
-				val, err := Inc(store, timer.Closed(), []byte("key"))
-				if err != nil {
-					ctx.Logger().Info("Error: %+v", err)
-					t.Fail()
-					return
-				}
-
-				ctx.Logger().Info("Incremented: %v", val)
-			}
-		}(i)
-	}
-
-	sync, err := cluster[0].self.Sync()
-	assert.Nil(t, sync.Sync(timer.Closed(), numThreads*numIncPerThread-1))
-}
-
-func Inc(store Store, cancel <-chan struct{}, key []byte) (int, error) {
-	for {
-		item, ok, err := store.Get(cancel, key)
+		cluster, err := NewTestCluster(ctx, size)
 		if err != nil {
-			return 0, errors.WithStack(err)
+			t.Fail()
+			return
 		}
 
-		var cur int
-		if ok {
-			tmp, err := stash.ParseInt(item.Val)
-			if err != nil {
-				return 0, errors.WithStack(err)
-			}
-			cur = tmp
-		} else {
-			cur = 0
-		}
-
-		cur++
-
-		_, ok, err = store.Put(cancel, key, stash.IntBytes(cur), item.Ver)
+		cl, err := NewTestClient(ctx, cluster)
 		if err != nil {
-			return 0, errors.WithStack(err)
+			t.Fail()
+			return
 		}
 
-		if ok {
-			return cur, nil
+		root, err := cl.Root()
+		if err != nil {
+			t.Fail()
+			return
 		}
+
+		timer := ctx.Timer(30 * time.Second)
+		defer timer.Close()
+
+		t.Run("GetStore_NoExist", testClient_GetStore_NoExist(ctx, timer.Closed(), root))
+		t.Run("CreateStore_Simple", testClient_CreateStore_Simple(ctx, timer.Closed(), root))
+		t.Run("CreateStore_AlreadyExists", testClient_CreateStore_AlreadyExists(ctx, timer.Closed(), root))
+		t.Run("CreateStore_PreviouslyDeleted", testClient_CreateStore_PreviouslyDeleted(ctx, timer.Closed(), root))
+
+		t.Run("DeleteStore_NoExist", testClient_DeleteStore_NoExist(ctx, timer.Closed(), root))
+		t.Run("DeleteStore_Simple", testClient_DeleteStore_Simple(ctx, timer.Closed(), root))
+		t.Run("DeleteStore_PreviouslyDeleted", testClient_DeleteStore_PreviouslyDeleted(ctx, timer.Closed(), root))
+
+		t.Run("Close", testClient_Close(ctx, timer.Closed(), cl))
+
+	}
+}
+
+// These testClient_s are independent of cluster topology/behavior.
+func testClient_Close(ctx common.Context, cancel <-chan struct{}, cl Peer) func(t *testing.T) {
+	return func(t *testing.T) {
+		assert.Nil(t, cl.Close())
+	}
+}
+
+func testClient_GetStore_NoExist(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
+	return func(t *testing.T) {
+		child, err := root.GetStore(cancel, []byte("GetStore_NoExist"))
+		assert.Nil(t, err)
+		assert.Nil(t, child)
+	}
+}
+
+func testClient_CreateStore_Simple(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
+	return func(t *testing.T) {
+		child, err := root.CreateStore(cancel, []byte("testClient_CreateStore_Simple"))
+		assert.Nil(t, err)
+		assert.NotNil(t, child)
+	}
+}
+
+func testClient_CreateStore_AlreadyExists(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
+	return func(t *testing.T) {
+		_, err := root.CreateStore(cancel, []byte("testClient_CreateStore_AlreadyExists"))
+		assert.Nil(t, err)
+
+		_, err = root.CreateStore(cancel, []byte("testClient_CreateStore_AlreadyExists"))
+		assert.Equal(t, InvariantError, common.Extract(err, InvariantError))
+	}
+}
+
+func testClient_CreateStore_PreviouslyDeleted(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
+	name := []byte("testClient_CreateStore_PreviouslyDeleted")
+	return func(t *testing.T) {
+		_, err := root.CreateStore(cancel, name)
+		assert.Nil(t, err)
+		assert.Nil(t, root.DeleteStore(cancel, name))
+
+		_, err = root.CreateStore(cancel, name)
+		assert.Nil(t, err)
+	}
+}
+
+func testClient_DeleteStore_NoExist(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
+	return func(t *testing.T) {
+		err := root.DeleteStore(cancel, []byte("testClient_DeleteStore_NoExist"))
+		assert.Equal(t, InvariantError, common.Extract(err, InvariantError))
+	}
+}
+
+func testClient_DeleteStore_Simple(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
+	name := []byte("testClient_DeleteStore_Simple")
+	return func(t *testing.T) {
+		_, err := root.CreateStore(cancel, name)
+		assert.Nil(t, err)
+		assert.Nil(t, root.DeleteStore(cancel, name))
+
+		store, err := root.GetStore(cancel, name)
+		assert.Nil(t, err)
+		assert.Nil(t, store)
+	}
+}
+
+func testClient_DeleteStore_PreviouslyDeleted(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
+	name := []byte("testClient_DeleteStore_PreviouslyDeleted")
+	return func(t *testing.T) {
+		_, err := root.CreateStore(cancel, name)
+		assert.Nil(t, err)
+		assert.Nil(t, root.DeleteStore(cancel, name))
+
+		_, err = root.CreateStore(cancel, name)
+		assert.Nil(t, err)
+		assert.Nil(t, root.DeleteStore(cancel, name))
 	}
 }
 
@@ -162,14 +145,23 @@ func collectAddrs(peers []*peer) []string {
 	return ret
 }
 
-func NewTestCluster(ctx common.Context, num int) []*peer {
-	timer := ctx.Timer(30 * time.Second)
-	defer timer.Close()
+func NewTestClient(ctx common.Context, cluster []*peer) (Peer, error) {
+	cl, err := Connect(ctx, collectAddrs(cluster))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
+	return cl, nil
+}
+
+func NewTestCluster(ctx common.Context, num int) ([]*peer, error) {
 	cluster, err := kayak.StartTestCluster(ctx, num)
 	if err != nil {
-		panic(err)
+		return nil, errors.WithStack(err)
 	}
+
+	timer := ctx.Timer(30 * time.Second)
+	defer timer.Close()
 
 	kayak.ElectLeader(timer.Closed(), cluster)
 
@@ -181,5 +173,5 @@ func NewTestCluster(ctx common.Context, num int) []*peer {
 		}
 		ret = append(ret, peer)
 	}
-	return ret
+	return ret, nil
 }

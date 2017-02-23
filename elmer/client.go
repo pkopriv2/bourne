@@ -85,6 +85,10 @@ func (s *storeClient) Name() []byte {
 }
 
 func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
+	if s.ctrl.IsClosed() {
+		return nil, errors.WithStack(common.ClosedError)
+	}
+
 	err = tryRpc(s.pool, cancel, func(r *rpcClient) error {
 		infoRpc, err := r.StoreInfo(partialStoreRpc{s.path, name})
 		if err != nil {
@@ -102,6 +106,10 @@ func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (ret Store, 
 }
 
 func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
+	if s.ctrl.IsClosed() {
+		return nil, errors.WithStack(common.ClosedError)
+	}
+
 	err = tryRpc(s.pool, cancel, func(r *rpcClient) error {
 		infoRpc, err := r.StoreInfo(partialStoreRpc{s.path, name})
 		if err != nil {
@@ -112,7 +120,12 @@ func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Stor
 			return errors.Wrapf(InvariantError, "Store already exists [%v]", name)
 		}
 
-		infoRpc, err = r.StoreEnable(storeRpc{infoRpc.Path.Parent().Child(name, infoRpc.Path.Last().Ver)})
+		path := infoRpc.Path
+		if ! infoRpc.Found {
+			path = s.path.Child(name, -1)
+		}
+
+		infoRpc, err = r.StoreEnable(storeRpc{path})
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -128,7 +141,30 @@ func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Stor
 }
 
 func (s *storeClient) DeleteStore(cancel <-chan struct{}, name []byte) error {
-	panic("not implemented")
+	if s.ctrl.IsClosed() {
+		return errors.WithStack(common.ClosedError)
+	}
+
+	return tryRpc(s.pool, cancel, func(r *rpcClient) error {
+		infoRpc, err := r.StoreInfo(partialStoreRpc{s.path, name})
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		if ! infoRpc.Found || ! infoRpc.Enabled {
+			return errors.Wrapf(InvariantError, "Store doesn't exist [%v]", name)
+		}
+
+		infoRpc, err = r.StoreDisable(storeRpc{infoRpc.Path})
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		if ! infoRpc.Found || infoRpc.Enabled {
+			return errors.Wrapf(InvariantError, "Error deleting store [%v]", name)
+		}
+		return nil
+	})
 }
 
 func (s *storeClient) Get(cancel <-chan struct{}, key []byte) (Item, bool, error) {

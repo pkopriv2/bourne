@@ -156,13 +156,14 @@ func TestIndexer(t *testing.T) {
 		assert.Nil(t, err)
 		assert.True(t, ok)
 
-		_, ok, err = indexer.StoreItemSwap(timer.Closed(), info.Path, []byte("key"), []byte("val"), -1, false)
+		swapped, ok, err := indexer.StoreItemSwap(timer.Closed(), info.Path, []byte("key"), []byte("val"), -1, false)
 		assert.Nil(t, err)
 		assert.True(t, ok)
 
-		_, ok, err = indexer.StoreItemRead(timer.Closed(), info.Path, []byte("key"))
+		read, ok, err := indexer.StoreItemRead(timer.Closed(), info.Path, []byte("key"))
 		assert.Nil(t, err)
 		assert.True(t, ok)
+		assert.Equal(t, swapped, read)
 	})
 
 	t.Run("StoreItemSwap_Atomicity", func(t *testing.T) {
