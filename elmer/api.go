@@ -1,7 +1,6 @@
 package elmer
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
@@ -88,6 +87,33 @@ type Store interface {
 	Del(cancel <-chan struct{}, key []byte, ver int) (bool, error)
 }
 
+func Update(cancel <-chan struct{}, store Store, key []byte, fn func([]byte) ([]byte, error)) (Item, error) {
+	for {
+		cur, ok, err := store.Get(cancel, key)
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		if !ok {
+			cur = Item{key, nil, -1, false, 0}
+		}
+
+		new, err := fn(cur.Val)
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		next, ok, err := store.Put(cancel, key, new, cur.Ver)
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		if ok {
+			return next, nil
+		}
+	}
+}
+
 // An item in a store.
 type Item struct {
 	Key []byte
@@ -114,12 +140,12 @@ func (i Item) Bytes() []byte {
 	return scribe.Write(i).Bytes()
 }
 
-func (i Item) Equal(o Item) bool {
-	return i.Ver == o.Ver &&
-		i.Del == o.Del &&
-		bytes.Equal(i.Key, o.Key) &&
-		bytes.Equal(i.Val, o.Val)
-}
+// func (i Item) Equal(o Item) bool {
+// return i.Ver == o.Ver &&
+// i.Del == o.Del &&
+// bytes.Equal(i.Key, o.Key) &&
+// bytes.Equal(i.Val, o.Val)
+// }
 
 func readItem(r scribe.Reader) (item Item, err error) {
 	err = common.Or(err, r.ReadBytes("key", &item.Key))

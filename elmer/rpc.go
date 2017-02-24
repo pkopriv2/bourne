@@ -10,7 +10,7 @@ import (
 // Server endpoints
 const (
 	actStatus        = "elmer.status"
-	actStoreInfo     = "elmer.store.exists"
+	actStoreInfo     = "elmer.store.info"
 	actStoreDelete   = "elmer.store.delete"
 	actStoreCreate   = "elmer.store.create"
 	actStoreItemRead = "elmer.store.item.read"
@@ -127,12 +127,12 @@ func readStoreRequestRpc(r scribe.Reader) (ret storeRpc, err error) {
 }
 
 type itemReadRpc struct {
-	Store []segment
+	Store path
 	Key   []byte
 }
 
 func (g itemReadRpc) Write(w scribe.Writer) {
-	w.WriteMessages("store", g.Store)
+	w.WriteMessage("store", g.Store)
 	w.WriteBytes("key", g.Key)
 }
 
@@ -141,7 +141,7 @@ func (g itemReadRpc) Request() net.Request {
 }
 
 func readItemReadRpc(r scribe.Reader) (ret itemReadRpc, err error) {
-	err = r.ParseMessages("store", &ret.Store, segmentParser)
+	err = r.ParseMessage("store", &ret.Store, pathParser)
 	err = common.Or(err, r.ReadBytes("key", &ret.Key))
 	return
 }
@@ -167,7 +167,7 @@ func (s swapRpc) Write(w scribe.Writer) {
 }
 
 func readSwapRpc(r scribe.Reader) (ret swapRpc, err error) {
-	err = r.ParseMessages("store", &ret.Store, segmentParser)
+	err = r.ParseMessage("store", &ret.Store, pathParser)
 	err = common.Or(err, r.ReadBytes("key", &ret.Key))
 	err = common.Or(err, r.ReadBytes("val", &ret.Val))
 	err = common.Or(err, r.ReadInt("ver", &ret.Ver))

@@ -9,6 +9,29 @@ import (
 	"github.com/pkopriv2/bourne/scribe"
 )
 
+// Ensures that the store exists.
+func ensureStore(indexer *indexer, cancel <-chan struct{}, partial partialPath) (storeInfo, error) {
+	for {
+		info, ok, err := indexer.StoreInfo(cancel, partial.Parent, partial.Child)
+		if err != nil {
+			return storeInfo{}, errors.WithStack(err)
+		}
+
+		if ok {
+			return info, nil
+		}
+
+		info, ok, err = indexer.StoreEnable(cancel, partial.Path(-1))
+		if err != nil {
+			return storeInfo{}, errors.WithStack(err)
+		}
+
+		if ok {
+			return info, nil
+		}
+	}
+}
+
 type command struct {
 	Path path
 	Raw  Item
@@ -230,16 +253,18 @@ func (s *indexer) StoreItemSwap(cancel <-chan struct{}, path path, key []byte, v
 	return raw.(Item), true, nil
 }
 
-func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, bool)) (Item, bool, error) {
+func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, error)) (Item, bool, error) {
 	item, _, err := s.StoreItemRead(cancel, store, key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	val, del := fn(item.Val)
-	if val == nil {
-		return Item{}, true, nil
+	val, err := fn(item.Val)
+	if err != nil {
+		return Item{}, false, errors.WithStack(err)
 	}
+
+	del := val == nil
 
 	item, ok, err := s.StoreItemSwap(cancel, store, key, val, item.Ver, del)
 	if err != nil {
@@ -249,7 +274,7 @@ func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []b
 	return item, ok, nil
 }
 
-func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, bool)) (Item, bool, error) {
+func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, error)) (Item, bool, error) {
 	for !common.IsCanceled(cancel) {
 		item, ok, _ := s.StoreTryUpdateItem(cancel, store, key, fn)
 		if ok {

@@ -10,6 +10,7 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
+
 func tryRpc(pool common.ObjectPool, cancel <-chan struct{}, fn func(*rpcClient) error) error {
 	raw := pool.TakeOrCancel(cancel)
 	if raw == nil {
@@ -89,6 +90,10 @@ func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (ret Store, 
 		return nil, errors.WithStack(common.ClosedError)
 	}
 
+	if name == nil || len(name) == 0 {
+		return nil, errors.Wrap(InvariantError, "Name must not be nil or empty.")
+	}
+
 	err = tryRpc(s.pool, cancel, func(r *rpcClient) error {
 		infoRpc, err := r.StoreInfo(partialStoreRpc{s.path, name})
 		if err != nil {
@@ -108,6 +113,10 @@ func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (ret Store, 
 func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
 	if s.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
+	}
+
+	if name == nil || len(name) == 0 {
+		return nil, errors.Wrap(InvariantError, "Name must not be nil or empty.")
 	}
 
 	err = tryRpc(s.pool, cancel, func(r *rpcClient) error {
@@ -143,6 +152,10 @@ func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Stor
 func (s *storeClient) DeleteStore(cancel <-chan struct{}, name []byte) error {
 	if s.ctrl.IsClosed() {
 		return errors.WithStack(common.ClosedError)
+	}
+
+	if name == nil || len(name) == 0 {
+		return errors.Wrap(InvariantError, "Name must not be nil or empty.")
 	}
 
 	return tryRpc(s.pool, cancel, func(r *rpcClient) error {
