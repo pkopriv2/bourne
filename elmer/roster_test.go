@@ -48,7 +48,6 @@ func TestRoster_Get_NonEmpty(t *testing.T) {
 	assert.Equal(t, added, read)
 }
 
-
 func TestRoster_Add_Empty(t *testing.T) {
 	ctx := common.NewEmptyContext()
 	defer ctx.Close()

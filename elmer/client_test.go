@@ -47,6 +47,8 @@ func testClient_Basic(t *testing.T, size int) func(t *testing.T) {
 		timer := ctx.Timer(30 * time.Second)
 		defer timer.Close()
 
+		t.Run("Roster", testClient_Roster(ctx, timer.Closed(), cl, size))
+
 		t.Run("GetStore_NoExist", testClient_GetStore_NoExist(ctx, timer.Closed(), root))
 		t.Run("CreateStore_Simple", testClient_CreateStore_Simple(ctx, timer.Closed(), root))
 		t.Run("CreateStore_AlreadyExists", testClient_CreateStore_AlreadyExists(ctx, timer.Closed(), root))
@@ -65,6 +67,14 @@ func testClient_Basic(t *testing.T, size int) func(t *testing.T) {
 }
 
 // These testClient_s are independent of cluster topology/behavior.
+func testClient_Roster(ctx common.Context, cancel <-chan struct{}, cl Peer, size int) func(t *testing.T) {
+	return func(t *testing.T) {
+		peers, err := cl.Roster(cancel)
+		assert.Nil(t, err)
+		assert.Equal(t, size, len(peers))
+	}
+}
+
 func testClient_StoreRead_NoExist(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
 	return func(t *testing.T) {
 		_, ok, err := root.Get(cancel, []byte("key"))

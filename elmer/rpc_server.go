@@ -12,16 +12,18 @@ type server struct {
 	ctx    common.Context
 	logger common.Logger
 	self   *indexer
+	roster *roster
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, listener net.Listener, self *indexer, workers int) (net.Server, error) {
+func newServer(ctx common.Context, listener net.Listener, self *indexer, roster *roster, workers int) (net.Server, error) {
 	ctx = ctx.Sub("Rpc")
 
 	server := &server{
 		ctx:    ctx,
 		logger: ctx.Logger(),
-		self:   self}
+		self:   self,
+		roster: roster}
 
 	return net.NewServer(ctx, listener, serverInitHandler(server), workers)
 }
@@ -53,12 +55,15 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) Status(req net.Request) net.Response {
-	// roster, err := s.self.Roster(nil)
-	// if err != nil {
-	// return net.NewErrorResponse(err)
-	// }
-	// return statusRpc{s.self.peer.Id(), roster}.Response()
-	return nil
+	timer := s.ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	roster, err := s.roster.Get(timer.Closed())
+	if err != nil {
+		return net.NewErrorResponse(err)
+	}
+
+	return statusRpc{s.self.peer.Id(), roster}.Response()
 }
 
 func (s *server) StoreInfo(req net.Request) net.Response {

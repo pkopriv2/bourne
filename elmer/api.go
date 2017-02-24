@@ -35,6 +35,9 @@ func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, 
 type Peer interface {
 	io.Closer
 
+	// Retrieves the roster
+	Roster(cancel <-chan struct{}) ([]string, error)
+
 	// Retrieves the root store.
 	Root() (Store, error)
 

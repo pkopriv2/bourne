@@ -10,7 +10,6 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-
 func tryRpc(pool common.ObjectPool, cancel <-chan struct{}, fn func(*rpcClient) error) error {
 	raw := pool.TakeOrCancel(cancel)
 	if raw == nil {
@@ -57,6 +56,19 @@ func (p *peerClient) Root() (Store, error) {
 	return newStoreClient(p.ctx, p.pool, emptyPath), nil
 }
 
+func (p *peerClient) Roster(cancel <-chan struct{}) (peers []string, err error) {
+	err = tryRpc(p.pool, cancel, func(r *rpcClient) error {
+		statusRpc, err := r.Status()
+		if err != nil {
+			return err
+		}
+
+		peers = statusRpc.peers
+		return nil
+	})
+	return
+}
+
 func (p *peerClient) Close() error {
 	return p.ctrl.Close()
 }
@@ -100,7 +112,7 @@ func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (ret Store, 
 			return err
 		}
 
-		if ! infoRpc.Found || ! infoRpc.Enabled {
+		if !infoRpc.Found || !infoRpc.Enabled {
 			return nil
 		}
 
@@ -130,7 +142,7 @@ func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Stor
 		}
 
 		path := infoRpc.Path
-		if ! infoRpc.Found {
+		if !infoRpc.Found {
 			path = s.path.Child(name, -1)
 		}
 
@@ -139,7 +151,7 @@ func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Stor
 			return errors.WithStack(err)
 		}
 
-		if ! infoRpc.Found || ! infoRpc.Enabled {
+		if !infoRpc.Found || !infoRpc.Enabled {
 			return errors.Wrapf(InvariantError, "Error creating store [%v]", name)
 		}
 
@@ -164,7 +176,7 @@ func (s *storeClient) DeleteStore(cancel <-chan struct{}, name []byte) error {
 			return errors.WithStack(err)
 		}
 
-		if ! infoRpc.Found || ! infoRpc.Enabled {
+		if !infoRpc.Found || !infoRpc.Enabled {
 			return errors.Wrapf(InvariantError, "Store doesn't exist [%v]", name)
 		}
 
@@ -173,7 +185,7 @@ func (s *storeClient) DeleteStore(cancel <-chan struct{}, name []byte) error {
 			return errors.WithStack(err)
 		}
 
-		if ! infoRpc.Found || infoRpc.Enabled {
+		if !infoRpc.Found || infoRpc.Enabled {
 			return errors.Wrapf(InvariantError, "Error deleting store [%v]", name)
 		}
 		return nil
@@ -247,18 +259,18 @@ func newStaticClusterPool(ctx common.Context, net net.Network, timeout time.Dura
 	}
 }
 
-func newDynamicClusterPool(ctx common.Context, m *rosterSync) func() (io.Closer, error) {
-	return func() (io.Closer, error) {
-		roster, err := m.Roster()
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		cl, err := connect(ctx, m.net, m.timeout, roster[rand.Intn(len(roster))])
-		if err != nil {
-			return nil, err
-		} else {
-			return cl, nil
-		}
-	}
-}
+// func newDynamicClusterPool(ctx common.Context, m *rosterSync) func() (io.Closer, error) {
+	// return func() (io.Closer, error) {
+		// roster, err := m.Roster()
+		// if err != nil {
+			// return nil, errors.WithStack(err)
+		// }
+//
+		// cl, err := connect(ctx, m.net, m.timeout, roster[rand.Intn(len(roster))])
+		// if err != nil {
+			// return nil, err
+		// } else {
+			// return cl, nil
+		// }
+	// }
+// }
