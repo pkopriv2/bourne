@@ -20,7 +20,7 @@ type rosterSync struct {
 }
 
 func newRosterSync(ctx common.Context, net net.Network, timeout time.Duration, freq time.Duration, base []string) *rosterSync {
-	ctx = ctx.Sub("RosterManager")
+	ctx = ctx.Sub("RosterSyncer")
 	r := &rosterSync{
 		ctx:     ctx,
 		ctrl:    ctx.Control(),

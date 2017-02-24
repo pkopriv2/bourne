@@ -35,11 +35,16 @@ type peerClient struct {
 	pool   common.ObjectPool // T: *rpcClient
 }
 
-func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, max int, addrs []string) *peerClient {
+func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, freq time.Duration, max int, addrs []string) *peerClient {
 	ctx = ctx.Sub("Client")
 
+	sync := newRosterSync(ctx, net, timeout, freq, addrs)
+	ctx.Control().Defer(func(error) {
+		sync.Close()
+	})
+
 	pool := common.NewObjectPool(ctx.Control(), max,
-		newStaticClusterPool(ctx, net, timeout, addrs))
+		newDynamicClusterPool(ctx, sync))
 	ctx.Control().Defer(func(error) {
 		pool.Close()
 	})
@@ -52,12 +57,12 @@ func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, m
 	}
 }
 
-func (p *peerClient) Addr() string {
-	return ""
-}
-
 func (p *peerClient) Root() (Store, error) {
 	return newStoreClient(p.ctx, p.pool, emptyPath), nil
+}
+
+func (p *peerClient) Addr() string {
+	return ""
 }
 
 func (p *peerClient) Roster(cancel <-chan struct{}) (peers []string, err error) {
@@ -263,18 +268,18 @@ func newStaticClusterPool(ctx common.Context, net net.Network, timeout time.Dura
 	}
 }
 
-// func newDynamicClusterPool(ctx common.Context, m *rosterSync) func() (io.Closer, error) {
-	// return func() (io.Closer, error) {
-		// roster, err := m.Roster()
-		// if err != nil {
-			// return nil, errors.WithStack(err)
-		// }
-//
-		// cl, err := connect(ctx, m.net, m.timeout, roster[rand.Intn(len(roster))])
-		// if err != nil {
-			// return nil, err
-		// } else {
-			// return cl, nil
-		// }
-	// }
-// }
+func newDynamicClusterPool(ctx common.Context, m *rosterSync) func() (io.Closer, error) {
+	return func() (io.Closer, error) {
+		roster, err := m.Roster()
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		cl, err := connect(ctx, m.net, m.timeout, roster[rand.Intn(len(roster))])
+		if err != nil {
+			return nil, err
+		} else {
+			return cl, nil
+		}
+	}
+}

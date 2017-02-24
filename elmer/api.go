@@ -30,40 +30,12 @@ func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, 
 		return nil, errors.WithStack(err)
 	}
 
-	return newPeerClient(ctx, options.Net, options.ConnTimeout, options.ConnPool, addrs), nil
+	return newPeerClient(ctx, options.Net, options.ConnTimeout, options.RosterTimeout, options.ConnPool, addrs), nil
 }
-
-func Update(cancel <-chan struct{}, store Store, key []byte, fn func([]byte) ([]byte, error)) (Item, error) {
-	for {
-		cur, ok, err := store.Get(cancel, key)
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		if !ok {
-			cur = Item{key, nil, -1, false, 0}
-		}
-
-		new, err := fn(cur.Val)
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		next, ok, err := store.Put(cancel, key, new, cur.Ver)
-		if err != nil {
-			return Item{}, errors.WithStack(err)
-		}
-
-		if ok {
-			return next, nil
-		}
-	}
-}
-
 
 type Peer interface {
 	io.Closer
-//
+
 	// Retrieves the address of the peer.
 	Addr() string
 
@@ -169,3 +141,32 @@ func parseItemBytes(bytes []byte) (item Item, err error) {
 
 	return readItem(msg)
 }
+
+func Update(cancel <-chan struct{}, store Store, key []byte, fn func([]byte) ([]byte, error)) (Item, error) {
+	for {
+		cur, ok, err := store.Get(cancel, key)
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		if !ok {
+			cur = Item{key, nil, -1, false, 0}
+		}
+
+		new, err := fn(cur.Val)
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		next, ok, err := store.Put(cancel, key, new, cur.Ver)
+		if err != nil {
+			return Item{}, errors.WithStack(err)
+		}
+
+		if ok {
+			return next, nil
+		}
+	}
+}
+
+

@@ -50,7 +50,7 @@ func TestRosterSync_Multiple_NoRefresh(t *testing.T) {
 	assert.Equal(t, collectAddrs(peers), roster)
 }
 
-func TestRosterSync_Multiple_WithRefresh(t *testing.T) {
+func TestRosterSync_Multiple_WithJoin(t *testing.T) {
 	ctx := common.NewEmptyContext()
 	defer ctx.Close()
 
@@ -85,4 +85,33 @@ func TestRosterSync_Multiple_WithRefresh(t *testing.T) {
 	roster, err = sync.Roster()
 	assert.Nil(t, err)
 	assert.Equal(t, collectAddrs([]*peer{peer1.(*peer), peer2.(*peer)}), roster)
+}
+
+func TestRosterSync_Multiple_WithLeave(t *testing.T) {
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
+	timer := ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	peers, err := NewTestCluster(ctx, 3)
+	if err != nil {
+		t.Fail()
+		return
+	}
+
+	sync := newRosterSync(ctx, net.NewTcpNetwork(), 30*time.Second, 500*time.Millisecond, collectAddrs(peers))
+
+	roster, err := sync.Roster()
+	assert.Nil(t, err)
+	assert.Equal(t, collectAddrs(peers), roster)
+
+	time.Sleep(2*time.Second)
+
+	peers[0].Close()
+	time.Sleep(2*time.Second)
+
+	roster, err = sync.Roster()
+	assert.Nil(t, err)
+	assert.Equal(t, collectAddrs(peers[1:]), roster)
 }

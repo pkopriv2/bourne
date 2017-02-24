@@ -30,8 +30,8 @@ type peer struct {
 	net    net.Network
 	self   kayak.Host
 	core   *indexer
-	server net.Server
 	roster *roster
+	server net.Server
 	pool   common.ObjectPool
 	addr   string
 }
@@ -58,7 +58,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 
 	ctx = ctx.Sub("Elmer(%v)", addr)
 
-	core, err := newIndexer(ctx, self, 20)
+	core, err := newIndexer(ctx, self, 100)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -68,7 +68,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 
 	roster := newRoster(core)
 
-	server, err := newServer(ctx, listener, core, roster, 50)
+	server, err := newServer(ctx, listener, core, roster, 150, 30*time.Second)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

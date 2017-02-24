@@ -9,21 +9,23 @@ import (
 )
 
 type server struct {
-	ctx    common.Context
-	logger common.Logger
-	self   *indexer
-	roster *roster
+	ctx     common.Context
+	logger  common.Logger
+	self    *indexer
+	roster  *roster
+	timeout time.Duration
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, listener net.Listener, self *indexer, roster *roster, workers int) (net.Server, error) {
+func newServer(ctx common.Context, listener net.Listener, self *indexer, roster *roster, workers int, timeout time.Duration) (net.Server, error) {
 	ctx = ctx.Sub("Rpc")
 
 	server := &server{
-		ctx:    ctx,
-		logger: ctx.Logger(),
-		self:   self,
-		roster: roster}
+		ctx:     ctx,
+		logger:  ctx.Logger(),
+		self:    self,
+		roster:  roster,
+		timeout: timeout}
 
 	return net.NewServer(ctx, listener, serverInitHandler(server), workers)
 }
@@ -55,7 +57,7 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 }
 
 func (s *server) Status(req net.Request) net.Response {
-	timer := s.ctx.Timer(30 * time.Second)
+	timer := s.ctx.Timer(s.timeout)
 	defer timer.Close()
 
 	roster, err := s.roster.Get(timer.Closed())
@@ -72,7 +74,7 @@ func (s *server) StoreInfo(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	timer := s.ctx.Timer(30 * time.Second)
+	timer := s.ctx.Timer(s.timeout)
 	defer timer.Close()
 
 	info, found, err := s.self.StoreInfo(timer.Closed(), rpc.Parent, rpc.Child)
@@ -89,7 +91,7 @@ func (s *server) StoreCreate(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	timer := s.ctx.Timer(30 * time.Second)
+	timer := s.ctx.Timer(s.timeout)
 	defer timer.Close()
 
 	info, ok, err := s.self.StoreEnable(timer.Closed(), rpc.Store)
@@ -106,7 +108,7 @@ func (s *server) StoreDelete(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	timer := s.ctx.Timer(30 * time.Second)
+	timer := s.ctx.Timer(s.timeout)
 	defer timer.Close()
 
 	info, ok, err := s.self.StoreDisable(timer.Closed(), rpc.Store)
@@ -122,7 +124,7 @@ func (s *server) StoreItemRead(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	timer := s.ctx.Timer(30 * time.Second)
+	timer := s.ctx.Timer(s.timeout)
 	defer timer.Close()
 
 	item, ok, err := s.self.StoreItemRead(timer.Closed(), rpc.Store, rpc.Key)
@@ -138,7 +140,7 @@ func (s *server) StoreItemSwap(req net.Request) net.Response {
 		return net.NewErrorResponse(err)
 	}
 
-	timer := s.ctx.Timer(30 * time.Second)
+	timer := s.ctx.Timer(s.timeout)
 	defer timer.Close()
 
 	item, ok, err := s.self.StoreItemSwap(timer.Closed(), rpc.Store, rpc.Key, rpc.Val, rpc.Ver, rpc.Del)

@@ -19,8 +19,7 @@ type storeDat struct {
 	Raw *store
 }
 
-// FIXME: Currently CANNOT synchronize across store boundaries.  May need to rethink
-// index design.
+// TODO: Replace with boltdb implementation
 type store struct {
 	// the path represents the versioned location in the meta hierarchy
 	path path
