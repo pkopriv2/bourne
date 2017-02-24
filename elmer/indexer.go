@@ -10,7 +10,7 @@ import (
 )
 
 // Ensures that the store exists.
-func ensureStore(indexer *indexer, cancel <-chan struct{}, partial partialPath) (storeInfo, error) {
+func indexerEnsureStore(indexer *indexer, cancel <-chan struct{}, partial partialPath) (storeInfo, error) {
 	for {
 		info, ok, err := indexer.StoreInfo(cancel, partial.Parent, partial.Child)
 		if err != nil {
@@ -259,7 +259,7 @@ func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []b
 		return Item{}, false, errors.WithStack(err)
 	}
 
-	if ! ok {
+	if !ok {
 		item = Item{key, nil, -1, false, 0}
 	}
 

@@ -234,13 +234,17 @@ func NewTestCluster(ctx common.Context, num int) ([]*peer, error) {
 
 	ret := make([]*peer, 0, len(cluster))
 	for _, host := range cluster {
-		peer, err := newPeer(ctx, host, net.NewTcpNetwork(), ":0")
+		peer, err := NewTestPeer(ctx, host)
 		if err != nil {
-			panic(err)
+			return nil, errors.WithStack(err)
 		}
 		ret = append(ret, peer)
 	}
 	return ret, nil
+}
+
+func NewTestPeer(ctx common.Context, host kayak.Host) (*peer, error) {
+	return newPeer(ctx, host, net.NewTcpNetwork(), ":0")
 }
 
 func storeIncrementInt(cancel <-chan struct{}, store Store, key []byte) error {

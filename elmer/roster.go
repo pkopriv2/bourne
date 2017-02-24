@@ -23,7 +23,7 @@ func newRoster(i *indexer) *roster {
 }
 
 func (r *roster) ensureStore(cancel <-chan struct{}) (path, error) {
-	info, err := ensureStore(r.indexer, cancel, partialPath{emptyPath, rosterStore})
+	info, err := indexerEnsureStore(r.indexer, cancel, partialPath{emptyPath, rosterStore})
 	return info.Path, err
 }
 
@@ -62,7 +62,7 @@ func (r *roster) Get(cancel <-chan struct{}) ([]string, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	if ! ok || item.Del {
+	if !ok || item.Del {
 		return []string{}, nil
 	}
 

@@ -52,6 +52,10 @@ func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, m
 	}
 }
 
+func (p *peerClient) Addr() string {
+	return ""
+}
+
 func (p *peerClient) Root() (Store, error) {
 	return newStoreClient(p.ctx, p.pool, emptyPath), nil
 }

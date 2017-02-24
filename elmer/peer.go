@@ -3,10 +3,25 @@ package elmer
 import (
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/kayak"
 	"github.com/pkopriv2/bourne/net"
 )
+
+func getAddr(self kayak.Host, listener net.Listener) (string, error) {
+	rawAddr, _, err := net.SplitAddr(self.Addr())
+	if err != nil {
+		return "", errors.WithStack(err)
+	}
+
+	_, localPort, err := net.SplitAddr(listener.Addr().String())
+	if err != nil {
+		return "", errors.WithStack(err)
+	}
+
+	return net.NewAddr(rawAddr, localPort), nil
+}
 
 type peer struct {
 	ctx    common.Context
@@ -30,18 +45,22 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 
 	listener, err := net.Listen(30*time.Second, addr)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	ctx.Control().Defer(func(cause error) {
 		listener.Close()
 	})
 
-	addr = listener.Addr().String()
+	addr, err = getAddr(self, listener)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	ctx = ctx.Sub("Elmer(%v)", addr)
 
 	core, err := newIndexer(ctx, self, 20)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	ctx.Control().Defer(func(cause error) {
 		core.Close()
@@ -49,17 +68,17 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 
 	server, err := newServer(ctx, listener, core, newRoster(core), 50)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	ctx.Control().Defer(func(cause error) {
 		server.Close()
 	})
 
-	// pool := common.NewObjectPool(ctx.Control(), 10,
-		// newStaticClusterPool(ctx, net, 30*time.Second, []string{addr}))
-	// ctx.Control().Defer(func(cause error) {
-		// pool.Close()
-	// })
+	pool := common.NewObjectPool(ctx.Control(), 10,
+		newStaticClusterPool(ctx, net, 30*time.Second, []string{addr}))
+	ctx.Control().Defer(func(cause error) {
+		pool.Close()
+	})
 
 	p := &peer{
 		ctx:    ctx,
@@ -70,7 +89,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		self:   self,
 		server: server,
 		roster: newRoster(core),
-		// pool:   pool,
+		pool:   pool,
 		addr:   addr,
 	}
 
@@ -99,4 +118,16 @@ func (p *peer) Shutdown() error {
 
 func (p *peer) Close() error {
 	return p.ctrl.Close()
+}
+
+func (p *peer) Roster(cancel <-chan struct{}) ([]string, error) {
+	return p.roster.Get(cancel)
+}
+
+func (p *peer) Addr() string {
+	return p.addr
+}
+
+func (p *peer) Root() (Store, error) {
+	return newStoreClient(p.ctx, p.pool, emptyPath), nil
 }

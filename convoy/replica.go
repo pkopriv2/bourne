@@ -602,87 +602,87 @@ func replicaInitDir(ctx common.Context, db *database, self member) (*directory, 
 		changeStreamToEventStream(
 			self, listener.ch), dir)
 
-			// Grab all the changes from the database
-			chgs, err := db.Log().All()
-			if err != nil {
-				return nil, err
-			}
+	// Grab all the changes from the database
+	chgs, err := db.Log().All()
+	if err != nil {
+		return nil, err
+	}
 
-			dir.Add(self)
-			dir.Apply(changesToEvents(self, chgs))
-			return dir, nil
+	dir.Add(self)
+	dir.Apply(changesToEvents(self, chgs))
+	return dir, nil
+}
+
+// Returns a newly initialized disseminator.
+func replicaInitDissem(ctx common.Context, net net.Network, self member, dir *directory) (*disseminator, error) {
+	dissem, err := newDisseminator(ctx, net, self, dir)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	ctx.Control().Defer(func(error) {
+		dissem.Close()
+	})
+
+	// Start disseminating realtime changes.
+	dissemEvents(dirListen(dir), dissem)
+	return dissem, nil
+}
+
+func replicaClient(server net.Server) (*rpcClient, error) {
+	raw, err := server.Client(net.Json)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return &rpcClient{raw}, nil
+}
+
+func replicaInitSelf(ctx common.Context, network net.Network, id uuid.UUID, ver int, addr string, peers []string) (member, error) {
+	addr, err := replicaInitAddr(ctx, network, addr, peers)
+	if err != nil {
+		return member{}, errors.WithStack(err)
+	}
+
+	host, port, err := net.SplitAddr(addr)
+	if err != nil {
+		return member{}, errors.WithStack(err)
+	}
+
+	return newMember(id, host, port, ver), nil
+}
+
+func replicaInitAddr(ctx common.Context, network net.Network, addr string, peers []string) (string, error) {
+	if peers == nil {
+		return addr, nil
+	}
+
+	try := func(peer string) (string, error) {
+		cl, err := connectMember(ctx, network, 30*time.Second, peer)
+		if err != nil {
+			return "", err
+		}
+		defer cl.Close()
+
+		host, _, err := net.SplitAddr(cl.Raw.Local().String())
+		if err != nil {
+			return "", err
 		}
 
-		// Returns a newly initialized disseminator.
-		func replicaInitDissem(ctx common.Context, net net.Network, self member, dir *directory) (*disseminator, error) {
-			dissem, err := newDisseminator(ctx, net, self, dir)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			ctx.Control().Defer(func(error) {
-				dissem.Close()
-			})
-
-			// Start disseminating realtime changes.
-			dissemEvents(dirListen(dir), dissem)
-			return dissem, nil
+		_, port, err := net.SplitAddr(addr)
+		if err != nil {
+			return "", errors.WithStack(err)
 		}
 
-		func replicaClient(server net.Server) (*rpcClient, error) {
-			raw, err := server.Client(net.Json)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
+		return net.NewAddr(host, port), nil
+	}
 
-			return &rpcClient{raw}, nil
+	var err error
+	for _, peer := range peers {
+		addr, err = try(peer)
+		if err == nil {
+			return addr, nil
 		}
+	}
 
-		func replicaInitSelf(ctx common.Context, network net.Network, id uuid.UUID, ver int, addr string, peers []string) (member, error) {
-			addr, err := replicaInitAddr(ctx, network, addr, peers)
-			if err != nil {
-				return member{}, errors.WithStack(err)
-			}
-
-			host, port, err := net.SplitAddr(addr)
-			if err != nil {
-				return member{}, errors.WithStack(err)
-			}
-
-			return newMember(id, host, port, ver), nil
-		}
-
-		func replicaInitAddr(ctx common.Context, network net.Network, addr string, peers []string) (string, error) {
-			if peers == nil {
-				return addr, nil
-			}
-
-			try := func(peer string) (string, error) {
-				cl, err := connectMember(ctx, network, 30*time.Second, peer)
-				if err != nil {
-					return "", err
-				}
-				defer cl.Close()
-
-				host, _, err := net.SplitAddr(cl.Raw.Local().String())
-				if err != nil {
-					return "", err
-				}
-
-				_, port, err := net.SplitAddr(addr)
-				if err != nil {
-					return "", errors.WithStack(err)
-				}
-
-				return net.NewAddr(host, port), nil
-			}
-
-			var err error
-			for _, peer := range peers {
-				addr, err = try(peer)
-				if err == nil {
-					return addr, nil
-				}
-			}
-
-			return addr, err
-		}
+	return addr, err
+}
