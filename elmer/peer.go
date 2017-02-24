@@ -88,7 +88,9 @@ func (p *peer) start(addr string) error {
 	// add peer to roster (clients can now discover this peer)
 	timer := p.ctx.Timer(5 * time.Minute)
 	defer timer.Close()
-	return p.roster.Add(timer.Closed(), addr)
+
+	_, err := p.roster.Add(timer.Closed(), addr)
+	return err
 }
 
 func (p *peer) Shutdown() error {

@@ -27,46 +27,58 @@ func (r *roster) ensureStore(cancel <-chan struct{}) (path, error) {
 	return info.Path, err
 }
 
-func (r *roster) Add(cancel <-chan struct{}, peer string) error {
+func (r *roster) Update(cancel <-chan struct{}, fn func([]string) ([]string, error)) ([]string, error) {
 	roster, err := r.ensureStore(cancel)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to add peer [%v]", peer)
+		return nil, errors.Wrap(err, "Unable to update roster")
 	}
 
-	r.logger.Info("Adding peer [%v]", peer)
-	_, _, err = r.indexer.StoreUpdateItem(cancel, roster, rosterKey, func(cur []byte) ([]byte, error) {
+	var ret []string
+	_, err = r.indexer.StoreUpdateItem(cancel, roster, rosterKey, func(cur []byte) ([]byte, error) {
 		curPeers, err := parsePeersBytes(cur)
 		if err != nil {
 			return []byte{}, err
 		}
 
-		if hasPeer(curPeers, peer) {
-			return peers(curPeers).Bytes(), nil
+		new, err := fn(curPeers)
+		if err != nil {
+			return []byte{}, err
 		}
 
-		return peers(addPeer(curPeers, peer)).Bytes(), nil
+		ret = new
+		return peers(new).Bytes(), nil
 	})
-	return err
+	return ret, err
 }
 
-func (r *roster) Del(cancel <-chan struct{}, peer string) error {
+func (r *roster) Get(cancel <-chan struct{}) ([]string, error) {
 	roster, err := r.ensureStore(cancel)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to del peer [%v]", peer)
+		return nil, errors.Wrap(err, "Error ensuring roster store")
 	}
 
-	r.logger.Info("Removing peer [%v]", peer)
-	_, _, err = r.indexer.StoreUpdateItem(cancel, roster, rosterKey, func(cur []byte) ([]byte, error) {
-		curPeers, err := parsePeersBytes(cur)
-		if err != nil {
-			return []byte{}, err
-		}
+	item, ok, err := r.indexer.StoreItemRead(cancel, roster, rosterKey)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
-		if ! hasPeer(curPeers, peer) {
-			return peers(curPeers).Bytes(), nil
-		}
+	if ! ok || item.Del {
+		return []string{}, nil
+	}
 
-		return peers(delPeer(curPeers, peer)).Bytes(), nil
+	return parsePeersBytes(item.Val)
+}
+
+func (r *roster) Add(cancel <-chan struct{}, peer string) ([]string, error) {
+	r.logger.Info("Adding peer [%v]", peer)
+	return r.Update(cancel, func(peers []string) ([]string, error) {
+		return addPeer(peers, peer), nil
 	})
-	return err
+}
+
+func (r *roster) Del(cancel <-chan struct{}, peer string) ([]string, error) {
+	r.logger.Info("Removing peer [%v]", peer)
+	return r.Update(cancel, func(peers []string) ([]string, error) {
+		return delPeer(peers, peer), nil
+	})
 }

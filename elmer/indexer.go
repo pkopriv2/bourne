@@ -254,9 +254,13 @@ func (s *indexer) StoreItemSwap(cancel <-chan struct{}, path path, key []byte, v
 }
 
 func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, error)) (Item, bool, error) {
-	item, _, err := s.StoreItemRead(cancel, store, key)
+	item, ok, err := s.StoreItemRead(cancel, store, key)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
+	}
+
+	if ! ok {
+		item = Item{key, nil, -1, false, 0}
 	}
 
 	val, err := fn(item.Val)
@@ -265,8 +269,11 @@ func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []b
 	}
 
 	del := val == nil
+	if del {
+		val = []byte{}
+	}
 
-	item, ok, err := s.StoreItemSwap(cancel, store, key, val, item.Ver, del)
+	item, ok, err = s.StoreItemSwap(cancel, store, key, val, item.Ver, del)
 	if err != nil {
 		return Item{}, false, errors.WithStack(err)
 	}
@@ -274,14 +281,14 @@ func (s *indexer) StoreTryUpdateItem(cancel <-chan struct{}, store path, key []b
 	return item, ok, nil
 }
 
-func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, error)) (Item, bool, error) {
+func (s *indexer) StoreUpdateItem(cancel <-chan struct{}, store path, key []byte, fn func([]byte) ([]byte, error)) (Item, error) {
 	for !common.IsCanceled(cancel) {
 		item, ok, _ := s.StoreTryUpdateItem(cancel, store, key, fn)
 		if ok {
-			return item, ok, nil
+			return item, nil
 		}
 	}
-	return Item{}, false, errors.WithStack(common.CanceledError)
+	return Item{}, errors.WithStack(common.CanceledError)
 }
 
 func (s *indexer) initLog() (kayak.Log, kayak.Sync, error) {
