@@ -76,17 +76,13 @@ func TestRosterSync_Multiple_WithRefresh(t *testing.T) {
 
 	kayak.ElectLeader(timer.Closed(), []kayak.Host{raw1, raw2})
 
-	time.Sleep(5*time.Second)
-
 	peer2, err := Start(ctx, raw2, ":0")
 	assert.Nil(t, err)
 	assert.NotNil(t, peer2)
 
+	time.Sleep(2*time.Second)
+
 	roster, err = sync.Roster()
 	assert.Nil(t, err)
 	assert.Equal(t, collectAddrs([]*peer{peer1.(*peer), peer2.(*peer)}), roster)
-
-	// roster, err = sync.Roster()
-	// assert.Nil(t, err)
-	// assert.Equal(t, collectAddrs([]*peer{peer1.(*peer), peer2.(*peer)}), roster)
 }

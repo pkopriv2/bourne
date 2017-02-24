@@ -66,7 +66,9 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		core.Close()
 	})
 
-	server, err := newServer(ctx, listener, core, newRoster(core), 50)
+	roster := newRoster(core)
+
+	server, err := newServer(ctx, listener, core, roster, 50)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -88,7 +90,7 @@ func newPeer(ctx common.Context, self kayak.Host, net net.Network, addr string) 
 		core:   core,
 		self:   self,
 		server: server,
-		roster: newRoster(core),
+		roster: roster,
 		pool:   pool,
 		addr:   addr,
 	}
