@@ -113,7 +113,10 @@ func TestHost_Cluster_ConvergeTwoPeers(t *testing.T) {
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
+
+	host, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
+	assert.NotNil(t, host)
 }
 
 func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
@@ -124,7 +127,10 @@ func TestHost_Cluster_ConvergeThreePeers(t *testing.T) {
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
+
+	host, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
+	assert.NotNil(t, host)
 }
 
 func TestHost_Cluster_ConvergeFivePeers(t *testing.T) {
@@ -135,7 +141,10 @@ func TestHost_Cluster_ConvergeFivePeers(t *testing.T) {
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
+
+	host, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
+	assert.NotNil(t, host)
 }
 
 func TestHost_Cluster_ConvergeSevenPeers(t *testing.T) {
@@ -146,7 +155,10 @@ func TestHost_Cluster_ConvergeSevenPeers(t *testing.T) {
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
+
+	host, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
+	assert.NotNil(t, host)
 }
 
 func TestHost_Cluster_Close(t *testing.T) {
@@ -160,7 +172,10 @@ func TestHost_Cluster_Close(t *testing.T) {
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
-	assert.NotNil(t, ElectLeader(timer.Closed(), cluster))
+
+	host, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
+	assert.NotNil(t, host)
 
 	time.Sleep(5 * time.Second)
 	ctx.Close()
@@ -186,14 +201,16 @@ func TestHost_Cluster_Leader_Failure(t *testing.T) {
 	timer := ctx.Timer(20 * time.Second)
 	defer timer.Close()
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	leader.Close()
 	ctx.Logger().Info("Leader killed. Waiting for re-election")
 	time.Sleep(5 * time.Second)
 
-	after := ElectLeader(timer.Closed(), cluster)
+	after, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 
 	assert.NotNil(t, after)
 	assert.NotEqual(t, leader, after)
@@ -207,7 +224,8 @@ func TestHost_Cluster_Leader_Leave(t *testing.T) {
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
-	leader1 := ElectLeader(timer.Closed(), cluster)
+	leader1, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.Nil(t, leader1.Close())
 
 	time.Sleep(5*time.Second)
@@ -216,7 +234,7 @@ func TestHost_Cluster_Leader_Leave(t *testing.T) {
 		return h.Id() != leader1.Id()
 	})
 
-	leader2 := ElectLeader(timer.Closed(), clusterAfter)
+	leader2, err := ElectLeader(timer.Closed(), clusterAfter)
 	assert.NotEqual(t, leader1.Id(), leader2.Id())
 
 	roster := leader2.Roster()
@@ -239,7 +257,8 @@ func TestHost_Cluster_Leader_Append_Single(t *testing.T) {
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	item, err := leader.(*host).core.Append(Event{0, 1}, Std)
@@ -263,7 +282,8 @@ func TestHost_Cluster_Leader_Append_Multi(t *testing.T) {
 	timer := ctx.Timer(60 * time.Second)
 	defer timer.Close()
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	numThreads := 10
@@ -298,7 +318,8 @@ func TestHost_Cluster_Leader_Append_WithCompactions(t *testing.T) {
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	numThreads := 10
@@ -354,7 +375,8 @@ func TestHost_Cluster_Append_Single(t *testing.T) {
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	log, err := leader.Log()
@@ -381,7 +403,8 @@ func TestCluster_Append_Multi(t *testing.T) {
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	log, err := leader.Log()
@@ -419,7 +442,8 @@ func TestHost_Cluster_Barrier(t *testing.T) {
 	timer := ctx.Timer(30 * time.Second)
 	defer timer.Close()
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	log, err := leader.Log()
@@ -474,7 +498,8 @@ func TestHost_Cluster_Join_Busy(t *testing.T) {
 	cluster, err := StartTestCluster(ctx, 5)
 	assert.Nil(t, err)
 
-	leader := ElectLeader(timer.Closed(), cluster)
+	leader, err := ElectLeader(timer.Closed(), cluster)
+	assert.Nil(t, err)
 	assert.NotNil(t, leader)
 
 	log, err := leader.Log()

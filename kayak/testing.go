@@ -62,7 +62,7 @@ func StartTestCluster(ctx common.Context, size int) (peers []Host, err error) {
 		first.Close()
 	})
 
-	first = ElectLeader(ctx.Control().Closed(), []Host{first})
+	first, err = ElectLeader(ctx.Control().Closed(), []Host{first})
 	if first == nil {
 		return nil, errors.Wrap(NoLeaderError, "First member failed to become leader")
 	}
@@ -83,11 +83,11 @@ func StartTestCluster(ctx common.Context, size int) (peers []Host, err error) {
 	return hosts, nil
 }
 
-func ElectLeader(cancel <-chan struct{}, cluster []Host) Host {
+func ElectLeader(cancel <-chan struct{}, cluster []Host) (Host, error) {
 	var term int = 0
 	var leader *uuid.UUID
 
-	SyncMajority(cancel, cluster, func(h Host) bool {
+	err := SyncMajority(cancel, cluster, func(h Host) bool {
 		copy := h.(*host).core.CurrentTerm()
 		if copy.Num > term {
 			term = copy.Num
@@ -99,17 +99,20 @@ func ElectLeader(cancel <-chan struct{}, cluster []Host) Host {
 
 		return leader != nil && copy.Leader == leader && copy.Num == term
 	})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
-	if leader == nil || common.IsCanceled(cancel) {
-		return nil
+	if leader == nil {
+		return nil, nil
 	}
 
 	return First(cluster, func(h Host) bool {
 		return h.Id() == *leader
-	})
+	}), nil
 }
 
-func SyncMajority(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) {
+func SyncMajority(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) error {
 	done := make(map[uuid.UUID]struct{})
 	start := time.Now()
 
@@ -117,7 +120,7 @@ func SyncMajority(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) 
 	for len(done) < majority {
 		for _, h := range cluster {
 			if common.IsCanceled(cancel) {
-				return
+				return errors.WithStack(common.CanceledError)
 			}
 
 			if _, ok := done[h.Id()]; ok {
@@ -135,16 +138,17 @@ func SyncMajority(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) 
 		}
 		<-time.After(250 * time.Millisecond)
 	}
+	return nil
 }
 
-func SyncAll(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) {
+func SyncAll(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) error {
 	done := make(map[uuid.UUID]struct{})
 	start := time.Now()
 
 	for len(done) < len(cluster) {
 		for _, h := range cluster {
 			if common.IsCanceled(cancel) {
-				return
+				return errors.WithStack(common.CanceledError)
 			}
 
 			if _, ok := done[h.Id()]; ok {
@@ -162,6 +166,7 @@ func SyncAll(cancel <-chan struct{}, cluster []Host, fn func(h Host) bool) {
 		}
 		<-time.After(250 * time.Millisecond)
 	}
+	return nil
 }
 
 func First(cluster []Host, fn func(h Host) bool) Host {

@@ -154,6 +154,9 @@ func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)
 	if err != nil {
 		return nil, err
 	}
+	defer ctx.Control().Defer(func(error) {
+		host.Close()
+	})
 
 	// FIXME: use all peer addrs.
 	return host, host.Join(peers[0])

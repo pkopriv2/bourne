@@ -203,9 +203,13 @@ func newTestIndexer(ctx common.Context, cancel <-chan struct{}) (*indexer, error
 		return nil, errors.WithStack(err)
 	}
 
-	leader := kayak.ElectLeader(cancel, []kayak.Host{raw})
-	if leader == nil || common.IsClosed(cancel) {
-		return nil, errors.WithStack(common.CanceledError)
+	leader, err := kayak.ElectLeader(cancel, []kayak.Host{raw})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if leader == nil {
+		return nil, errors.WithStack(kayak.NoLeaderError)
 	}
 
 	indexer, err := newIndexer(ctx, raw, 10)
