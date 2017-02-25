@@ -7,6 +7,15 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
+
+type Options struct {
+	net              net.Network
+	rpcTimeout       time.Duration
+	rpcClientPool    int
+	rpcServerPool    int
+	rpcRosterRefresh time.Duration
+}
+
 func initOptions(ctx common.Context, fns []func(*Options)) (*Options, error) {
 	opts := &Options{
 		rpcClientPool:    5,
@@ -24,14 +33,6 @@ func initOptions(ctx common.Context, fns []func(*Options)) (*Options, error) {
 	}
 
 	return opts, nil
-}
-
-type Options struct {
-	net              net.Network
-	rpcTimeout       time.Duration
-	rpcClientPool    int
-	rpcServerPool    int
-	rpcRosterRefresh time.Duration
 }
 
 func (o *Options) WithNetwork(n net.Network) *Options {

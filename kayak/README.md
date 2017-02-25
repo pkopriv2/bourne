@@ -6,17 +6,29 @@ consistent state machines, without all the hassle of managing consensus.
 # Distributed Consensus
 
 Distributed consensus is the process by which a group of machines is able to agree to a set of facts.  In the case
-of Kayak, and its progenitor, RAFT, the algorithm specifies an algorithm for keeping a log consistent across 
-a set of members.  The log has the following guarantees:
+of Kayak, and its progenitor, RAFT, the algorithm ensures that a log is consistent across a set of members.  The 
+log has the following guarantees:
 
-* All items will eventually be received
-* All items will be received in the order they are written
-* Items will never be lost
-* Items will only be received once\*
+* All committed items will eventually be received by all live members
+* All committed items will be received in the order they are written
+* Committed items will never be lost
+* Committed Items will only be received once\*
 
 \* The log guarantees exactly-once delivery at the level of items, however, this is NOT inherited by consumer entries.  
 It is possible for an append operation to respond with an error but still complete.   Therefore, consumers that require
 strict linearizability must also be idempotent.  
+
+# Differences From Raft
+
+Even though kayak implements that majority of raft features, e.g.:
+
+* Leader Election
+* Log Replication
+* Log Snapshotting/Compactions
+* Synchronizable Reads
+* ... 
+
+It does diverge 
 
 # Getting Started
 
@@ -52,30 +64,20 @@ host,err := kayak.Start(ctx, ":10240")
 To add a member:
 
 ```go
-host := convoy.StartHost(ctx, "host1.convoy.com:10240", "seed.convoy.com:10240")
+host,err := kayak.Join(ctx, ":10240", []string{"host.co.com:10240"})
 ```
 
 ### Removing Members
 
-To add a member:
+To remove a member:
 
 ```go
-host := convoy.StartHost(ctx, "host1.convoy.com:10240", "seed.convoy.com:10240")
+host.Close()
 ```
 
 ## Using the Log 
 
-
 ## Using the Sync
-
-* Searching the directory:
-```
-found, err := dir.Search(func(id uuid.UUID, key string, val string) bool {
-    return key == "#tag"
-})
-```
-
-# Architecture/Design
 
 # Security
 
@@ -89,17 +91,11 @@ More details to come.
 * Preston Koprivica: pkopriv2@gmail.com
 * Andy Attebery: andyatterbery@gmail.com
 * Mike Antonelli: mikeantonelli@me.com
+* Danny Purcell: mikeantonelli@me.com
 
 # References:
 
-1. https://www.cs.cornell.edu/home/rvr/papers/flowgossip.pdf
-2. http://se.inf.ethz.ch/old/people/eugster/papers/gossips.pdf
-
 # Other Reading:
-
- * http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.557.1902&rep=rep1&type=pdf
- * https://www.cs.cornell.edu/~asdas/research/dsn02-swim.pdf
- * http://bitsavers.informatik.uni-stuttgart.de/pdf/xerox/parc/techReports/CSL-89-1_Epidemic_Algorithms_for_Replicated_Database_Maintenance.pdf
 
 # License
 

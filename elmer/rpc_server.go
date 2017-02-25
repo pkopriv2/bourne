@@ -8,7 +8,7 @@ import (
 	"github.com/pkopriv2/bourne/net"
 )
 
-type server struct {
+type rpcServer struct {
 	ctx     common.Context
 	logger  common.Logger
 	self    *indexer
@@ -17,20 +17,20 @@ type server struct {
 }
 
 // Returns a new service handler for the ractlica
-func newServer(ctx common.Context, listener net.Listener, self *indexer, roster *roster, workers int, timeout time.Duration) (net.Server, error) {
+func newRpcServer(ctx common.Context, listener net.Listener, self *indexer, roster *roster, workers int, timeout time.Duration) (net.Server, error) {
 	ctx = ctx.Sub("Rpc")
 
-	server := &server{
+	server := &rpcServer{
 		ctx:     ctx,
 		logger:  ctx.Logger(),
 		self:    self,
 		roster:  roster,
 		timeout: timeout}
 
-	return net.NewServer(ctx, listener, serverInitHandler(server), workers)
+	return net.NewServer(ctx, listener, rpcServerHandler(server), workers)
 }
 
-func serverInitHandler(s *server) func(net.Request) net.Response {
+func rpcServerHandler(s *rpcServer) func(net.Request) net.Response {
 	return func(req net.Request) net.Response {
 		action, err := readMeta(req.Meta())
 		if err != nil {
@@ -56,7 +56,7 @@ func serverInitHandler(s *server) func(net.Request) net.Response {
 	}
 }
 
-func (s *server) Status(req net.Request) net.Response {
+func (s *rpcServer) Status(req net.Request) net.Response {
 	timer := s.ctx.Timer(s.timeout)
 	defer timer.Close()
 
@@ -68,7 +68,7 @@ func (s *server) Status(req net.Request) net.Response {
 	return statusRpc{s.self.peer.Id(), roster}.Response()
 }
 
-func (s *server) StoreInfo(req net.Request) net.Response {
+func (s *rpcServer) StoreInfo(req net.Request) net.Response {
 	rpc, err := readPartialStoreRpc(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -85,7 +85,7 @@ func (s *server) StoreInfo(req net.Request) net.Response {
 	return storeInfoRpc{info.Path, info.Enabled, found}.Response()
 }
 
-func (s *server) StoreCreate(req net.Request) net.Response {
+func (s *rpcServer) StoreCreate(req net.Request) net.Response {
 	rpc, err := readStoreRequestRpc(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -102,7 +102,7 @@ func (s *server) StoreCreate(req net.Request) net.Response {
 	return storeInfoRpc{info.Path, info.Enabled, ok}.Response()
 }
 
-func (s *server) StoreDelete(req net.Request) net.Response {
+func (s *rpcServer) StoreDelete(req net.Request) net.Response {
 	rpc, err := readStoreRequestRpc(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -118,7 +118,7 @@ func (s *server) StoreDelete(req net.Request) net.Response {
 	return storeInfoRpc{info.Path, info.Enabled, ok}.Response()
 }
 
-func (s *server) StoreItemRead(req net.Request) net.Response {
+func (s *rpcServer) StoreItemRead(req net.Request) net.Response {
 	rpc, err := readItemReadRpc(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)
@@ -134,7 +134,7 @@ func (s *server) StoreItemRead(req net.Request) net.Response {
 	return itemRpc{item, ok}.Response()
 }
 
-func (s *server) StoreItemSwap(req net.Request) net.Response {
+func (s *rpcServer) StoreItemSwap(req net.Request) net.Response {
 	rpc, err := readSwapRpc(req.Body())
 	if err != nil {
 		return net.NewErrorResponse(err)

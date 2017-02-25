@@ -68,7 +68,7 @@ func newPeer(ctx common.Context, self kayak.Host, addr string, opts *Options) (h
 
 	roster := newRoster(core)
 
-	server, err := newServer(ctx, listener, core, roster, opts.rpcServerPool, opts.rpcTimeout)
+	server, err := newRpcServer(ctx, listener, core, roster, opts.rpcServerPool, opts.rpcTimeout)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
