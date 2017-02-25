@@ -43,7 +43,7 @@ func newPeer(ctx common.Context, self kayak.Host, addr string, opts *Options) (h
 		}
 	}()
 
-	listener, err := opts.Net.Listen(opts.ConnTimeout, addr)
+	listener, err := opts.net.Listen(opts.rpcTimeout, addr)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -68,7 +68,7 @@ func newPeer(ctx common.Context, self kayak.Host, addr string, opts *Options) (h
 
 	roster := newRoster(core)
 
-	server, err := newServer(ctx, listener, core, roster, opts.ServerWorkers, opts.ConnTimeout)
+	server, err := newServer(ctx, listener, core, roster, opts.rpcServerPool, opts.rpcTimeout)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -76,8 +76,8 @@ func newPeer(ctx common.Context, self kayak.Host, addr string, opts *Options) (h
 		server.Close()
 	})
 
-	pool := common.NewObjectPool(ctx.Control(), opts.ConnPool,
-		newStaticClusterPool(ctx, opts.Net, opts.ConnTimeout, []string{addr}))
+	pool := common.NewObjectPool(ctx.Control(), opts.rpcClientPool,
+		newStaticClusterPool(ctx, opts.net, opts.rpcTimeout, []string{addr}))
 	ctx.Control().Defer(func(cause error) {
 		pool.Close()
 	})
@@ -86,7 +86,7 @@ func newPeer(ctx common.Context, self kayak.Host, addr string, opts *Options) (h
 		ctx:    ctx,
 		ctrl:   ctx.Control(),
 		logger: ctx.Logger(),
-		net:    opts.Net,
+		net:    opts.net,
 		core:   core,
 		self:   self,
 		server: server,
@@ -122,8 +122,8 @@ func (p *peer) Close() error {
 	return p.ctrl.Close()
 }
 
-func (p *peer) Roster(cancel <-chan struct{}) ([]string, error) {
-	return p.roster.Get(cancel)
+func (p *peer) Roster() ([]string, error) {
+	return p.roster.Get(p.ctrl.Closed())
 }
 
 func (p *peer) Addr() string {

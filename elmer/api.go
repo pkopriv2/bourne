@@ -16,7 +16,7 @@ var (
 )
 
 func Start(ctx common.Context, self kayak.Host, addr string, opts ...func(*Options)) (Peer, error) {
-	options, err := buildOptions(ctx, opts)
+	options, err := initOptions(ctx, opts)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -24,13 +24,29 @@ func Start(ctx common.Context, self kayak.Host, addr string, opts ...func(*Optio
 	return newPeer(ctx, self, addr, options)
 }
 
-func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {
-	options, err := buildOptions(ctx, opts)
+func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Client, error) {
+	options, err := initOptions(ctx, opts)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	return newPeerClient(ctx, options.Net, options.ConnTimeout, options.RosterTimeout, options.ConnPool, addrs), nil
+	return newPeerClient(ctx, options.net, options.rpcTimeout, options.rpcRosterRefresh, options.rpcClientPool, addrs), nil
+}
+
+type Client interface {
+	io.Closer
+
+	// Retrieves the root store.
+	Root() (Store, error)
+
+	// Retrieves the roster
+	Roster() ([]string, error)
+
+	// // Shuts the peer down.
+	// Leave() error
+//
+	// // Shuts the peer down.
+	// Shutdown(cause error) error
 }
 
 type Peer interface {
@@ -40,7 +56,7 @@ type Peer interface {
 	Addr() string
 
 	// Retrieves the roster
-	Roster(cancel <-chan struct{}) ([]string, error)
+	Roster() ([]string, error)
 
 	// Retrieves the root store.
 	Root() (Store, error)
@@ -168,5 +184,3 @@ func Update(cancel <-chan struct{}, store Store, key []byte, fn func([]byte) ([]
 		}
 	}
 }
-
-

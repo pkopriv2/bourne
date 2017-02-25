@@ -122,9 +122,9 @@ func testClient_Fail(t *testing.T, size int) func(t *testing.T) {
 }
 
 // These testClient_s are independent of cluster topology/behavior.
-func testClient_Roster(ctx common.Context, cancel <-chan struct{}, cl Peer, size int) func(t *testing.T) {
+func testClient_Roster(ctx common.Context, cancel <-chan struct{}, cl Client, size int) func(t *testing.T) {
 	return func(t *testing.T) {
-		peers, err := cl.Roster(cancel)
+		peers, err := cl.Roster()
 		assert.Nil(t, err)
 		assert.Equal(t, size, len(peers))
 	}
@@ -185,7 +185,7 @@ func testClient_StoreSwap_Atomicity(ctx common.Context, cancel <-chan struct{}, 
 	}
 }
 
-func testClient_Close(ctx common.Context, cancel <-chan struct{}, cl Peer) func(t *testing.T) {
+func testClient_Close(ctx common.Context, cancel <-chan struct{}, cl Client) func(t *testing.T) {
 	return func(t *testing.T) {
 		assert.Nil(t, cl.Close())
 	}
@@ -270,10 +270,10 @@ func collectAddrs(peers []*peer) []string {
 	return ret
 }
 
-func NewTestClient(ctx common.Context, cluster []*peer) (Peer, error) {
+func NewTestClient(ctx common.Context, cluster []*peer) (Client, error) {
 	cl, err := Connect(ctx, collectAddrs(cluster), func(o *Options) {
-		o.WithRosterTimeout(1 * time.Second)
-		o.WithConnTimeout(1 * time.Second)
+		o.WithRpcRosterRefresh(1 * time.Second)
+		o.WithRpcTimeout(1 * time.Second)
 	})
 	if err != nil {
 		return nil, errors.WithStack(err)

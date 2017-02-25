@@ -33,6 +33,7 @@ type peerClient struct {
 	ctrl   common.Control
 	logger common.Logger
 	pool   common.ObjectPool // T: *rpcClient
+	sync   *rosterSync
 }
 
 func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, freq time.Duration, max int, addrs []string) *peerClient {
@@ -54,6 +55,7 @@ func newPeerClient(ctx common.Context, net net.Network, timeout time.Duration, f
 		ctrl:   ctx.Control(),
 		logger: ctx.Logger(),
 		pool:   pool,
+		sync:   sync,
 	}
 }
 
@@ -61,21 +63,8 @@ func (p *peerClient) Root() (Store, error) {
 	return newStoreClient(p.ctx, p.pool, emptyPath), nil
 }
 
-func (p *peerClient) Addr() string {
-	return ""
-}
-
-func (p *peerClient) Roster(cancel <-chan struct{}) (peers []string, err error) {
-	err = tryRpc(p.pool, cancel, func(r *rpcClient) error {
-		statusRpc, err := r.Status()
-		if err != nil {
-			return err
-		}
-
-		peers = statusRpc.peers
-		return nil
-	})
-	return
+func (p *peerClient) Roster() (peers []string, err error) {
+	return p.sync.Roster()
 }
 
 func (p *peerClient) Close() error {
