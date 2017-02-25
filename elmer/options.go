@@ -12,6 +12,7 @@ type Options struct {
 	ConnTimeout   time.Duration
 	ConnPool      int
 	RosterTimeout time.Duration
+	ServerWorkers int
 }
 
 func (o *Options) WithNetwork(n net.Network) *Options {
@@ -36,9 +37,10 @@ func (o *Options) WithRosterTimeout(timeout time.Duration) *Options {
 
 func buildOptions(ctx common.Context, fns []func(*Options)) (*Options, error) {
 	opts := &Options{
-		ConnPool:      20,
+		ConnPool:      5,
 		ConnTimeout:   30 * time.Second,
 		RosterTimeout: 30 * time.Second,
+		ServerWorkers: 100,
 	}
 
 	for _, fn := range fns {

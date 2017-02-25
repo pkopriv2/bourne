@@ -21,7 +21,7 @@ func Start(ctx common.Context, self kayak.Host, addr string, opts ...func(*Optio
 		return nil, errors.WithStack(err)
 	}
 
-	return newPeer(ctx, self, options.Net, addr)
+	return newPeer(ctx, self, addr, options)
 }
 
 func Connect(ctx common.Context, addrs []string, opts ...func(*Options)) (Peer, error) {

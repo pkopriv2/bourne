@@ -198,8 +198,7 @@ type Log interface {
 	// Returns the index of the maximum committed item in the local log.
 	Committed() int
 
-	// Returns the latest snaphot and the maximum index that the events stream
-	// represents.
+	// Returns the latest snaphot and the maximum index that the stream represents.
 	Snapshot() (int, EventStream, error)
 
 	// Listen generates a stream of committed log entries starting at and
@@ -211,7 +210,7 @@ type Log interface {
 
 	// Append appends and commits the event to the log.
 	//
-	// If the append is successful, Do not assume that all committed items
+	// If the append is successful, do not assume that all committed items
 	// have been replicated to this instance.  Appends should always accompany
 	// a sync routine that ensures that the log has been caught up prior to
 	// returning control.

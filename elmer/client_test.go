@@ -7,8 +7,8 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/concurrent"
 	"github.com/pkopriv2/bourne/kayak"
-	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/stash"
 	"github.com/stretchr/testify/assert"
 )
@@ -19,6 +19,10 @@ func TestClient(t *testing.T) {
 	t.Run("Client_Basic_3", testClient_Basic(t, 3))
 	t.Run("Client_Basic_4", testClient_Basic(t, 4))
 	t.Run("Client_Basic_5", testClient_Basic(t, 5))
+
+	t.Run("Client_Fail_3", testClient_Fail(t, 3))
+	t.Run("Client_Fail_4", testClient_Fail(t, 4))
+	t.Run("Client_Fail_5", testClient_Fail(t, 5))
 }
 
 func testClient_Basic(t *testing.T, size int) func(t *testing.T) {
@@ -37,6 +41,57 @@ func testClient_Basic(t *testing.T, size int) func(t *testing.T) {
 			t.Fail()
 			return
 		}
+
+		root, err := cl.Root()
+		if err != nil {
+			t.Fail()
+			return
+		}
+
+		timer := ctx.Timer(30 * time.Second)
+		defer timer.Close()
+
+		t.Run("Roster", testClient_Roster(ctx, timer.Closed(), cl, size))
+
+		t.Run("GetStore_NoExist", testClient_GetStore_NoExist(ctx, timer.Closed(), root))
+		t.Run("CreateStore_Simple", testClient_CreateStore_Simple(ctx, timer.Closed(), root))
+		t.Run("CreateStore_AlreadyExists", testClient_CreateStore_AlreadyExists(ctx, timer.Closed(), root))
+		t.Run("CreateStore_PreviouslyDeleted", testClient_CreateStore_PreviouslyDeleted(ctx, timer.Closed(), root))
+
+		t.Run("DeleteStore_NoExist", testClient_DeleteStore_NoExist(ctx, timer.Closed(), root))
+		t.Run("DeleteStore_Simple", testClient_DeleteStore_Simple(ctx, timer.Closed(), root))
+		t.Run("DeleteStore_PreviouslyDeleted", testClient_DeleteStore_PreviouslyDeleted(ctx, timer.Closed(), root))
+
+		t.Run("StoreRead_NoExist", testClient_StoreRead_NoExist(ctx, timer.Closed(), root))
+		t.Run("StoreRead_Simple", testClient_StoreRead_Simple(ctx, timer.Closed(), root))
+		t.Run("StoreSwap_Atomicity", testClient_StoreSwap_Atomicity(ctx, timer.Closed(), root))
+
+		t.Run("Close", testClient_Close(ctx, timer.Closed(), cl))
+	}
+}
+
+func testClient_Fail(t *testing.T, size int) func(t *testing.T) {
+	return func(t *testing.T) {
+		ctx := common.NewEmptyContext()
+		defer ctx.Close()
+
+		cluster, err := NewTestCluster(ctx, size)
+		if err != nil {
+			t.Fail()
+			return
+		}
+
+		cl, err := NewTestClient(ctx, cluster)
+		if err != nil {
+			t.Fail()
+			return
+		}
+
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			cluster[0].logger.Info("Killing: %v", cluster[0].addr)
+			cluster[0].self.Close()
+		}()
 
 		root, err := cl.Root()
 		if err != nil {
@@ -105,6 +160,8 @@ func testClient_StoreSwap_Atomicity(ctx common.Context, cancel <-chan struct{}, 
 		numRoutines := 10
 		numIncPerRoutine := 10
 
+		failures := concurrent.NewAtomicCounter()
+
 		var wait sync.WaitGroup
 		for i := 0; i < numRoutines; i++ {
 			wait.Add(1)
@@ -114,6 +171,7 @@ func testClient_StoreSwap_Atomicity(ctx common.Context, cancel <-chan struct{}, 
 					ctx.Logger().Info("Increment: %v", j)
 					err := storeIncrementInt(cancel, root, key)
 					if err != nil {
+						failures.Inc()
 						ctx.Logger().Error("Error Incrementing: %+v", err)
 					}
 				}
@@ -123,7 +181,7 @@ func testClient_StoreSwap_Atomicity(ctx common.Context, cancel <-chan struct{}, 
 		wait.Wait()
 		val, _, err := storeReadInt(cancel, root, key)
 		assert.Nil(t, err)
-		assert.Equal(t, numRoutines*numIncPerRoutine, val)
+		assert.Equal(t, numRoutines*numIncPerRoutine-int(failures.Get()), val)
 	}
 }
 
@@ -213,7 +271,10 @@ func collectAddrs(peers []*peer) []string {
 }
 
 func NewTestClient(ctx common.Context, cluster []*peer) (Peer, error) {
-	cl, err := Connect(ctx, collectAddrs(cluster))
+	cl, err := Connect(ctx, collectAddrs(cluster), func(o *Options) {
+		o.WithRosterTimeout(1 * time.Second)
+		o.WithConnTimeout(1 * time.Second)
+	})
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -244,7 +305,11 @@ func NewTestCluster(ctx common.Context, num int) ([]*peer, error) {
 }
 
 func NewTestPeer(ctx common.Context, host kayak.Host) (*peer, error) {
-	return newPeer(ctx, host, net.NewTcpNetwork(), ":0")
+	p, err := Start(ctx, host, ":0")
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return p.(*peer), nil
 }
 
 func storeIncrementInt(cancel <-chan struct{}, store Store, key []byte) error {
@@ -268,7 +333,7 @@ func storeReadInt(cancel <-chan struct{}, store Store, key []byte) (int, bool, e
 	if err != nil {
 		return 0, false, errors.WithStack(err)
 	}
-	if ! ok || item.Del {
+	if !ok || item.Del {
 		return 0, false, nil
 	}
 
