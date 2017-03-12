@@ -96,9 +96,6 @@ func StartTestCluster(ctx common.Context, num int) ([]Host, error) {
 			return false
 		}
 
-		timer := ctx.Timer(30 * time.Second)
-		defer timer.Close()
-
 		all, err := dir.AllMembers(timer.Closed())
 		if err != nil {
 			return false

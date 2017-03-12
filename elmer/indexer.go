@@ -493,6 +493,7 @@ func (e *epoch) start(index int, size int) error {
 		defer e.logger.Info("Compactor shutting down")
 		e.logger.Info("Starting compactor")
 
+		// FIXME: move to a timebased approach in order to avoid the herd effect.
 		for lastIndex := index; ; lastIndex = lastIndex + 1000 {
 			if err := e.sync.Sync(e.ctrl.Closed(), lastIndex+1000); err != nil {
 				e.ctrl.Fail(err)

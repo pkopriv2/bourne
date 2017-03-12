@@ -201,7 +201,7 @@ func testClient_GetStore_NoExist(ctx common.Context, cancel <-chan struct{}, roo
 
 func testClient_CreateStore_Simple(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
 	return func(t *testing.T) {
-		child, err := root.CreateStore(cancel, []byte("testClient_CreateStore_Simple"))
+		child, err := root.NewStore(cancel, []byte("testClient_CreateStore_Simple"))
 		assert.Nil(t, err)
 		assert.NotNil(t, child)
 	}
@@ -209,10 +209,10 @@ func testClient_CreateStore_Simple(ctx common.Context, cancel <-chan struct{}, r
 
 func testClient_CreateStore_AlreadyExists(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
 	return func(t *testing.T) {
-		_, err := root.CreateStore(cancel, []byte("testClient_CreateStore_AlreadyExists"))
+		_, err := root.NewStore(cancel, []byte("testClient_CreateStore_AlreadyExists"))
 		assert.Nil(t, err)
 
-		_, err = root.CreateStore(cancel, []byte("testClient_CreateStore_AlreadyExists"))
+		_, err = root.NewStore(cancel, []byte("testClient_CreateStore_AlreadyExists"))
 		assert.Equal(t, InvariantError, common.Extract(err, InvariantError))
 	}
 }
@@ -220,18 +220,18 @@ func testClient_CreateStore_AlreadyExists(ctx common.Context, cancel <-chan stru
 func testClient_CreateStore_PreviouslyDeleted(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
 	name := []byte("testClient_CreateStore_PreviouslyDeleted")
 	return func(t *testing.T) {
-		_, err := root.CreateStore(cancel, name)
+		_, err := root.NewStore(cancel, name)
 		assert.Nil(t, err)
-		assert.Nil(t, root.DeleteStore(cancel, name))
+		assert.Nil(t, root.DelStore(cancel, name))
 
-		_, err = root.CreateStore(cancel, name)
+		_, err = root.NewStore(cancel, name)
 		assert.Nil(t, err)
 	}
 }
 
 func testClient_DeleteStore_NoExist(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
 	return func(t *testing.T) {
-		err := root.DeleteStore(cancel, []byte("testClient_DeleteStore_NoExist"))
+		err := root.DelStore(cancel, []byte("testClient_DeleteStore_NoExist"))
 		assert.Equal(t, InvariantError, common.Extract(err, InvariantError))
 	}
 }
@@ -239,9 +239,9 @@ func testClient_DeleteStore_NoExist(ctx common.Context, cancel <-chan struct{}, 
 func testClient_DeleteStore_Simple(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
 	name := []byte("testClient_DeleteStore_Simple")
 	return func(t *testing.T) {
-		_, err := root.CreateStore(cancel, name)
+		_, err := root.NewStore(cancel, name)
 		assert.Nil(t, err)
-		assert.Nil(t, root.DeleteStore(cancel, name))
+		assert.Nil(t, root.DelStore(cancel, name))
 
 		store, err := root.GetStore(cancel, name)
 		assert.Nil(t, err)
@@ -252,13 +252,13 @@ func testClient_DeleteStore_Simple(ctx common.Context, cancel <-chan struct{}, r
 func testClient_DeleteStore_PreviouslyDeleted(ctx common.Context, cancel <-chan struct{}, root Store) func(t *testing.T) {
 	name := []byte("testClient_DeleteStore_PreviouslyDeleted")
 	return func(t *testing.T) {
-		_, err := root.CreateStore(cancel, name)
+		_, err := root.NewStore(cancel, name)
 		assert.Nil(t, err)
-		assert.Nil(t, root.DeleteStore(cancel, name))
+		assert.Nil(t, root.DelStore(cancel, name))
 
-		_, err = root.CreateStore(cancel, name)
+		_, err = root.NewStore(cancel, name)
 		assert.Nil(t, err)
-		assert.Nil(t, root.DeleteStore(cancel, name))
+		assert.Nil(t, root.DelStore(cancel, name))
 	}
 }
 

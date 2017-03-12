@@ -41,6 +41,10 @@ func (k Key) Raw() []byte {
 	return []byte(k)
 }
 
+func String(key string) Key {
+	return Key([]byte(key))
+}
+
 func UUID(key uuid.UUID) Key {
 	return Key(key.Bytes())
 }
@@ -55,10 +59,33 @@ func IntBytes(val int) []byte {
 	return buf.Bytes()
 }
 
+
 func ParseInt(val []byte) (ret int, err error) {
 	var raw int64
 	buf := bytes.NewBuffer(val)
 	err = binary.Read(buf, binary.BigEndian, &raw)
 	ret = int(raw)
+	return
+}
+
+func Bool(key bool) Key {
+	return Key(BoolBytes(key))
+}
+
+func BoolBytes(val bool) []byte {
+	buf := &bytes.Buffer{}
+	if val {
+		binary.Write(buf, binary.BigEndian, uint8(1))
+	} else {
+		binary.Write(buf, binary.BigEndian, uint8(0))
+	}
+	return buf.Bytes()
+}
+
+func ParseBool(val []byte) (ret bool, err error) {
+	var raw uint8
+	buf := bytes.NewBuffer(val)
+	err = binary.Read(buf, binary.BigEndian, &raw)
+	ret = raw == 1
 	return
 }

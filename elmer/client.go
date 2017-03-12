@@ -120,7 +120,48 @@ func (s *storeClient) GetStore(cancel <-chan struct{}, name []byte) (ret Store, 
 	return
 }
 
-func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
+func (s *storeClient) EnsureStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
+	if s.ctrl.IsClosed() {
+		return nil, errors.WithStack(common.ClosedError)
+	}
+
+	if name == nil || len(name) == 0 {
+		return nil, errors.Wrap(InvariantError, "Name must not be nil or empty.")
+	}
+
+	err = tryRpc(s.pool, cancel, func(r *rpcClient) error {
+		for {
+			infoRpc, err := r.StoreInfo(partialStoreRpc{s.path, name})
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			if infoRpc.Found && infoRpc.Enabled {
+				return nil
+			}
+
+			path := infoRpc.Path
+			if !infoRpc.Found {
+				path = s.path.Child(name, -1)
+			}
+
+			infoRpc, err = r.StoreEnable(storeRpc{path})
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			if !infoRpc.Found || !infoRpc.Enabled {
+				continue
+			}
+
+			ret = &storeClient{infoRpc.Path, s.logger, s.ctrl, s.pool}
+			return nil
+		}
+	})
+	return
+}
+
+func (s *storeClient) NewStore(cancel <-chan struct{}, name []byte) (ret Store, err error) {
 	if s.ctrl.IsClosed() {
 		return nil, errors.WithStack(common.ClosedError)
 	}
@@ -159,7 +200,7 @@ func (s *storeClient) CreateStore(cancel <-chan struct{}, name []byte) (ret Stor
 	return
 }
 
-func (s *storeClient) DeleteStore(cancel <-chan struct{}, name []byte) error {
+func (s *storeClient) DelStore(cancel <-chan struct{}, name []byte) error {
 	if s.ctrl.IsClosed() {
 		return errors.WithStack(common.ClosedError)
 	}

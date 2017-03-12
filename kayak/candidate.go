@@ -64,7 +64,7 @@ func (c *candidate) start() {
 			needed := c.replica.Majority()
 			if numVotes >= needed {
 				c.logger.Info("Acquired majority [%v] votes.", needed)
-				c.replica.Term(c.replica.term.Num, &c.replica.Id, &c.replica.Id)
+				// c.replica.Term(c.replica.term.Num, &c.replica.Id, &c.replica.Id)
 				becomeLeader(c.replica)
 				return
 			}
