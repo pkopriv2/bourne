@@ -10,18 +10,17 @@ import (
 )
 
 var (
-	UnknownCipherError = errors.New("WARDEN:UNKNOWN_CIPHER")
+	CipherUnknownError = errors.New("WARDEN:UNKNOWN_CIPHER")
 	CipherKeyError     = errors.New("WARDEN:KEY_ERROR")
 )
 
-// Supported ciphers.  This library is intended to ONLY offer support ciphers
+// Supported symmetric ciphers.  This library is intended to ONLY offer support ciphers
 // that implement the Authenticated Encryption with Associated Data (AEAD)
 // standard.  Currently, that only includes the GCM family of streaming modes.
-//
-type CipherMode int32
+type SymCipher int32
 
 const (
-	AES_128_GCM CipherMode = iota
+	AES_128_GCM SymCipher = iota
 	AES_192_GCM
 	AES_256_GCM
 )
@@ -40,32 +39,32 @@ func newCipherKeyLengthError(expected int, key []byte) error {
 //
 // Currently thinking:
 //  * Mac
-type cipherText struct {
-	Cipher CipherMode
+type symCipherText struct {
+	Cipher SymCipher
 	Nonce  []byte
 	Data   []byte
 }
 
-func Encrypt(alg CipherMode, key []byte, msg []byte) (cipherText, error) {
+func Encrypt(alg SymCipher, key []byte, msg []byte) (symCipherText, error) {
 	block, err := initBlockCipher(alg, key)
 	if err != nil {
-		return cipherText{}, errors.WithStack(err)
+		return symCipherText{}, errors.WithStack(err)
 	}
 
 	strm, err := initStreamCipher(alg, block)
 	if err != nil {
-		return cipherText{}, errors.WithStack(err)
+		return symCipherText{}, errors.WithStack(err)
 	}
 
 	nonce, err := generateNonce(strm.NonceSize())
 	if err != nil {
-		return cipherText{}, errors.Wrapf(err, "Error generating nonce of [%v] bytes", strm.NonceSize())
+		return symCipherText{}, errors.Wrapf(err, "Error generating nonce of [%v] bytes", strm.NonceSize())
 	}
 
-	return cipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
+	return symCipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
 }
 
-func (c cipherText) Decrypt(key []byte) ([]byte, error) {
+func (c symCipherText) Decrypt(key []byte) ([]byte, error) {
 	block, err := initBlockCipher(c.Cipher, key)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -83,23 +82,23 @@ func (c cipherText) Decrypt(key []byte) ([]byte, error) {
 	return ret, nil
 }
 
-func initBlockCipher(alg CipherMode, key []byte) (cipher.Block, error) {
+func initBlockCipher(alg SymCipher, key []byte) (cipher.Block, error) {
 	if err := ensureValidKey(alg, key); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	switch alg {
 	default:
-		return nil, errors.Wrapf(UnknownCipherError, "Unknown cipher: %v", alg)
+		return nil, errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
 	case AES_128_GCM, AES_192_GCM, AES_256_GCM:
 		return aes.NewCipher(key)
 	}
 }
 
-func initStreamCipher(alg CipherMode, blk cipher.Block) (cipher.AEAD, error) {
+func initStreamCipher(alg SymCipher, blk cipher.Block) (cipher.AEAD, error) {
 	switch alg {
 	default:
-		return nil, errors.Wrapf(UnknownCipherError, "Unknown cipher: %v", alg)
+		return nil, errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
 	case AES_128_GCM, AES_192_GCM, AES_256_GCM:
 		return cipher.NewGCM(blk)
 	}
@@ -107,10 +106,10 @@ func initStreamCipher(alg CipherMode, blk cipher.Block) (cipher.AEAD, error) {
 
 // Creates a new random nonce.  Nonces are essentially the same
 // thing as initialization vectors and should be use
-func ensureValidKey(alg CipherMode, key []byte) error {
+func ensureValidKey(alg SymCipher, key []byte) error {
 	switch alg {
 	default:
-		return errors.Wrapf(UnknownCipherError, "Unknown cipher: %v", alg)
+		return errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
 	case AES_128_GCM:
 		return ensureKeySize(BYTES_128_BITS, key)
 	case AES_192_GCM:

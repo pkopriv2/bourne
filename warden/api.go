@@ -2,33 +2,75 @@ package warden
 
 import (
 	"crypto"
+	"time"
 
 	uuid "github.com/satori/go.uuid"
 )
 
-// A secret contains an actual secret.  These should be handled with extreme care.
-type Secret struct {
-	Id    uuid.UUID
-	Bytes []byte
+// A token is a cryptographically secure
+type Token struct {
+	TTL    int
+	Claims map[string]string
+	Auth   []byte
 }
 
-// A key ring represents a protected public/private key pair.
-type KeyRing interface {
+func (t Token) Encrypt(key crypto.PublicKey) ([]byte, error) {
+	return nil, nil
+}
 
-	// Return the public key component of this key ring.  This may be shared publicly
-	// without compromising the security of the ring.
-	PublicKey() (crypto.PublicKey, error)
+func (t Token) Authenticate(key crypto.PrivateKey) error {
+	return nil
+}
 
-	// Return the private key component of this key ring.  This should be used and discarded
-	PrivateKey(Secret) (crypto.PrivateKey, error)
+func DecryptToken(token []byte, key crypto.PrivateKey) (Token, error) {
+	return Token{}, nil
+}
 
-	// Adds a secret to the key ring.  Caller must supply the actual private key
-	// in order to add a secret.
-	AddSecret(crypto.PrivateKey, Secret) error
+// Publicly viewable information of the challenge
+type ChallengeInfo struct {
+	Id       uuid.UUID
+	Name     string
+	Ttl      int
+	Used     int
+	Created  time.Time
+	Accessed time.Time
+}
 
-	// Adds a secret to the key ring.  Caller must supply the actual private key
-	// in order to add a secret.
-	DelSecret(crypto.PrivateKey, Secret) error
+// The safe room allows direct access to the secrets of the corresponding safe box.  And allows
+// changes.
+type SafeRoom interface {
+
+	// The secured secret
+	Secret() []byte
+
+	// Returns the private key of the box.
+	PrivateKey() crypto.PrivateKey
+
+	// Returns all the currently active challenges.
+	AllChallenges() map[string]ChallengeInfo
+
+	// Adds an authorized challenge to the safe box.
+	AddChallenge(name string, secret []byte, ttl int) error
+
+	// Deletes an authorized challenge from the safe box.
+	DelChallenge(name string) error
+}
+
+// A key safe is a durable, cryptographically secure structure that protects a secret key.
+type SafeBox interface {
+	Id() uuid.UUID
+
+	// The safe box's public key
+	PublicKey() crypto.PublicKey
+
+	// Returns all the challenges
+	Challenges() map[string]ChallengeInfo
+
+	// Opens the box using the given challenge.  The provided closure will give raw access
+	// to the protected resources.  Consumers should be careful NOT to allow elements of the
+	// safe room to be leaked to the external environment.  Once the given closure returns
+	// the core secret of the box is kkkkkk
+	Open(challengeName string, challengeSecret []byte, fn func(s SafeRoom)) (err error)
 }
 
 // A member represents the basis of identity within the trust ecosystem.
@@ -38,30 +80,13 @@ type Member interface {
 	Id() uuid.UUID
 
 	// Returns the member's key ring.
-	KeyRing() (KeyRing, error)
+	SafeBox() (SafeBox, error)
 }
 
 // This represents the basic abstraction for establishing trust within
 // a group, while denying trust from outside the group.  At its basis, a
 // group is simply a collection of members and the group protects a
-// single secret (a public/private key pair).
-//
-// Membership of the group must be allowed to increase and decrease over
-// time, while retaining the security of the group.  The secret may be
-// obtained by a trusted member of the group, but the knowledge of how
-// the secret is obtained is maintained by the system (and is never exposed
-// to the group members).  Most importantly, the system itself CANNOT obtain
-// the secret.
-//
-// Individual members of a group may be compromised.  Nothing can be done
-// while the compromise is taking place, but once it has been discovered,
-// the group must be able to revoke trust from the member, while retaining
-// trust within the rest of the group.
-//
-// If trust is removed from a member, the remaining members of the group
-// must be allowed to work together to re-establish trust.  Otherwise, they
-// may choose to abandon the entire secret.  This is akin to abandoning
-// the entire group.
+// key pair.
 //
 // The security axioms:
 //
@@ -76,29 +101,64 @@ type Member interface {
 //
 // 	* Members may leave the group - either voluntarily or forced.
 //
-type Group interface {
-	Key() KeyRing
+
+type Trust interface {
 
 	// Generates a new invitation.  The returned invitation is cryptographically
 	// secure and may be shared publicly.  However, it should be limited to
-	Invite(uuid.UUID, crypto.PublicKey) (Invitation, error)
+	Invite(grantor Member, id uuid.UUID, secret []byte, key crypto.PublicKey) (Invitation, error)
+
+	// Evicts the
+	Evict(memberId uuid.UUID)
+}
+
+type Group interface {
+
+	// Opens the trust using
+	OpenTrust(self Member, challengeName string, challengeBytes []byte, fn func(t Trust)) error
 
 	// Accepts an invitation using the target entity's private key.
-	Accept(Invitation, crypto.PrivateKey) error
-
-	// Removes a member from the group.
-	Evict(uuid.UUID) error
+	Accept(invitation Invitation) error
 }
 
 // An invitation is a cryptographically secured message that may only be accepted
-// by the intended recipient.
+// by the intended recipient.  These technically can be shared publicly.
 type Invitation struct {
-	Id       uuid.UUID
-	TrustId  uuid.UUID
-	EntityId uuid.UUID
-	_raw_    []byte
+	Id           uuid.UUID
+	TrustId      uuid.UUID
+	EntityId     uuid.UUID
+	encryptedKey []byte
+	encryptedMsg []byte
 }
 
-func (i Invitation) Decrypt(crypto.PrivateKey) ([]byte, error) {
+func (i Invitation) decryptKey(memberKey crypto.PrivateKey) ([]byte, error) {
 	return nil, nil
 }
+
+func (i Invitation) decryptMsg(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (i Invitation) Decrypt(memberKey crypto.PrivateKey) ([]byte, error) {
+	return nil, nil
+}
+
+//
+// type SecureDocument interface {
+// Id() uuid.UUID
+// KeyRing() KeyRing
+// Raw() (io.Reader, error)
+// Decrypt(key []byte) (io.Reader, error)
+// }
+//
+// type TrustStore interface {
+//
+// // Returns the document
+// GetDocument(uuid.UUID) (SecureDocument, error)
+//
+// // Stores the secure document stream.
+// StoreDocument(uuid.UUID, io.Reader) (SecureDocument, error)
+// }
+//
+// type Client interface {
+// }
