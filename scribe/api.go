@@ -118,7 +118,6 @@ type Reader interface {
 	ParseMessage(field string, val interface{}, fn Parser) error
 	ParseMessages(field string, val interface{}, fn Parser) error
 
-
 	// Supported extensions
 	ReadInt(field string, val *int) error
 	ReadInts(field string, val *[]int) error

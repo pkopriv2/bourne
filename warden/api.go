@@ -27,50 +27,48 @@ func DecryptToken(token []byte, key crypto.PrivateKey) (Token, error) {
 }
 
 // Publicly viewable information of the challenge
-type ChallengeInfo struct {
+type AccessCodeInfo struct {
 	Id       uuid.UUID
 	Name     string
 	Ttl      int
 	Used     int
 	Created  time.Time
-	Accessed time.Time
 }
 
-// The safe room allows direct access to the secrets of the corresponding safe box.  And allows
-// changes.
-type SafeRoom interface {
+// The unsecured contents of the safe.
+type SafeContents interface {
 
 	// The secured secret
 	Secret() []byte
 
-	// Returns the private key of the box.
-	PrivateKey() crypto.PrivateKey
+	// // Returns the private key of the box.
+	// PrivateKey() crypto.PrivateKey
 
-	// Returns all the currently active challenges.
-	AllChallenges() map[string]ChallengeInfo
+	// Returns basic info of all currently active access codes.
+	AccessCodes() []AccessCodeInfo
 
-	// Adds an authorized challenge to the safe box.
-	AddChallenge(name string, secret []byte, ttl int) error
+	// Adds an authorized access code to the safe.
+	AddAccessCode(name string, code []byte, ttl int) error
 
 	// Deletes an authorized challenge from the safe box.
-	DelChallenge(name string) error
+	DelAccessCode(name string) error
 }
 
-// A key safe is a durable, cryptographically secure structure that protects a secret key.
-type SafeBox interface {
+// A safe is a durable, cryptographically secure structure that protects a secret key.
+type Safe interface {
 	Id() uuid.UUID
 
 	// The safe box's public key
 	PublicKey() crypto.PublicKey
 
 	// Returns all the challenges
-	Challenges() map[string]ChallengeInfo
+	AccessCodes() []AccessCodeInfo
 
 	// Opens the box using the given challenge.  The provided closure will give raw access
 	// to the protected resources.  Consumers should be careful NOT to allow elements of the
 	// safe room to be leaked to the external environment.  Once the given closure returns
-	// the core secret of the box is kkkkkk
-	Open(challengeName string, challengeSecret []byte, fn func(s SafeRoom)) (err error)
+	// the core secret of the box is promptly discarded.
+	Open(challengeName string, challengeSecret []byte, fn func(s SafeContents)) (err error)
 }
 
 // A member represents the basis of identity within the trust ecosystem.
@@ -79,8 +77,8 @@ type Member interface {
 	// Returns the member's id.
 	Id() uuid.UUID
 
-	// Returns the member's key ring.
-	SafeBox() (SafeBox, error)
+	// Returns the member's personal safe.
+	Safe() (Safe, error)
 }
 
 // This represents the basic abstraction for establishing trust within
@@ -102,17 +100,17 @@ type Member interface {
 // 	* Members may leave the group - either voluntarily or forced.
 //
 
-type Trust interface {
+type TrustContents interface {
 
 	// Generates a new invitation.  The returned invitation is cryptographically
 	// secure and may be shared publicly.  However, it should be limited to
-	Invite(grantor Member, id uuid.UUID, secret []byte, key crypto.PublicKey) (Invitation, error)
+	Invite(memberId uuid.UUID, key crypto.PublicKey) (Invitation, error)
 
 	// Evicts the
 	Evict(memberId uuid.UUID)
 }
 
-type Group interface {
+type Trust interface {
 
 	// Opens the trust using
 	OpenTrust(self Member, challengeName string, challengeBytes []byte, fn func(t Trust)) error

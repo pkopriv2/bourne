@@ -7,4 +7,3 @@ with them, but they are also verbose and less efficient.  Moreover, once tied
 to a particular encoding format, moving to another format can be difficult.  
 Scribe offers the ditherers of the world the opportunity to procastinate
 further, without harm.
-

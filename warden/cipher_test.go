@@ -17,7 +17,7 @@ func TestEncrypt_KeyTooLarge(t *testing.T) {
 }
 
 func TestEncrypt_AES_128_GCM(t *testing.T) {
-	key, err := generateRandomBytes(BYTES_128_BITS)
+	key, err := generateRandomBytes(BITS_128)
 	assert.Nil(t, err)
 
 	ct, err := Encrypt(AES_128_GCM, key, []byte("msg"))

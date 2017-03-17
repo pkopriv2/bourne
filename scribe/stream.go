@@ -1,4 +1,4 @@
-package utils
+package scribe
 
 import (
 	"bufio"
@@ -21,8 +21,6 @@ type OverflowError struct {
 func (e OverflowError) Error() string {
 	return fmt.Sprintf("That value [%v] overflows [%v]", e.actual, e.target)
 }
-
-
 
 // A simple encoding interface that normalizes the most common, low-level
 // message encoding.
@@ -53,11 +51,11 @@ type StreamReader interface {
 }
 
 func NewStreamReader(reader *bufio.Reader) StreamReader {
-	return &BufStreamReader{reader: reader}
+	return &StandardStreamReader{reader: reader}
 }
 
 func NewStreamWriter(writer *bufio.Writer) StreamWriter {
-	return &BufStreamWriter{writer: writer}
+	return &StandardStreamWriter{writer: writer}
 }
 
 func PutUUID(w *bufio.Writer, val uuid.UUID) (err error) {
@@ -171,12 +169,12 @@ func ReadString(r *bufio.Reader) (string, error) {
 	return string(raw), nil
 }
 
-type BufStreamReader struct {
+type StandardStreamReader struct {
 	reader *bufio.Reader
 	err    error
 }
 
-func (s *BufStreamReader) ReadUUID() (ret uuid.UUID) {
+func (s *StandardStreamReader) ReadUUID() (ret uuid.UUID) {
 	if s.err != nil {
 		return
 	}
@@ -185,7 +183,7 @@ func (s *BufStreamReader) ReadUUID() (ret uuid.UUID) {
 	return
 }
 
-func (s *BufStreamReader) ReadUint64() (ret uint64) {
+func (s *StandardStreamReader) ReadUint64() (ret uint64) {
 	if s.err != nil {
 		return
 	}
@@ -194,7 +192,7 @@ func (s *BufStreamReader) ReadUint64() (ret uint64) {
 	return
 }
 
-func (s *BufStreamReader) ReadUint32() (ret uint32) {
+func (s *StandardStreamReader) ReadUint32() (ret uint32) {
 	if s.err != nil {
 		return
 	}
@@ -203,7 +201,7 @@ func (s *BufStreamReader) ReadUint32() (ret uint32) {
 	return
 }
 
-func (s *BufStreamReader) ReadUint16() (ret uint16) {
+func (s *StandardStreamReader) ReadUint16() (ret uint16) {
 	if s.err != nil {
 		return
 	}
@@ -212,7 +210,7 @@ func (s *BufStreamReader) ReadUint16() (ret uint16) {
 	return
 }
 
-func (s *BufStreamReader) ReadUint8() (ret uint8) {
+func (s *StandardStreamReader) ReadUint8() (ret uint8) {
 	if s.err != nil {
 		return
 	}
@@ -221,7 +219,7 @@ func (s *BufStreamReader) ReadUint8() (ret uint8) {
 	return
 }
 
-func (s *BufStreamReader) ReadString() (ret string) {
+func (s *StandardStreamReader) ReadString() (ret string) {
 	if s.err != nil {
 		return
 	}
@@ -230,7 +228,7 @@ func (s *BufStreamReader) ReadString() (ret string) {
 	return
 }
 
-func (s *BufStreamReader) ReadBytes() (ret []byte) {
+func (s *StandardStreamReader) ReadBytes() (ret []byte) {
 	if s.err != nil {
 		return
 	}
@@ -239,51 +237,51 @@ func (s *BufStreamReader) ReadBytes() (ret []byte) {
 	return
 }
 
-func (s *BufStreamReader) Err() error {
+func (s *StandardStreamReader) Err() error {
 	return s.err
 }
 
-type BufStreamWriter struct {
+type StandardStreamWriter struct {
 	writer *bufio.Writer
 	err    error
 }
 
-func (s *BufStreamWriter) Flush() {
+func (s *StandardStreamWriter) Flush() {
 	if s.err != nil {
 		return
 	}
 	s.err = s.writer.Flush()
 }
 
-func (s *BufStreamWriter) PutUUID(val uuid.UUID) {
+func (s *StandardStreamWriter) PutUUID(val uuid.UUID) {
 	if s.err != nil {
 		return
 	}
 	s.err = PutUUID(s.writer, val)
 }
 
-func (s *BufStreamWriter) PutUint64(val uint64) {
+func (s *StandardStreamWriter) PutUint64(val uint64) {
 	if s.err != nil {
 		return
 	}
 	s.err = PutUint64(s.writer, val)
 }
 
-func (s *BufStreamWriter) PutUint32(val uint32) {
+func (s *StandardStreamWriter) PutUint32(val uint32) {
 	if s.err != nil {
 		return
 	}
 	s.err = PutUint32(s.writer, val)
 }
 
-func (s *BufStreamWriter) PutUint16(val uint16) {
+func (s *StandardStreamWriter) PutUint16(val uint16) {
 	if s.err != nil {
 		return
 	}
 	s.err = PutUint16(s.writer, val)
 }
 
-func (s *BufStreamWriter) PutUint8(val uint8) {
+func (s *StandardStreamWriter) PutUint8(val uint8) {
 	if s.err != nil {
 		return
 	}
@@ -291,20 +289,20 @@ func (s *BufStreamWriter) PutUint8(val uint8) {
 	s.err = PutUint8(s.writer, val)
 }
 
-func (s *BufStreamWriter) PutString(val string) {
+func (s *StandardStreamWriter) PutString(val string) {
 	if s.err != nil {
 		return
 	}
 	s.err = PutString(s.writer, val)
 }
 
-func (s *BufStreamWriter) PutBytes(val []byte) {
+func (s *StandardStreamWriter) PutBytes(val []byte) {
 	if s.err != nil {
 		return
 	}
 	s.err = PutBytes(s.writer, val)
 }
 
-func (s *BufStreamWriter) Err() error {
+func (s *StandardStreamWriter) Err() error {
 	return s.err
 }
