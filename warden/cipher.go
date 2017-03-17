@@ -9,6 +9,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"reflect"
@@ -22,6 +23,51 @@ var (
 	CipherUnknownError = errors.New("WARDEN:UNKNOWN_CIPHER")
 	CipherKeyError     = errors.New("WARDEN:KEY_ERROR")
 )
+
+func newCipherKeyLengthError(expected int, key []byte) error {
+	return errors.Wrapf(CipherKeyError, "Illegal key [%v].  Expected [%v] bytes but got [%v]", key, expected, len(key))
+}
+
+// Useful byte functions (in a crypto context)
+type Bytes []byte
+
+// Zeroes the underlying byte array.  (Useful for deleting secret information)
+func (b Bytes) Destroy() {
+	for i := 0; i < len(b); i++ {
+		b[i] = 0
+	}
+}
+
+// Returns the length of the underlying array
+func (b Bytes) Size() int {
+	return len(b)
+}
+
+// Returns a base64 encoding of the array
+func (b Bytes) Base64() string {
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// Returns a hex encoding of the array
+func (b Bytes) Hex() string {
+	return hex.EncodeToString(b)
+}
+
+// Returns a string representation of the array
+func (b Bytes) String() string {
+	base64 := b.Base64()
+
+	if b.Size() <= 32 {
+		return base64
+	} else {
+		return fmt.Sprintf("%v... (total=%v)", base64[:32], len(base64))
+	}
+}
+
+// Returns a new byte array for use as a cipher key
+func (b Bytes) PBKDF2(salt []byte, iter int, size int) Bytes {
+	return pbkdf2.Key(b, salt, iter, size, sha256.New)
+}
 
 // Supported symmetric ciphers.  This library is intended to ONLY offer support ciphers
 // that implement the Authenticated Encryption with Associated Data (AEAD)
@@ -63,36 +109,22 @@ func (s SymCipher) String() string {
 }
 
 // Supported asymmetric ciphers.
-type ASymCipher int32
+type AsymCipher int32
 
 const (
-	RSA_WITH_SHA1 ASymCipher = iota
+	RSA_WITH_SHA1 AsymCipher = iota
 	RSA_WITH_SHA256
 )
 
-// Simple byte decorator.
-type Bytes []byte
-
-func (e Bytes) Base64() string {
-	return base64.StdEncoding.EncodeToString(e)
-}
-
-func newCipherKeyLengthError(expected int, key []byte) error {
-	return errors.Wrapf(CipherKeyError, "Illegal key [%v].  Expected [%v] bytes but got [%v]", key, expected, len(key))
-}
-
-type secret struct {
-	Raw []byte
-}
-
-func (s *secret) Destroy() {
-	for i := 0; i < len(s.Raw); i++ {
-		s.Raw[i] = 0
+func (s AsymCipher) String() string {
+	switch s {
+	default:
+		return "Unknown"
+	case RSA_WITH_SHA1:
+		return "RSA_WITH_SHA1"
+	case RSA_WITH_SHA256:
+		return "RSA_WITH_SHA256"
 	}
-}
-
-func (s *secret) DeriveKey(salt []byte, size int) []byte {
-	return pbkdf2.Key(s.Raw, salt, 4096, size, sha256.New)
 }
 
 // TODO: Determine general set of fields for non-AE modes
@@ -147,12 +179,12 @@ func (c symCipherText) String() string {
 }
 
 type asymCipherText struct {
-	KeyCipher ASymCipher
+	KeyCipher AsymCipher
 	Key       Bytes
 	Msg       symCipherText
 }
 
-func asymmetricEncrypt(rand io.Reader, keyCipher ASymCipher, msgCipher SymCipher, pub crypto.PublicKey, msg []byte) (asymCipherText, error) {
+func asymmetricEncrypt(rand io.Reader, keyCipher AsymCipher, msgCipher SymCipher, pub crypto.PublicKey, msg []byte) (asymCipherText, error) {
 	key, err := initRandomSymmetricKey(rand, msgCipher)
 	if err != nil {
 		return asymCipherText{}, errors.WithStack(err)
@@ -190,7 +222,7 @@ const (
 	BITS_256 = 256 / 8
 )
 
-func asymmetricEncryptKey(alg ASymCipher, raw crypto.PublicKey, key []byte) ([]byte, error) {
+func asymmetricEncryptKey(alg AsymCipher, raw crypto.PublicKey, key []byte) ([]byte, error) {
 	switch alg {
 	default:
 		return nil, errors.Wrapf(CipherUnknownError, "Unknown asymmetric cipher: %v", alg)
@@ -210,7 +242,7 @@ func asymmetricEncryptKey(alg ASymCipher, raw crypto.PublicKey, key []byte) ([]b
 	}
 }
 
-func decryptKey(alg ASymCipher, raw crypto.PrivateKey, key []byte) ([]byte, error) {
+func decryptKey(alg AsymCipher, raw crypto.PrivateKey, key []byte) ([]byte, error) {
 	switch alg {
 	default:
 		return nil, errors.Wrapf(CipherUnknownError, "Unknown asymmetric cipher: %v", alg)

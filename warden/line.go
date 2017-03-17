@@ -11,12 +11,36 @@ import (
 	"github.com/pkopriv2/bourne/scribe"
 )
 
-// func randomBigInt(io io.Reader, size int) (*big.Int,error) {
-// raw, err := generateRandomBytes(size)
-// if err != nil {
-// return nil, errors.Wrapf("Error generating random int of %v bytes", size)
-// }
-// }
+func randomLine(rand io.Reader, domain int) (line, error) {
+	slope, err := randomBigInt(rand, domain)
+	if err != nil {
+		return line{}, errors.WithStack(err)
+	}
+
+	intercept, err := randomBigInt(rand, domain)
+	if err != nil {
+		return line{}, errors.WithStack(err)
+	}
+
+	return line{slope, intercept}, nil
+}
+
+func randomPoint(rand io.Reader, line line, domain int) (point, error) {
+	x, err := randomBigInt(rand, domain)
+	if err != nil {
+		return point{}, errors.Wrapf(err, "Unable to generate point on line [%v] for domain [%v]", line, domain)
+	}
+	return line.Point(x), nil
+}
+
+func randomBigInt(rand io.Reader, size int) (*big.Int, error) {
+	buf, err := generateRandomBytes(rand, size)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Unable to generate random *big.Int of size [%v]", size)
+	}
+
+	return new(big.Int).SetBytes(buf), nil
+}
 
 type line struct {
 	Slope     *big.Int
@@ -36,6 +60,14 @@ func (l line) Height(x *big.Int) *big.Int {
 
 func (l line) Point(x *big.Int) point {
 	return point{x, l.Height(x)}
+}
+
+func (l line) Equals(o line) bool {
+	return (l.Slope.Cmp(o.Slope) == 0) && (l.Intercept.Cmp(o.Intercept) == 0)
+}
+
+func (l line) String() string {
+	return fmt.Sprintf("Line(m=%v,y-intercept=%v)", l.Slope, l.Intercept)
 }
 
 // Cannon use typical field oriented approaches here.  Must be totally deterministic impl
@@ -60,28 +92,6 @@ func parseLineBytes(raw []byte) (line, error) {
 	return line{slope.SetBytes(sBytes), intercept.SetBytes(iBytes)}, nil
 }
 
-func randomLine(rand io.Reader, domain int) (line, error) {
-	slope, err := randomBigInt(rand, domain)
-	if err != nil {
-		return line{}, errors.WithStack(err)
-	}
-
-	intercept, err := randomBigInt(rand, domain)
-	if err != nil {
-		return line{}, errors.WithStack(err)
-	}
-
-	return line{slope, intercept}, nil
-}
-
-func randomBigInt(rand io.Reader, num int) (*big.Int, error) {
-	buf := make([]byte, num)
-	if _, err := io.ReadFull(rand, buf); err != nil {
-		return nil, errors.Wrapf(err, "Unable to allocate [%v] random bytes", num)
-	}
-	return new(big.Int).SetBytes(buf), nil
-}
-
 // A vector representation of a point in n-dimensional space
 type point struct {
 	X *big.Int
@@ -89,7 +99,7 @@ type point struct {
 }
 
 func (p point) Derive(o point) (line, error) {
-	if p.Equals(o) {
+	if p.X.Cmp(o.X) == 0 {
 		return line{}, errors.Errorf("Cannot derive a line from the same points [%v,%v]", o, p)
 	}
 	slope := deriveSlope(p, o)
