@@ -38,11 +38,8 @@ type AccessCodeInfo struct {
 // The unsecured contents of the safe.
 type SafeContents interface {
 
-	// The secured secret
+	// The secured secret (Extreme care should be taken NOT to leak this information beyond what's required.)
 	Secret() []byte
-
-	// // Returns the private key of the box.
-	// PrivateKey() crypto.PrivateKey
 
 	// Returns basic info of all currently active access codes.
 	AccessCodes() []AccessCodeInfo
@@ -102,18 +99,20 @@ type Member interface {
 
 type TrustContents interface {
 
+
+
 	// Generates a new invitation.  The returned invitation is cryptographically
 	// secure and may be shared publicly.  However, it should be limited to
-	Invite(memberId uuid.UUID, key crypto.PublicKey) (Invitation, error)
+	InviteMember(memberId uuid.UUID) (Invitation, error)
 
 	// Evicts the
-	Evict(memberId uuid.UUID)
+	EvictMember(memberId uuid.UUID)
 }
 
 type Trust interface {
 
 	// Opens the trust using
-	OpenTrust(self Member, challengeName string, challengeBytes []byte, fn func(t Trust)) error
+	OpenTrust(self Member, codeName string, code []byte, fn func(t Trust)) error
 
 	// Accepts an invitation using the target entity's private key.
 	Accept(invitation Invitation) error

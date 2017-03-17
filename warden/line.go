@@ -3,6 +3,7 @@ package warden
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"math/big"
 
@@ -10,11 +11,21 @@ import (
 	"github.com/pkopriv2/bourne/scribe"
 )
 
-// TODO: Generalize to either n-dimentions or n-degree curves.
+// func randomBigInt(io io.Reader, size int) (*big.Int,error) {
+// raw, err := generateRandomBytes(size)
+// if err != nil {
+// return nil, errors.Wrapf("Error generating random int of %v bytes", size)
+// }
+// }
 
 type line struct {
 	Slope     *big.Int
 	Intercept *big.Int
+}
+
+func (l line) Destroy() {
+	l.Slope.SetBytes(big.NewInt(0).Bytes())
+	l.Intercept.SetBytes(big.NewInt(0).Bytes())
 }
 
 func (l line) Height(x *big.Int) *big.Int {
@@ -77,9 +88,41 @@ type point struct {
 	Y *big.Int
 }
 
-func (p point) Derive(o point) line {
+func (p point) Derive(o point) (line, error) {
+	if p.Equals(o) {
+		return line{}, errors.Errorf("Cannot derive a line from the same points [%v,%v]", o, p)
+	}
 	slope := deriveSlope(p, o)
-	return line{slope, deriveIntercept(p, slope)}
+	return line{slope, deriveIntercept(p, slope)}, nil
+}
+
+func (p point) Equals(o point) bool {
+	return (p.X.Cmp(o.X) == 0) && (p.Y.Cmp(o.Y) == 0)
+}
+
+func (p point) String() string {
+	return fmt.Sprintf("Point(%v,%v)", p.X, p.Y)
+}
+
+func (p point) Bytes() []byte {
+	buf := &bytes.Buffer{}
+	writer := scribe.NewStreamWriter(bufio.NewWriter(buf))
+	writer.PutBytes(p.X.Bytes())
+	writer.PutBytes(p.Y.Bytes())
+	writer.Flush()
+	return buf.Bytes()
+}
+
+func parsePointBytes(raw []byte) (point, error) {
+	reader := scribe.NewStreamReader(bufio.NewReader(bytes.NewBuffer(raw)))
+	xBytes := reader.ReadBytes()
+	yBytes := reader.ReadBytes()
+	if err := reader.Err(); err != nil {
+		return point{}, errors.WithStack(err)
+	}
+
+	x, y := new(big.Int), new(big.Int)
+	return point{x.SetBytes(xBytes), y.SetBytes(yBytes)}, nil
 }
 
 func deriveSlope(p1, p2 point) *big.Int {
