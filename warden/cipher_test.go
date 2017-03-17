@@ -3,7 +3,6 @@ package warden
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,15 +19,13 @@ func TestEncrypt_KeyTooLarge(t *testing.T) {
 }
 
 func TestEncrypt_AES_128_GCM(t *testing.T) {
-	key, err := generateRandomBytes(rand.Reader, BITS_128)
+	key, err := generateRandomBytes(rand.Reader, bits_128)
 	assert.Nil(t, err)
 
 	ct, err := symmetricEncrypt(rand.Reader, AES_128_GCM, key, []byte("msg"))
 	assert.Nil(t, err)
 	assert.NotNil(t, ct)
 	assert.NotEmpty(t, ct)
-
-	fmt.Println("ciphertext: ", ct)
 
 	raw, err := ct.Decrypt(key)
 	assert.Nil(t, err)
@@ -44,9 +41,7 @@ func TestAsymmetricEncryp_Simple(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, enc)
 
-	fmt.Println("Encrypted: ", enc)
 	decrypted, err := enc.Decrypt(key)
 	assert.Nil(t, err)
 	assert.Equal(t, msg, decrypted)
-	fmt.Println("Decrypted: ", string(decrypted))
 }

@@ -55,17 +55,14 @@ type SafeContents interface {
 type Safe interface {
 	Id() uuid.UUID
 
-	// The safe box's public key
-	PublicKey() crypto.PublicKey
-
 	// Returns all the challenges
 	AccessCodes() []AccessCodeInfo
 
-	// Opens the box using the given challenge.  The provided closure will give raw access
-	// to the protected resources.  Consumers should be careful NOT to allow elements of the
-	// safe room to be leaked to the external environment.  Once the given closure returns
-	// the core secret of the box is promptly discarded.
-	Open(challengeName string, challengeSecret []byte, fn func(s SafeContents)) (err error)
+	// Opens the box using the access code with the given name.  The provided closure will give
+	// raw access to the protected resources.  Consumers should be careful NOT to allow
+	// elements of the safe room to be leaked to the external environment.  Once the given
+	// closure returns the secret of the box is promptly destroyed.
+	Open(codeName string, code []byte, fn func(s SafeContents)) (err error)
 }
 
 // A member represents the basis of identity within the trust ecosystem.

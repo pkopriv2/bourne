@@ -48,8 +48,14 @@ type line struct {
 }
 
 func (l line) Destroy() {
-	l.Slope.SetBytes(big.NewInt(0).Bytes())
-	l.Intercept.SetBytes(big.NewInt(0).Bytes())
+	sBytes := l.Slope.Bytes()
+	iBytes := l.Intercept.Bytes()
+
+	Bytes(sBytes).Destroy()
+	Bytes(iBytes).Destroy()
+
+	l.Slope.SetBytes(sBytes)
+	l.Slope.SetBytes(iBytes)
 }
 
 func (l line) Height(x *big.Int) *big.Int {
@@ -96,6 +102,17 @@ func parseLineBytes(raw []byte) (line, error) {
 type point struct {
 	X *big.Int
 	Y *big.Int
+}
+
+func (p point) Destroy() {
+	xBytes := p.X.Bytes()
+	yBytes := p.Y.Bytes()
+
+	Bytes(xBytes).Destroy()
+	Bytes(yBytes).Destroy()
+
+	p.X.SetBytes(xBytes)
+	p.Y.SetBytes(yBytes)
 }
 
 func (p point) Derive(o point) (line, error) {

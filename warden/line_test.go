@@ -1,7 +1,6 @@
 package warden
 
 import (
-	"fmt"
 	"math/big"
 	"math/rand"
 	"testing"
@@ -95,8 +94,4 @@ func TestLineRandRand(t *testing.T) {
 	parsed, err := parseLineBytes(line.Bytes())
 	assert.Nil(t, err)
 	assert.Equal(t, line, parsed)
-
-	fmt.Println("BEFORE: ", Bytes(line.Bytes()).Hex())
-	fmt.Println("AFTER: ", Bytes(line.Bytes()).PBKDF2([]byte{}, 4096, 32).Hex())
-
 }

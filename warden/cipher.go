@@ -69,6 +69,13 @@ func (b Bytes) PBKDF2(salt []byte, iter int, size int) Bytes {
 	return pbkdf2.Key(b, salt, iter, size, sha256.New)
 }
 
+// Some useful binary constants.
+const (
+	bits_128 = 128 / 8
+	bits_192 = 192 / 8
+	bits_256 = 256 / 8
+)
+
 // Supported symmetric ciphers.  This library is intended to ONLY offer support ciphers
 // that implement the Authenticated Encryption with Associated Data (AEAD)
 // standard.  Currently, that only includes the GCM family of streaming modes.
@@ -87,11 +94,11 @@ func (s SymCipher) KeySize() int {
 	default:
 		return 0
 	case AES_128_GCM:
-		return BITS_128
+		return bits_128
 	case AES_192_GCM:
-		return BITS_192
+		return bits_192
 	case AES_256_GCM:
-		return BITS_192
+		return bits_192
 	}
 }
 
@@ -175,7 +182,7 @@ func (c symCipherText) Decrypt(key []byte) ([]byte, error) {
 }
 
 func (c symCipherText) String() string {
-	return fmt.Sprintf("SymmetricCipherText(alg=%v,nonce=%v): %v...", c.Cipher, c.Nonce.Base64(), c.Data.Base64())
+	return fmt.Sprintf("SymCipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, c.Data)
 }
 
 type asymCipherText struct {
@@ -215,12 +222,6 @@ func (c asymCipherText) Decrypt(priv crypto.PrivateKey) ([]byte, error) {
 func (c asymCipherText) String() string {
 	return fmt.Sprintf("AsymmetricCipherText(alg=%v,key=%v,val=%v)", c.KeyCipher, c.Key.Base64(), c.Msg)
 }
-
-const (
-	BITS_128 = 128 / 8
-	BITS_192 = 192 / 8
-	BITS_256 = 256 / 8
-)
 
 func asymmetricEncryptKey(alg AsymCipher, raw crypto.PublicKey, key []byte) ([]byte, error) {
 	switch alg {
@@ -268,11 +269,11 @@ func initRandomSymmetricKey(rand io.Reader, alg SymCipher) ([]byte, error) {
 	default:
 		return nil, errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
 	case AES_128_GCM:
-		return generateRandomBytes(rand, BITS_128)
+		return generateRandomBytes(rand, bits_128)
 	case AES_192_GCM:
-		return generateRandomBytes(rand, BITS_192)
+		return generateRandomBytes(rand, bits_192)
 	case AES_256_GCM:
-		return generateRandomBytes(rand, BITS_256)
+		return generateRandomBytes(rand, bits_256)
 	}
 }
 
@@ -305,11 +306,11 @@ func ensureValidKey(alg SymCipher, key []byte) error {
 	default:
 		return errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
 	case AES_128_GCM:
-		return ensureKeySize(BITS_128, key)
+		return ensureKeySize(bits_128, key)
 	case AES_192_GCM:
-		return ensureKeySize(BITS_192, key)
+		return ensureKeySize(bits_192, key)
 	case AES_256_GCM:
-		return ensureKeySize(BITS_256, key)
+		return ensureKeySize(bits_256, key)
 	}
 }
 
