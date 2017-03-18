@@ -76,7 +76,7 @@ func (l line) String() string {
 	return fmt.Sprintf("Line(m=%v,y-intercept=%v)", l.Slope, l.Intercept)
 }
 
-// Cannon use typical field oriented approaches here.  Must be totally deterministic impl
+// Cannot use typical field oriented approaches here.  Must be totally deterministic impl
 func (l line) Bytes() []byte {
 	buf := &bytes.Buffer{}
 	writer := scribe.NewStreamWriter(bufio.NewWriter(buf))

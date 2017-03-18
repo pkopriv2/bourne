@@ -13,6 +13,10 @@ func (k Key) Child(child []byte) Key {
 	return Key(append([]byte(k), child...))
 }
 
+func (k Key) ChildString(child string) Key {
+	return k.Child([]byte(child))
+}
+
 func (k Key) ChildInt(child int) Key {
 	return k.Child(IntBytes(child))
 }

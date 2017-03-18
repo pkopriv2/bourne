@@ -2,7 +2,6 @@ package warden
 
 import (
 	"crypto"
-	"time"
 
 	uuid "github.com/satori/go.uuid"
 )
@@ -28,11 +27,11 @@ func DecryptToken(token []byte, key crypto.PrivateKey) (Token, error) {
 
 // Publicly viewable information of the challenge
 type AccessCodeInfo struct {
-	Id       uuid.UUID
-	Name     string
-	Ttl      int
-	Used     int
-	Created  time.Time
+	Name    string
+	MaxUses int
+	NumUses int
+	// Created time.Time
+	// Accessed time.Time
 }
 
 // The unsecured contents of the safe.
@@ -53,7 +52,6 @@ type SafeContents interface {
 
 // A safe is a durable, cryptographically secure structure that protects a secret key.
 type Safe interface {
-	Id() uuid.UUID
 
 	// Returns all the challenges
 	AccessCodes() []AccessCodeInfo
@@ -95,8 +93,6 @@ type Member interface {
 //
 
 type TrustContents interface {
-
-
 
 	// Generates a new invitation.  The returned invitation is cryptographically
 	// secure and may be shared publicly.  However, it should be limited to

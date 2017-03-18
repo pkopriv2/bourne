@@ -17,6 +17,8 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/scribe"
 )
 
 var (
@@ -87,7 +89,7 @@ const (
 )
 
 // Symmetric Cipher Type.  (FIXME: Switches are getting annoying...)
-type SymCipher int32
+type SymCipher int
 
 func (s SymCipher) KeySize() int {
 	switch s {
@@ -116,7 +118,7 @@ func (s SymCipher) String() string {
 }
 
 // Supported asymmetric ciphers.
-type AsymCipher int32
+type AsymCipher int
 
 const (
 	RSA_WITH_SHA1 AsymCipher = iota
@@ -163,7 +165,7 @@ func symmetricEncrypt(rand io.Reader, alg SymCipher, key []byte, msg []byte) (sy
 	return symCipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
 }
 
-func (c symCipherText) Decrypt(key []byte) ([]byte, error) {
+func (c symCipherText) Decrypt(key []byte) (Bytes, error) {
 	block, err := initBlockCipher(c.Cipher, key)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -181,8 +183,33 @@ func (c symCipherText) Decrypt(key []byte) ([]byte, error) {
 	return ret, nil
 }
 
+func (c symCipherText) Bytes() []byte {
+	return scribe.Write(c).Bytes()
+}
+
+func (c symCipherText) Write(w scribe.Writer) {
+	w.WriteInt("cipher", int(c.Cipher))
+	w.WriteBytes("nonce", c.Nonce)
+	w.WriteBytes("data", c.Data)
+}
+
 func (c symCipherText) String() string {
 	return fmt.Sprintf("SymCipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, c.Data)
+}
+
+func readSymCipherText(r scribe.Reader) (s symCipherText, err error) {
+	err = r.ReadInt("cipher", (*int)(&s.Cipher))
+	err = common.Or(err, r.ReadBytes("nonce", (*[]byte)(&s.Nonce)))
+	err = common.Or(err, r.ReadBytes("data", (*[]byte)(&s.Data)))
+	return
+}
+
+func parseSymCipherTextBytes(raw []byte) (symCipherText, error) {
+	msg, err := scribe.Parse(raw)
+	if err != nil {
+		return symCipherText{}, err
+	}
+	return readSymCipherText(msg)
 }
 
 type asymCipherText struct {
