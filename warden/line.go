@@ -11,6 +11,10 @@ import (
 	"github.com/pkopriv2/bourne/scribe"
 )
 
+// TODO: Generalize this for curves of n-degrees. (ie: lines, parabolas, cubics, quartics, etc...)
+
+// Generates a random line.  The domain is used to determine the number of bytes to use when generating
+// the properties of the curve.
 func randomLine(rand io.Reader, domain int) (line, error) {
 	slope, err := randomBigInt(rand, domain)
 	if err != nil {
@@ -25,6 +29,7 @@ func randomLine(rand io.Reader, domain int) (line, error) {
 	return line{slope, intercept}, nil
 }
 
+// Generates a random point on the line.  The domain is used to bound the size of the resulting point.
 func randomPoint(rand io.Reader, line line, domain int) (point, error) {
 	x, err := randomBigInt(rand, domain)
 	if err != nil {
@@ -33,6 +38,10 @@ func randomPoint(rand io.Reader, line line, domain int) (point, error) {
 	return line.Point(x), nil
 }
 
+// TODO: Is generating a random byte array consistent with generating a random integer?
+//
+// Generates a random integer using the size to determine the number of bytes to use when generating the
+// random value.
 func randomBigInt(rand io.Reader, size int) (*big.Int, error) {
 	buf, err := generateRandomBytes(rand, size)
 	if err != nil {

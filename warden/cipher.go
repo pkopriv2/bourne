@@ -26,11 +26,14 @@ var (
 	CipherKeyError     = errors.New("WARDEN:KEY_ERROR")
 )
 
-func newCipherKeyLengthError(expected int, key []byte) error {
-	return errors.Wrapf(CipherKeyError, "Illegal key [%v].  Expected [%v] bytes but got [%v]", key, expected, len(key))
-}
+// Common bit->byte conversions
+const (
+	bits_128 = 128 / 8
+	bits_192 = 192 / 8
+	bits_256 = 256 / 8
+)
 
-// Useful byte functions (in a crypto context)
+// Useful cryptographic binary functions.
 type Bytes []byte
 
 // Zeroes the underlying byte array.  (Useful for deleting secret information)
@@ -71,17 +74,9 @@ func (b Bytes) PBKDF2(salt []byte, iter int, size int) Bytes {
 	return pbkdf2.Key(b, salt, iter, size, sha256.New)
 }
 
-// Some useful binary constants.
-const (
-	bits_128 = 128 / 8
-	bits_192 = 192 / 8
-	bits_256 = 256 / 8
-)
-
 // Supported symmetric ciphers.  This library is intended to ONLY offer support ciphers
 // that implement the Authenticated Encryption with Associated Data (AEAD)
 // standard.  Currently, that only includes the GCM family of streaming modes.
-
 const (
 	AES_128_GCM SymCipher = iota
 	AES_192_GCM
@@ -94,7 +89,7 @@ type SymCipher int
 func (s SymCipher) KeySize() int {
 	switch s {
 	default:
-		return 0
+		panic("UnknownCipher")
 	case AES_128_GCM:
 		return bits_128
 	case AES_192_GCM:
@@ -146,6 +141,7 @@ type symCipherText struct {
 	Data   Bytes
 }
 
+// Runs the given symmetric encryption algorithm on the message using the key as the key.  Returns the resulting cipher text
 func symmetricEncrypt(rand io.Reader, alg SymCipher, key []byte, msg []byte) (symCipherText, error) {
 	block, err := initBlockCipher(alg, key)
 	if err != nil {
@@ -238,7 +234,7 @@ func asymmetricEncrypt(rand io.Reader, keyCipher AsymCipher, msgCipher SymCipher
 }
 
 func (c asymCipherText) Decrypt(priv crypto.PrivateKey) ([]byte, error) {
-	key, err := decryptKey(c.KeyCipher, priv, c.Key)
+	key, err := asymmetricDecryptKey(c.KeyCipher, priv, c.Key)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -270,7 +266,7 @@ func asymmetricEncryptKey(alg AsymCipher, raw crypto.PublicKey, key []byte) ([]b
 	}
 }
 
-func decryptKey(alg AsymCipher, raw crypto.PrivateKey, key []byte) ([]byte, error) {
+func asymmetricDecryptKey(alg AsymCipher, raw crypto.PrivateKey, key []byte) ([]byte, error) {
 	switch alg {
 	default:
 		return nil, errors.Wrapf(CipherUnknownError, "Unknown asymmetric cipher: %v", alg)
@@ -343,7 +339,7 @@ func ensureValidKey(alg SymCipher, key []byte) error {
 
 func ensureKeySize(expected int, key []byte) error {
 	if expected != len(key) {
-		return newCipherKeyLengthError(expected, key)
+		return errors.Wrapf(CipherKeyError, "Illegal key [%v].  Expected [%v] bytes but got [%v]", key, expected, len(key))
 	} else {
 		return nil
 	}
