@@ -1,7 +1,8 @@
 package warden
 
 import (
-	"crypto"
+	"crypto/sha256"
+	"hash"
 	"io"
 	"time"
 
@@ -58,6 +59,7 @@ type codeOptions struct {
 	salt   int
 	point  int
 	iter   int
+	hash   hash.Hash
 }
 
 // Sets the access code cipher
@@ -70,8 +72,13 @@ func (o *codeOptions) WithExpiration(ttl time.Duration) {
 	o.expire = ttl
 }
 
+// Sets the access code cipher
+func (o *codeOptions) WithKeyHash(h hash.Hash) {
+	o.hash = h
+}
+
 // Sets the salt size of the access code (typically > 8).  This is the server side equivalent of a password
-func (o *codeOptions) WithSaltSize(size int) {
+func (o *codeOptions) WithKeySaltSize(size int) {
 	o.salt = size
 }
 
@@ -88,7 +95,7 @@ func (o *codeOptions) WithKeyIter(iter int) {
 }
 
 func defaultCodeOptions() *codeOptions {
-	return &codeOptions{AES_128_GCM, 256, 8, 8, 4096}
+	return &codeOptions{AES_128_GCM, 256, 8, 8, 4096, sha256.New()}
 }
 
 func buildCodeOptions(fns ...func(*codeOptions)) *codeOptions {
@@ -99,52 +106,27 @@ func buildCodeOptions(fns ...func(*codeOptions)) *codeOptions {
 	return o
 }
 
-type boldCode struct {
+type boltCode struct {
 	db  *bolt.DB
 	dat codeDat
 }
 
-func (b *boldCode) Name() string {
-	panic("not implemented")
+func (b *boltCode) Name() string {
+	return b.dat.name
 }
 
-func (b *boldCode) access(pub crypto.PublicKey, pass []byte) (Token, error) {
-	panic("not implemented")
-}
-
-type boltLock struct {
-}
-
-func (b *boltLock) Codes() []Code {
-	panic("not implemented")
-}
-
-func (b *boltLock) UseCode(code string, pass []byte) (Token, error) {
-	panic("not implemented")
-}
-
-func (b *boltLock) ChgCode(code string, cur []byte, new []byte) (Token, error) {
-	panic("not implemented")
-}
-
-func (b *boltLock) AddCode(token Token, code string, pass []byte, expire time.Duration) error {
-	panic("not implemented")
-}
-
-func (b *boltLock) DelCode(token Token, code string, pass []byte, expire time.Duration) error {
-	panic("not implemented")
-}
-
-func (b *boltLock) open(token Token) ([]byte, error) {
-	panic("not implemented")
-}
+// func (b *boltCode) access(session Session, key []byte, pass []byte) (Token, error) {
+// b.db.View(func(tx *bolt.Tx) {
+// // priv, err := b.dat.SecurePoint(tx)
+// })
+// }
 
 // An encrypted point (just wraps a simple cipher whose key is a PBKDF2 hash)
 type securePointDat symCipherText
 
 // Returns the point, encrypted by using the given pass as the key for the cipher.
-func encryptPoint(rand io.Reader, alg SymCipher, salt []byte, iter int, point point, pass Bytes) (securePointDat, error) {
-	ct, err := symmetricEncrypt(rand, alg, pass.PBKDF2(salt, iter, alg.KeySize()), point.Bytes())
+func encryptPoint(rand io.Reader, alg SymCipher, salt []byte, iter int, hash hash.Hash, point point, pass Bytes) (securePointDat, error) {
+	ct, err := symmetricEncrypt(rand, alg, pass.PBKDF2(salt, iter, alg.KeySize(), hash), point.Bytes())
 	if err != nil {
 		return securePointDat{}, errors.WithStack(err) // Dealing with secure data.  No additional context
 	}
@@ -152,9 +134,9 @@ func encryptPoint(rand io.Reader, alg SymCipher, salt []byte, iter int, point po
 	return securePointDat(ct), nil
 }
 
-// Decryptes the point using the salt, iterations and raw bytes.
-func (e securePointDat) Decrypt(salt []byte, iter int, code Bytes) (point, error) {
-	raw, err := symCipherText(e).Decrypt(code.PBKDF2(salt, iter, e.Cipher.KeySize()))
+// Decrypts the point using the salt, iterations and raw bytes.
+func (e securePointDat) Decrypt(salt []byte, iter int, hash hash.Hash, code Bytes) (point, error) {
+	raw, err := symCipherText(e).Decrypt(code.PBKDF2(salt, iter, e.Cipher.KeySize(), hash))
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}
@@ -213,7 +195,7 @@ func initBoltCode(tx *bolt.Tx, rand io.Reader, name string, line line, code []by
 	}
 	defer point.Destroy()
 
-	enc, err := encryptPoint(rand, opts.alg, salt, opts.iter, point, code)
+	enc, err := encryptPoint(rand, opts.alg, salt, opts.iter, opts.hash, point, code)
 	if err != nil {
 		return codeDat{}, errors.Wrap(err, "Unable to initialize access code")
 	}
@@ -274,7 +256,7 @@ func (b codeDat) Access(tx *bolt.Tx, code []byte) (point, error) {
 	}
 
 	defer b.IncUses(tx)
-	return enc.Decrypt(b.salt, b.iter, code)
+	return enc.Decrypt(b.salt, b.iter, sha256.New(), code)
 }
 
 // Returns the current number of uses for the access code.
@@ -476,7 +458,7 @@ func (s lockDat) Open(tx *bolt.Tx, code string, pass []byte) ([]byte, line, erro
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)
 	}
 
-	plain, err := cipherText.Decrypt(Bytes(curve.Bytes()).PBKDF2(s.salt, s.iter, cipherText.Cipher.KeySize()))
+	plain, err := cipherText.Decrypt(Bytes(curve.Bytes()).PBKDF2(s.salt, s.iter, cipherText.Cipher.KeySize(), sha256.New()))
 	if err != nil {
 		curve.Destroy()
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)
