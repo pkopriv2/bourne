@@ -25,6 +25,8 @@ type Signer interface {
 // A signature is a 3-tuple of the hashing algorithm, the original message
 // and the signature bytes.  Signatures may be verified with a public key,
 // preferably obtained through a trusted source.
+//
+// TODO: Not sure if this struct is necessary.
 type Signature struct {
 	Alg Hash
 	Msg []byte
@@ -43,10 +45,10 @@ func (s Signature) Verify(key PublicKey) error {
 // the implications of a compromised one.
 //
 // A couple initial thoughts on key organization for users.  I personally plan to
-// issue my keys in terms of the trust required.  Likely, I'll have separate keys for
-// each environment that I'm working in, e.g.: Dev, Cert, Prod1, etc...
+// issue my keys in terms of the trust required.
 //
-// Initial thoughts are that each
+// For development purposes, I think issuing keys based on the environment
+// I'm working on will prove best, e.g. dev, cert, prod, etc...
 //
 type PublicKey interface {
 	Algorithm() KeyAlgorithm
@@ -54,10 +56,10 @@ type PublicKey interface {
 	Bytes() []byte
 }
 
-// Private keys represent proof of identity and form the basis of how authentication
-// confidentiality and integrity concerns are managed within the ecosystem.  Warden
-// goes to great lengths to ensure that your data is *NEVER* derivable by any other
-// actors (malicious or otherwise), including the system itself.
+// Private keys represent proof of ownership of a public key and form the basis of
+// how authentication confidentiality and integrity concerns are managed within the
+// ecosystem.  Warden goes to great lengths to ensure that your data is *NEVER*
+// derivable by any other actors (malicious or otherwise), including the system itself.
 //
 // For high-security private keys, only a signer is required to authenticate with the
 // system.  It is never necessary for private key to leave the local system, which is
@@ -76,13 +78,6 @@ type PrivateKey interface {
 }
 
 // A key pad gives access to the various authentication methods.
-//
-// Authentication within the trust ecosystem is performed using a hybrid signature
-// + Leslie-Lamport's One-Time-Pass scheme.  The algorithm for signature
-//
-// # Authentication Methods
-//
-//
 type KeyPad interface {
 
 	// Authenticates using a simple signature scheme. The signer will be asked
@@ -105,7 +100,8 @@ type KeyPad interface {
 
 // A token represents an authenticated session with the trust ecosystem.  Tokens
 // contain a signed message from the trust service - plus a hashed form of the
-// authentication credentials.
+// authentication credentials.  The hash is NOT enough to rederive any secrets
+// on its own.
 type Token interface {
 
 	// Returns the public key associated with the token.
@@ -126,7 +122,7 @@ type KeyRing interface {
 	// The owning key.
 	Owner() PublicKey
 
-	// Loads the public key of the given name.
+	// Loads the existing invitations for the key of the given name
 	Invitations(cancel <-chan struct{}, token Token, name string) ([]Invitation, error)
 
 	// Loads the public key of the given name.
@@ -135,8 +131,13 @@ type KeyRing interface {
 	// Loads the private key of the given name.
 	PrivateKey(cancel <-chan struct{}, token Token, name string) (PrivateKey, error)
 
-	// Publishes a key to the key ring.
+	// Publishes a key to the key ring.  Although not searchable, the key should be
+	// considered public knowledge.
 	Publish(cancel <-chan struct{}, token Token, name string, key PublicKey) error
+
+	// Marks the given key as being compromised.  This will be published to a
+	// global revocation list that consumers will have access to check.
+	Revoke(cancel <-chan struct{}, token Token, name string) error
 
 	// Backs the private key up.  The plaintext private key never leaves
 	// the local machine, but an encrypted form will be sent to the trust
@@ -181,7 +182,6 @@ type Invitation interface {
 type TrustLevel int
 
 const (
-	// Minimum trust allows members to view the shared secret, while disallowing membership changes
 	Verify TrustLevel = iota
 	Sign
 	Encrypt
@@ -198,20 +198,26 @@ type Group interface {
 	// The key that originally created the group.
 	Creator() PublicKey
 
-	// The global name of the group.  This must be unique, and is NOT published.
+	// The global name of the group.  This must be unique.  This is not published
+	// but should be considered public knowledge.
+	//
+	// Consumers will use the uri to coordinate invitations.
 	URI() string
 
-	// The common name of the group.  Not necessarily unique, just indicative of what the group does
-	Description() string
+	// Returns all the currently trusted keys of the group
+	Trusted(cancel <-chan struct{}, token Token) []PublicKey
 
 	// Disbands the group.  The group's private key will be permanently irrecoverable.
 	Disband(cancel <-chan struct{}, token Token) error
 
-	// Returns all the currently trusted keys of the group
-	Members(cancel <-chan struct{}, token Token) []PublicKey
-
 	// Generates an invitation for the given public key to join the group.
 	Invite(cancel <-chan struct{}, token Token, key PublicKey, lvl TrustLevel) (Invitation, error)
+
+	// Generates an invitation request for the given public key to join the group.
+	RequestInvitation(cancel <-chan struct{}, token Token, key PublicKey, lvl TrustLevel) error
+
+	// Generates an invitation for the given public key to join the group.
+	Evict(cancel <-chan struct{}, token Token, key PublicKey) error
 
 	// Verifies the signature was generated from the group's private key and the msg.
 	Verify(cancel <-chan struct{}, token Token, hash Hash, msg []byte, sig []byte) ([]byte, error)
@@ -220,14 +226,8 @@ type Group interface {
 	Sign(cancel <-chan struct{}, token Token, hash Hash, msg []byte) ([]byte, error)
 
 	// Encrypts and signs the message with the group's key.
-	Encrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) (CipherText, error)
+	Encrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) ([]byte, error)
 
-	// Verifies the contents using the group's key.  Only trusted members
-	Decrypt(cancel <-chan struct{}, token Token, c CipherText) ([]byte, error)
-}
-
-type CipherText interface {
-	Cipher() SymCipher
-	Key()  []byte
-	Data() []byte
+	// Verifies the contents using the group's key.
+	Decrypt(cancel <-chan struct{}, token Token, c []byte) ([]byte, error)
 }
