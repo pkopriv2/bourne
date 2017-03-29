@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -24,14 +25,18 @@ func (b Bytes) Size() int {
 	return len(b)
 }
 
-// Returns a base64 encoding of the array
+// Returns a base64 representation of the array
 func (b Bytes) Base64() string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
-// Returns a hex encoding of the array
+// Returns a base32 representation of the array
+func (b Bytes) Base32() string {
+	return base32.StdEncoding.EncodeToString(b)
+}
+
 func (b Bytes) Hex() string {
-	return hex.EncodeToString(b)
+	return hex.Dump(b)
 }
 
 // Returns a string representation of the array
@@ -43,6 +48,11 @@ func (b Bytes) String() string {
 	} else {
 		return fmt.Sprintf("%v... (total=%v)", base64[:32], len(base64))
 	}
+}
+
+// Returns a new byte array for use as a cipher key
+func (b Bytes) Hash(h Hash) (Bytes, error) {
+	return h.Hash(b)
 }
 
 // Returns a new byte array for use as a cipher key

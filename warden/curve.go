@@ -107,7 +107,7 @@ func parseLineBytes(raw []byte) (line, error) {
 	return line{slope.SetBytes(sBytes), intercept.SetBytes(iBytes)}, nil
 }
 
-// A vector representation of a point in n-dimensional space
+// A vector representation of a point in 2-dimensional space
 type point struct {
 	X *big.Int
 	Y *big.Int

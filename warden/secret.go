@@ -52,6 +52,11 @@ func initBoltBuckets(db *bolt.DB) (err error) {
 	})
 }
 
+type keyArgs struct {
+	salt1 []byte
+	salt2 []byte
+}
+
 // Access code options.
 type codeOptions struct {
 	alg    SymCipher

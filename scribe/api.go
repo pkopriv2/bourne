@@ -2,6 +2,7 @@ package scribe
 
 import (
 	"fmt"
+	"math/big"
 	"reflect"
 
 	uuid "github.com/satori/go.uuid"
@@ -103,6 +104,8 @@ type Writer interface {
 	WriteInt(field string, val int)
 	WriteInts(field string, val []int)
 	WriteBytes(field string, val []byte)
+	WriteBigInt(field string, val *big.Int)
+	WriteBigInts(field string, val []*big.Int)
 	WriteUUID(field string, val uuid.UUID)
 }
 
@@ -119,6 +122,8 @@ type Reader interface {
 	ParseMessages(field string, val interface{}, fn Parser) error
 
 	// Supported extensions
+	ReadBigInt(field string, val **big.Int) error
+	ReadBigInts(field string, val *[]*big.Int) error
 	ReadInt(field string, val *int) error
 	ReadInts(field string, val *[]int) error
 	ReadBytes(field string, val *[]byte) error

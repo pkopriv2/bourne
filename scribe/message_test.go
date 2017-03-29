@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -132,6 +133,30 @@ func TestMessages_ReadWrite(t *testing.T) {
 
 	var val []Message
 	err := msg.ReadMessages("field", &val)
+	assert.Nil(t, err)
+	assert.Equal(t, exp, val)
+}
+
+func TestBigInt_ReadWrite(t *testing.T) {
+	exp := big.NewInt(100)
+	msg := Build(func(w Writer) {
+		w.WriteBigInt("field", exp)
+	})
+
+	var val *big.Int
+	err := msg.ReadBigInt("field", &val)
+	assert.Nil(t, err)
+	assert.Equal(t, exp, val)
+}
+
+func TestBigInts_ReadWrite(t *testing.T) {
+	exp := []*big.Int{big.NewInt(1), big.NewInt(1<<63-1)}
+	msg := Build(func(w Writer) {
+		w.WriteBigInts("field", exp)
+	})
+
+	var val []*big.Int
+	err := msg.ReadBigInts("field", &val)
 	assert.Nil(t, err)
 	assert.Equal(t, exp, val)
 }

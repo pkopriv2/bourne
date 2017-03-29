@@ -18,8 +18,8 @@ import (
 )
 
 var (
-	CipherUnknownError = errors.New("WARDEN:UNKNOWN_CIPHER")
-	CipherKeyError     = errors.New("WARDEN:KEY_ERROR")
+	CipherUnknownError = errors.New("Warden:CipherUnknown")
+	CipherKeyError     = errors.New("Warden:CipherKey")
 )
 
 // Common bit->byte conversions
@@ -57,7 +57,7 @@ func (s SymCipher) KeySize() int {
 func (s SymCipher) String() string {
 	switch s {
 	default:
-		return "UnknownCipher"
+		return CipherUnknownError.Error()
 	case AES_128_GCM:
 		return "AES_128_GCM"
 	case AES_192_GCM:

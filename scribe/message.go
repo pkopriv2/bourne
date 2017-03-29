@@ -1,7 +1,9 @@
 package scribe
 
 import (
+	"encoding/base64"
 	"encoding/hex"
+	"math/big"
 	"reflect"
 	"strconv"
 
@@ -173,6 +175,19 @@ func (w writer) WriteBytes(field string, val []byte) {
 	w.WriteString(field, hex.EncodeToString(val))
 }
 
+// TODO: Switch to using a common base-10 scheme. (couldn't find parsing during quick pass)
+func (w writer) WriteBigInt(field string, val *big.Int) {
+	w.WriteString(field, base64.StdEncoding.EncodeToString(val.Bytes()))
+}
+
+func (w writer) WriteBigInts(field string, val []*big.Int) {
+	strs := make([]string, 0, len(val))
+	for _, s := range val {
+		strs = append(strs, base64.StdEncoding.EncodeToString(s.Bytes()))
+	}
+	w.WriteStrings(field, strs)
+}
+
 func (w writer) WriteUUID(field string, val uuid.UUID) {
 	w.WriteString(field, val.String())
 }
@@ -285,6 +300,41 @@ func (m message) ReadInts(field string, val *[]int) error {
 		}
 
 		ret = append(ret, i)
+	}
+
+	*val = ret
+	return nil
+}
+
+func (m message) ReadBigInt(field string, val **big.Int) error {
+	var str string
+	if err := m.ReadString(field, &str); err != nil {
+		return err
+	}
+
+	bin, err := base64.StdEncoding.DecodeString(str)
+	if err != nil {
+		return err
+	}
+
+	*val = new(big.Int).SetBytes(bin)
+	return nil
+}
+
+func (m message) ReadBigInts(field string, val *[]*big.Int) error {
+	var strs []string
+	if err := m.ReadStrings(field, &strs); err != nil {
+		return err
+	}
+
+	ret := make([]*big.Int, 0, len(strs))
+	for _, s := range strs {
+		bin, err := base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			return err
+		}
+
+		ret = append(ret, new(big.Int).SetBytes(bin))
 	}
 
 	*val = ret
