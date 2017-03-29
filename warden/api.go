@@ -16,20 +16,37 @@ var (
 	TrustError          = errors.New("Warden:TrustError")
 )
 
-// func Connect() (Connection, error) {
-// return nil, nil
-// }
-
 // A signer contains the knowledge necessary to digitally sign messages.
 type Signer interface {
 	Public() PublicKey
-	Sign(rand io.Reader, hsh Hash, msg []byte) ([]byte, error)
+	Sign(rand io.Reader, hsh Hash, msg []byte) (Signature, error)
+}
+
+// A signature is a 3-tuple of the hashing algorithm, the original message
+// and the signature bytes.  Signatures may be verified with a public key,
+// preferably obtained through a trusted source.
+type Signature struct {
+	Alg Hash
+	Msg []byte
+	Sig []byte
+}
+
+// Verifies the signature with the given public key.  Returns nil if the
+// verification succeeded.
+func (s Signature) Verify(key PublicKey) error {
+	return key.Verify(s.Alg, s.Msg, s.Sig)
 }
 
 // Public keys are the basis of identity within the trust ecosystem.  In plain english,
 // I don't trust your identity, I only trust your keys.  Therefore, risk planning starts
 // with limiting the exposure of your trusted keys.  The more trusted a key, the greater
 // the implications of a compromised one.
+//
+// A couple initial thoughts on key organization for users.  I personally plan to
+// issue my keys in terms of the trust required.  Likely, I'll have separate keys for
+// each environment that I'm working in, e.g.: Dev, Cert, Prod1, etc...
+//
+// Initial thoughts are that each
 //
 type PublicKey interface {
 	Algorithm() KeyAlgorithm
@@ -50,7 +67,7 @@ type PublicKey interface {
 // For user-defined keys, users may wish to store encrypted backups of their private
 // keys.  The plaintext version of these keys (PrivateKey#Bytes()) never leave the
 // the local machine, ensuring that the trust ecosystem has no knowledge of the key
-// values.  Consumers may access their keys using
+// values.  Consumers may access their keys using their key ring.
 //
 type PrivateKey interface {
 	Signer
@@ -58,39 +75,37 @@ type PrivateKey interface {
 	Bytes() []byte
 }
 
-// An access pad gives access to the various authentication methods.
-//
-// # Authentication
+// A key pad gives access to the various authentication methods.
 //
 // Authentication within the trust ecosystem is performed using a hybrid signature
-// + Leslie-Lamport's One-Time-Pass scheme.  In other words, the signature
+// + Leslie-Lamport's One-Time-Pass scheme.  The algorithm for signature
 //
-type AccessPad interface {
+// # Authentication Methods
+//
+//
+type KeyPad interface {
 
 	// Authenticates using a simple signature scheme. The signer will be asked
 	// to sign a simple message, which will then be used as proof that the caller
 	// has direct signing access to the private key component of the public key.
 	//
 	// Note: The public key is only used as a means of performing a simple account
-	// lookup and is not used to verify the signature.  The signature verification
-	// happens
+	// lookup and is not used to verify the signature.
+	WithSignature(account string, signer Signer) (Token, error)
+
+	// // Authenticates with a simple user-generated pin.
+	// WithPin(user string, pin []byte) (Session, error)
 	//
-	WithSignature(Signer) (Token, error)
-
-	// Authenticates with a simple user-generated pin.
-	WithPin(user string, pin []byte) (Session, error)
-
 	// // Authenticates using the default username/password combo.  We currently
 	// // do not support multifactor auth, so this should be considered the weakest
 	// // of the 3, but does not require that the user has direct access to his/her
 	// // private key.
-	WithPassword(user string, pass []byte)
+	// WithPassword(user string, pass []byte)
 }
 
 // A token represents an authenticated session with the trust ecosystem.  Tokens
 // contain a signed message from the trust service - plus a hashed form of the
 // authentication credentials.
-//
 type Token interface {
 
 	// Returns the public key associated with the token.
@@ -102,7 +117,32 @@ type Token interface {
 	// user and the trust system.
 	//
 	// The private key will be promptly destroyed once the given closure returns.
-	SecretKey(cancel <-chan struct{}, fn func([]byte)) error
+	secretKey(cancel <-chan struct{}, fn func([]byte)) error
+}
+
+// A key ring hosts a set of key/pairs.
+type KeyRing interface {
+
+	// The owning key.
+	Owner() PublicKey
+
+	// Loads the public key of the given name.
+	Invitations(cancel <-chan struct{}, token Token, name string) ([]Invitation, error)
+
+	// Loads the public key of the given name.
+	PublicKey(cancel <-chan struct{}, token Token, name string) (PublicKey, error)
+
+	// Loads the private key of the given name.
+	PrivateKey(cancel <-chan struct{}, token Token, name string) (PrivateKey, error)
+
+	// Publishes a key to the key ring.
+	Publish(cancel <-chan struct{}, token Token, name string, key PublicKey) error
+
+	// Backs the private key up.  The plaintext private key never leaves
+	// the local machine, but an encrypted form will be sent to the trust
+	// key store.  The encrypted key will only be accessible to the owner
+	// of the key ring.
+	Backup(cancel <-chan struct{}, token Token, name string, key PrivateKey) error
 }
 
 // A secret is a durable, cryptographically secure structure that protects a long-lived secret.
@@ -127,46 +167,67 @@ type Secret interface {
 	Use(cancel <-chan struct{}, token Token, fn func([]byte)) error
 }
 
-// // Group levels set the basic policy for members of a trusted group to make changes to the group.
-// type TrustLevel int
-//
-// const (
-//
-// // Minimum trust allows members to view the shared secret, while disallowing membership changes
-// Minimum TrustLevel = 0
-//
-// // Maximum trust allows members to invite and evict other members.
-// Maximum TrustLevel = math.MaxUint32
-// )
-//
-// // A trust is a group of members that maintain a shared secret.
-// type Group interface {
-//
-// // Authenticates the user with the trust, returning an access token for the trust
-// Auth(cancel <-chan struct{}, session Session) (Token, error)
-//
-// // List all members of the trust.
-// Members(cancel <-chan struct{}, token Token) []uuid.UUID
-//
-// // List all pending invitations of the trust.
-// Invitations(cancel <-chan struct{}, token Token) []Invitation
-//
-// // Generates an invitation for the given member at the specified trust level
-// Invite(cancel <-chan struct{}, token Token, member uuid.UUID, lvl TrustLevel) (Invitation, error)
-//
-// // Evicts a member from the group.  Only those with maximum trust may evict members
-// Evict(cancel <-chan struct{}, token Token, member uuid.UUID) (Invitation, error)
-//
-// // Accesses the underlying secret.
-// Secret(cancel <-chan struct{}, token Token, fn func(secret []byte))
-// }
-//
-// // An invitation is a cryptographically secured message that may only be accepted
-// // by the intended recipient.  These technically can be shared publicly, but exposure
-// // should be limited (typically only the trust system needs to know)
-// type Invitation struct {
-// Id        uuid.UUID
-// Recipient uuid.UUID
-// Created   time.Time
-// Expires   time.Time
-// }
+// An invitation is a cryptographically secured message that may only be accepted
+// by the intended recipient.  These technically can be shared publicly, but exposure
+// should be limited (typically only the trust system needs to know)
+type Invitation interface {
+	Group() PublicKey
+
+	// Accepts the invitation on behalf of the owner of the token.
+	Accept(cancel <-chan struct{}, token Token) error
+}
+
+// Group levels set the basic policy for members of a trusted group to make changes to the group.
+type TrustLevel int
+
+const (
+	// Minimum trust allows members to view the shared secret, while disallowing membership changes
+	Verify TrustLevel = iota
+	Sign
+	Encrypt
+	Decrypt
+	Invite
+	Evict
+	Disband
+)
+
+// A group represents a group of keys that have all been trusted for the purposes of maintaining
+// a shared group secret.
+type Group interface {
+
+	// The key that originally created the group.
+	Creator() PublicKey
+
+	// The global name of the group.  This must be unique, and is NOT published.
+	URI() string
+
+	// The common name of the group.  Not necessarily unique, just indicative of what the group does
+	Description() string
+
+	// Disbands the group.  The group's private key will be permanently irrecoverable.
+	Disband(cancel <-chan struct{}, token Token) error
+
+	// Returns all the currently trusted keys of the group
+	Members(cancel <-chan struct{}, token Token) []PublicKey
+
+	// Generates an invitation for the given public key to join the group.
+	Invite(cancel <-chan struct{}, token Token, key PublicKey, lvl TrustLevel) (Invitation, error)
+
+	// Verifies the signature was generated from the group's private key and the msg.
+	Verify(cancel <-chan struct{}, token Token, hash Hash, msg []byte, sig []byte) ([]byte, error)
+
+	// Signs the message with the group's private key.
+	Sign(cancel <-chan struct{}, token Token, hash Hash, msg []byte) ([]byte, error)
+
+	// Encrypts and signs the message with the group's key.
+	Encrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) (CipherText, error)
+
+	// Verifies the contents using the group's key.  Only trusted members
+	Decrypt(cancel <-chan struct{}, token Token, c CipherText) ([]byte, error)
+}
+
+type CipherText interface {
+	Cipher() SymCipher
+	Key()  []byte
+	Data() []byte
+}

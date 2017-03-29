@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"io"
 	"time"
 
 	"github.com/pkg/errors"
@@ -10,24 +11,19 @@ import (
 )
 
 // The decrypted token.  Internal only and only decrypted by the owner of the token key.
-type token struct {
+type authToken struct {
 	IssuedTo uuid.UUID
 	IssuedBy uuid.UUID
 	Created  time.Time
 	Expires  time.Time
 }
 
-func parseToken(raw []byte) (s token, e error) {
-	e = s.Parse(raw)
-	return
-}
-
-func newToken(issuedTo uuid.UUID, issuedBy uuid.UUID, ttl time.Duration) token {
+func newToken(issuedTo uuid.UUID, issuedBy uuid.UUID, ttl time.Duration) authToken {
 	now := time.Now()
-	return token{issuedTo, issuedBy, time.Now(), now.Add(ttl)}
+	return authToken{issuedTo, issuedBy, time.Now(), now.Add(ttl)}
 }
 
-func (s token) Write(w scribe.Writer) {
+func (s authToken) Write(w scribe.Writer) {
 	w.WriteUUID("issuedTo", s.IssuedTo)
 	w.WriteUUID("issuedBy", s.IssuedBy)
 	created, _ := s.Created.MarshalBinary()
@@ -36,7 +32,7 @@ func (s token) Write(w scribe.Writer) {
 	w.WriteBytes("expires", expires)
 }
 
-func (s token) Read(r scribe.Reader) (e error) {
+func (s authToken) Read(r scribe.Reader) (e error) {
 	var created, expired []byte
 	e = common.Or(e, r.ReadUUID("issuedTo", &s.IssuedTo))
 	e = common.Or(e, r.ReadUUID("issuedBy", &s.IssuedBy))
@@ -47,11 +43,15 @@ func (s token) Read(r scribe.Reader) (e error) {
 	return
 }
 
-func (s token) Bytes() []byte {
+func (s authToken) Sign(rand io.Reader, signer Signer, hash Hash) ([]byte, error) {
+	return nil, nil
+}
+
+func (s authToken) Bytes() []byte {
 	return scribe.Write(s).Bytes()
 }
 
-func (s token) Parse(raw []byte) error {
+func (s authToken) Parse(raw []byte) error {
 	msg, err := scribe.Parse(raw)
 	if err != nil {
 		return errors.WithStack(err)

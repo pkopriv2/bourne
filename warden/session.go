@@ -4,7 +4,7 @@ import "crypto"
 
 // The decrypted token.  Internal only and only decrypted by the owner of the token key.
 type session struct {
-	token token
+	token authToken
 	hash1 []byte
 }
 

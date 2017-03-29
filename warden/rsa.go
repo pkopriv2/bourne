@@ -9,7 +9,7 @@ import (
 	"github.com/pkopriv2/bourne/scribe"
 )
 
-// Public key implementation.
+// Public RSA key implementation.
 type rsaPublicKey struct {
 	raw *rsa.PublicKey
 }
@@ -71,18 +71,18 @@ func (r *rsaPrivateKey) Public() PublicKey {
 	return r.public()
 }
 
-func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) ([]byte, error) {
+func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) (Signature, error) {
 	hashed, err := hash.Hash(msg)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", Bytes(msg), hash)
+		return Signature{}, errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", Bytes(msg), hash)
 	}
 
 	sig, err := rsa.SignPSS(rand, r.raw, hash.Crypto(), hashed, nil)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to sign msg [%v]", Bytes(msg))
+		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", Bytes(msg))
 	}
 
-	return sig, nil
+	return Signature{hash, msg, sig}, nil
 }
 
 func (r *rsaPrivateKey) Bytes() []byte {
