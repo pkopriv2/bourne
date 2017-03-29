@@ -7,7 +7,10 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// TODO: Follow the guidelines here, esp NIST standards: https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
+// Useful references:
+//
+// * https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
+// * https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
 
 // Common errors
 var (
@@ -27,16 +30,12 @@ type Signer interface {
 // preferably obtained through a trusted source.
 //
 // TODO: Not sure if this struct is necessary.
-type Signature struct {
-	Alg Hash
-	Msg []byte
-	Sig []byte
-}
+type Signature []byte
 
 // Verifies the signature with the given public key.  Returns nil if the
 // verification succeeded.
-func (s Signature) Verify(key PublicKey) error {
-	return key.Verify(s.Alg, s.Msg, s.Sig)
+func (s Signature) Verify(key PublicKey, hash Hash, msg []byte) error {
+	return key.Verify(hash, msg, s)
 }
 
 // Public keys are the basis of identity within the trust ecosystem.  In plain english,
@@ -45,10 +44,8 @@ func (s Signature) Verify(key PublicKey) error {
 // the implications of a compromised one.
 //
 // A couple initial thoughts on key organization for users.  I personally plan to
-// issue my keys in terms of the trust required.
-//
-// For development purposes, I think issuing keys based on the environment
-// I'm working on will prove best, e.g. dev, cert, prod, etc...
+// issue my keys in terms of the trust required.  As a developer, I think issuing keys based
+// on the environment I'm working on will be easy to reason about, e.g. dev, cert, prod, etc...
 //
 type PublicKey interface {
 	Algorithm() KeyAlgorithm
@@ -77,7 +74,8 @@ type PrivateKey interface {
 	Bytes() []byte
 }
 
-// A key pad gives access to the various authentication methods.
+// A key pad gives access to the various authentication methods and will
+// be used during the registration process.
 type KeyPad interface {
 
 	// Authenticates using a simple signature scheme. The signer will be asked
@@ -107,43 +105,37 @@ type Token interface {
 	// Returns the public key associated with the token.
 	PublicKey(cancel <-chan struct{}) PublicKey
 
-	// Reconstructs the secret key from the token details.  The reconstruction process is such
+	// Reconstructs the private key from the token details.  The reconstruction process is such
 	// that only the local process has enough knowledge to reconstruct it.  Moreover, the
 	// reconstruction process is collaborative, meaning it requires elements from both the
 	// user and the trust system.
 	//
 	// The private key will be promptly destroyed once the given closure returns.
-	secretKey(cancel <-chan struct{}, fn func([]byte)) error
+	PrivateKey(cancel <-chan struct{}, fn func(PrivateKey)) error
 }
 
 // A key ring hosts a set of key/pairs.
 type KeyRing interface {
 
-	// The owning key.
-	Owner() PublicKey
-
-	// Loads the existing invitations for the key of the given name
-	Invitations(cancel <-chan struct{}, token Token, name string) ([]Invitation, error)
-
 	// Loads the public key of the given name.
-	PublicKey(cancel <-chan struct{}, token Token, name string) (PublicKey, error)
+	PublicKey(cancel <-chan struct{}, token Token, uri string) (PublicKey, error)
 
 	// Loads the private key of the given name.
-	PrivateKey(cancel <-chan struct{}, token Token, name string) (PrivateKey, error)
+	PrivateKey(cancel <-chan struct{}, token Token, uri string, fn func(PrivateKey)) error
 
 	// Publishes a key to the key ring.  Although not searchable, the key should be
 	// considered public knowledge.
-	Publish(cancel <-chan struct{}, token Token, name string, key PublicKey) error
+	Publish(cancel <-chan struct{}, token Token, uri string, key PublicKey) error
 
 	// Marks the given key as being compromised.  This will be published to a
-	// global revocation list that consumers will have access to check.
-	Revoke(cancel <-chan struct{}, token Token, name string) error
+	// global revocation list that anyone can check against.
+	Revoke(cancel <-chan struct{}, token Token, uri string) error
 
 	// Backs the private key up.  The plaintext private key never leaves
 	// the local machine, but an encrypted form will be sent to the trust
 	// key store.  The encrypted key will only be accessible to the owner
 	// of the key ring.
-	Backup(cancel <-chan struct{}, token Token, name string, key PrivateKey) error
+	Backup(cancel <-chan struct{}, token Token, uri string, key PrivateKey) error
 }
 
 // A secret is a durable, cryptographically secure structure that protects a long-lived secret.
@@ -225,9 +217,15 @@ type Group interface {
 	// Signs the message with the group's private key.
 	Sign(cancel <-chan struct{}, token Token, hash Hash, msg []byte) ([]byte, error)
 
-	// Encrypts and signs the message with the group's key.
-	Encrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) ([]byte, error)
+	// TODO:
+	// // Encrypts and signs the message with the group's key.
+	// Encrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) ([]byte, error)
+	//
+	// // Verifies the contents using the group's key.
+	// Decrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) ([]byte, error)
+}
 
-	// Verifies the contents using the group's key.
-	Decrypt(cancel <-chan struct{}, token Token, c []byte) ([]byte, error)
+type CipherText struct {
+	Key PublicKey
+	Sig Signature
 }

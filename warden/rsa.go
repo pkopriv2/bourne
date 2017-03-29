@@ -82,7 +82,8 @@ func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) (Signature, 
 		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", Bytes(msg))
 	}
 
-	return Signature{hash, msg, sig}, nil
+	// return Signature{hash, msg, sig}, nil
+	return sig, nil
 }
 
 func (r *rsaPrivateKey) Bytes() []byte {
