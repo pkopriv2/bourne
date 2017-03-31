@@ -68,19 +68,19 @@ func RequestInvite(session Session, domain string, level LevelOfTrust) error {
 	return nil
 }
 
-// Lists your session's currently pending invitations.  These are invitations to manage in other domains.
+// Lists your session's currently pending invitations.
 func ListInvitations(session Session) ([]Invitation, error) {
 	return nil, nil
-}
-
-// Verifies the contents of an invitation.
-func VerifyInvitation(session Session, invite Invitation) error {
-	return nil
 }
 
 // Accepts the invitation with the given id.  Returns an error if the
 // acceptance fails for any reason.
 func AcceptInvite(session Session, id uuid.UUID) error {
+	return nil
+}
+
+// Verifies the contents of an invitation.
+func VerifyInvitation(session Session, invite Invitation) error {
 	return nil
 }
 
