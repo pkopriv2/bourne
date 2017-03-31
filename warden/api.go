@@ -20,7 +20,7 @@ var (
 	DomainInvariantError = errors.New("Warden:DomainInvariantError")
 )
 
-// TODO: Add subscription processing code.
+// Registers a new subscription with the trust service.
 func NewSubscription(addr string) (KeyPad, error) {
 	return nil, nil
 }
@@ -30,23 +30,22 @@ func LoadSubscription(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
-// Registers the private domain.
-func registerPrivateDomain(session Session) (Domain, error) {
-	return nil, nil
-}
-
 // Loads the private domain.
-func LoadPrivateDomain(session Session) (Domain, error) {
+func ManagePrivateDomain(session Session) (Domain, error) {
 	return nil, nil
 }
 
-// Registers the domain with the given name.  If it has been listed, then it will
-// be returned by warden.ListDomains()
-func RegisterDomain(session Session, domain string, list bool) (Domain, error) {
+// Registers/creates the domain.  Must not already exist.
+func RegisterDomain(session Session, domain string) (Domain, error) {
 	return nil, nil
 }
 
-// Lists all the doamins.
+// Publishes the domain to the main index.  It will now be globally searchable.
+func PublishDomain(session Session, domain string) ([]Domain, error) {
+	return nil, nil
+}
+
+// Lists all the domain on the main index.
 func ListDomains(session Session, beg int, end int) ([]Domain, error) {
 	return nil, nil
 }
@@ -68,12 +67,12 @@ func RequestInvite(session Session, domain string) error {
 	return nil
 }
 
-// Lists your session's key's currently pending trust invitations.
+// Lists your session's currently pending invitations.  These are invitations to manage in other domains.
 func ListInvitations(session Session) ([]Invitation, error) {
 	return nil, nil
 }
 
-// Lists your session's key's currently outstanding trust invitations.
+// Verifies the contents of an invitation.
 func VerifyInvitation(session Session, invite Invitation) error {
 	return nil
 }
@@ -89,7 +88,7 @@ func ListCertificates(session Session) ([]Certificate, error) {
 	return nil, nil
 }
 
-// Lists your session's key's currently outstanding trust invitations.
+// Verifies the contents of a certificate.
 func VerifyCertificate(session Session, cert Certificate) error {
 	return nil
 }
@@ -202,7 +201,7 @@ const (
 // You may access a domain only if you have established trust.
 type Domain interface {
 
-	// The common identifier of the domain (not required to be uniqued)
+	// The common identifier of the domain.  Must be unique per universe. (FIXME: Is uniqueness necessary.)
 	Name() string
 
 	// The public key of the domain.
