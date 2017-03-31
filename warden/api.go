@@ -3,6 +3,7 @@ package warden
 import (
 	"errors"
 	"io"
+	"time"
 
 	uuid "github.com/satori/go.uuid"
 )
@@ -10,32 +11,45 @@ import (
 // Useful references:
 //
 // * https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
-// * https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
 
 // Common errors
 var (
-	SessionExpiredError = errors.New("Warden:ExpiredSession")
-	SessionInvalidError = errors.New("Warden:InvalidSession")
-	TrustError          = errors.New("Warden:TrustError")
+	TokenExpiredError = errors.New("Warden:ExpiredToken")
+	TokenInvalidError = errors.New("Warden:InvalidToken")
+	TrustError        = errors.New("Warden:TrustError")
 )
 
-// A signer contains the knowledge necessary to digitally sign messages.
-type Signer interface {
-	Public() PublicKey
-	Sign(rand io.Reader, hsh Hash, msg []byte) (Signature, error)
+// Starts a session with the trust service.
+func Authenticate(addr string, domain string) (KeyPad, error) {
+	return nil, nil
 }
 
-// A signature is a 3-tuple of the hashing algorithm, the original message
-// and the signature bytes.  Signatures may be verified with a public key,
-// preferably obtained through a trusted source.
-//
-// TODO: Not sure if this struct is necessary.
-type Signature []byte
+// Starts the registration process with the trust service.
+func Register(addr string, domain string) (KeyPad, error) {
+	return nil, nil
+}
 
-// Verifies the signature with the given public key.  Returns nil if the
-// verification succeeded.
-func (s Signature) Verify(key PublicKey, hash Hash, msg []byte) error {
-	return key.Verify(hash, msg, s)
+// A signer contains the knowledge necessary to digitally sign messages.
+//
+// For high-security environments, only a signer is required to authenticate with the
+// system.  It is never necessary for the corresponding private key to leave the local
+// system, which is convienent in enviroments where access to the private key is not
+// possible (e.g. embedded hardware security modules).
+type Signer interface {
+	Public() PublicKey
+	Sign(rand io.Reader, hash Hash, msg []byte) (Signature, error)
+}
+
+// A signature is a cryptographically secure structure that may be used to both prove
+// the authenticity of an accompanying document, as well as the identity of the signer.
+type Signature struct {
+	Hash Hash
+	Data []byte
+}
+
+// Verifies the signature with the given public key.  Returns nil if the verification succeeded.
+func (s Signature) Verify(key PublicKey, msg []byte) error {
+	return key.Verify(s.Hash, msg, s.Data)
 }
 
 // Public keys are the basis of identity within the trust ecosystem.  In plain english,
@@ -43,39 +57,33 @@ func (s Signature) Verify(key PublicKey, hash Hash, msg []byte) error {
 // with limiting the exposure of your trusted keys.  The more trusted a key, the greater
 // the implications of a compromised one.
 //
-// A couple initial thoughts on key organization for users.  I personally plan to
-// issue my keys in terms of the trust required.  As a developer, I think issuing keys based
-// on the environment I'm working on will be easy to reason about, e.g. dev, cert, prod, etc...
+// The purpose of using Warden is not just to publish keys for your own personal use
+// (although it may be used for that), it is ultimately expected to serve as a way that
+// people can form groups of trust.  Every key in the system will be issued a domain
 //
 type PublicKey interface {
 	Algorithm() KeyAlgorithm
-	Verify(hsh Hash, msg []byte, sig []byte) error
+	Verify(hash Hash, msg []byte, sig []byte) error
+	Encrypt(rand io.Reader, hash Hash, plaintext []byte) ([]byte, error)
 	Bytes() []byte
 }
 
 // Private keys represent proof of ownership of a public key and form the basis of
-// how authentication confidentiality and integrity concerns are managed within the
-// ecosystem.  Warden goes to great lengths to ensure that your data is *NEVER*
+// how authentication, confidentiality and integrity concerns are managed within the
+// ecosystem.  Warden goes to great lengths to ensure that private keys data are *NEVER*
 // derivable by any other actors (malicious or otherwise), including the system itself.
-//
-// For high-security private keys, only a signer is required to authenticate with the
-// system.  It is never necessary for private key to leave the local system, which is
-// convienent in enviroments where access to the private key is not possible
-// (e.g. embedded hardware security modules).
-//
-// For user-defined keys, users may wish to store encrypted backups of their private
-// keys.  The plaintext version of these keys (PrivateKey#Bytes()) never leave the
-// the local machine, ensuring that the trust ecosystem has no knowledge of the key
-// values.  Consumers may access their keys using their key ring.
 //
 type PrivateKey interface {
 	Signer
 	Algorithm() KeyAlgorithm
+	Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error)
 	Bytes() []byte
 }
 
 // A key pad gives access to the various authentication methods and will
 // be used during the registration process.
+//
+// Future: Accept alternative login methods (e.g. pins, passwords, multi-factor, etc...)
 type KeyPad interface {
 
 	// Authenticates using a simple signature scheme. The signer will be asked
@@ -84,148 +92,124 @@ type KeyPad interface {
 	//
 	// Note: The public key is only used as a means of performing a simple account
 	// lookup and is not used to verify the signature.
-	WithSignature(account string, signer Signer) (Token, error)
-
-	// // Authenticates with a simple user-generated pin.
-	// WithPin(user string, pin []byte) (Session, error)
-	//
-	// // Authenticates using the default username/password combo.  We currently
-	// // do not support multifactor auth, so this should be considered the weakest
-	// // of the 3, but does not require that the user has direct access to his/her
-	// // private key.
-	// WithPassword(user string, pass []byte)
+	WithSignature(signer Signer) (Token, error)
 }
 
 // A token represents an authenticated session with the trust ecosystem.  Tokens
 // contain a signed message from the trust service - plus a hashed form of the
 // authentication credentials.  The hash is NOT enough to rederive any secrets
-// on its own.
+// on its own - therefore it is safe to maintain the token in memory, without
+// fear of leaking any critical details.
 type Token interface {
 
-	// Returns the public key associated with the token.
-	PublicKey(cancel <-chan struct{}) PublicKey
+	// Returns the public key associated with this token.  All activities
+	// will be done on behalf of this key.
+	Owner(cancel <-chan struct{}) PublicKey
 
-	// Reconstructs the private key from the token details.  The reconstruction process is such
+	// Returns the default domain of the owner of this token
+	DefaultDomain(cancel <-chan struct{}) (Domain, error)
+
+	// Reconstructs the master key from the token details.  The reconstruction process is such
 	// that only the local process has enough knowledge to reconstruct it.  Moreover, the
 	// reconstruction process is collaborative, meaning it requires elements from both the
 	// user and the trust system.
 	//
-	// The private key will be promptly destroyed once the given closure returns.
-	PrivateKey(cancel <-chan struct{}, fn func(PrivateKey)) error
+	// The master key will be promptly destroyed once the given closure returns.
+	masterKey(cancel <-chan struct{}, fn func([]byte)) error
 }
 
-// A key ring hosts a set of key/pairs.
-type KeyRing interface {
+// A domain represents a group of resources under a private key's control.
+type Domain interface {
 
-	// Loads the public key of the given name.
-	PublicKey(cancel <-chan struct{}, token Token, uri string) (PublicKey, error)
+	// The common identifier of the domain (not required to be uniqued)
+	Name() string
 
-	// Loads the private key of the given name.
-	PrivateKey(cancel <-chan struct{}, token Token, uri string, fn func(PrivateKey)) error
+	// The public key of the domain.
+	PublicKey() PublicKey
 
-	// Publishes a key to the key ring.  Although not searchable, the key should be
-	// considered public knowledge.
-	Publish(cancel <-chan struct{}, token Token, uri string, key PublicKey) error
+	// A short, publicly viewable description of the domain (not advertised, but not public)
+	Description() string
 
-	// Marks the given key as being compromised.  This will be published to a
-	// global revocation list that anyone can check against.
-	Revoke(cancel <-chan struct{}, token Token, uri string) error
+	// Loads all the trust certificates that have been issued by this domain
+	IssuedCertificates(cancel <-chan struct{}, token Token) ([]Certificate, error)
 
-	// Backs the private key up.  The plaintext private key never leaves
-	// the local machine, but an encrypted form will be sent to the trust
-	// key store.  The encrypted key will only be accessible to the owner
-	// of the key ring.
-	Backup(cancel <-chan struct{}, token Token, uri string, key PrivateKey) error
+	// Loads all the trust certificates that have been accepted by this domain
+	ReceivedCertificates(cancel <-chan struct{}, token Token) ([]Certificate, error)
+
+	// Loads all the issued invitations that have been issued by this domain
+	IssuedInvitations(cancel <-chan struct{}, token Token) ([]Certificate, error)
+
+	// Loads all the pending invitations that have been issued to this domain
+	ReceivedInvitations(cancel <-chan struct{}, token Token) ([]Certificate, error)
+
+	// Lists all the document names under the control of this domain
+	ListDocument(cancel <-chan struct{}, token Token) ([]string, error)
+
+	// Loads a specific document.
+	LoadDocument(cancel <-chan struct{}, token Token, name []byte) (struct{}, error)
+
+	// Stores a document under the domain
+	StoreDocument(cancel <-chan struct{}, token Token, name []byte, ver int) (struct{}, error)
+
+	// Stores a document under the domain
+	DeleteDocument(cancel <-chan struct{}, token Token, name []byte, ver int) (struct{}, error)
 }
 
-// A secret is a durable, cryptographically secure structure that protects a long-lived secret.
-//
-// A secret should be considered private to its owner and MUST NEVER BE SHARED. It has been
-// constructed in such a way that only the owner has the knowledge required to recover it.
-//
-// The plaintext form of the secret never leaves the local process space and any time a secret
-// is in transit or is durably stored, it is done so in an encrypted form that is only recoverable
-// by its owner.
-//
-type Secret interface {
-
-	// Returns the unique identifier for the secret.
-	Id() uuid.UUID
-
-	// Applies the given closure to the plaintext secret.
-	//
-	// Extreme care should be taken NOT to leak the secret beyond the boundaries of the
-	// closure.  By convention, the secret is promptly destroyed once the closure returns
-	// and the plaintext secret is never distributed to any 3rd party systems.
-	Use(cancel <-chan struct{}, token Token, fn func([]byte)) error
-}
-
-// An invitation is a cryptographically secured message that may only be accepted
-// by the intended recipient.  These technically can be shared publicly, but exposure
-// should be limited (typically only the trust system needs to know)
-type Invitation interface {
-	Group() PublicKey
-
-	// Accepts the invitation on behalf of the owner of the token.
-	Accept(cancel <-chan struct{}, token Token) error
-}
-
-// Group levels set the basic policy for members of a trusted group to make changes to the group.
-type TrustLevel int
+// Trust levels dictate the terms for how a secret may be used once established.
+type Level int
 
 const (
-	Verify TrustLevel = iota
-	Sign
-	Encrypt
-	Decrypt
-	Invite
-	Evict
-	Disband
+	Use Level = iota
+	Issue
+	Revoke
 )
 
-// A group represents a group of keys that have all been trusted for the purposes of maintaining
-// a shared group secret.
-type Group interface {
-
-	// The key that originally created the group.
-	Creator() PublicKey
-
-	// The global name of the group.  This must be unique.  This is not published
-	// but should be considered public knowledge.
-	//
-	// Consumers will use the uri to coordinate invitations.
-	URI() string
-
-	// Returns all the currently trusted keys of the group
-	Trusted(cancel <-chan struct{}, token Token) []PublicKey
-
-	// Disbands the group.  The group's private key will be permanently irrecoverable.
-	Disband(cancel <-chan struct{}, token Token) error
-
-	// Generates an invitation for the given public key to join the group.
-	Invite(cancel <-chan struct{}, token Token, key PublicKey, lvl TrustLevel) (Invitation, error)
-
-	// Generates an invitation request for the given public key to join the group.
-	RequestInvitation(cancel <-chan struct{}, token Token, key PublicKey, lvl TrustLevel) error
-
-	// Generates an invitation for the given public key to join the group.
-	Evict(cancel <-chan struct{}, token Token, key PublicKey) error
-
-	// Verifies the signature was generated from the group's private key and the msg.
-	Verify(cancel <-chan struct{}, token Token, hash Hash, msg []byte, sig []byte) ([]byte, error)
-
-	// Signs the message with the group's private key.
-	Sign(cancel <-chan struct{}, token Token, hash Hash, msg []byte) ([]byte, error)
-
-	// TODO:
-	// // Encrypts and signs the message with the group's key.
-	// Encrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) ([]byte, error)
-	//
-	// // Verifies the contents using the group's key.
-	// Decrypt(cancel <-chan struct{}, token Token, cipher SymCipher, msg []byte) ([]byte, error)
+// A certificate is a receipt that trust has been established.
+type Certificate struct {
+	Id        uuid.UUID
+	Issuer    string
+	Trustee   string
+	Level     Level
+	IssuedAt  time.Time
+	StartsAt  time.Time
+	ExpiresAt time.Time
 }
 
-type CipherText struct {
-	Key PublicKey
-	Sig Signature
+// Returns a consistent byte representation of a certificate
+func (c Certificate) Bytes() []byte {
+	return nil
+}
+
+// A signed certificate is a receipt + proof that trust has been established.
+type SignedCertificate struct {
+	Certificate
+	IssuerSignature  Signature
+	TrusteeSignature Signature
+}
+
+func (i SignedCertificate) Verify(issuer PublicKey, trustee PublicKey) error {
+	return nil
+}
+
+// An invitation is a cryptographically secured message asking the recipient to share in the
+// management of a domain. The invitation may only be accepted by the intended recipient.
+// These technically can be shared publicly, but exposure should be limited (typically only the
+// trust system needs to know).
+type Invitation struct {
+	Id        uuid.UUID
+	Issuer    string
+	Trustee   string
+	Level     Level
+	Starts    time.Time
+	Duration  time.Duration
+	Signature Signature
+	payload   []byte
+}
+
+func (i Invitation) Bytes() []byte {
+	return nil
+}
+
+func (i Invitation) Verify(key PublicKey) error {
+	return nil
 }

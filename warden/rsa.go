@@ -14,6 +14,14 @@ type rsaPublicKey struct {
 	raw *rsa.PublicKey
 }
 
+func (r *rsaPublicKey) Uri() string {
+	return ""
+}
+
+func (r *rsaPublicKey) Parent() PublicKey {
+	return nil
+}
+
 func (r *rsaPublicKey) Algorithm() KeyAlgorithm {
 	return RSA
 }
@@ -27,6 +35,14 @@ func (r *rsaPublicKey) Verify(hash Hash, msg []byte, sig []byte) error {
 		return errors.Wrapf(err, "Unable to verify signature [%v] with key [%v]", Bytes(sig), r.raw)
 	}
 	return nil
+}
+
+func (r *rsaPublicKey) Encrypt(rand io.Reader, hash Hash, msg []byte) ([]byte, error) {
+	msg, err := rsa.EncryptOAEP(hash.Standard(), rand, r.raw, msg, nil)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Error encrypting message [%v] with key [%v]", Bytes(msg), r.raw)
+	}
+	return msg, nil
 }
 
 func (r *rsaPublicKey) Write(w scribe.Writer) {
@@ -82,8 +98,16 @@ func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) (Signature, 
 		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", Bytes(msg))
 	}
 
-	// return Signature{hash, msg, sig}, nil
-	return sig, nil
+	return Signature{hash, sig}, nil
+}
+
+func (r *rsaPrivateKey) Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error) {
+	plaintext, err := rsa.DecryptOAEP(hash.Standard(), rand, r.raw, ciphertext, nil)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Unable to decrypt ciphertext [%v]", Bytes(ciphertext))
+	}
+
+	return plaintext, nil
 }
 
 func (r *rsaPrivateKey) Bytes() []byte {
