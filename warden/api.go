@@ -84,7 +84,7 @@ func VerifyInvitation(session Session, invite Invitation) error {
 	return nil
 }
 
-// Lists your session's key's currently outstanding trust invitations.
+// Lists your session's currently outstanding trust invitations.
 func ListCertificates(session Session) ([]Certificate, error) {
 	return nil, nil
 }
