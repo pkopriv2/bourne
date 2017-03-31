@@ -30,12 +30,13 @@ func LoadSubscription(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
-// Loads the private domain.
+// Loads the private domain.  By default, every session is trusted to manage a
+// domain that corresponds to its private key.
 func ManagePrivateDomain(session Session) (Domain, error) {
 	return nil, nil
 }
 
-// Registers/creates the domain.  Must not already exist.
+// Registers/creates the domain.  Must not already exist and is not published by default.
 func RegisterDomain(session Session, domain string) (Domain, error) {
 	return nil, nil
 }
@@ -45,13 +46,13 @@ func PublishDomain(session Session, domain string) ([]Domain, error) {
 	return nil, nil
 }
 
-// Lists all the domain on the main index.
+// Lists all the domains that have been listed on the main index.
 func ListDomains(session Session, beg int, end int) ([]Domain, error) {
 	return nil, nil
 }
 
 // Loads the domain with the given name.  The domain will be returned only
-// if your public key has been invited to join the domain and the invitation
+// if your public key has been invited to manage the domain and the invitation
 // has been accepted.
 func ManageDomain(session Session, domain string) (Domain, error) {
 	return nil, nil
@@ -63,7 +64,7 @@ func ListKeys(session Session, beg int, end int) ([]string, error) {
 }
 
 // Requests an invite to the domain.
-func RequestInvite(session Session, domain string) error {
+func RequestInvite(session Session, domain string, level LevelOfTrust) error {
 	return nil
 }
 
@@ -170,11 +171,6 @@ type Session interface {
 	// will be done on behalf of this key.
 	Owner(cancel <-chan struct{}) PublicKey
 
-	// The universe to which this session belongs.  The multiverse of trust
-	// servers is used to physically isolate clients who have paid for the
-	// additional security.
-	universe() string
-
 	// Reconstructs the master key from the session details.  The reconstruction process is such
 	// that only the local process has enough knowledge to reconstruct it.  Moreover, the
 	// reconstruction process is collaborative, meaning it requires elements from both the
@@ -194,6 +190,8 @@ const (
 	DocumentSign
 	Invite
 	Revoke
+	Publish
+	Destroy
 )
 
 // A domain represents a group of documents under the control of a single (possibly shared) private key.
