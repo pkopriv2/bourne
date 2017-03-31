@@ -14,19 +14,84 @@ import (
 
 // Common errors
 var (
-	TokenExpiredError = errors.New("Warden:ExpiredToken")
-	TokenInvalidError = errors.New("Warden:InvalidToken")
-	TrustError        = errors.New("Warden:TrustError")
+	SessionExpiredError  = errors.New("Warden:ExpiredSession")
+	SessionInvalidError  = errors.New("Warden:InvalidSession")
+	TrustError           = errors.New("Warden:TrustError")
+	DomainInvariantError = errors.New("Warden:DomainInvariantError")
 )
 
-// Starts a session with the trust service.
-func Authenticate(addr string, domain string) (KeyPad, error) {
+// TODO: Add subscription processing code.
+func NewSubscription(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
-// Starts the registration process with the trust service.
-func Register(addr string, domain string) (KeyPad, error) {
+// Loads a subscription.
+func LoadSubscription(addr string) (KeyPad, error) {
 	return nil, nil
+}
+
+// Registers the private domain.
+func registerPrivateDomain(session Session) (Domain, error) {
+	return nil, nil
+}
+
+// Loads the private domain.
+func LoadPrivateDomain(session Session) (Domain, error) {
+	return nil, nil
+}
+
+// Registers the domain with the given name.  If it has been listed, then it will
+// be returned by warden.ListDomains()
+func RegisterDomain(session Session, domain string, list bool) (Domain, error) {
+	return nil, nil
+}
+
+// Lists all the doamins.
+func ListDomains(session Session, beg int, end int) ([]Domain, error) {
+	return nil, nil
+}
+
+// Loads the domain with the given name.  The domain will be returned only
+// if your public key has been invited to join the domain and the invitation
+// has been accepted.
+func ManageDomain(session Session, domain string) (Domain, error) {
+	return nil, nil
+}
+
+// Lists a subsection of keys from [beg,end].  Boundaries given for client pagination
+func ListKeys(session Session, beg int, end int) ([]string, error) {
+	return nil, nil
+}
+
+// Requests an invite to the domain.
+func RequestInvite(session Session, domain string) error {
+	return nil
+}
+
+// Lists your session's key's currently pending trust invitations.
+func ListInvitations(session Session) ([]Invitation, error) {
+	return nil, nil
+}
+
+// Lists your session's key's currently outstanding trust invitations.
+func VerifyInvitation(session Session, invite Invitation) error {
+	return nil
+}
+
+// Accepts the invitation with the given id.  Returns an error if the
+// acceptance fails for any reason.
+func AcceptInvite(session Session, id uuid.UUID) error {
+	return nil
+}
+
+// Lists your session's key's currently outstanding trust invitations.
+func ListCertificates(session Session) ([]Certificate, error) {
+	return nil, nil
+}
+
+// Lists your session's key's currently outstanding trust invitations.
+func VerifyCertificate(session Session, cert Certificate) error {
+	return nil
 }
 
 // A signer contains the knowledge necessary to digitally sign messages.
@@ -92,24 +157,26 @@ type KeyPad interface {
 	//
 	// Note: The public key is only used as a means of performing a simple account
 	// lookup and is not used to verify the signature.
-	WithSignature(signer Signer) (Token, error)
+	WithSignature(signer Signer) (Session, error)
 }
 
-// A token represents an authenticated session with the trust ecosystem.  Tokens
+// A session represents an authenticated session with the trust ecosystem.  Sessions
 // contain a signed message from the trust service - plus a hashed form of the
 // authentication credentials.  The hash is NOT enough to rederive any secrets
-// on its own - therefore it is safe to maintain the token in memory, without
+// on its own - therefore it is safe to maintain the session in memory, without
 // fear of leaking any critical details.
-type Token interface {
+type Session interface {
 
-	// Returns the public key associated with this token.  All activities
+	// Returns the public key associated with this session.  All activities
 	// will be done on behalf of this key.
 	Owner(cancel <-chan struct{}) PublicKey
 
-	// Returns the default domain of the owner of this token
-	DefaultDomain(cancel <-chan struct{}) (Domain, error)
+	// The universe to which this session belongs.  The multiverse of trust
+	// servers is used to physically isolate clients who have paid for the
+	// additional security.
+	universe() string
 
-	// Reconstructs the master key from the token details.  The reconstruction process is such
+	// Reconstructs the master key from the session details.  The reconstruction process is such
 	// that only the local process has enough knowledge to reconstruct it.  Moreover, the
 	// reconstruction process is collaborative, meaning it requires elements from both the
 	// user and the trust system.
@@ -118,7 +185,21 @@ type Token interface {
 	masterKey(cancel <-chan struct{}, fn func([]byte)) error
 }
 
-// A domain represents a group of resources under a private key's control.
+// Trust levels dictate the terms for what actions a user can take on a domain.
+type LevelOfTrust int
+
+const (
+	DocumentVerify LevelOfTrust = iota + 10
+	DocumentLoad
+	DocumentUpdate
+	DocumentSign
+	Invite
+	Revoke
+)
+
+// A domain represents a group of documents under the control of a single (possibly shared) private key.
+//
+// You may access a domain only if you have established trust.
 type Domain interface {
 
 	// The common identifier of the domain (not required to be uniqued)
@@ -131,45 +212,37 @@ type Domain interface {
 	Description() string
 
 	// Loads all the trust certificates that have been issued by this domain
-	IssuedCertificates(cancel <-chan struct{}, token Token) ([]Certificate, error)
+	IssuedCertificates(cancel <-chan struct{}, session Session) ([]Certificate, error)
 
-	// Loads all the trust certificates that have been accepted by this domain
-	ReceivedCertificates(cancel <-chan struct{}, token Token) ([]Certificate, error)
+	// Revokes a certificate.  The trustee will no longer be able to act in the management of the domain.
+	RevokeCertificate(cancel <-chan struct{}, session Session, id uuid.UUID) error
 
 	// Loads all the issued invitations that have been issued by this domain
-	IssuedInvitations(cancel <-chan struct{}, token Token) ([]Certificate, error)
+	IssuedInvitations(cancel <-chan struct{}, session Session) ([]Invitation, error)
 
-	// Loads all the pending invitations that have been issued to this domain
-	ReceivedInvitations(cancel <-chan struct{}, token Token) ([]Certificate, error)
+	// Issues an invitation to the given key.
+	Invite(cancel <-chan struct{}, session Session, key string, level LevelOfTrust, ttl time.Duration) (Invitation, error)
 
 	// Lists all the document names under the control of this domain
-	ListDocument(cancel <-chan struct{}, token Token) ([]string, error)
+	ListDocument(cancel <-chan struct{}, session Session) ([]string, error)
 
 	// Loads a specific document.
-	LoadDocument(cancel <-chan struct{}, token Token, name []byte) (struct{}, error)
+	LoadDocument(cancel <-chan struct{}, session Session, name []byte) (struct{}, error)
 
 	// Stores a document under the domain
-	StoreDocument(cancel <-chan struct{}, token Token, name []byte, ver int) (struct{}, error)
+	StoreDocument(cancel <-chan struct{}, session Session, name []byte, ver int) (struct{}, error)
 
 	// Stores a document under the domain
-	DeleteDocument(cancel <-chan struct{}, token Token, name []byte, ver int) (struct{}, error)
+	DeleteDocument(cancel <-chan struct{}, session Session, name []byte, ver int) (struct{}, error)
 }
-
-// Trust levels dictate the terms for how a secret may be used once established.
-type Level int
-
-const (
-	Use Level = iota
-	Issue
-	Revoke
-)
 
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
-	Id        uuid.UUID
-	Issuer    string
-	Trustee   string
-	Level     Level
+	Id      uuid.UUID
+	Issuer  string
+	Trustee string
+	Level   LevelOfTrust
+
 	IssuedAt  time.Time
 	StartsAt  time.Time
 	ExpiresAt time.Time
@@ -180,36 +253,47 @@ func (c Certificate) Bytes() []byte {
 	return nil
 }
 
-// A signed certificate is a receipt + proof that trust has been established.
-type SignedCertificate struct {
-	Certificate
-	IssuerSignature  Signature
-	TrusteeSignature Signature
-}
-
-func (i SignedCertificate) Verify(issuer PublicKey, trustee PublicKey) error {
-	return nil
-}
-
 // An invitation is a cryptographically secured message asking the recipient to share in the
 // management of a domain. The invitation may only be accepted by the intended recipient.
 // These technically can be shared publicly, but exposure should be limited (typically only the
 // trust system needs to know).
 type Invitation struct {
-	Id        uuid.UUID
-	Issuer    string
-	Trustee   string
-	Level     Level
-	Starts    time.Time
-	Duration  time.Duration
-	Signature Signature
-	payload   []byte
+	Id      uuid.UUID
+	Issuer  string
+	Trustee string
+	Level   LevelOfTrust
+
+	IssuedAt  time.Time
+	StartsAt  time.Time
+	ExpiresAt time.Time
+
+	payload []byte
 }
 
 func (i Invitation) Bytes() []byte {
 	return nil
 }
 
-func (i Invitation) Verify(key PublicKey) error {
+func (i Invitation) decrypt(key PrivateKey) ([]byte, error) {
+	return nil, nil
+}
+
+func (i Invitation) Sign(key PrivateKey, hash Hash) (Signature, error) {
+	return Signature{}, nil
+}
+
+type Document struct {
+	Id         uuid.UUID
+	DomainId   uuid.UUID
+	StartBlock uuid.UUID
+	CreatedAt  time.Time
+	Contents   []byte
+}
+
+func (d Document) Bytes() error {
 	return nil
+}
+
+func (d Document) Sign(key PrivateKey, hash Hash) (Signature, error) {
+	return Signature{}, nil
 }
