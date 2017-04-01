@@ -338,12 +338,43 @@ func (d Document) Sign(key PrivateKey, hash Hash) (Signature, error) {
 type session struct {
 	Pub   PublicKey
 	Net   transport
-	Auth  authToken
+	Auth  *authToken
 	creds []byte
 }
 
-func (s *session) Owner(cancel <-chan struct{}) PublicKey {
-	return s.Pub
+func (s *session) Owner() string {
+	return s.Pub.Id()
+}
+
+func (s *session) publicKey(cancel <-chan struct{}) (PublicKey, error) {
+	return s.Pub, nil
+}
+
+func (s *session) privateKey(cancel <-chan struct{}) (PrivateKey, error) {
+	keyId := s.Owner()
+
+	masterKey, err := s.masterKey(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	partialKey, err := s.Net.LoadPartialPrivateKey(cancel, *s.Auth, keyId)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return partialKey.DeriveKey(masterKey)
+}
+
+func (s *session) masterKey(cancel <-chan struct{}) ([]byte, error) {
+	keyId := s.Owner()
+
+	partialKey, err := s.Net.LoadPartialSecretKey(cancel, *s.Auth, keyId)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return partialKey.DeriveKey(s.creds)
 }
 
 type PartialSecretKey struct {
@@ -352,7 +383,7 @@ type PartialSecretKey struct {
 	Key    symCipherText
 	Hash   Hash
 	Salt   []byte
-	Iter   int
+	Iter   int // this is always changing.
 }
 
 func (p PartialSecretKey) derivePoint(creds []byte) (point, error) {
