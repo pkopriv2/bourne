@@ -21,12 +21,12 @@ var (
 )
 
 // Registers a new subscription with the trust service.
-func NewSubscription(addr string) (KeyPad, error) {
+func Subscribe(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
 // Loads a subscription.
-func LoadSubscription(addr string) (KeyPad, error) {
+func Connect(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
@@ -41,7 +41,6 @@ func LoadKey(session Session, id string) (PublicKey, error) {
 }
 
 // Publishes the key to the main key index using the given name.  You must offer proof of ownership
-// of the corresponding private key.
 func PublishKey(session Session, id string, name string) error {
 	return nil
 }
@@ -54,7 +53,7 @@ func VerifyKey(session Session, pub PublicKey) (PublicKey, error) {
 // Registers/creates a domain.  The domain will be controlled by newly generated public/private key
 // pair and a certificate of trust will be issued to the session's owner.
 func CreateDomain(session Session) (Domain, error) {
-	return nil, nil
+	return Domain{}, nil
 }
 
 // Lists all the domains created/trusted by the session's owner.
@@ -67,7 +66,7 @@ func PublishDomain(session Session, id string, name string) error {
 	return nil
 }
 
-// Lists all the domains that have been listed on the main index.
+// Lists all the domains that have been published on the main index.
 func ListPublishedDomains(session Session, beg int, end int) ([]Domain, error) {
 	return nil, nil
 }
@@ -75,8 +74,8 @@ func ListPublishedDomains(session Session, beg int, end int) ([]Domain, error) {
 // Loads the domain with the given name.  The domain will be returned only
 // if your public key has been invited to manage the domain and the invitation
 // has been accepted.
-func LoadDomain(session Session, id string) (Domain, error) {
-	return nil, nil
+func LoadDomain(session Session, id string) (Domain, bool, error) {
+	return Domain{}, false, nil
 }
 
 // Requests an invite to the domain of the given id.
@@ -101,8 +100,8 @@ func VerifyInvitation(session Session, invite Invitation) error {
 }
 
 // Lists your session's currently outstanding trust invitations.
-func LoadCertificate(session Session, id uuid.UUID) (Certificate, error) {
-	return Certificate{}, nil
+func LoadCertificate(session Session, id uuid.UUID) (Certificate, bool, error) {
+	return Certificate{}, false, nil
 }
 
 // Lists all the certificates of trust that have been issued to the given session.
@@ -182,25 +181,6 @@ type KeyPad interface {
 	WithSignature(signer Signer) (Session, error)
 }
 
-// A session represents an authenticated session with the trust ecosystem.  Sessions
-// contain a signed message from the trust service - plus a hashed form of the
-// authentication credentials.  The hash is NOT enough to rederive any secrets
-// on its own - therefore it is safe to maintain the session in memory, without
-// fear of leaking any critical details.
-type Session interface {
-
-	// Returns the id of the owner.  This is the id of the owner's public key.
-	Owner() string
-
-	// Returns the public key associated with this session.
-	publicKey(cancel <-chan struct{}) (PublicKey, error)
-
-	// Returns the private key associated with this session.
-	privateKey(cancel <-chan struct{}) (PrivateKey, error)
-
-	// Returns the session's master key.
-	masterKey(cancel <-chan struct{}) (PrivateKey, error)
-}
 
 // Trust levels dictate the terms for what actions a user can take on a domain.
 type LevelOfTrust int
@@ -216,44 +196,6 @@ const (
 	Destroy
 )
 
-// A domain represents a group of documents under the control of a single (possibly shared) private key.
-//
-// You may access a domain only if you have established trust.
-type Domain interface {
-
-	// The unique identifier of the domain
-	Id() string
-
-	// The public key of the domain.
-	PublicKey() PublicKey
-
-	// A short, publicly viewable description of the domain (not advertised, but not public)
-	Description() string
-
-	// Loads all the trust certificates that have been issued by this domain
-	IssuedCertificates(cancel <-chan struct{}, session Session) ([]Certificate, error)
-
-	// Revokes a certificate.  The trustee will no longer be able to act in the management of the domain.
-	RevokeCertificate(cancel <-chan struct{}, session Session, id uuid.UUID) error
-
-	// Loads all the issued invitations that have been issued by this domain
-	IssuedInvitations(cancel <-chan struct{}, session Session) ([]Invitation, error)
-
-	// Issues an invitation to the given key.
-	Invite(cancel <-chan struct{}, session Session, key string, level LevelOfTrust, ttl time.Duration) (Invitation, error)
-
-	// Lists all the document names under the control of this domain
-	ListDocument(cancel <-chan struct{}, session Session) ([]string, error)
-
-	// Loads a specific document.
-	LoadDocument(cancel <-chan struct{}, session Session, name []byte) (struct{}, error)
-
-	// Stores a document under the domain
-	StoreDocument(cancel <-chan struct{}, session Session, name []byte, ver int) (struct{}, error)
-
-	// Stores a document under the domain
-	DeleteDocument(cancel <-chan struct{}, session Session, name []byte, ver int) (struct{}, error)
-}
 
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
@@ -293,6 +235,7 @@ func (c Certificate) Bytes() []byte {
 // trust system needs to know).
 type Invitation struct {
 	Id      uuid.UUID
+	Domain  string
 	Issuer  string
 	Trustee string
 
@@ -333,119 +276,4 @@ func (d Document) Bytes() error {
 
 func (d Document) Sign(key PrivateKey, hash Hash) (Signature, error) {
 	return Signature{}, nil
-}
-
-type session struct {
-	Pub   PublicKey
-	Net   transport
-	Auth  *authToken
-	creds []byte
-}
-
-func (s *session) Owner() string {
-	return s.Pub.Id()
-}
-
-func (s *session) publicKey(cancel <-chan struct{}) (PublicKey, error) {
-	return s.Pub, nil
-}
-
-func (s *session) privateKey(cancel <-chan struct{}) (PrivateKey, error) {
-	keyId := s.Owner()
-
-	masterKey, err := s.masterKey(cancel)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	partialKey, err := s.Net.LoadPartialPrivateKey(cancel, *s.Auth, keyId)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return partialKey.DeriveKey(masterKey)
-}
-
-func (s *session) masterKey(cancel <-chan struct{}) ([]byte, error) {
-	keyId := s.Owner()
-
-	partialKey, err := s.Net.LoadPartialSecretKey(cancel, *s.Auth, keyId)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return partialKey.DeriveKey(s.creds)
-}
-
-type PartialSecretKey struct {
-	PtPub  point
-	PtPriv securePoint
-	Key    symCipherText
-	Hash   Hash
-	Salt   []byte
-	Iter   int // this is always changing.
-}
-
-func (p PartialSecretKey) derivePoint(creds []byte) (point, error) {
-	return p.PtPriv.Decrypt(p.Salt, p.Iter, p.Hash.Standard(), creds)
-}
-
-func (p PartialSecretKey) DeriveKey(creds []byte) ([]byte, error) {
-	point, err := p.derivePoint(creds)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer point.Destroy()
-
-	line, err := point.Derive(p.PtPub)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer line.Destroy()
-
-	return p.Key.Decrypt(
-		Bytes(line.Bytes()).Pbkdf2(
-			p.Salt, p.Iter, p.Key.Cipher.KeySize(), p.Hash.Standard()))
-}
-
-type PartialPrivateKey struct {
-	Alg     KeyAlgorithm
-	PtPub   point
-	PtPriv  securePoint
-	PrivKey symCipherText
-	Hash    Hash
-	Salt    []byte
-	Iter    int
-}
-
-func (p PartialPrivateKey) derivePoint(key []byte) (point, error) {
-	return p.PtPriv.Decrypt(p.Salt, p.Iter, p.Hash.Standard(), key)
-}
-
-func (p PartialPrivateKey) DeriveKey(key []byte) (PrivateKey, error) {
-	point, err := p.derivePoint(key)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer point.Destroy()
-
-	line, err := point.Derive(p.PtPub)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer line.Destroy()
-
-	raw, err := p.PrivKey.Decrypt(
-		Bytes(line.Bytes()).Pbkdf2(
-			p.Salt, p.Iter, p.PrivKey.Cipher.KeySize(), p.Hash.Standard()))
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer raw.Destroy()
-
-	priv, err := p.Alg.ParsePrivateKey(raw)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	return priv, nil
 }

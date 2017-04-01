@@ -78,6 +78,8 @@ func randomBigInt(rand io.Reader, size int) (*big.Int, error) {
 	return new(big.Int).SetBytes(buf), nil
 }
 
+// A simple y=mx+b line.  Considered a parametric form, but when moving to a
+// canonical form, it reduces to this anyway.
 type line struct {
 	Slope     *big.Int
 	Intercept *big.Int
