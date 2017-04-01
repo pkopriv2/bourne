@@ -68,7 +68,7 @@ func PublishDomain(session Session, id string, name string) error {
 }
 
 // Lists all the domains that have been listed on the main index.
-func ListDomains(session Session, beg int, end int) ([]Domain, error) {
+func ListPublishedDomains(session Session, beg int, end int) ([]Domain, error) {
 	return nil, nil
 }
 
@@ -148,6 +148,7 @@ func (s Signature) Verify(key PublicKey, msg []byte) error {
 // people can form groups of trust.
 //
 type PublicKey interface {
+	Id() string
 	Algorithm() KeyAlgorithm
 	Verify(hash Hash, msg []byte, sig []byte) error
 	Encrypt(rand io.Reader, hash Hash, plaintext []byte) ([]byte, error)
@@ -188,17 +189,17 @@ type KeyPad interface {
 // fear of leaking any critical details.
 type Session interface {
 
-	// Returns the public key associated with this session.  All activities
-	// will be done on behalf of this key.
-	Owner(cancel <-chan struct{}) PublicKey
+	// Returns the id of the owner.  This is the id of the owner's public key.
+	Owner() string
 
-	// Reconstructs the master key from the session details.  The reconstruction process is such
-	// that only the local process has enough knowledge to reconstruct it.  Moreover, the
-	// reconstruction process is collaborative, meaning it requires elements from both the
-	// user and the trust system.
-	//
-	// The master key will be promptly destroyed once the given closure returns.
-	masterKey(cancel <-chan struct{}, fn func([]byte)) error
+	// Returns the public key associated with this session.
+	publicKey(cancel <-chan struct{}) (PublicKey, error)
+
+	// Returns the private key associated with this session.
+	privateKey(cancel <-chan struct{}) (PrivateKey, error)
+
+	// Returns the session's master key.
+	masterKey(cancel <-chan struct{}) (PrivateKey, error)
 }
 
 // Trust levels dictate the terms for what actions a user can take on a domain.
@@ -259,11 +260,26 @@ type Certificate struct {
 	Id      uuid.UUID
 	Issuer  string
 	Trustee string
-	Level   LevelOfTrust
+
+	Level LevelOfTrust
 
 	IssuedAt  time.Time
 	StartsAt  time.Time
 	ExpiresAt time.Time
+
+	// not part of signed contents
+	issuerSignature  uuid.UUID
+	trusteeSignature uuid.UUID
+}
+
+// Verifies that the signature matches the certificate contents.
+func (c Certificate) Verify(key PublicKey, signature Signature) error {
+	return nil
+}
+
+// Signs the certificate with the private key.
+func (c Certificate) Sign(key PrivateKey, hash Hash) (Signature, error) {
+	return Signature{}, nil
 }
 
 // Returns a consistent byte representation of a certificate
@@ -279,7 +295,8 @@ type Invitation struct {
 	Id      uuid.UUID
 	Issuer  string
 	Trustee string
-	Level   LevelOfTrust
+
+	Level LevelOfTrust
 
 	IssuedAt  time.Time
 	StartsAt  time.Time
@@ -292,11 +309,13 @@ func (i Invitation) Bytes() []byte {
 	return nil
 }
 
-func (i Invitation) decrypt(key PrivateKey) ([]byte, error) {
-	return nil, nil
+// Verifies that the signature matches the certificate contents.
+func (c Invitation) Verify(key PublicKey, signature Signature) error {
+	return nil
 }
 
-func (i Invitation) Sign(key PrivateKey, hash Hash) (Signature, error) {
+// Signs the certificate with the private key.
+func (c Invitation) Sign(key PrivateKey, hash Hash) (Signature, error) {
 	return Signature{}, nil
 }
 
@@ -316,17 +335,24 @@ func (d Document) Sign(key PrivateKey, hash Hash) (Signature, error) {
 	return Signature{}, nil
 }
 
-// Credentials are the hashed form of the user's credentials stored
-// in memory.  The credentials hash will be used as the basis
+type session struct {
+	Pub   PublicKey
+	Net   transport
+	Auth  authToken
+	creds []byte
+}
 
-//
+func (s *session) Owner(cancel <-chan struct{}) PublicKey {
+	return s.Pub
+}
+
 type PartialSecretKey struct {
-	PtPub   point
-	PtPriv  securePoint
-	Key     symCipherText
-	Hash    Hash
-	Salt    []byte
-	Iter    int
+	PtPub  point
+	PtPriv securePoint
+	Key    symCipherText
+	Hash   Hash
+	Salt   []byte
+	Iter   int
 }
 
 func (p PartialSecretKey) derivePoint(creds []byte) (point, error) {
@@ -378,7 +404,7 @@ func (p PartialPrivateKey) DeriveKey(key []byte) (PrivateKey, error) {
 	}
 	defer line.Destroy()
 
-	raw, err  := p.PrivKey.Decrypt(
+	raw, err := p.PrivKey.Decrypt(
 		Bytes(line.Bytes()).Pbkdf2(
 			p.Salt, p.Iter, p.PrivKey.Cipher.KeySize(), p.Hash.Standard()))
 	if err != nil {

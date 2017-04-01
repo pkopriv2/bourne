@@ -14,12 +14,8 @@ type rsaPublicKey struct {
 	raw *rsa.PublicKey
 }
 
-func (r *rsaPublicKey) Uri() string {
+func (r *rsaPublicKey) Id() string {
 	return ""
-}
-
-func (r *rsaPublicKey) Parent() PublicKey {
-	return nil
 }
 
 func (r *rsaPublicKey) Algorithm() KeyAlgorithm {

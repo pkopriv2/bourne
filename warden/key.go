@@ -10,8 +10,7 @@ type KeyAlgorithm int
 
 const (
 	RSA KeyAlgorithm = iota
-	// DSA
-	// ECDSA
+	// Elliptic
 )
 
 // Parses the public key from a standard binary format.
