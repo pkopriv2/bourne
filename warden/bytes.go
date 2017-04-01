@@ -56,7 +56,7 @@ func (b Bytes) Hash(h Hash) (Bytes, error) {
 }
 
 // Returns a new byte array for use as a cipher key
-func (b Bytes) PBKDF2(salt []byte, iter int, size int, h hash.Hash) Bytes {
+func (b Bytes) Pbkdf2(salt []byte, iter int, size int, h hash.Hash) Bytes {
 	return pbkdf2.Key(b, salt, iter, size, func() hash.Hash {
 		return h
 	})

@@ -1,10 +1,10 @@
 package warden
 
 import (
-	"errors"
 	"io"
 	"time"
 
+	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -16,8 +16,8 @@ import (
 var (
 	SessionExpiredError  = errors.New("Warden:ExpiredSession")
 	SessionInvalidError  = errors.New("Warden:InvalidSession")
-	TrustError           = errors.New("Warden:TrustError")
 	DomainInvariantError = errors.New("Warden:DomainInvariantError")
+	TrustError           = errors.New("Warden:TrustError")
 )
 
 // Registers a new subscription with the trust service.
@@ -30,20 +30,41 @@ func LoadSubscription(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
-// Loads the private domain.  By default, every session is trusted to manage a
-// domain that corresponds to its private key.
-func ManagePrivateDomain(session Session) (Domain, error) {
+// Lists a subsection of public key ids from [beg,end).
+func ListKeys(session Session, beg int, end int) ([]string, error) {
 	return nil, nil
 }
 
-// Registers/creates the domain.  Must not already exist and is not published by default.
-func RegisterDomain(session Session, domain string) (Domain, error) {
+// Loads the public key.
+func LoadKey(session Session, id string) (PublicKey, error) {
 	return nil, nil
 }
 
-// Publishes the domain to the main index.  It will now be globally searchable.
-func PublishDomain(session Session, domain string) ([]Domain, error) {
+// Publishes the key to the main key index using the given name.  You must offer proof of ownership
+// of the corresponding private key.
+func PublishKey(session Session, id string, name string) error {
+	return nil
+}
+
+// Verifies that the key is indeed an authentic key, registered with the system.
+func VerifyKey(session Session, pub PublicKey) (PublicKey, error) {
 	return nil, nil
+}
+
+// Registers/creates a domain.  The domain will be controlled by newly generated public/private key
+// pair and a certificate of trust will be issued to the session's owner.
+func CreateDomain(session Session) (Domain, error) {
+	return nil, nil
+}
+
+// Lists all the domains created/trusted by the session's owner.
+func ListPrivateDomains(session Session, beg int, end int) ([]Domain, error) {
+	return nil, nil
+}
+
+// Publishes the domain to the main index using the given name.  It will now be globally searchable.
+func PublishDomain(session Session, id string, name string) error {
+	return nil
 }
 
 // Lists all the domains that have been listed on the main index.
@@ -54,17 +75,12 @@ func ListDomains(session Session, beg int, end int) ([]Domain, error) {
 // Loads the domain with the given name.  The domain will be returned only
 // if your public key has been invited to manage the domain and the invitation
 // has been accepted.
-func ManageDomain(session Session, domain string) (Domain, error) {
+func LoadDomain(session Session, id string) (Domain, error) {
 	return nil, nil
 }
 
-// Lists a subsection of keys from [beg,end].  Boundaries given for client pagination
-func ListKeys(session Session, beg int, end int) ([]string, error) {
-	return nil, nil
-}
-
-// Requests an invite to the domain.
-func RequestInvite(session Session, domain string, level LevelOfTrust) error {
+// Requests an invite to the domain of the given id.
+func RequestInvite(session Session, id string, level LevelOfTrust) error {
 	return nil
 }
 
@@ -85,6 +101,11 @@ func VerifyInvitation(session Session, invite Invitation) error {
 }
 
 // Lists your session's currently outstanding trust invitations.
+func LoadCertificate(session Session, id uuid.UUID) (Certificate, error) {
+	return Certificate{}, nil
+}
+
+// Lists all the certificates of trust that have been issued to the given session.
 func ListCertificates(session Session) ([]Certificate, error) {
 	return nil, nil
 }
@@ -124,7 +145,7 @@ func (s Signature) Verify(key PublicKey, msg []byte) error {
 //
 // The purpose of using Warden is not just to publish keys for your own personal use
 // (although it may be used for that), it is ultimately expected to serve as a way that
-// people can form groups of trust.  Every key in the system will be issued a domain
+// people can form groups of trust.
 //
 type PublicKey interface {
 	Algorithm() KeyAlgorithm
@@ -199,8 +220,8 @@ const (
 // You may access a domain only if you have established trust.
 type Domain interface {
 
-	// The common identifier of the domain.  Must be unique per universe. (FIXME: Is uniqueness necessary.)
-	Name() string
+	// The unique identifier of the domain
+	Id() string
 
 	// The public key of the domain.
 	PublicKey() PublicKey
@@ -293,4 +314,81 @@ func (d Document) Bytes() error {
 
 func (d Document) Sign(key PrivateKey, hash Hash) (Signature, error) {
 	return Signature{}, nil
+}
+
+// Credentials are the hashed form of the user's credentials stored
+// in memory.  The credentials hash will be used as the basis
+
+//
+type PartialSecretKey struct {
+	PtPub   point
+	PtPriv  securePoint
+	Key     symCipherText
+	Hash    Hash
+	Salt    []byte
+	Iter    int
+}
+
+func (p PartialSecretKey) derivePoint(creds []byte) (point, error) {
+	return p.PtPriv.Decrypt(p.Salt, p.Iter, p.Hash.Standard(), creds)
+}
+
+func (p PartialSecretKey) DeriveKey(creds []byte) ([]byte, error) {
+	point, err := p.derivePoint(creds)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer point.Destroy()
+
+	line, err := point.Derive(p.PtPub)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer line.Destroy()
+
+	return p.Key.Decrypt(
+		Bytes(line.Bytes()).Pbkdf2(
+			p.Salt, p.Iter, p.Key.Cipher.KeySize(), p.Hash.Standard()))
+}
+
+type PartialPrivateKey struct {
+	Alg     KeyAlgorithm
+	PtPub   point
+	PtPriv  securePoint
+	PrivKey symCipherText
+	Hash    Hash
+	Salt    []byte
+	Iter    int
+}
+
+func (p PartialPrivateKey) derivePoint(key []byte) (point, error) {
+	return p.PtPriv.Decrypt(p.Salt, p.Iter, p.Hash.Standard(), key)
+}
+
+func (p PartialPrivateKey) DeriveKey(key []byte) (PrivateKey, error) {
+	point, err := p.derivePoint(key)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer point.Destroy()
+
+	line, err := point.Derive(p.PtPub)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer line.Destroy()
+
+	raw, err  := p.PrivKey.Decrypt(
+		Bytes(line.Bytes()).Pbkdf2(
+			p.Salt, p.Iter, p.PrivKey.Cipher.KeySize(), p.Hash.Standard()))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer raw.Destroy()
+
+	priv, err := p.Alg.ParsePrivateKey(raw)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return priv, nil
 }

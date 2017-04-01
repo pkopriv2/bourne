@@ -52,11 +52,6 @@ func initBoltBuckets(db *bolt.DB) (err error) {
 	})
 }
 
-type keyArgs struct {
-	salt1 []byte
-	salt2 []byte
-}
-
 // Access code options.
 type codeOptions struct {
 	alg    SymCipher
@@ -130,8 +125,8 @@ func (b *boltCode) Name() string {
 type securePointDat symCipherText
 
 // Returns the point, encrypted by using the given pass as the key for the cipher.
-func encryptPoint(rand io.Reader, alg SymCipher, salt []byte, iter int, hash hash.Hash, point point, pass Bytes) (securePointDat, error) {
-	ct, err := symmetricEncrypt(rand, alg, pass.PBKDF2(salt, iter, alg.KeySize(), hash), point.Bytes())
+func encryptPointDat(rand io.Reader, alg SymCipher, salt []byte, iter int, hash hash.Hash, point point, pass Bytes) (securePointDat, error) {
+	ct, err := symmetricEncrypt(rand, alg, pass.Pbkdf2(salt, iter, alg.KeySize(), hash), point.Bytes())
 	if err != nil {
 		return securePointDat{}, errors.WithStack(err) // Dealing with secure data.  No additional context
 	}
@@ -141,7 +136,7 @@ func encryptPoint(rand io.Reader, alg SymCipher, salt []byte, iter int, hash has
 
 // Decrypts the point using the salt, iterations and raw bytes.
 func (e securePointDat) Decrypt(salt []byte, iter int, hash hash.Hash, code Bytes) (point, error) {
-	raw, err := symCipherText(e).Decrypt(code.PBKDF2(salt, iter, e.Cipher.KeySize(), hash))
+	raw, err := symCipherText(e).Decrypt(code.Pbkdf2(salt, iter, e.Cipher.KeySize(), hash))
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}
@@ -200,7 +195,7 @@ func initBoltCode(tx *bolt.Tx, rand io.Reader, name string, line line, code []by
 	}
 	defer point.Destroy()
 
-	enc, err := encryptPoint(rand, opts.alg, salt, opts.iter, opts.hash, point, code)
+	enc, err := encryptPointDat(rand, opts.alg, salt, opts.iter, opts.hash, point, code)
 	if err != nil {
 		return codeDat{}, errors.Wrap(err, "Unable to initialize access code")
 	}
@@ -463,7 +458,7 @@ func (s lockDat) Open(tx *bolt.Tx, code string, pass []byte) ([]byte, line, erro
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)
 	}
 
-	plain, err := cipherText.Decrypt(Bytes(curve.Bytes()).PBKDF2(s.salt, s.iter, cipherText.Cipher.KeySize(), sha256.New()))
+	plain, err := cipherText.Decrypt(Bytes(curve.Bytes()).Pbkdf2(s.salt, s.iter, cipherText.Cipher.KeySize(), sha256.New()))
 	if err != nil {
 		curve.Destroy()
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)
