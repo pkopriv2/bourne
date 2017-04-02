@@ -31,7 +31,7 @@ type Transport interface {
 	LoadCertificatesByDomain(cancel <-chan struct{}, a token, domain string, opts ...func(*PagingOptions)) ([]Certificate, error)
 
 	// Returns all the certificates issued for the given subscriber
-	LoadCertificatesByDomainAndKey(cancel <-chan struct{}, a token, domain string, subscriber string) ([]Certificate, error)
+	LoadCertificateByDomainAndTrustee(cancel <-chan struct{}, a token, domain string, trustee string) (Certificate, error)
 
 	// Returns all the certificates for a given subscription subscriber.
 	LoadCertificatesBySubscriber(cancel <-chan struct{}, a token, subscriber string, opts ...func(*PagingOptions)) ([]Certificate, error)
@@ -41,4 +41,7 @@ type Transport interface {
 
 	// Creates a new domain object.  All secure components must be created locally.
 	CreateDomain(cancel <-chan struct{}, a token, description string, o oracle, s SigningKey, k oracleKey) (Domain, error)
+
+	// Registers the given invitation.
+	RegisterInvitation(cancel <-chan struct{}, a token, i Invitation, domainSig Signature, issuerSig Signature) error
 }

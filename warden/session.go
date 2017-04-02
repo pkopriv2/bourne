@@ -22,13 +22,17 @@ type Session struct {
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
 
-	// the auth token
-	auth token
+	// // the auth token
+	// auth token
 
 	// the hashed session owner's seed.  This isn't actually usable on its own.
 	// It must be paired with every piece of data that this user attempts to
 	// decrypt.
 	seed []byte
+}
+
+func (s *Session) auth(cancel <-chan struct{}) (token, error) {
+	return token{}, nil
 }
 
 // Returns the subscriber id associated with this session.  This uniquely identifies
@@ -61,7 +65,7 @@ func (s *Session) mySigningKey() (PrivateKey, error) {
 // It should be noted that even in the event of a compromised seed + token,
 // the system itself is never in danger because the risk has been spread over the
 // community.  The leak extends as far as the trust extends.  No other users are at risk
-// because of a leaked seed or token.  And this is the worst case scenario.
+// because of a leaked seed or token.
 func (s *Session) mySeed() []byte {
 	return s.seed
 }

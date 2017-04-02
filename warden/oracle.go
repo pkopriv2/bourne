@@ -97,13 +97,13 @@ type oracle struct {
 }
 
 // Decrypts the oracle, returning a hash of the underlying secret.
-func (p oracle) Unlock(key oracleKey, pass []byte) ([]byte, error) {
-	line, err := p.DeriveLine(key, pass)
+func (p oracle) Unlock(key oracleKey, pass []byte) ([]byte, line, error) {
+	ymxb, err := p.DeriveLine(key, pass)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, line{}, errors.WithStack(err)
 	}
-	return Bytes(line.Bytes()).Pbkdf2(
-		p.derivSalt, p.derivIter, p.derivSize, p.derivHash.Standard()), nil
+	return Bytes(ymxb.Bytes()).Pbkdf2(
+		p.derivSalt, p.derivIter, p.derivSize, p.derivHash.Standard()), ymxb, nil
 }
 
 // Decrypts the oracle, returning a hash of the underlying secret.

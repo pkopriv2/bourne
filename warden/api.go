@@ -159,6 +159,7 @@ type PrivateKey interface {
 	Algorithm() KeyAlgorithm
 	Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error)
 	Bytes() []byte
+	Destroy()
 }
 
 // A key pad gives access to the various authentication methods and will

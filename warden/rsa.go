@@ -106,6 +106,10 @@ func (r *rsaPrivateKey) Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([
 	return plaintext, nil
 }
 
+func (r *rsaPrivateKey) Destroy() {
+	// FIXME: implement
+}
+
 func (r *rsaPrivateKey) Bytes() []byte {
 	return scribe.Write(r).Bytes()
 }
