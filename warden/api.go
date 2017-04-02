@@ -31,23 +31,18 @@ func Connect(addr string) (KeyPad, error) {
 }
 
 // Lists a subsection of public key ids from [beg,end).
-func ListKeys(session Session, beg int, end int) ([]string, error) {
+func ListPublishedKeys(session Session, beg int, end int) ([]string, error) {
 	return nil, nil
 }
 
 // Loads the public key.
-func LoadKey(session Session, id string) (PublicKey, error) {
+func LoadSubscriberKey(session Session, id string) (PublicKey, error) {
 	return nil, nil
 }
 
-// Publishes the key to the main key index using the given name.  You must offer proof of ownership
-func PublishKey(session Session, id string, name string) error {
+// Publishes the key to the main key index using the given name
+func PublishKey(session Session) error {
 	return nil
-}
-
-// Verifies that the key is indeed an authentic key, registered with the system.
-func VerifyKey(session Session, pub PublicKey) (PublicKey, error) {
-	return nil, nil
 }
 
 // Registers/creates a domain.  The domain will be controlled by newly generated public/private key
