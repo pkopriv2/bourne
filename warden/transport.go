@@ -30,10 +30,10 @@ type Transport interface {
 	// Returns the domain's trust agreements
 	LoadCertificatesByDomain(cancel <-chan struct{}, a token, domain string, opts ...func(*PagingOptions)) ([]Certificate, error)
 
-	// Returns all the certificates issued for the given subscriber
-	LoadCertificateByDomainAndTrustee(cancel <-chan struct{}, a token, domain string, trustee string) (Certificate, error)
+	// Returns the trust certificate between the domain and trustee.
+	LoadCertificateByDomainAndTrustee(cancel <-chan struct{}, a token, domain string, trustee string) (Certificate, bool, error)
 
-	// Returns all the certificates for a given subscription subscriber.
+	// Returns all the certificates for a given subscriber.
 	LoadCertificatesBySubscriber(cancel <-chan struct{}, a token, subscriber string, opts ...func(*PagingOptions)) ([]Certificate, error)
 
 	// Revokes the given certificate.  The trustee of the certificate will no longer be authorized

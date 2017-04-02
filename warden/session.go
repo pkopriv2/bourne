@@ -16,14 +16,11 @@ type Session struct {
 	// the encrypted subscription key.
 	sub SigningKey
 
-	// internal only transport.
+	// the transport mechanism. (expected to be secure).
 	net Transport
 
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
-
-	// // the auth token
-	// auth token
 
 	// the hashed session owner's seed.  This isn't actually usable on its own.
 	// It must be paired with every piece of data that this user attempts to
@@ -80,9 +77,9 @@ type SigningKey struct {
 	fnIter int
 }
 
-func (p SigningKey) Decrypt(oracle []byte) (PrivateKey, error) {
+func (p SigningKey) Decrypt(seed []byte) (PrivateKey, error) {
 	raw, err := p.Priv.Decrypt(
-		Bytes(oracle).Pbkdf2(
+		Bytes(seed).Pbkdf2(
 			p.fnSalt, p.fnIter, p.Priv.Cipher.KeySize(), p.fnHash.Standard()))
 	if err != nil {
 		return nil, errors.WithStack(err)

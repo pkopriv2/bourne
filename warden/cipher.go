@@ -144,7 +144,7 @@ type KeyExchange struct {
 	Key     Bytes
 }
 
-func AsymmetricEncrypt(rand io.Reader, pub PublicKey, hash Hash, msgCipher SymmetricCipher, msg []byte) (KeyExchange, CipherText, error) {
+func asymmetricEncrypt(rand io.Reader, pub PublicKey, hash Hash, msgCipher SymmetricCipher, msg []byte) (KeyExchange, CipherText, error) {
 	key, err := initRandomSymmetricKey(rand, msgCipher)
 	if err != nil {
 		return KeyExchange{}, CipherText{}, errors.WithStack(err)
@@ -163,13 +163,26 @@ func AsymmetricEncrypt(rand io.Reader, pub PublicKey, hash Hash, msgCipher Symme
 	return KeyExchange{pub.Algorithm(), hash, encKey}, cipherText, nil
 }
 
-func (k KeyExchange) Decrypt(rand io.Reader, priv PrivateKey, c CipherText) ([]byte, error) {
+func asymmetricDecrypt(rand io.Reader, priv PrivateKey, exchg KeyExchange, ciphertext CipherText) ([]byte, error) {
+	key, err := exchg.Decrypt(rand, priv)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer Bytes(key).Destroy()
+
+	plaintext, err := ciphertext.Decrypt(key)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return plaintext, nil
+}
+
+func (k KeyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
 	key, err := priv.Decrypt(rand, k.KeyHash, k.Key)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
-	return c.Decrypt(key)
+	return key, nil
 }
 
 func (c KeyExchange) String() string {

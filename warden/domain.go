@@ -7,7 +7,7 @@ type Domain struct {
 	// the identifier of the domain.
 	Id string
 
-	// the description
+	// the domain description
 	Description string
 
 	// the strength requirement of the domain.
@@ -25,7 +25,6 @@ type Domain struct {
 	// the encrypted signing key.  (Only available for trusted users)
 	signingKey SigningKey
 }
-
 
 // Decrypts the domain oracle.  Requires *Encryption* trust
 func (d Domain) unlockOracle(s Session) (Bytes, line, error) {
@@ -60,9 +59,13 @@ func (d Domain) RevokeCertificate(cancel <-chan struct{}, s Session, subscriber 
 		return errors.WithStack(err)
 	}
 
-	cert, err := s.net.LoadCertificateByDomainAndTrustee(cancel, auth, d.Id, subscriber)
+	cert, ok, err := s.net.LoadCertificateByDomainAndTrustee(cancel, auth, d.Id, subscriber)
 	if err != nil {
-		return errors.Wrapf(err, "Error loading certificates for domain [%v] and subscriber [%v]", subscriber)
+		return errors.Wrapf(err, "Error loading certificates for domain [%v] and subscriber [%v]", d.Id, subscriber)
+	}
+
+	if ! ok {
+		return errors.Wrapf(DomainInvariantError, "No existing trust certificate from domain [%v] to subscriber [%v]", d.Id, subscriber)
 	}
 
 	if err := s.net.RevokeCertificate(cancel, auth, cert.Id); err != nil {
@@ -113,12 +116,12 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee strin
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for domain [%v]", trustee, d.Id)
 	}
 
-	domainSig, err := inv.Sign(domainKey, SHA256)
+	domainSig, err := inv.Sign(s.rand, domainKey, SHA256)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error signing invitation with domain key: %v", inv)
 	}
 
-	issuerSig, err := inv.Sign(issuerKey, SHA256)
+	issuerSig, err := inv.Sign(s.rand, issuerKey, SHA256)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error signing invitation with issuer key: %v", inv)
 	}

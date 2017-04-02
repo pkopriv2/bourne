@@ -180,13 +180,13 @@ type KeyPad interface {
 // Trust levels dictate the terms for what actions a user can take on a domain.
 type LevelOfTrust int
 
-func (l LevelOfTrust) Exceeds(o LevelOfTrust) bool {
+func (l LevelOfTrust) Greater(o LevelOfTrust) bool {
 	return l > o
 }
 
 func (l LevelOfTrust) EnsureExceeded(o LevelOfTrust) error {
 	if l > o {
-		return NewLevelOfTrustError(l, o)
+		return newLevelOfTrustError(l, o)
 	}
 	return nil
 }
@@ -201,7 +201,7 @@ const (
 	Destroy
 )
 
-func NewLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
+func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
 	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
 }
 
@@ -218,17 +218,6 @@ type Certificate struct {
 	IssuedAt  time.Time
 	StartsAt  time.Time
 	ExpiresAt time.Time
-
-	// For a certificate to be considered valid, it has to be signed
-	// by three separate parties.
-	//
-	//	1. The actor who issued the invitation.
-	//	2. The domain the actor issued the invitation on behalf of.
-	//  3. The actor who received the invitation.
-	//
-	DomainSignature  Signature
-	IssuerSignature  Signature
-	TrusteeSignature Signature
 }
 
 // Verifies that the signature matches the certificate contents.
