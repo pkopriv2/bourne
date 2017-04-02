@@ -8,7 +8,7 @@ type Transport interface {
 	LoadSubVerifyKey(cancel <-chan struct{}, a token, subscriber string) (PublicKey, error)
 
 	// Returns the encrypted master subscriber for the given subscription subscriber.
-	LoadSubMasterKey(cancel <-chan struct{}, a token, subscriber string) (oracle, error)
+	LoadSubOracle(cancel <-chan struct{}, a token, subscriber string) (oracle, error)
 
 	// Returns the encrypted private subscriber for the given subscription subscriber.
 	LoadSubSigningKey(cancel <-chan struct{}, a token, subscriber string) (signingKey, error)

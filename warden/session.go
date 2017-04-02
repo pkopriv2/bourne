@@ -54,7 +54,7 @@ func (s *Session) mySigningKey() (PrivateKey, error) {
 // data that is being accessed in order to be useful.
 //
 // In order for a attacker to penetrate further, he would need both the oracle and a valid
-// token. The token would give him temporary access to your subscription, but
+// token. The token would give him temporary access to the subscription, but
 // once the token expired, he could not login again.  Higher security environments
 // could tune down the ttl of a session token to limit exposure.
 //
@@ -97,10 +97,10 @@ func (s *Session) domainVerifyKey(cancel <-chan struct{}, domainId string) (Publ
 	return s.net.LoadDomainVerifyKey(cancel, s.auth, domainId)
 }
 
-// A oracle key/oracle is used to seed other encryption algorithms.  This implements the
+// A oracle is used to seed other encryption algorithms.  This implements the
 // core sharing/derivation algorithm.  An oracle is an immutable object taht is personal
 // to each resource that created it.  In the case of a user, it is their private account
-// oracle. In the case of a domain, it is the domain oracle.  The domain oracle consists
+// oracle. In the case of a domain, it is the domain oracle.  An oracle consists
 // of the following components:
 //
 // 1.) A public point on a curve in 2-dimensional space. (all user's see this)
@@ -129,8 +129,10 @@ type oracle struct {
 	KeyIter int
 }
 
-func (p oracle) DeriveLine(creds []byte) (line, error) {
-	point, err := p.PtPriv.Decrypt(p.PtSalt, p.PtIter, p.PtHash.Standard(), creds)
+// Derives the oracle's 2-dimensional curve.  This is based on knowledge that only the
+// owner of the oracle has access to.
+func (p oracle) DeriveLine(key []byte) (line, error) {
+	point, err := p.PtPriv.Decrypt(p.PtSalt, p.PtIter, p.PtHash.Standard(), key)
 	if err != nil {
 		return line{}, errors.WithStack(err)
 	}

@@ -123,58 +123,57 @@ func (c CipherText) String() string {
 	return fmt.Sprintf("SymCipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, c.Data)
 }
 
-func readSymCipherText(r scribe.Reader) (s CipherText, err error) {
+func readCipherText(r scribe.Reader) (s CipherText, err error) {
 	err = r.ReadInt("cipher", (*int)(&s.Cipher))
 	err = common.Or(err, r.ReadBytes("nonce", (*[]byte)(&s.Nonce)))
 	err = common.Or(err, r.ReadBytes("data", (*[]byte)(&s.Data)))
 	return
 }
 
-func parseSymCipherTextBytes(raw []byte) (CipherText, error) {
+func parseCipherTextBytes(raw []byte) (CipherText, error) {
 	msg, err := scribe.Parse(raw)
 	if err != nil {
 		return CipherText{}, err
 	}
-	return readSymCipherText(msg)
+	return readCipherText(msg)
 }
 
 type KeyExchange struct {
 	KeyAlg  KeyAlgorithm
 	KeyHash Hash
 	Key     Bytes
-	Msg     CipherText
 }
 
-func ASymmetricEncrypt(rand io.Reader, pub PublicKey, hash Hash, msgCipher SymmetricCipher, msg []byte) (KeyExchange, error) {
+func AsymmetricEncrypt(rand io.Reader, pub PublicKey, hash Hash, msgCipher SymmetricCipher, msg []byte) (KeyExchange, CipherText, error) {
 	key, err := initRandomSymmetricKey(rand, msgCipher)
 	if err != nil {
-		return KeyExchange{}, errors.WithStack(err)
+		return KeyExchange{}, CipherText{}, errors.WithStack(err)
 	}
 
 	encKey, err := pub.Encrypt(rand, hash, key)
 	if err != nil {
-		return KeyExchange{}, errors.WithStack(err)
+		return KeyExchange{}, CipherText{}, errors.WithStack(err)
 	}
 
-	encMsg, err := symmetricEncrypt(rand, msgCipher, key, msg)
+	cipherText, err := symmetricEncrypt(rand, msgCipher, key, msg)
 	if err != nil {
-		return KeyExchange{}, errors.WithStack(err)
+		return KeyExchange{}, CipherText{}, errors.WithStack(err)
 	}
 
-	return KeyExchange{pub.Algorithm(), hash, encKey, encMsg}, nil
+	return KeyExchange{pub.Algorithm(), hash, encKey}, cipherText, nil
 }
 
-func (c KeyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
-	key, err := priv.Decrypt(rand, c.KeyHash, c.Key)
+func (k KeyExchange) Decrypt(rand io.Reader, priv PrivateKey, c CipherText) ([]byte, error) {
+	key, err := priv.Decrypt(rand, k.KeyHash, k.Key)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	return c.Msg.Decrypt(key)
+	return c.Decrypt(key)
 }
 
 func (c KeyExchange) String() string {
-	return fmt.Sprintf("AsymmetricCipherText(alg=%v+%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.Key.Base64(), c.Msg)
+	return fmt.Sprintf("AsymmetricCipherText(alg=%v+%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.Key.Base64())
 }
 
 func initRandomSymmetricKey(rand io.Reader, alg SymmetricCipher) ([]byte, error) {

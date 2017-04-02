@@ -297,7 +297,7 @@ func (b codeDat) SecurePoint(tx *bolt.Tx) (securePointDat, error) {
 		return securePointDat{}, errors.Wrapf(StorageInvariateError, "No curve data for code [%v]", b.id)
 	}
 
-	dat, err := parseSymCipherTextBytes(raw)
+	dat, err := parseCipherTextBytes(raw)
 	if err != nil {
 		return securePointDat{}, errors.Wrapf(err, "Error parsing access code curve data [%v]", b.id)
 	}
@@ -473,7 +473,7 @@ func (s lockDat) LoadSecret(tx *bolt.Tx) (CipherText, error) {
 		return CipherText{}, errors.Wrapf(StorageInvariateError, "No secret data for lock [%v]", s.id)
 	}
 
-	dat, err := parseSymCipherTextBytes(raw)
+	dat, err := parseCipherTextBytes(raw)
 	if err != nil {
 		return CipherText{}, errors.Wrapf(err, "Unable to parse cipher text for lock [%v]", s.id)
 	}

@@ -152,7 +152,7 @@ type PublicKey interface {
 // Private keys represent proof of ownership of a public key and form the basis of
 // how authentication, confidentiality and integrity concerns are managed within the
 // ecosystem.  Warden goes to great lengths to ensure that private keys data are *NEVER*
-// derivable by any other actors (malicious or otherwise), including the system itself.
+// derivable by any untrusted actors (malicious or otherwise), including the system itself.
 //
 type PrivateKey interface {
 	Signer
@@ -191,7 +191,9 @@ const (
 
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
-	Id      uuid.UUID
+	Id uuid.UUID
+
+	Domain  string
 	Issuer  string
 	Trustee string
 
@@ -201,9 +203,16 @@ type Certificate struct {
 	StartsAt  time.Time
 	ExpiresAt time.Time
 
-	// not part of signed contents
-	issuerSignature  uuid.UUID
-	trusteeSignature uuid.UUID
+	// For a certificate to be considered valid, it has to be signed
+	// by three separate parties.
+	//
+	//	1. The actor who issued the invitation.
+	//	2. The domain the actor issued the invitation on behalf of.
+	//  3. The actor who received the invitation.
+	//
+	DomainSignature  Signature
+	IssuerSignature  Signature
+	TrusteeSignature Signature
 }
 
 // Verifies that the signature matches the certificate contents.
@@ -226,7 +235,8 @@ func (c Certificate) Bytes() []byte {
 // These technically can be shared publicly, but exposure should be limited (typically only the
 // trust system needs to know).
 type Invitation struct {
-	Id      uuid.UUID
+	Id uuid.UUID
+
 	Domain  string
 	Issuer  string
 	Trustee string
@@ -237,7 +247,12 @@ type Invitation struct {
 	StartsAt  time.Time
 	ExpiresAt time.Time
 
-	msg KeyExchange
+	key KeyExchange
+	msg CipherText
+
+	// Not part of signed contents.
+	DomainSignature Signature
+	IssuerSignature Signature
 }
 
 func generateInvitation(rand io.Reader, line line, issue PublicKey, domain string, trust string, ttl time.Duration) (Invitation, error) {
@@ -259,11 +274,11 @@ func (c Invitation) Sign(key PrivateKey, hash Hash) (Signature, error) {
 }
 
 type Document struct {
-	Name      string
-	Ver       int
-	domain    uuid.UUID
-	Created time.Time
-	Contents  []byte
+	Id       uuid.UUID
+	Name     string
+	Ver      int
+	Created  time.Time
+	Contents []byte
 }
 
 func (d Document) Bytes() error {
