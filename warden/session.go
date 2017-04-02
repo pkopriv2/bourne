@@ -31,7 +31,7 @@ type Session struct {
 	master []byte
 }
 
-// Returns the id of my account.  This may be shared through unsecure channels
+// Returns the id of my account.  This may be shared through unsecure channels.
 func (s *Session) WhoAmI() string {
 	return s.sub.Pub.Id()
 }
@@ -76,7 +76,7 @@ func (s *Session) domainVerifyKey(cancel <-chan struct{}, domain string) (Public
 type MasterKey struct {
 	PtPub  point
 	PtPriv securePoint
-	Key    symCipherText
+	Key    CipherText
 
 	// point args
 	PtHash Hash
@@ -89,14 +89,22 @@ type MasterKey struct {
 	KeyIter int
 }
 
-func (p MasterKey) Decrypt(creds []byte) ([]byte, error) {
+func (p MasterKey) deriveLine(creds []byte) (line, error) {
 	point, err := p.PtPriv.Decrypt(p.PtSalt, p.PtIter, p.PtHash.Standard(), creds)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return line{}, errors.WithStack(err)
 	}
 	defer point.Destroy()
 
-	line, err := point.Derive(p.PtPub)
+	ymxb, err := point.Derive(p.PtPub)
+	if err != nil {
+		return line{}, errors.WithStack(err)
+	}
+	return ymxb, nil
+}
+
+func (p MasterKey) Decrypt(creds []byte) ([]byte, error) {
+	line, err := p.deriveLine(creds)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -111,7 +119,7 @@ func (p MasterKey) Decrypt(creds []byte) ([]byte, error) {
 // by someone who has been trusted to sign on its behalf.
 type SigningKey struct {
 	Pub  PublicKey
-	Key  symCipherText
+	Key  CipherText
 	Hash Hash
 	Salt []byte
 	Iter int

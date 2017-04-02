@@ -14,10 +14,10 @@ import (
 
 // TODO: Generalize this for curves of n-degrees. (ie: lines, parabolas, cubics, quartics, etc...)
 // An encrypted point (just wraps a simple cipher whose key is a PBKDF2 hash)
-type securePoint symCipherText
+type securePoint CipherText
 
 // Returns the point, encrypted by using the given pass as the key for the cipher.
-func encryptPoint(rand io.Reader, alg SymCipher, salt []byte, iter int, hash hash.Hash, point point, pass []byte) (securePoint, error) {
+func encryptPoint(rand io.Reader, alg SymmetricCipher, salt []byte, iter int, hash hash.Hash, point point, pass []byte) (securePoint, error) {
 	ct, err := symmetricEncrypt(rand, alg, Bytes(pass).Pbkdf2(salt, iter, alg.KeySize(), hash), point.Bytes())
 	if err != nil {
 		return securePoint{}, errors.WithStack(err) // Dealing with secure data.  No additional context
@@ -28,7 +28,7 @@ func encryptPoint(rand io.Reader, alg SymCipher, salt []byte, iter int, hash has
 
 // Decrypts the point using the salt, iterations and raw bytes.
 func (e securePoint) Decrypt(salt []byte, iter int, hash hash.Hash, code []byte) (point, error) {
-	raw, err := symCipherText(e).Decrypt(Bytes(code).Pbkdf2(salt, iter, e.Cipher.KeySize(), hash))
+	raw, err := CipherText(e).Decrypt(Bytes(code).Pbkdf2(salt, iter, e.Cipher.KeySize(), hash))
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}
@@ -37,7 +37,7 @@ func (e securePoint) Decrypt(salt []byte, iter int, hash hash.Hash, code []byte)
 
 // Returns the raw representation of the encrypted point.
 func (e securePoint) Bytes() []byte {
-	return symCipherText(e).Bytes()
+	return CipherText(e).Bytes()
 }
 
 // Generates a random line.  The domain is used to determine the number of bytes to use when generating

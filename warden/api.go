@@ -181,21 +181,18 @@ type KeyPad interface {
 	WithSignature(signer Signer) (Session, error)
 }
 
-
 // Trust levels dictate the terms for what actions a user can take on a domain.
 type LevelOfTrust int
 
 const (
-	DocumentVerify LevelOfTrust = iota + 10
-	DocumentLoad
-	DocumentUpdate
-	DocumentSign
+	Verify LevelOfTrust = iota + 10
+	Encryption
+	Sign
 	Invite
 	Revoke
 	Publish
 	Destroy
 )
-
 
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
@@ -245,7 +242,11 @@ type Invitation struct {
 	StartsAt  time.Time
 	ExpiresAt time.Time
 
-	payload []byte
+	msg KeyExchange
+}
+
+func generateInvitation(rand io.Reader, line line, issue PublicKey, domain string, trust string, ttl time.Duration) (Invitation, error) {
+	return Invitation{}, nil
 }
 
 func (i Invitation) Bytes() []byte {

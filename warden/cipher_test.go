@@ -2,7 +2,6 @@ package warden
 
 import (
 	"crypto/rand"
-	"crypto/rsa"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,16 +31,16 @@ func TestEncrypt_AES_128_GCM(t *testing.T) {
 	assert.Equal(t, []byte("msg"), raw)
 }
 
-func TestAsymmetricEncryp_Simple(t *testing.T) {
-	msg := []byte("hello, world")
-	key, err := rsa.GenerateKey(rand.Reader, 512)
-	assert.Nil(t, err)
-
-	enc, err := asymmetricEncrypt(rand.Reader, RSA_WITH_SHA1, AES_128_GCM, &key.PublicKey, msg)
-	assert.Nil(t, err)
-	assert.NotNil(t, enc)
-
-	decrypted, err := enc.Decrypt(key)
-	assert.Nil(t, err)
-	assert.Equal(t, msg, decrypted)
-}
+// func TestAsymmetricEncryp_Simple(t *testing.T) {
+// msg := []byte("hello, world")
+// key, err := rsa.GenerateKey(rand.Reader, 512)
+// assert.Nil(t, err)
+//
+// enc, err := asymmetricEncrypt(rand.Reader, RSA_WITH_SHA1, AES_128_GCM, &key.PublicKey, msg)
+// assert.Nil(t, err)
+// assert.NotNil(t, enc)
+//
+// decrypted, err := enc.Decrypt(key)
+// assert.Nil(t, err)
+// assert.Equal(t, msg, decrypted)
+// }

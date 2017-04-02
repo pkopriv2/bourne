@@ -49,7 +49,7 @@ func (d Domain) RevokeCertificates(cancel <-chan struct{}, s Session, subscriber
 }
 
 // Issues an invitation to the given key.
-func (d Domain) IssueInvitation(cancel <-chan struct{}, session Session, key string, level LevelOfTrust, ttl time.Duration) (Invitation, error) {
+func (d Domain) IssueInvitation(cancel <-chan struct{}, session Session, key string, lvl LevelOfTrust, ttl time.Duration) (Invitation, error) {
 	return Invitation{}, nil
 }
 

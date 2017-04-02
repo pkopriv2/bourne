@@ -54,7 +54,7 @@ func initBoltBuckets(db *bolt.DB) (err error) {
 
 // Access code options.
 type codeOptions struct {
-	alg    SymCipher
+	alg    SymmetricCipher
 	expire time.Duration
 	salt   int
 	point  int
@@ -63,7 +63,7 @@ type codeOptions struct {
 }
 
 // Sets the access code cipher
-func (o *codeOptions) WithCipher(alg SymCipher) {
+func (o *codeOptions) WithCipher(alg SymmetricCipher) {
 	o.alg = alg
 }
 
@@ -122,10 +122,10 @@ func (b *boltCode) Name() string {
 // }
 
 // An encrypted point (just wraps a simple cipher whose key is a PBKDF2 hash)
-type securePointDat symCipherText
+type securePointDat CipherText
 
 // Returns the point, encrypted by using the given pass as the key for the cipher.
-func encryptPointDat(rand io.Reader, alg SymCipher, salt []byte, iter int, hash hash.Hash, point point, pass Bytes) (securePointDat, error) {
+func encryptPointDat(rand io.Reader, alg SymmetricCipher, salt []byte, iter int, hash hash.Hash, point point, pass Bytes) (securePointDat, error) {
 	ct, err := symmetricEncrypt(rand, alg, pass.Pbkdf2(salt, iter, alg.KeySize(), hash), point.Bytes())
 	if err != nil {
 		return securePointDat{}, errors.WithStack(err) // Dealing with secure data.  No additional context
@@ -136,7 +136,7 @@ func encryptPointDat(rand io.Reader, alg SymCipher, salt []byte, iter int, hash 
 
 // Decrypts the point using the salt, iterations and raw bytes.
 func (e securePointDat) Decrypt(salt []byte, iter int, hash hash.Hash, code Bytes) (point, error) {
-	raw, err := symCipherText(e).Decrypt(code.Pbkdf2(salt, iter, e.Cipher.KeySize(), hash))
+	raw, err := CipherText(e).Decrypt(code.Pbkdf2(salt, iter, e.Cipher.KeySize(), hash))
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}
@@ -145,7 +145,7 @@ func (e securePointDat) Decrypt(salt []byte, iter int, hash hash.Hash, code Byte
 
 // Returns the raw representation of the encrypted point.
 func (e securePointDat) Bytes() []byte {
-	return symCipherText(e).Bytes()
+	return CipherText(e).Bytes()
 }
 
 // The raw access code data as it is durably stored.  The fields of this object are immutable
@@ -340,7 +340,7 @@ func parseCodeBytes(raw []byte) (codeDat, error) {
 // The central lock data structure.  The lock
 type lockDat struct {
 	id      uuid.UUID
-	cipher  SymCipher
+	cipher  SymmetricCipher
 	pub     point
 	created int
 	salt    []byte
@@ -467,15 +467,15 @@ func (s lockDat) Open(tx *bolt.Tx, code string, pass []byte) ([]byte, line, erro
 	return plain, curve, nil
 }
 
-func (s lockDat) LoadSecret(tx *bolt.Tx) (symCipherText, error) {
+func (s lockDat) LoadSecret(tx *bolt.Tx) (CipherText, error) {
 	raw := tx.Bucket(lockSecretBucket).Get(stash.UUID(s.id))
 	if raw == nil {
-		return symCipherText{}, errors.Wrapf(StorageInvariateError, "No secret data for lock [%v]", s.id)
+		return CipherText{}, errors.Wrapf(StorageInvariateError, "No secret data for lock [%v]", s.id)
 	}
 
 	dat, err := parseSymCipherTextBytes(raw)
 	if err != nil {
-		return symCipherText{}, errors.Wrapf(err, "Unable to parse cipher text for lock [%v]", s.id)
+		return CipherText{}, errors.Wrapf(err, "Unable to parse cipher text for lock [%v]", s.id)
 	}
 
 	return dat, nil

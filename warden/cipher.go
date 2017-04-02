@@ -1,16 +1,10 @@
 package warden
 
 import (
-	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha1"
-	"crypto/sha256"
 	"fmt"
 	"io"
-	"reflect"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
@@ -33,15 +27,15 @@ const (
 // that implement the Authenticated Encryption with Associated Data (AEAD)
 // standard.  Currently, that only includes the GCM family of streaming modes.
 const (
-	AES_128_GCM SymCipher = iota
+	AES_128_GCM SymmetricCipher = iota
 	AES_192_GCM
 	AES_256_GCM
 )
 
 // Symmetric Cipher Type.  (FIXME: Switches are getting annoying...)
-type SymCipher int
+type SymmetricCipher int
 
-func (s SymCipher) KeySize() int {
+func (s SymmetricCipher) KeySize() int {
 	switch s {
 	default:
 		panic("UnknownCipher")
@@ -54,7 +48,7 @@ func (s SymCipher) KeySize() int {
 	}
 }
 
-func (s SymCipher) String() string {
+func (s SymmetricCipher) String() string {
 	switch s {
 	default:
 		return CipherUnknownError.Error()
@@ -67,56 +61,37 @@ func (s SymCipher) String() string {
 	}
 }
 
-// Supported asymmetric ciphers.
-type AsymCipher int
-
-const (
-	RSA_WITH_SHA1 AsymCipher = iota
-	RSA_WITH_SHA256
-)
-
-func (s AsymCipher) String() string {
-	switch s {
-	default:
-		return "Unknown"
-	case RSA_WITH_SHA1:
-		return "RSA_WITH_SHA1"
-	case RSA_WITH_SHA256:
-		return "RSA_WITH_SHA256"
-	}
-}
-
 // TODO: Determine general set of fields for non-AE modes
 //
 // Currently thinking:
 //  * Mac
-type symCipherText struct {
-	Cipher SymCipher
+type CipherText struct {
+	Cipher SymmetricCipher
 	Nonce  Bytes
 	Data   Bytes
 }
 
 // Runs the given symmetric encryption algorithm on the message using the key as the key.  Returns the resulting cipher text
-func symmetricEncrypt(rand io.Reader, alg SymCipher, key []byte, msg []byte) (symCipherText, error) {
+func symmetricEncrypt(rand io.Reader, alg SymmetricCipher, key []byte, msg []byte) (CipherText, error) {
 	block, err := initBlockCipher(alg, key)
 	if err != nil {
-		return symCipherText{}, errors.WithStack(err)
+		return CipherText{}, errors.WithStack(err)
 	}
 
 	strm, err := initStreamCipher(alg, block)
 	if err != nil {
-		return symCipherText{}, errors.WithStack(err)
+		return CipherText{}, errors.WithStack(err)
 	}
 
 	nonce, err := generateNonce(rand, strm.NonceSize())
 	if err != nil {
-		return symCipherText{}, errors.Wrapf(err, "Error generating nonce of [%v] bytes", strm.NonceSize())
+		return CipherText{}, errors.Wrapf(err, "Error generating nonce of [%v] bytes", strm.NonceSize())
 	}
 
-	return symCipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
+	return CipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
 }
 
-func (c symCipherText) Decrypt(key []byte) (Bytes, error) {
+func (c CipherText) Decrypt(key []byte) (Bytes, error) {
 	block, err := initBlockCipher(c.Cipher, key)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -134,62 +109,63 @@ func (c symCipherText) Decrypt(key []byte) (Bytes, error) {
 	return ret, nil
 }
 
-func (c symCipherText) Bytes() []byte {
+func (c CipherText) Bytes() []byte {
 	return scribe.Write(c).Bytes()
 }
 
-func (c symCipherText) Write(w scribe.Writer) {
+func (c CipherText) Write(w scribe.Writer) {
 	w.WriteInt("cipher", int(c.Cipher))
 	w.WriteBytes("nonce", c.Nonce)
 	w.WriteBytes("data", c.Data)
 }
 
-func (c symCipherText) String() string {
+func (c CipherText) String() string {
 	return fmt.Sprintf("SymCipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, c.Data)
 }
 
-func readSymCipherText(r scribe.Reader) (s symCipherText, err error) {
+func readSymCipherText(r scribe.Reader) (s CipherText, err error) {
 	err = r.ReadInt("cipher", (*int)(&s.Cipher))
 	err = common.Or(err, r.ReadBytes("nonce", (*[]byte)(&s.Nonce)))
 	err = common.Or(err, r.ReadBytes("data", (*[]byte)(&s.Data)))
 	return
 }
 
-func parseSymCipherTextBytes(raw []byte) (symCipherText, error) {
+func parseSymCipherTextBytes(raw []byte) (CipherText, error) {
 	msg, err := scribe.Parse(raw)
 	if err != nil {
-		return symCipherText{}, err
+		return CipherText{}, err
 	}
 	return readSymCipherText(msg)
 }
 
-type asymCipherText struct {
-	KeyCipher AsymCipher
-	Key       Bytes
-	Msg       symCipherText
+type KeyExchange struct {
+	KeyAlg  KeyAlgorithm
+	KeyHash Hash
+	Key     Bytes
+	Msg     CipherText
 }
 
-func asymmetricEncrypt(rand io.Reader, keyCipher AsymCipher, msgCipher SymCipher, pub crypto.PublicKey, msg []byte) (asymCipherText, error) {
+func ASymmetricEncrypt(rand io.Reader, pub PublicKey, hash Hash, msgCipher SymmetricCipher, msg []byte) (KeyExchange, error) {
 	key, err := initRandomSymmetricKey(rand, msgCipher)
 	if err != nil {
-		return asymCipherText{}, errors.WithStack(err)
+		return KeyExchange{}, errors.WithStack(err)
 	}
 
-	encKey, err := asymmetricEncryptKey(keyCipher, pub, key)
+	encKey, err := pub.Encrypt(rand, hash, key)
 	if err != nil {
-		return asymCipherText{}, errors.WithStack(err)
+		return KeyExchange{}, errors.WithStack(err)
 	}
 
 	encMsg, err := symmetricEncrypt(rand, msgCipher, key, msg)
 	if err != nil {
-		return asymCipherText{}, errors.WithStack(err)
+		return KeyExchange{}, errors.WithStack(err)
 	}
 
-	return asymCipherText{keyCipher, encKey, encMsg}, nil
+	return KeyExchange{pub.Algorithm(), hash, encKey, encMsg}, nil
 }
 
-func (c asymCipherText) Decrypt(priv crypto.PrivateKey) ([]byte, error) {
-	key, err := asymmetricDecryptKey(c.KeyCipher, priv, c.Key)
+func (c KeyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
+	key, err := priv.Decrypt(rand, c.KeyHash, c.Key)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -197,52 +173,11 @@ func (c asymCipherText) Decrypt(priv crypto.PrivateKey) ([]byte, error) {
 	return c.Msg.Decrypt(key)
 }
 
-func (c asymCipherText) String() string {
-	return fmt.Sprintf("AsymmetricCipherText(alg=%v,key=%v,val=%v)", c.KeyCipher, c.Key.Base64(), c.Msg)
+func (c KeyExchange) String() string {
+	return fmt.Sprintf("AsymmetricCipherText(alg=%v+%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.Key.Base64(), c.Msg)
 }
 
-func asymmetricEncryptKey(alg AsymCipher, raw crypto.PublicKey, key []byte) ([]byte, error) {
-	switch alg {
-	default:
-		return nil, errors.Wrapf(CipherUnknownError, "Unknown asymmetric cipher: %v", alg)
-	case RSA_WITH_SHA1:
-		pub, ok := raw.(*rsa.PublicKey)
-		if !ok {
-			return nil, errors.Wrapf(CipherKeyError, "Expected *rsa.PublicKey. Not [%v]", reflect.TypeOf(raw))
-		}
-
-		return rsa.EncryptOAEP(sha1.New(), rand.Reader, pub, key, []byte{})
-	case RSA_WITH_SHA256:
-		pub, ok := raw.(*rsa.PublicKey)
-		if !ok {
-			return nil, errors.Wrapf(CipherKeyError, "Expected *rsa.PublicKey. Not [%v]", reflect.TypeOf(raw))
-		}
-		return rsa.EncryptOAEP(sha256.New(), rand.Reader, pub, key, []byte{})
-	}
-}
-
-func asymmetricDecryptKey(alg AsymCipher, raw crypto.PrivateKey, key []byte) ([]byte, error) {
-	switch alg {
-	default:
-		return nil, errors.Wrapf(CipherUnknownError, "Unknown asymmetric cipher: %v", alg)
-	case RSA_WITH_SHA1:
-		priv, ok := raw.(*rsa.PrivateKey)
-		if !ok {
-			return nil, errors.Wrapf(CipherKeyError, "Expected *rsa.PrivateKey. Not [%v]", reflect.TypeOf(raw))
-		}
-
-		return rsa.DecryptOAEP(sha1.New(), rand.Reader, priv, key, []byte{})
-	case RSA_WITH_SHA256:
-		priv, ok := raw.(*rsa.PrivateKey)
-		if !ok {
-			return nil, errors.Wrapf(CipherKeyError, "Expected *rsa.PrivateKey. Not [%v]", reflect.TypeOf(raw))
-		}
-
-		return rsa.DecryptOAEP(sha1.New(), rand.Reader, priv, key, []byte{})
-	}
-}
-
-func initRandomSymmetricKey(rand io.Reader, alg SymCipher) ([]byte, error) {
+func initRandomSymmetricKey(rand io.Reader, alg SymmetricCipher) ([]byte, error) {
 	switch alg {
 	default:
 		return nil, errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
@@ -255,7 +190,7 @@ func initRandomSymmetricKey(rand io.Reader, alg SymCipher) ([]byte, error) {
 	}
 }
 
-func initBlockCipher(alg SymCipher, key []byte) (cipher.Block, error) {
+func initBlockCipher(alg SymmetricCipher, key []byte) (cipher.Block, error) {
 	if err := ensureValidKey(alg, key); err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -268,7 +203,7 @@ func initBlockCipher(alg SymCipher, key []byte) (cipher.Block, error) {
 	}
 }
 
-func initStreamCipher(alg SymCipher, blk cipher.Block) (cipher.AEAD, error) {
+func initStreamCipher(alg SymmetricCipher, blk cipher.Block) (cipher.AEAD, error) {
 	switch alg {
 	default:
 		return nil, errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
@@ -279,7 +214,7 @@ func initStreamCipher(alg SymCipher, blk cipher.Block) (cipher.AEAD, error) {
 
 // Creates a new random nonce.  Nonces are essentially the same
 // thing as initialization vectors and should be use
-func ensureValidKey(alg SymCipher, key []byte) error {
+func ensureValidKey(alg SymmetricCipher, key []byte) error {
 	switch alg {
 	default:
 		return errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
