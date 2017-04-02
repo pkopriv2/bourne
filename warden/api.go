@@ -179,6 +179,17 @@ type KeyPad interface {
 // Trust levels dictate the terms for what actions a user can take on a domain.
 type LevelOfTrust int
 
+func (l LevelOfTrust) Exceeds(o LevelOfTrust) bool {
+	return l > o
+}
+
+func (l LevelOfTrust) EnsureExceeded(o LevelOfTrust) error {
+	if l > o {
+		return NewLevelOfTrustError(l, o)
+	}
+	return nil
+}
+
 const (
 	Verify LevelOfTrust = iota + 10
 	Encryption
@@ -188,6 +199,10 @@ const (
 	Publish
 	Destroy
 )
+
+func NewLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
+	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
+}
 
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
@@ -228,49 +243,6 @@ func (c Certificate) Sign(key PrivateKey, hash Hash) (Signature, error) {
 // Returns a consistent byte representation of a certificate
 func (c Certificate) Bytes() []byte {
 	return nil
-}
-
-// An invitation is a cryptographically secured message asking the recipient to share in the
-// management of a domain. The invitation may only be accepted by the intended recipient.
-// These technically can be shared publicly, but exposure should be limited (typically only the
-// trust system needs to know).
-type Invitation struct {
-	Id uuid.UUID
-
-	Domain  string
-	Issuer  string
-	Trustee string
-
-	Level LevelOfTrust
-
-	IssuedAt  time.Time
-	StartsAt  time.Time
-	ExpiresAt time.Time
-
-	key KeyExchange
-	msg CipherText
-
-	// Not part of signed contents.
-	DomainSignature Signature
-	IssuerSignature Signature
-}
-
-func generateInvitation(rand io.Reader, line line, issue PublicKey, domain string, trust string, ttl time.Duration) (Invitation, error) {
-	return Invitation{}, nil
-}
-
-func (i Invitation) Bytes() []byte {
-	return nil
-}
-
-// Verifies that the signature matches the certificate contents.
-func (c Invitation) Verify(key PublicKey, signature Signature) error {
-	return nil
-}
-
-// Signs the certificate with the private key.
-func (c Invitation) Sign(key PrivateKey, hash Hash) (Signature, error) {
-	return Signature{}, nil
 }
 
 type Document struct {

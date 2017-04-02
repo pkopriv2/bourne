@@ -42,13 +42,13 @@ func (e securePoint) Bytes() []byte {
 
 // Generates a random line.  The domain is used to determine the number of bytes to use when generating
 // the properties of the curve.
-func randomLine(rand io.Reader, domain int) (line, error) {
-	slope, err := randomBigInt(rand, domain)
+func generateLine(rand io.Reader, domain int) (line, error) {
+	slope, err := generateBigInt(rand, domain)
 	if err != nil {
 		return line{}, errors.WithStack(err)
 	}
 
-	intercept, err := randomBigInt(rand, domain)
+	intercept, err := generateBigInt(rand, domain)
 	if err != nil {
 		return line{}, errors.WithStack(err)
 	}
@@ -57,8 +57,8 @@ func randomLine(rand io.Reader, domain int) (line, error) {
 }
 
 // Generates a random point on the line.  The domain is used to bound the size of the resulting point.
-func randomPoint(rand io.Reader, line line, domain int) (point, error) {
-	x, err := randomBigInt(rand, domain)
+func generatePoint(rand io.Reader, line line, domain int) (point, error) {
+	x, err := generateBigInt(rand, domain)
 	if err != nil {
 		return point{}, errors.Wrapf(err, "Unable to generate point on line [%v] for domain [%v]", line, domain)
 	}
@@ -69,7 +69,7 @@ func randomPoint(rand io.Reader, line line, domain int) (point, error) {
 //
 // Generates a random integer using the size to determine the number of bytes to use when generating the
 // random value.
-func randomBigInt(rand io.Reader, size int) (*big.Int, error) {
+func generateBigInt(rand io.Reader, size int) (*big.Int, error) {
 	buf, err := generateRandomBytes(rand, size)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Unable to generate random *big.Int of size [%v]", size)

@@ -78,11 +78,11 @@ func TestPoint00_Derive01(t *testing.T) {
 func TestLineRandRand(t *testing.T) {
 	source := rand.New(rand.NewSource(1))
 
-	line, err := randomLine(source, 16)
+	line, err := generateLine(source, 16)
 	assert.Nil(t, err)
 
-	randomX1, _ := randomBigInt(source, 16)
-	randomX2, _ := randomBigInt(source, 16)
+	randomX1, _ := generateBigInt(source, 16)
+	randomX2, _ := generateBigInt(source, 16)
 
 	point1 := line.Point(randomX1)
 	point2 := line.Point(randomX2)

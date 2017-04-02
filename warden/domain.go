@@ -20,20 +20,28 @@ type Domain struct {
 	// the level of trust that was derived when loading (this is only used to prevent unnecessary client calls)
 	lvl LevelOfTrust
 
-	// the encrypted master key. (Only available for trusted users)
-	masterKey oracle
+	// the encrypted oracle. (Only available for trusted users)
+	oracle oracle
 
 	// the encrypted signing key.  (Only available for trusted users)
-	signingKey signingKey
+	signingKey SigningKey
 }
 
 // Loads all the trust certificates that have been issued by this domain.
-func (d Domain) IssuedCertificates(cancel <-chan struct{}, s Session, beg int, end int) ([]Certificate, error) {
-	return s.net.LoadCertificatesByDomain(cancel, s.auth, d.Id, beg, end)
+func (d Domain) IssuedCertificates(cancel <-chan struct{}, s Session, opts ...func(*PagingOptions)) ([]Certificate, error) {
+	if err := Verify.EnsureExceeded(d.lvl); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return s.net.LoadCertificatesByDomain(cancel, s.auth, d.Id, opts...)
 }
 
 // Revokes all issued certificates by this domain for the given subscriber.
 func (d Domain) RevokeCertificates(cancel <-chan struct{}, s Session, subscriber string) error {
+	if err := Revoke.EnsureExceeded(d.lvl); err != nil {
+		return errors.WithStack(err)
+	}
+
 	all, err := s.net.LoadCertificatesByDomainAndKey(cancel, s.auth, d.Id, subscriber)
 	if err != nil {
 		return errors.Wrapf(err, "Error loading certificates for domain [%v] and subscriber [%v]", subscriber)
@@ -49,7 +57,11 @@ func (d Domain) RevokeCertificates(cancel <-chan struct{}, s Session, subscriber
 }
 
 // Issues an invitation to the given key.
-func (d Domain) IssueInvitation(cancel <-chan struct{}, session Session, key string, lvl LevelOfTrust, ttl time.Duration) (Invitation, error) {
+func (d Domain) IssueInvitation(cancel <-chan struct{}, session Session, subscriber string, lvl LevelOfTrust, ttl time.Duration) (Invitation, error) {
+	if err := Invite.EnsureExceeded(d.lvl); err != nil {
+		return Invitation{}, errors.WithStack(err)
+	}
+
 	return Invitation{}, nil
 }
 

@@ -189,7 +189,7 @@ func initBoltCode(tx *bolt.Tx, rand io.Reader, name string, line line, code []by
 		return codeDat{}, errors.Wrap(err, "Unable to initialize access code")
 	}
 
-	point, err := randomPoint(rand, line, opts.point)
+	point, err := generatePoint(rand, line, opts.point)
 	if err != nil {
 		return codeDat{}, errors.Wrap(err, "Unable to initialize access code")
 	}
