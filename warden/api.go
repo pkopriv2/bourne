@@ -30,19 +30,19 @@ func Connect(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
+// Publishes the key to the main key index using the given name
+func PublishMyKey(session Session) error {
+	return nil
+}
+
 // Lists a subsection of public key ids from [beg,end).
 func ListPublishedKeys(session Session, beg int, end int) ([]string, error) {
 	return nil, nil
 }
 
-// Loads the public key.
+// Loads the public key of the given subscriber
 func LoadSubscriberKey(session Session, id string) (PublicKey, error) {
 	return nil, nil
-}
-
-// Publishes the key to the main key index using the given name
-func PublishKey(session Session) error {
-	return nil
 }
 
 // Registers/creates a domain.  The domain will be controlled by newly generated public/private key
@@ -259,11 +259,11 @@ func (c Invitation) Sign(key PrivateKey, hash Hash) (Signature, error) {
 }
 
 type Document struct {
-	Id         uuid.UUID
-	DomainId   uuid.UUID
-	StartBlock uuid.UUID
-	CreatedAt  time.Time
-	Contents   []byte
+	Name      string
+	Ver       int
+	domain    uuid.UUID
+	Created time.Time
+	Contents  []byte
 }
 
 func (d Document) Bytes() error {

@@ -21,10 +21,10 @@ type Domain struct {
 	lvl LevelOfTrust
 
 	// the encrypted master key. (Only available for trusted users)
-	masterKey MasterKey
+	masterKey oracle
 
 	// the encrypted signing key.  (Only available for trusted users)
-	signingKey SigningKey
+	signingKey signingKey
 }
 
 // Loads all the trust certificates that have been issued by this domain.
@@ -58,39 +58,39 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, session Session, key str
 // // You may access a domain only if you have established trust.
 // type domain interface {
 //
-	// // The unique identifier of the domain
-	// Id() string
+// // The unique identifier of the domain
+// Id() string
 //
-	// // The public key of the domain.
-	// PublicKey() PublicKey
+// // The public key of the domain.
+// PublicKey() PublicKey
 //
-	// // A short, publicly viewable description of the domain (not advertised, but not public)
-	// Description() string
+// // A short, publicly viewable description of the domain (not advertised, but not public)
+// Description() string
 //
-	// // Loads all the trust certificates that have been issued by this domain
-	// IssuedCertificates(cancel <-chan struct{}, session Session, beg int, end int) ([]Certificate, error)
+// // Loads all the trust certificates that have been issued by this domain
+// IssuedCertificates(cancel <-chan struct{}, beg int, end int) ([]Certificate, error)
 //
-	// // Revokes all certificates for the given key.  The trustee will no longer be able to act in the management of the domain.
-	// RevokeCertificates(cancel <-chan struct{}, session Session, key string) error
+// // Revokes all certificates for the given key.  The trustee will no longer be able to act in the management of the domain.
+// RevokeCertificates(cancel <-chan struct{}, key string) error
 //
-	// // Loads all the issued invitations that have been issued by this domain
-	// IssuedInvitations(cancel <-chan struct{}, session Session) ([]Invitation, error)
+// // Loads all the issued invitations that have been issued by this domain
+// IssuedInvitations(cancel <-chan struct{}, session Session) ([]Invitation, error)
 //
-	// // Issues an invitation to the given key.
-	// IssueInvitation(cancel <-chan struct{}, session Session, key string, level LevelOfTrust, ttl time.Duration) (Invitation, error)
+// // Issues an invitation to the given key.
+// IssueInvitation(cancel <-chan struct{}, session Session, key string, level LevelOfTrust, ttl time.Duration) (Invitation, error)
 //
-	// // Issues an invitation to the given key.
-	// RevokeInvitation(cancel <-chan struct{}, session Session, key string, level LevelOfTrust, ttl time.Duration) (Invitation, error)
+// // Issues an invitation to the given key.
+// RevokeInvitation(cancel <-chan struct{}, session Session, key string, level LevelOfTrust, ttl time.Duration) (Invitation, error)
 //
-	// // // Lists all the document names under the control of this domain
-	// // ListDocument(cancel <-chan struct{}, session Session) ([]string, error)
-	// //
-	// // // Loads a specific document.
-	// // LoadDocument(cancel <-chan struct{}, session Session, name []byte) (Document, error)
-	// //
-	// // // Stores a document under the domain
-	// // StoreDocument(cancel <-chan struct{}, session Session, name []byte, ver int, contents []byte) (Document, error)
-	// //
-	// // // Stores a document under the domain
-	// // DeleteDocument(cancel <-chan struct{}, session Session, name []byte, ver int) error
+// // // Lists all the document names under the control of this domain
+// // ListDocuments(cancel <-chan struct{}, session Session) ([]string, error)
+// //
+// // // Loads a specific document.
+// // LoadDocument(cancel <-chan struct{}, session Session, name []byte) (Document, error)
+// //
+// // // Stores a document under the domain
+// // StoreDocument(cancel <-chan struct{}, session Session, name []byte, ver int, contents []byte) (Document, error)
+// //
+// // // Stores a document under the domain
+// // DeleteDocument(cancel <-chan struct{}, session Session, name []byte, ver int) error
 // }

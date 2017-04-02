@@ -8,19 +8,19 @@ type Transport interface {
 	LoadSubVerifyKey(cancel <-chan struct{}, a token, subscriber string) (PublicKey, error)
 
 	// Returns the encrypted master subscriber for the given subscription subscriber.
-	LoadSubMasterKey(cancel <-chan struct{}, a token, subscriber string) (MasterKey, error)
+	LoadSubMasterKey(cancel <-chan struct{}, a token, subscriber string) (oracle, error)
 
 	// Returns the encrypted private subscriber for the given subscription subscriber.
-	LoadSubSigningKey(cancel <-chan struct{}, a token, subscriber string) (SigningKey, error)
+	LoadSubSigningKey(cancel <-chan struct{}, a token, subscriber string) (signingKey, error)
 
 	// Returns the domain's public verification subscriber.
 	LoadDomainVerifyKey(cancel <-chan struct{}, a token, domainKey string) (PublicKey, error)
 
 	// Returns the domain's master subscriber.  The master subscriber may be used to decrypt.
-	LoadDomainMasterKey(cancel <-chan struct{}, a token, domainKey string) (MasterKey, error)
+	LoadDomainOracle(cancel <-chan struct{}, a token, domainKey string) (oracle, error)
 
 	// Returns the domain's encrypted private subscriber.
-	LoadDomainSigningKey(cancel <-chan struct{}, a token, domainKey string) (SigningKey, error)
+	LoadDomainSigningKey(cancel <-chan struct{}, a token, domainKey string) (signingKey, error)
 
 	// Loads the signature.
 	LoadSignature(cancel <-chan struct{}, a token, id uuid.UUID) (Signature, error)
