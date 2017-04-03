@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"hash"
 	"io"
 	"math/big"
 
@@ -17,8 +16,8 @@ import (
 type securePoint CipherText
 
 // Returns the point, encrypted by using the given pass as the key for the cipher.
-func encryptPoint(rand io.Reader, alg SymmetricCipher, salt []byte, iter int, hash hash.Hash, point point, pass []byte) (securePoint, error) {
-	ct, err := symmetricEncrypt(rand, alg, Bytes(pass).Pbkdf2(salt, iter, alg.KeySize(), hash), point.Bytes())
+func encryptPoint(rand io.Reader, pt point, alg SymmetricCipher, key []byte) (securePoint, error) {
+	ct, err := symmetricEncrypt(rand, alg, key, pt.Bytes())
 	if err != nil {
 		return securePoint{}, errors.WithStack(err) // Dealing with secure data.  No additional context
 	}
@@ -27,8 +26,8 @@ func encryptPoint(rand io.Reader, alg SymmetricCipher, salt []byte, iter int, ha
 }
 
 // Decrypts the point using the salt, iterations and raw bytes.
-func (e securePoint) Decrypt(salt []byte, iter int, hash hash.Hash, code []byte) (point, error) {
-	raw, err := CipherText(e).Decrypt(Bytes(code).Pbkdf2(salt, iter, e.Cipher.KeySize(), hash))
+func (e securePoint) Decrypt(key []byte) (point, error) {
+	raw, err := CipherText(e).Decrypt(key)
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}

@@ -13,7 +13,7 @@ type Transport interface {
 	LoadPublicKey(cancel <-chan struct{}, a token, subscriber string) (PublicKey, error)
 
 	// Returns the subscriber's oracle along with the oracle key corresponding to the access method.
-	LoadOracle(cancel <-chan struct{}, a token, method string) (oracle, oracleKey, error)
+	LoadOracle(cancel <-chan struct{}, a token, method string) (oracle, oracleKey, bool, error)
 
 	// Returns the signing key for the owner of the token.
 	LoadingSigningKey(cancel <-chan struct{}, a token) (SigningKey, error)
@@ -44,4 +44,7 @@ type Transport interface {
 
 	// Registers the given invitation.
 	RegisterInvitation(cancel <-chan struct{}, a token, i Invitation, domainSig Signature, issuerSig Signature) error
+
+	// Registers the certificate
+	RegisterCertificate(cancel <-chan struct{}, a token, c Certificate, trusteeSig Signature, trusteeKey oracleKey) error
 }

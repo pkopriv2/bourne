@@ -14,6 +14,14 @@ type oracleOptions struct {
 	DeriveSize int
 }
 
+func buildOracleOptions(fns ... func(*oracleOptions)) oracleOptions {
+	ret := oracleOptions{bits_256, SHA256, 1024, 32}
+	for _, fn := range fns {
+		fn(&ret)
+	}
+	return ret
+}
+
 // Options for generating an oracle key
 type oracleKeyOptions struct {
 	Cipher  SymmetricCipher
@@ -22,9 +30,19 @@ type oracleKeyOptions struct {
 	KeySize int
 }
 
+func buildOracleKeyOptions(fns ... func(*oracleKeyOptions)) oracleKeyOptions {
+	ret := oracleKeyOptions{AES_256_GCM, SHA256, 1024, 32}
+	for _, fn := range fns {
+		fn(&ret)
+	}
+	return ret
+}
+
 // Generates a new random oracle + the curve that generated the oracle.  The returned curve
 // may be used to generate oracle keys.
-func generateOracle(rand io.Reader, id string, alias string, opts oracleOptions) (oracle, line, error) {
+func generateOracle(rand io.Reader, id string, alias string, fns ... func(*oracleOptions)) (oracle, line, error) {
+	opts := buildOracleOptions(fns...)
+
 	ret, err := generateLine(rand, opts.Strength)
 	if err != nil {
 		return oracle{}, line{}, errors.Wrapf(err, "Error generating curve of strength [%v]", opts.Strength)
@@ -58,7 +76,8 @@ func generateOracleKey(rand io.Reader, oracleId string, id string, line line, pa
 		return oracleKey{}, errors.Wrapf(err, "Error generating salt of strength [%v]", opts.KeySize)
 	}
 
-	encPt, err := encryptPoint(rand, opts.Cipher, salt, opts.KeyIter, opts.KeyHash.Standard(), pt, pass)
+	encPt, err := encryptPoint(rand, pt, opts.Cipher,
+		Bytes(pass).Pbkdf2(salt, opts.KeyIter, opts.KeySize, opts.KeyHash.Standard()))
 	if err != nil {
 		return oracleKey{}, errors.WithMessage(err, "Error generating oracle key")
 	}
@@ -137,7 +156,8 @@ type oracleKey struct {
 }
 
 func (p oracleKey) access(pass []byte) (point, error) {
-	pt, err := p.pt.Decrypt(p.keySalt, p.keyIter, p.keyHash.Standard(), pass)
+	pt, err := p.pt.Decrypt(
+		Bytes(pass).Pbkdf2(p.keySalt, p.keyIter, p.pt.Cipher.KeySize(), p.keyHash.Standard()))
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}

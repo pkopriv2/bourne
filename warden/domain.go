@@ -10,14 +10,14 @@ type Domain struct {
 	// the domain description
 	Description string
 
-	// the strength requirement of the domain.
-	strength int
-
 	// the level of trust that was derived when loading (this is only used to prevent unnecessary client calls)
 	lvl LevelOfTrust
 
 	// the encrypted oracle. (Only available for trusted users)
 	oracle oracle
+
+	// the strength requirement of the domain.
+	oracleKeyOpts oracleKeyOptions
 
 	// the encrypted oracle. (Only available for trusted users)
 	oracleKey oracleKey
@@ -111,7 +111,7 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee strin
 		return Invitation{}, errors.Wrapf(err, "Error retrieving public key [%v]", trustee)
 	}
 
-	inv, err := generateInvitation(s.rand, d, line, issuerKey, trusteeKey, opts...)
+	inv, err := generateInvitation(s.rand, d, line, domainKey, issuerKey, trusteeKey, opts...)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for domain [%v]", trustee, d.Id)
 	}

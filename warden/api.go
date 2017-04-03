@@ -216,8 +216,12 @@ type Certificate struct {
 	Level LevelOfTrust
 
 	IssuedAt  time.Time
-	StartsAt  time.Time
 	ExpiresAt time.Time
+}
+
+func newCertificate(domain string, issuer string, trustee string, lvl LevelOfTrust, ttl time.Duration) Certificate {
+	now := time.Now()
+	return Certificate{uuid.NewV1(), domain, issuer, trustee, lvl, now, now.Add(ttl)}
 }
 
 // Verifies that the signature matches the certificate contents.
@@ -226,7 +230,7 @@ func (c Certificate) Verify(key PublicKey, signature Signature) error {
 }
 
 // Signs the certificate with the private key.
-func (c Certificate) Sign(key PrivateKey, hash Hash) (Signature, error) {
+func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
 	return Signature{}, nil
 }
 
