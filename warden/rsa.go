@@ -25,10 +25,10 @@ func (r *rsaPublicKey) Algorithm() KeyAlgorithm {
 func (r *rsaPublicKey) Verify(hash Hash, msg []byte, sig []byte) error {
 	hashed, err := hash.Hash(msg)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", Bytes(msg), hash)
+		return errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", crypoBytes(msg), hash)
 	}
 	if err := rsa.VerifyPSS(r.raw, hash.Crypto(), hashed, sig, nil); err != nil {
-		return errors.Wrapf(err, "Unable to verify signature [%v] with key [%v]", Bytes(sig), r.raw)
+		return errors.Wrapf(err, "Unable to verify signature [%v] with key [%v]", crypoBytes(sig), r.raw)
 	}
 	return nil
 }
@@ -36,7 +36,7 @@ func (r *rsaPublicKey) Verify(hash Hash, msg []byte, sig []byte) error {
 func (r *rsaPublicKey) Encrypt(rand io.Reader, hash Hash, msg []byte) ([]byte, error) {
 	msg, err := rsa.EncryptOAEP(hash.Standard(), rand, r.raw, msg, nil)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Error encrypting message [%v] with key [%v]", Bytes(msg), r.raw)
+		return nil, errors.Wrapf(err, "Error encrypting message [%v] with key [%v]", crypoBytes(msg), r.raw)
 	}
 	return msg, nil
 }
@@ -86,12 +86,12 @@ func (r *rsaPrivateKey) Public() PublicKey {
 func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) (Signature, error) {
 	hashed, err := hash.Hash(msg)
 	if err != nil {
-		return Signature{}, errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", Bytes(msg), hash)
+		return Signature{}, errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", crypoBytes(msg), hash)
 	}
 
 	sig, err := rsa.SignPSS(rand, r.raw, hash.Crypto(), hashed, nil)
 	if err != nil {
-		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", Bytes(msg))
+		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", crypoBytes(msg))
 	}
 
 	return Signature{hash, sig}, nil
@@ -100,7 +100,7 @@ func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) (Signature, 
 func (r *rsaPrivateKey) Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error) {
 	plaintext, err := rsa.DecryptOAEP(hash.Standard(), rand, r.raw, ciphertext, nil)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to decrypt ciphertext [%v]", Bytes(ciphertext))
+		return nil, errors.Wrapf(err, "Unable to decrypt ciphertext [%v]", crypoBytes(ciphertext))
 	}
 
 	return plaintext, nil

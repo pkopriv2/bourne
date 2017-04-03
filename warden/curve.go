@@ -88,8 +88,8 @@ func (l line) Destroy() {
 	sBytes := l.Slope.Bytes()
 	iBytes := l.Intercept.Bytes()
 
-	Bytes(sBytes).Destroy()
-	Bytes(iBytes).Destroy()
+	crypoBytes(sBytes).Destroy()
+	crypoBytes(iBytes).Destroy()
 
 	l.Slope.SetBytes(sBytes)
 	l.Slope.SetBytes(iBytes)
@@ -145,8 +145,8 @@ func (p point) Destroy() {
 	xBytes := p.X.Bytes()
 	yBytes := p.Y.Bytes()
 
-	Bytes(xBytes).Destroy()
-	Bytes(yBytes).Destroy()
+	crypoBytes(xBytes).Destroy()
+	crypoBytes(yBytes).Destroy()
 
 	p.X.SetBytes(xBytes)
 	p.Y.SetBytes(yBytes)

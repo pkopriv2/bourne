@@ -14,7 +14,7 @@ type oracleOptions struct {
 	DeriveSize int
 }
 
-func buildOracleOptions(fns ... func(*oracleOptions)) oracleOptions {
+func buildOracleOptions(fns ...func(*oracleOptions)) oracleOptions {
 	ret := oracleOptions{bits_256, SHA256, 1024, 32}
 	for _, fn := range fns {
 		fn(&ret)
@@ -30,7 +30,7 @@ type oracleKeyOptions struct {
 	KeySize int
 }
 
-func buildOracleKeyOptions(fns ... func(*oracleKeyOptions)) oracleKeyOptions {
+func buildOracleKeyOptions(fns ...func(*oracleKeyOptions)) oracleKeyOptions {
 	ret := oracleKeyOptions{AES_256_GCM, SHA256, 1024, 32}
 	for _, fn := range fns {
 		fn(&ret)
@@ -40,7 +40,7 @@ func buildOracleKeyOptions(fns ... func(*oracleKeyOptions)) oracleKeyOptions {
 
 // Generates a new random oracle + the curve that generated the oracle.  The returned curve
 // may be used to generate oracle keys.
-func generateOracle(rand io.Reader, id string, alias string, fns ... func(*oracleOptions)) (oracle, line, error) {
+func generateOracle(rand io.Reader, id string, alias string, fns ...func(*oracleOptions)) (oracle, line, error) {
 	opts := buildOracleOptions(fns...)
 
 	ret, err := generateLine(rand, opts.Strength)
@@ -77,7 +77,7 @@ func generateOracleKey(rand io.Reader, oracleId string, id string, line line, pa
 	}
 
 	encPt, err := encryptPoint(rand, pt, opts.Cipher,
-		Bytes(pass).Pbkdf2(salt, opts.KeyIter, opts.KeySize, opts.KeyHash.Standard()))
+		crypoBytes(pass).Pbkdf2(salt, opts.KeyIter, opts.KeySize, opts.KeyHash.Standard()))
 	if err != nil {
 		return oracleKey{}, errors.WithMessage(err, "Error generating oracle key")
 	}
@@ -121,7 +121,7 @@ func (p oracle) Unlock(key oracleKey, pass []byte) ([]byte, line, error) {
 	if err != nil {
 		return nil, line{}, errors.WithStack(err)
 	}
-	return Bytes(ymxb.Bytes()).Pbkdf2(
+	return crypoBytes(ymxb.Bytes()).Pbkdf2(
 		p.derivSalt, p.derivIter, p.derivSize, p.derivHash.Standard()), ymxb, nil
 }
 
@@ -157,7 +157,7 @@ type oracleKey struct {
 
 func (p oracleKey) access(pass []byte) (point, error) {
 	pt, err := p.pt.Decrypt(
-		Bytes(pass).Pbkdf2(p.keySalt, p.keyIter, p.pt.Cipher.KeySize(), p.keyHash.Standard()))
+		crypoBytes(pass).Pbkdf2(p.keySalt, p.keyIter, p.pt.Cipher.KeySize(), p.keyHash.Standard()))
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}

@@ -46,5 +46,5 @@ type Transport interface {
 	RegisterInvitation(cancel <-chan struct{}, a token, i Invitation, domainSig Signature, issuerSig Signature) error
 
 	// Registers the certificate
-	RegisterCertificate(cancel <-chan struct{}, a token, c Certificate, trusteeSig Signature, trusteeKey oracleKey) error
+	RegisterCertificate(cancel <-chan struct{}, a token, c Certificate, domainSig Signature, issuerSig Signature, trusteeSig Signature, trusteeKey oracleKey) error
 }

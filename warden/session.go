@@ -79,7 +79,7 @@ type SigningKey struct {
 
 func (p SigningKey) Decrypt(seed []byte) (PrivateKey, error) {
 	raw, err := p.Priv.Decrypt(
-		Bytes(seed).Pbkdf2(
+		crypoBytes(seed).Pbkdf2(
 			p.fnSalt, p.fnIter, p.Priv.Cipher.KeySize(), p.fnHash.Standard()))
 	if err != nil {
 		return nil, errors.WithStack(err)

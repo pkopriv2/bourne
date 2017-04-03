@@ -125,7 +125,7 @@ func (b *boltCode) Name() string {
 type securePointDat CipherText
 
 // Returns the point, encrypted by using the given pass as the key for the cipher.
-func encryptPointDat(rand io.Reader, alg SymmetricCipher, salt []byte, iter int, hash hash.Hash, point point, pass Bytes) (securePointDat, error) {
+func encryptPointDat(rand io.Reader, alg SymmetricCipher, salt []byte, iter int, hash hash.Hash, point point, pass crypoBytes) (securePointDat, error) {
 	ct, err := symmetricEncrypt(rand, alg, pass.Pbkdf2(salt, iter, alg.KeySize(), hash), point.Bytes())
 	if err != nil {
 		return securePointDat{}, errors.WithStack(err) // Dealing with secure data.  No additional context
@@ -135,7 +135,7 @@ func encryptPointDat(rand io.Reader, alg SymmetricCipher, salt []byte, iter int,
 }
 
 // Decrypts the point using the salt, iterations and raw bytes.
-func (e securePointDat) Decrypt(salt []byte, iter int, hash hash.Hash, code Bytes) (point, error) {
+func (e securePointDat) Decrypt(salt []byte, iter int, hash hash.Hash, code crypoBytes) (point, error) {
 	raw, err := CipherText(e).Decrypt(code.Pbkdf2(salt, iter, e.Cipher.KeySize(), hash))
 	if err != nil {
 		return point{}, errors.WithStack(err)
@@ -458,7 +458,7 @@ func (s lockDat) Open(tx *bolt.Tx, code string, pass []byte) ([]byte, line, erro
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)
 	}
 
-	plain, err := cipherText.Decrypt(Bytes(curve.Bytes()).Pbkdf2(s.salt, s.iter, cipherText.Cipher.KeySize(), sha256.New()))
+	plain, err := cipherText.Decrypt(crypoBytes(curve.Bytes()).Pbkdf2(s.salt, s.iter, cipherText.Cipher.KeySize(), sha256.New()))
 	if err != nil {
 		curve.Destroy()
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)

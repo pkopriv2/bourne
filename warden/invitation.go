@@ -9,62 +9,66 @@ import (
 )
 
 type InvitationOptions struct {
-	Cipher SymmetricCipher
-	Hash   Hash
-	Lvl    LevelOfTrust
-	Ttl    time.Duration
+	ExchgCipher SymmetricCipher
+	Hash        Hash
+	Lvl         LevelOfTrust
+	Ttl         time.Duration
+	SigHash     Hash
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
-	def := InvitationOptions{AES_128_GCM, SHA256, Encryption, 365 * 24 * time.Hour}
+	def := InvitationOptions{AES_128_GCM, SHA256, Encryption, 365 * 24 * time.Hour, SHA256}
 	for _, fn := range opts {
 		fn(&def)
 	}
 	return def
 }
 
-func acceptInvitation(cancel <-chan struct{}, s Session, i Invitation, domainSig Signature, trusteeSig Signature) (Certificate, error) {
+func acceptInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
 	priv, err := s.mySigningKey()
 	if err != nil {
-		return Certificate{}, errors.Wrapf(err, "Unable to retrieve session key [%v]", s.MyId())
+		return errors.Wrapf(err, "Unable to retrieve session key [%v]", s.MyId())
 	}
-
 	defer priv.Destroy()
 
-	pt, err := i.ExtractPoint(s.rand, priv)
+	sig, err := i.Cert.Sign(s.rand, priv, SHA256)
 	if err != nil {
-		return Certificate{}, errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
+		return errors.Wrapf(err, "Error signing certificate: ", i.Cert)
 	}
 
+	pt, err := i.extractPoint(s.rand, priv)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
+	}
 	defer pt.Destroy()
 
-	domain, ok, err := LoadDomain(s, i.cert.Domain)
+	domain, ok, err := LoadDomain(s, i.Cert.Domain)
 	if err != nil {
-		return Certificate{}, errors.Wrapf(err, "Err obtaining auth token [%v]", s.MyId())
+		return errors.Wrapf(err, "Err obtaining auth token [%v]", s.MyId())
 	}
 
 	if !ok {
-		return Certificate{}, errors.Wrapf(DomainInvariantError, "No such domain [%v]", i.cert.Domain)
+		return errors.Wrapf(DomainInvariantError, "No such domain [%v]", i.Cert.Domain)
 	}
 
-	// auth, err := s.auth(cancel)
-	// if err != nil {
-	// return Certificate{}, errors.Wrapf(err, "Err obtaining auth token [%v]", s.MyId())
-	// }
+	auth, err := s.auth(cancel)
+	if err != nil {
+		return errors.Wrapf(err, "Err obtaining auth token [%v]", s.MyId())
+	}
 
 	line, err := pt.Derive(domain.oracle.pt)
 	if err != nil {
-		return Certificate{}, errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", s.MyId(), i.cert.Domain)
+		return errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", s.MyId(), i.Cert.Domain)
+	}
+	defer line.Destroy()
+
+	key, err := generateOracleKey(s.rand, i.Cert.Domain, i.Cert.Trustee, line, s.seed, domain.oracleKeyOpts)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
 	}
 
-	defer line.Destroy()
-	//
-	// key, err := generateOracleKey(s.rand, i.Domain, i.Trustee, line, s.seed, domain.oracleKeyOpts)
-	// if err != nil {
-	// return Certificate{}, errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Domain)
-	// }
-
-	return Certificate{}, nil
+	err = s.net.RegisterCertificate(cancel, auth, i.Cert, i.DomainSig, i.IssuerSig, sig, key)
+	return errors.Wrapf(err, "Unable to register certificate [%v]", i.Cert)
 }
 
 // An invitation is a cryptographically secured message asking the recipient to share in the
@@ -75,13 +79,15 @@ type Invitation struct {
 	Id uuid.UUID
 
 	// Contains the embedded cert (must be signed by all parties)
-	cert Certificate
+	Cert Certificate
 
-	// The certificate signatures.  A valid certificate requires 3 signatures (issuer, domain, trustee)
-	domainSig Signature
-	issuerSig Signature
+	// The domain signature.  A valid certificate requires 3 signatures (issuer, domain, trustee)
+	DomainSig Signature
 
-	// The embedded curve information
+	// The issuer signature.
+	IssuerSig Signature
+
+	// The embedded curve information (internal only)
 	key KeyExchange
 	pt  securePoint
 }
@@ -89,15 +95,14 @@ type Invitation struct {
 func generateInvitation(rand io.Reader, d Domain, oracleLine line, domainKey PrivateKey, issuerKey PrivateKey, trusteeKey PublicKey, fns ...func(*InvitationOptions)) (Invitation, error) {
 	opts := buildInvitationOptions(fns...)
 
-
 	cert := newCertificate(d.Id, issuerKey.Public().Id(), trusteeKey.Id(), opts.Lvl, opts.Ttl)
 
-	domainSig, err := cert.Sign(rand, domainKey, SHA256)
+	domainSig, err := cert.Sign(rand, domainKey, opts.SigHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error signing certificate with key [%v]: %v", domainKey.Public().Id(), cert)
 	}
 
-	issuerSig, err := cert.Sign(rand, issuerKey, SHA256)
+	issuerSig, err := cert.Sign(rand, issuerKey, opts.SigHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error signing certificate with key [%v]: %v", issuerKey.Public().Id(), cert)
 	}
@@ -108,13 +113,17 @@ func generateInvitation(rand io.Reader, d Domain, oracleLine line, domainKey Pri
 	}
 	defer pt.Destroy()
 
-	// FIXME: WRITE EXCHANGE METHOD
-	encPt, err := encryptPoint(rand, pt, opts.Cipher, nil)
+	exchg, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.ExchgCipher, opts.Hash)
+	if err != nil {
+		return Invitation{}, errors.Wrapf(err, "Error generating key exchange [%v,%v]", AES_128_GCM, SHA256)
+	}
+	defer crypoBytes(cipherKey).Destroy()
+
+	encPt, err := encryptPoint(rand, pt, opts.ExchgCipher, cipherKey)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Unable to generate invitation for trustee [%v] to join [%v]", trusteeKey.Id(), d.Id)
 	}
-
-	return Invitation{uuid.NewV1(), cert, domainSig, issuerSig, KeyExchange{}, encPt}, nil
+	return Invitation{uuid.NewV1(), cert, domainSig, issuerSig, exchg, encPt}, nil
 }
 
 // Return the byte representation of the invitation.  This *MUST* be totally deterministic!
@@ -123,7 +132,7 @@ func (i Invitation) Bytes() []byte {
 }
 
 // Verifies that the signature matches the certificate contents.
-func (c Invitation) ExtractPoint(rand io.Reader, priv PrivateKey) (point, error) {
+func (c Invitation) extractPoint(rand io.Reader, priv PrivateKey) (point, error) {
 	cipherKey, err := c.key.Decrypt(rand, priv)
 	if err != nil {
 		return point{}, errors.Wrapf(err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())

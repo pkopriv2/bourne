@@ -27,7 +27,7 @@ type Domain struct {
 }
 
 // Decrypts the domain oracle.  Requires *Encryption* trust
-func (d Domain) unlockOracle(s Session) (Bytes, line, error) {
+func (d Domain) unlockOracle(s Session) (crypoBytes, line, error) {
 	if err := Encryption.EnsureExceeded(d.lvl); err != nil {
 		return nil, line{}, errors.WithStack(err)
 	}
@@ -64,7 +64,7 @@ func (d Domain) RevokeCertificate(cancel <-chan struct{}, s Session, subscriber 
 		return errors.Wrapf(err, "Error loading certificates for domain [%v] and subscriber [%v]", d.Id, subscriber)
 	}
 
-	if ! ok {
+	if !ok {
 		return errors.Wrapf(DomainInvariantError, "No existing trust certificate from domain [%v] to subscriber [%v]", d.Id, subscriber)
 	}
 
