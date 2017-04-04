@@ -8,6 +8,25 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestEncryptPoint(t *testing.T) {
+	source := rand.New(rand.NewSource(1))
+
+	line := line{big.NewInt(1), big.NewInt(0)}
+
+	pt, err := generatePoint(source, line, 1)
+	assert.Nil(t, err)
+
+	key := Bytes([]byte("pass")).Pbkdf2([]byte{}, 1, 32, SHA256.Standard())
+
+	enc, err := encryptPoint(source, pt, AES_256_GCM, key)
+	assert.Nil(t, err)
+	assert.NotNil(t, enc)
+
+	dec, err := enc.Decrypt(key)
+	assert.Nil(t, err)
+	assert.Equal(t, pt, dec)
+}
+
 func TestLine00(t *testing.T) {
 	line := line{big.NewInt(0), big.NewInt(0)}
 	assert.Equal(t, big.NewInt(0), line.Height(big.NewInt(0)))

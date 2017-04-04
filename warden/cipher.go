@@ -44,7 +44,7 @@ func (s SymmetricCipher) KeySize() int {
 	case AES_192_GCM:
 		return bits_192
 	case AES_256_GCM:
-		return bits_192
+		return bits_256
 	}
 }
 

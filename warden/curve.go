@@ -101,6 +101,10 @@ func (l line) Height(x *big.Int) *big.Int {
 	return ret
 }
 
+func (l line) Contains(o point) bool {
+	return l.Point(o.X).Equals(o)
+}
+
 func (l line) Point(x *big.Int) point {
 	return point{x, l.Height(x)}
 }

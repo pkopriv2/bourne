@@ -27,11 +27,10 @@ type oracleKeyOptions struct {
 	Cipher  SymmetricCipher
 	KeyHash Hash
 	KeyIter int
-	KeySize int
 }
 
 func buildOracleKeyOptions(fns ...func(*oracleKeyOptions)) oracleKeyOptions {
-	ret := oracleKeyOptions{AES_256_GCM, SHA256, 1024, 32}
+	ret := oracleKeyOptions{AES_256_GCM, SHA256, 1024}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -40,7 +39,7 @@ func buildOracleKeyOptions(fns ...func(*oracleKeyOptions)) oracleKeyOptions {
 
 // Generates a new random oracle + the curve that generated the oracle.  The returned curve
 // may be used to generate oracle keys.
-func generateOracle(rand io.Reader, id string, alias string, fns ...func(*oracleOptions)) (oracle, line, error) {
+func generateOracle(rand io.Reader, id string, fns ...func(*oracleOptions)) (oracle, line, error) {
 	opts := buildOracleOptions(fns...)
 
 	ret, err := generateLine(rand, opts.Strength)
@@ -64,25 +63,25 @@ func generateOracle(rand io.Reader, id string, alias string, fns ...func(*oracle
 // Generates a new key for the oracle whose secret was derived from line.  Only the given pass
 // may unlock the oracle key.
 func generateOracleKey(rand io.Reader, oracleId string, id string, line line, pass []byte, opts oracleKeyOptions) (oracleKey, error) {
-	pt, err := generatePoint(rand, line, opts.KeySize)
+	pt, err := generatePoint(rand, line, opts.Cipher.KeySize())
 	if err != nil {
-		return oracleKey{}, errors.Wrapf(err, "Error generating point of strength [%v]", opts.KeySize)
+		return oracleKey{}, errors.Wrapf(err, "Error generating point of strength [%v]", opts.Cipher.KeySize())
 	}
 
 	defer pt.Destroy()
 
-	salt, err := generateRandomBytes(rand, opts.KeySize)
+	salt, err := generateRandomBytes(rand, opts.Cipher.KeySize())
 	if err != nil {
-		return oracleKey{}, errors.Wrapf(err, "Error generating salt of strength [%v]", opts.KeySize)
+		return oracleKey{}, errors.Wrapf(err, "Error generating salt of strength [%v]", opts.Cipher.KeySize())
 	}
 
-	encPt, err := encryptPoint(rand, pt, opts.Cipher,
-		Bytes(pass).Pbkdf2(salt, opts.KeyIter, opts.KeySize, opts.KeyHash.Standard()))
+	enc, err := encryptPoint(rand, pt, opts.Cipher,
+		Bytes(pass).Pbkdf2(salt, opts.KeyIter, opts.Cipher.KeySize(), opts.KeyHash.Standard()))
 	if err != nil {
 		return oracleKey{}, errors.WithMessage(err, "Error generating oracle key")
 	}
 
-	return oracleKey{oracleId, id, encPt, opts.KeyHash, salt, opts.KeyIter}, nil
+	return oracleKey{oracleId, id, enc, opts.KeyHash, salt, opts.KeyIter}, nil
 }
 
 // An oracle is used to protect a secret that may be shared amongst many actors.

@@ -107,7 +107,7 @@ func generateInvitation(rand io.Reader, d Domain, oracleLine line, domainKey Pri
 		return Invitation{}, errors.Wrapf(err, "Error signing certificate with key [%v]: %v", issuerKey.Public().Id(), cert)
 	}
 
-	pt, err := generatePoint(rand, oracleLine, d.oracleKeyOpts.KeySize)
+	pt, err := generatePoint(rand, oracleLine, d.oracleKeyOpts.Cipher.KeySize())
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Unable to generate invitation for trustee [%v] to join [%v]", trusteeKey.Id(), d.Id)
 	}

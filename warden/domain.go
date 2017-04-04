@@ -2,6 +2,10 @@ package warden
 
 import "github.com/pkg/errors"
 
+type DomainOptions struct {
+	KeyStrength int
+}
+
 type Domain struct {
 
 	// the identifier of the domain.

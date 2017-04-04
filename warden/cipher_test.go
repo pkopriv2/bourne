@@ -28,7 +28,7 @@ func TestEncrypt_AES_128_GCM(t *testing.T) {
 
 	raw, err := ct.Decrypt(key)
 	assert.Nil(t, err)
-	assert.Equal(t, []byte("msg"), raw)
+	assert.Equal(t, Bytes([]byte("msg")), raw)
 }
 
 // func TestAsymmetricEncryp_Simple(t *testing.T) {
