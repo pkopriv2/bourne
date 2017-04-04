@@ -67,8 +67,8 @@ func (s SymmetricCipher) String() string {
 //  * Mac
 type CipherText struct {
 	Cipher SymmetricCipher
-	Nonce  crypoBytes
-	Data   crypoBytes
+	Nonce  Bytes
+	Data   Bytes
 }
 
 // Runs the given symmetric encryption algorithm on the message using the key as the key.  Returns the resulting cipher text
@@ -91,7 +91,7 @@ func symmetricEncrypt(rand io.Reader, alg SymmetricCipher, key []byte, msg []byt
 	return CipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
 }
 
-func (c CipherText) Decrypt(key []byte) (crypoBytes, error) {
+func (c CipherText) Decrypt(key []byte) (Bytes, error) {
 	block, err := initBlockCipher(c.Cipher, key)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -142,7 +142,7 @@ type KeyExchange struct {
 	KeyAlg    KeyAlgorithm
 	KeyCipher SymmetricCipher
 	KeyHash   Hash
-	CipherKey crypoBytes
+	CipherKey Bytes
 }
 
 func generateKeyExchange(rand io.Reader, pub PublicKey, cipher SymmetricCipher, hash Hash) (KeyExchange, []byte, error) {

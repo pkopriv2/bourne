@@ -27,7 +27,7 @@ type Domain struct {
 }
 
 // Decrypts the domain oracle.  Requires *Encryption* trust
-func (d Domain) unlockOracle(s Session) (crypoBytes, line, error) {
+func (d Domain) unlockOracle(s Session) (Bytes, line, error) {
 	if err := Encryption.EnsureExceeded(d.lvl); err != nil {
 		return nil, line{}, errors.WithStack(err)
 	}
@@ -116,12 +116,12 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee strin
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for domain [%v]", trustee, d.Id)
 	}
 
-	domainSig, err := inv.Sign(s.rand, domainKey, SHA256)
+	domainSig, err := inv.Cert.Sign(s.rand, domainKey, SHA256)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error signing invitation with domain key: %v", inv)
 	}
 
-	issuerSig, err := inv.Sign(s.rand, issuerKey, SHA256)
+	issuerSig, err := inv.Cert.Sign(s.rand, issuerKey, SHA256)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error signing invitation with issuer key: %v", inv)
 	}

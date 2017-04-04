@@ -2,11 +2,6 @@ package warden
 
 import uuid "github.com/satori/go.uuid"
 
-type PagingOptions struct {
-	Beg int
-	End int
-}
-
 type Transport interface {
 
 	// Returns the subscriber's public key.

@@ -77,7 +77,7 @@ func generateOracleKey(rand io.Reader, oracleId string, id string, line line, pa
 	}
 
 	encPt, err := encryptPoint(rand, pt, opts.Cipher,
-		crypoBytes(pass).Pbkdf2(salt, opts.KeyIter, opts.KeySize, opts.KeyHash.Standard()))
+		Bytes(pass).Pbkdf2(salt, opts.KeyIter, opts.KeySize, opts.KeyHash.Standard()))
 	if err != nil {
 		return oracleKey{}, errors.WithMessage(err, "Error generating oracle key")
 	}
@@ -121,7 +121,7 @@ func (p oracle) Unlock(key oracleKey, pass []byte) ([]byte, line, error) {
 	if err != nil {
 		return nil, line{}, errors.WithStack(err)
 	}
-	return crypoBytes(ymxb.Bytes()).Pbkdf2(
+	return Bytes(ymxb.Bytes()).Pbkdf2(
 		p.derivSalt, p.derivIter, p.derivSize, p.derivHash.Standard()), ymxb, nil
 }
 
@@ -157,7 +157,7 @@ type oracleKey struct {
 
 func (p oracleKey) access(pass []byte) (point, error) {
 	pt, err := p.pt.Decrypt(
-		crypoBytes(pass).Pbkdf2(p.keySalt, p.keyIter, p.pt.Cipher.KeySize(), p.keyHash.Standard()))
+		Bytes(pass).Pbkdf2(p.keySalt, p.keyIter, p.pt.Cipher.KeySize(), p.keyHash.Standard()))
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}

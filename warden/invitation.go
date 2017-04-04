@@ -117,18 +117,13 @@ func generateInvitation(rand io.Reader, d Domain, oracleLine line, domainKey Pri
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error generating key exchange [%v,%v]", AES_128_GCM, SHA256)
 	}
-	defer crypoBytes(cipherKey).Destroy()
+	defer Bytes(cipherKey).Destroy()
 
 	encPt, err := encryptPoint(rand, pt, opts.ExchgCipher, cipherKey)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Unable to generate invitation for trustee [%v] to join [%v]", trusteeKey.Id(), d.Id)
 	}
 	return Invitation{uuid.NewV1(), cert, domainSig, issuerSig, exchg, encPt}, nil
-}
-
-// Return the byte representation of the invitation.  This *MUST* be totally deterministic!
-func (i Invitation) Bytes() []byte {
-	return nil
 }
 
 // Verifies that the signature matches the certificate contents.
@@ -143,14 +138,4 @@ func (c Invitation) extractPoint(rand io.Reader, priv PrivateKey) (point, error)
 		return point{}, errors.Wrapf(err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
 	}
 	return pt, nil
-}
-
-// Verifies that the signature matches the certificate contents.
-func (c Invitation) Verify(key PublicKey, signature Signature) error {
-	return nil
-}
-
-// Signs the certificate with the private key.
-func (c Invitation) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
-	return Signature{}, nil
 }

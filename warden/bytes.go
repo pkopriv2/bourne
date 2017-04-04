@@ -11,36 +11,36 @@ import (
 )
 
 // Useful cryptographic binary functions.
-type crypoBytes []byte
+type Bytes []byte
 
 // Zeroes the underlying byte array.  (Useful for deleting secret information)
-func (b crypoBytes) Destroy() {
+func (b Bytes) Destroy() {
 	for i := 0; i < len(b); i++ {
 		b[i] = 0
 	}
 }
 
 // Returns the length of the underlying array
-func (b crypoBytes) Size() int {
+func (b Bytes) Size() int {
 	return len(b)
 }
 
 // Returns a base64 representation of the array
-func (b crypoBytes) Base64() string {
+func (b Bytes) Base64() string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
 // Returns a base32 representation of the array
-func (b crypoBytes) Base32() string {
+func (b Bytes) Base32() string {
 	return base32.StdEncoding.EncodeToString(b)
 }
 
-func (b crypoBytes) Hex() string {
+func (b Bytes) Hex() string {
 	return hex.Dump(b)
 }
 
 // Returns a string representation of the array
-func (b crypoBytes) String() string {
+func (b Bytes) String() string {
 	base64 := b.Base64()
 
 	if b.Size() <= 32 {
@@ -51,12 +51,12 @@ func (b crypoBytes) String() string {
 }
 
 // Returns a new byte array for use as a cipher key
-func (b crypoBytes) Hash(h Hash) (crypoBytes, error) {
+func (b Bytes) Hash(h Hash) (Bytes, error) {
 	return h.Hash(b)
 }
 
 // Returns a new byte array for use as a cipher key
-func (b crypoBytes) Pbkdf2(salt []byte, iter int, size int, h hash.Hash) crypoBytes {
+func (b Bytes) Pbkdf2(salt []byte, iter int, size int, h hash.Hash) Bytes {
 	return pbkdf2.Key(b, salt, iter, size, func() hash.Hash {
 		return h
 	})

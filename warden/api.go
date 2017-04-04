@@ -8,6 +8,12 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+type PagingOptions struct {
+	Beg int
+	End int
+}
+
+
 // Useful references:
 //
 // * https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
@@ -175,68 +181,6 @@ type KeyPad interface {
 	// Note: The public key is only used as a means of performing a simple account
 	// lookup and is not used to verify the signature.
 	WithSignature(signer Signer) (Session, error)
-}
-
-// Trust levels dictate the terms for what actions a user can take on a domain.
-type LevelOfTrust int
-
-func (l LevelOfTrust) Greater(o LevelOfTrust) bool {
-	return l > o
-}
-
-func (l LevelOfTrust) EnsureExceeded(o LevelOfTrust) error {
-	if l > o {
-		return newLevelOfTrustError(l, o)
-	}
-	return nil
-}
-
-const (
-	Verify LevelOfTrust = iota + 10
-	Encryption
-	Sign
-	Invite
-	Revoke
-	Publish
-	Destroy
-)
-
-func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
-	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
-}
-
-// A certificate is a receipt that trust has been established.
-type Certificate struct {
-	Id uuid.UUID
-
-	Domain  string
-	Issuer  string
-	Trustee string
-
-	Level LevelOfTrust
-
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-}
-
-func newCertificate(domain string, issuer string, trustee string, lvl LevelOfTrust, ttl time.Duration) Certificate {
-	now := time.Now()
-	return Certificate{uuid.NewV1(), domain, issuer, trustee, lvl, now, now.Add(ttl)}
-}
-
-// Verifies that the signature matches the certificate contents.
-func (c Certificate) Verify(key PublicKey, signature Signature) error {
-	return nil
-}
-
-// Signs the certificate with the private key.
-func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
-	return Signature{}, nil
-}
-
-// Returns a consistent byte representation of a certificate
-func (c Certificate) Bytes() []byte {
-	return nil
 }
 
 type Document struct {
