@@ -1,6 +1,8 @@
 package warden
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/rsa"
 	"io"
 
@@ -14,12 +16,16 @@ type rsaPublicKey struct {
 	raw *rsa.PublicKey
 }
 
-func (r *rsaPublicKey) Id() string {
-	return ""
-}
-
 func (r *rsaPublicKey) Algorithm() KeyAlgorithm {
 	return RSA
+}
+
+func (r *rsaPublicKey) Id() string {
+	hash, err := Bytes(r.StreamBytes()).Hash(SHA1)
+	if err != nil {
+		panic(err)
+	}
+	return hash.Base64()
 }
 
 func (r *rsaPublicKey) Verify(hash Hash, msg []byte, sig []byte) error {
@@ -50,12 +56,24 @@ func (r *rsaPublicKey) Bytes() []byte {
 	return scribe.Write(r).Bytes()
 }
 
+func (r *rsaPublicKey) Stream(w scribe.StreamWriter) {
+	w.PutBytes(r.raw.N.Bytes())
+	w.PutUint64(uint64(r.raw.E))
+}
+
+func (r *rsaPublicKey) StreamBytes() []byte {
+	buf := &bytes.Buffer{}
+	w := scribe.NewStreamWriter(bufio.NewWriter(buf))
+	r.Stream(w)
+	w.Flush()
+	return buf.Bytes()
+}
+
 func parseRsaPublicKey(bytes []byte) (*rsaPublicKey, error) {
 	msg, err := scribe.Parse(bytes)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
 	return readRsaPublicKey(msg)
 }
 
@@ -69,6 +87,14 @@ func readRsaPublicKey(r scribe.Reader) (k *rsaPublicKey, e error) {
 // Private key implementation
 type rsaPrivateKey struct {
 	raw *rsa.PrivateKey
+}
+
+func GenRsaKey(rand io.Reader, bits int) (*rsaPrivateKey, error) {
+	key, err := rsa.GenerateKey(rand, bits)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Error generating private key [%v]", bits)
+	}
+	return &rsaPrivateKey{key}, nil
 }
 
 func (r *rsaPrivateKey) Algorithm() KeyAlgorithm {

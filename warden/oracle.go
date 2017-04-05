@@ -6,31 +6,21 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Options for generating an oracle
+// Options for generating an oracle.  These options will determine the
+// strength of the oracle as well as the strength of any accessors to the
+// oracle.
 type oracleOptions struct {
-	Strength   int
-	DerivHash  Hash
-	DerivIter  int
-	DeriveSize int
+	// sharing options
+	ShareCipher SymmetricCipher
+	ShareHash   Hash
+	ShareIter   int // used for key derivations only
+
+	// signature options
+	SigHash Hash
 }
 
 func buildOracleOptions(fns ...func(*oracleOptions)) oracleOptions {
-	ret := oracleOptions{bits_256, SHA256, 1024, 32}
-	for _, fn := range fns {
-		fn(&ret)
-	}
-	return ret
-}
-
-// Options for generating an oracle key
-type oracleKeyOptions struct {
-	Cipher  SymmetricCipher
-	KeyHash Hash
-	KeyIter int
-}
-
-func buildOracleKeyOptions(fns ...func(*oracleKeyOptions)) oracleKeyOptions {
-	ret := oracleKeyOptions{AES_256_GCM, SHA256, 1024}
+	ret := oracleOptions{AES_256_GCM, SHA256, 1024, SHA256}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -42,46 +32,45 @@ func buildOracleKeyOptions(fns ...func(*oracleKeyOptions)) oracleKeyOptions {
 func generateOracle(rand io.Reader, id string, fns ...func(*oracleOptions)) (oracle, line, error) {
 	opts := buildOracleOptions(fns...)
 
-	ret, err := generateLine(rand, opts.Strength)
+	size := opts.ShareCipher.KeySize()
+
+	ret, err := generateLine(rand, size)
 	if err != nil {
-		return oracle{}, line{}, errors.Wrapf(err, "Error generating curve of strength [%v]", opts.Strength)
+		return oracle{}, line{}, errors.Wrapf(err, "Error generating curve of strength [%v]", size)
 	}
 
-	salt, err := generateRandomBytes(rand, opts.Strength)
+	pub, err := generatePoint(rand, ret, size)
 	if err != nil {
-		return oracle{}, line{}, errors.Wrapf(err, "Error generating salt of strength [%v]", opts.Strength)
+		return oracle{}, line{}, errors.Wrapf(err, "Error generating point of strength [%v]", size)
 	}
 
-	pub, err := generatePoint(rand, ret, opts.Strength)
-	if err != nil {
-		return oracle{}, line{}, errors.Wrapf(err, "Error generating point of strength [%v]", opts.Strength)
-	}
-
-	return oracle{id, pub, opts.Strength, opts.DerivHash, salt, opts.DerivIter}, ret, nil
+	return oracle{id, pub, opts}, ret, nil
 }
 
 // Generates a new key for the oracle whose secret was derived from line.  Only the given pass
 // may unlock the oracle key.
-func generateOracleKey(rand io.Reader, oracleId string, id string, line line, pass []byte, opts oracleKeyOptions) (oracleKey, error) {
-	pt, err := generatePoint(rand, line, opts.Cipher.KeySize())
+func generateOracleKey(rand io.Reader, oid string, id string, line line, pass []byte, opts oracleOptions) (oracleKey, error) {
+	size := opts.ShareCipher.KeySize()
+
+	pt, err := generatePoint(rand, line, size)
 	if err != nil {
-		return oracleKey{}, errors.Wrapf(err, "Error generating point of strength [%v]", opts.Cipher.KeySize())
+		return oracleKey{}, errors.Wrapf(err, "Error generating point of strength [%v]", size)
 	}
 
 	defer pt.Destroy()
 
-	salt, err := generateRandomBytes(rand, opts.Cipher.KeySize())
+	salt, err := generateRandomBytes(rand, size)
 	if err != nil {
-		return oracleKey{}, errors.Wrapf(err, "Error generating salt of strength [%v]", opts.Cipher.KeySize())
+		return oracleKey{}, errors.Wrapf(err, "Error generating salt of strength [%v]", size)
 	}
 
-	enc, err := encryptPoint(rand, pt, opts.Cipher,
-		Bytes(pass).Pbkdf2(salt, opts.KeyIter, opts.Cipher.KeySize(), opts.KeyHash.Standard()))
+	enc, err := encryptPoint(rand, pt, opts.ShareCipher,
+		Bytes(pass).Pbkdf2(salt, opts.ShareIter, size, opts.ShareHash.Standard()))
 	if err != nil {
 		return oracleKey{}, errors.WithMessage(err, "Error generating oracle key")
 	}
 
-	return oracleKey{oracleId, id, enc, opts.KeyHash, salt, opts.KeyIter}, nil
+	return oracleKey{oid, id, enc, opts.ShareHash, salt, opts.ShareIter}, nil
 }
 
 // An oracle is used to protect a secret that may be shared amongst many actors.
@@ -107,25 +96,16 @@ type oracle struct {
 	// The public point on the secret curve
 	pt point
 
-	// The seed key derivation options
-	derivSize int
-	derivHash Hash
-	derivSalt []byte
-	derivIter int
-}
-
-// Decrypts the oracle, returning a hash of the underlying secret.
-func (p oracle) Unlock(key oracleKey, pass []byte) ([]byte, line, error) {
-	ymxb, err := p.DeriveLine(key, pass)
-	if err != nil {
-		return nil, line{}, errors.WithStack(err)
-	}
-	return Bytes(ymxb.Bytes()).Pbkdf2(
-		p.derivSalt, p.derivIter, p.derivSize, p.derivHash.Standard()), ymxb, nil
+	// key options.  In order to share in the oracle, must agree to these
+	opts oracleOptions
 }
 
 // Decrypts the oracle, returning a hash of the underlying secret.
 func (p oracle) DeriveLine(key oracleKey, pass []byte) (line, error) {
+	if key.oid != p.Id {
+		return line{}, errors.Wrapf(TrustError, "Cannot use that key [%v] to open oracle [%v]", key.Id, p.Id)
+	}
+
 	pt, err := key.access(pass)
 	if err != nil {
 		return line{}, errors.WithStack(err)
@@ -142,8 +122,8 @@ func (p oracle) DeriveLine(key oracleKey, pass []byte) (line, error) {
 // An oracle key is required to unlock an oracle.  It contains a point on
 // the corresponding oracle's secret line.
 type oracleKey struct {
-	OracleId string
-	Id       string
+	oid string
+	Id  string
 
 	// the secure point.  (Must be paired with another point to be useful)
 	pt securePoint

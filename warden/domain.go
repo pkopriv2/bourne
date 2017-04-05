@@ -20,9 +20,6 @@ type Domain struct {
 	// the encrypted oracle. (Only available for trusted users)
 	oracle oracle
 
-	// the strength requirement of the domain.
-	oracleKeyOpts oracleKeyOptions
-
 	// the encrypted oracle. (Only available for trusted users)
 	oracleKey oracleKey
 
@@ -31,11 +28,12 @@ type Domain struct {
 }
 
 // Decrypts the domain oracle.  Requires *Encryption* trust
-func (d Domain) unlockOracle(s Session) (Bytes, line, error) {
+func (d Domain) unlockOracle(s Session) (line, error) {
 	if err := Encryption.EnsureExceeded(d.lvl); err != nil {
-		return nil, line{}, errors.WithStack(err)
+		return line{}, errors.WithStack(err)
 	}
-	return d.oracle.Unlock(d.oracleKey, s.seed)
+
+	return d.oracle.DeriveLine(d.oracleKey, s.oracle)
 }
 
 // Loads all the trust certificates that have been issued by this domain.
@@ -82,7 +80,7 @@ func (d Domain) RevokeCertificate(cancel <-chan struct{}, s Session, subscriber 
 // Issues an invitation to the given key.
 func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee string, opts ...func(*InvitationOptions)) (Invitation, error) {
 	if err := Invite.EnsureExceeded(d.lvl); err != nil {
-		return Invitation{}, errors.WithStack(err)
+		return Invitation{}, newLevelOfTrustError(Invite, d.lvl)
 	}
 
 	auth, err := s.auth(cancel)
@@ -90,15 +88,14 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee strin
 		return Invitation{}, errors.WithStack(err)
 	}
 
-	seed, line, err := d.unlockOracle(s)
+	line, err := d.unlockOracle(s)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Unable to unlock domain oracle [%v]", d.Id)
 	}
 
-	defer seed.Destroy()
 	defer line.Destroy()
 
-	domainKey, err := d.signingKey.Decrypt(seed)
+	domainKey, err := d.signingKey.Decrypt(line.Bytes())
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error retrieving domain signing key [%v]", d.Id)
 	}
@@ -115,7 +112,7 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee strin
 		return Invitation{}, errors.Wrapf(err, "Error retrieving public key [%v]", trustee)
 	}
 
-	inv, err := generateInvitation(s.rand, d, line, domainKey, issuerKey, trusteeKey, opts...)
+	inv, err := generateInvitation(s.rand, line, domainKey, issuerKey, trusteeKey, opts...)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for domain [%v]", trustee, d.Id)
 	}

@@ -11,7 +11,7 @@ import (
 func TestOracleKey_GenerateAndAccess(t *testing.T) {
 	line := line{big.NewInt(1), big.NewInt(0)}
 
-	key, err := generateOracleKey(rand.Reader, "id", "alias", line, []byte("pass"), buildOracleKeyOptions())
+	key, err := generateOracleKey(rand.Reader, "id", "alias", line, []byte("pass"), buildOracleOptions())
 	assert.Nil(t, err)
 
 	pt, err := key.access([]byte("pass"))
@@ -23,7 +23,7 @@ func TestOracle_GenerateAndAccess(t *testing.T) {
 	oracle, line, err := generateOracle(rand.Reader, "id")
 	assert.Nil(t, err)
 
-	key, err := generateOracleKey(rand.Reader, "id", "alias", line, []byte("pass"), buildOracleKeyOptions())
+	key, err := generateOracleKey(rand.Reader, "id", "alias", line, []byte("pass"), oracle.opts)
 	assert.Nil(t, err)
 
 	act, err := oracle.DeriveLine(key, []byte("pass"))

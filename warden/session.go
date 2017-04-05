@@ -22,10 +22,8 @@ type Session struct {
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
 
-	// the hashed session owner's seed.  This isn't actually usable on its own.
-	// It must be paired with every piece of data that this user attempts to
-	// decrypt.
-	seed []byte
+	// the subcriber's oracle/seed.
+	oracle []byte
 }
 
 func (s *Session) auth(cancel <-chan struct{}) (token, error) {
@@ -46,7 +44,7 @@ func (s *Session) MyKey() PublicKey {
 
 // Returns the signing key associated with this session.
 func (s *Session) mySigningKey() (PrivateKey, error) {
-	return s.sub.Decrypt(s.seed)
+	return s.sub.Decrypt(s.oracle)
 }
 
 // Returns the personal encryption seed of this subscription.  The seed is actually
@@ -63,8 +61,8 @@ func (s *Session) mySigningKey() (PrivateKey, error) {
 // the system itself is never in danger because the risk has been spread over the
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
-func (s *Session) mySeed() []byte {
-	return s.seed
+func (s *Session) myOracle() []byte {
+	return s.oracle
 }
 
 // A signing key is an encrypted private key.  It may only be decrypted

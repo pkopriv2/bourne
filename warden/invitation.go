@@ -9,15 +9,13 @@ import (
 )
 
 type InvitationOptions struct {
-	ExchgCipher SymmetricCipher
-	Hash        Hash
-	Lvl         LevelOfTrust
-	Ttl         time.Duration
-	SigHash     Hash
+	Lvl        LevelOfTrust
+	Expiration time.Duration
+	ShareOpts  oracleOptions
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
-	def := InvitationOptions{AES_128_GCM, SHA256, Encryption, 365 * 24 * time.Hour, SHA256}
+	def := InvitationOptions{Encryption, 365 * 24 * time.Hour, buildOracleOptions()}
 	for _, fn := range opts {
 		fn(&def)
 	}
@@ -62,7 +60,7 @@ func acceptInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
 	}
 	defer line.Destroy()
 
-	key, err := generateOracleKey(s.rand, i.Cert.Domain, i.Cert.Trustee, line, s.seed, domain.oracleKeyOpts)
+	key, err := generateOracleKey(s.rand, i.Cert.Domain, i.Cert.Trustee, line, s.oracle, domain.oracle.opts)
 	if err != nil {
 		return errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
 	}
@@ -87,43 +85,53 @@ type Invitation struct {
 	// The issuer signature.
 	IssuerSig Signature
 
-	// The embedded curve information (internal only)
+	// The embedded curve information
 	key KeyExchange
 	pt  securePoint
 }
 
-func generateInvitation(rand io.Reader, d Domain, oracleLine line, domainKey PrivateKey, issuerKey PrivateKey, trusteeKey PublicKey, fns ...func(*InvitationOptions)) (Invitation, error) {
+func generateInvitation(rand io.Reader, line line, domainKey PrivateKey, issuerKey PrivateKey, trusteeKey PublicKey, fns ...func(*InvitationOptions)) (Invitation, error) {
 	opts := buildInvitationOptions(fns...)
 
-	cert := newCertificate(d.Id, issuerKey.Public().Id(), trusteeKey.Id(), opts.Lvl, opts.Ttl)
+	cert := newCertificate(
+		domainKey.Public().Id(),
+		issuerKey.Public().Id(),
+		trusteeKey.Id(),
+		opts.Lvl,
+		opts.Expiration)
 
-	domainSig, err := cert.Sign(rand, domainKey, opts.SigHash)
+	domainSig, err := cert.Sign(rand, domainKey, opts.ShareOpts.SigHash)
 	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Error signing certificate with key [%v]: %v", domainKey.Public().Id(), cert)
+		return Invitation{}, errors.Wrapf(
+			err, "Error signing certificate with key [%v]: %v", cert.Domain, cert)
 	}
 
-	issuerSig, err := cert.Sign(rand, issuerKey, opts.SigHash)
+	issuerSig, err := cert.Sign(rand, issuerKey, opts.ShareOpts.SigHash)
 	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Error signing certificate with key [%v]: %v", issuerKey.Public().Id(), cert)
+		return Invitation{}, errors.Wrapf(
+			err, "Error signing certificate with key [%v]: %v", cert.Domain, cert)
 	}
 
-	pt, err := generatePoint(rand, oracleLine, d.oracleKeyOpts.Cipher.KeySize())
+	rawPt, err := generatePoint(rand, line, opts.ShareOpts.ShareCipher.KeySize())
 	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Unable to generate invitation for trustee [%v] to join [%v]", trusteeKey.Id(), d.Id)
+		return Invitation{}, errors.Wrapf(
+			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Domain)
 	}
-	defer pt.Destroy()
+	defer rawPt.Destroy()
 
-	exchg, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.ExchgCipher, opts.Hash)
+	asymKey, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.ShareOpts.ShareCipher, opts.ShareOpts.ShareHash)
 	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Error generating key exchange [%v,%v]", AES_128_GCM, SHA256)
+		return Invitation{}, errors.Wrapf(
+			err, "Error generating key exchange [%v,%v]", AES_128_GCM, SHA256)
 	}
 	defer Bytes(cipherKey).Destroy()
 
-	encPt, err := encryptPoint(rand, pt, opts.ExchgCipher, cipherKey)
+	encPt, err := encryptPoint(rand, rawPt, opts.ShareOpts.ShareCipher, cipherKey)
 	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Unable to generate invitation for trustee [%v] to join [%v]", trusteeKey.Id(), d.Id)
+		return Invitation{}, errors.Wrapf(
+			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Domain)
 	}
-	return Invitation{uuid.NewV1(), cert, domainSig, issuerSig, exchg, encPt}, nil
+	return Invitation{uuid.NewV1(), cert, domainSig, issuerSig, asymKey, encPt}, nil
 }
 
 // Verifies that the signature matches the certificate contents.

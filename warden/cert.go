@@ -64,7 +64,11 @@ func (c Certificate) Verify(key PublicKey, sig Signature) error {
 // Signs the certificate with the private key.
 func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
 	sig, err := key.Sign(rand, hash, c.Bytes())
-	return sig, errors.Wrapf(err, "Error signing certificate [%v]", c)
+	if err != nil {
+		return Signature{}, errors.Wrapf(err, "Error signing certificate [%v]", c)
+
+	}
+	return sig, nil
 }
 
 // Returns a consistent byte representation of a certificate

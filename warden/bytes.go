@@ -4,6 +4,7 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"hash"
 
@@ -35,8 +36,15 @@ func (b Bytes) Base32() string {
 	return base32.StdEncoding.EncodeToString(b)
 }
 
+// Returns a base32 representation of the array
+func (b Bytes) Pem() string {
+	blk := &pem.Block{Type: "Bytes", Bytes: b}
+	return Bytes(pem.EncodeToMemory(blk)).Hex()
+}
+
+
 func (b Bytes) Hex() string {
-	return hex.Dump(b)
+	return hex.EncodeToString(b)
 }
 
 // Returns a string representation of the array
