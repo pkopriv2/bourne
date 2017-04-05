@@ -8,10 +8,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-type PagingOptions struct {
-	Beg int
-	End int
-}
+// FIXMES:
+//	* Get off gob encoding/decoding so we can easily support other languages.
 
 
 // Useful references:
@@ -25,6 +23,21 @@ var (
 	DomainInvariantError = errors.New("Warden:DomainInvariantError")
 	TrustError           = errors.New("Warden:TrustError")
 )
+
+// The paging options
+type PagingOptions struct {
+	Beg int
+	End int
+}
+
+// Constructs paging options.
+func buildPagingOptions(fns ... func(p *PagingOptions)) PagingOptions {
+	opts := PagingOptions{0, 256}
+	for _, fn := range fns {
+		fn(&opts)
+	}
+	return opts
+}
 
 // Registers a new subscription with the trust service.
 func Subscribe(addr string) (KeyPad, error) {
@@ -42,7 +55,7 @@ func PublishMyKey(session Session) error {
 }
 
 // Lists a subsection of public key ids from [beg,end).
-func ListPublishedKeys(session Session, beg int, end int) ([]string, error) {
+func ListPublishedKeys(cancel <-chan struct{}, session Session, fns ...func(*PagingOptions)) ([]string, error) {
 	return nil, nil
 }
 
@@ -58,7 +71,7 @@ func CreateDomain(session Session) (Domain, error) {
 }
 
 // Lists all the domains created/trusted by the session's owner.
-func ListPrivateDomains(session Session, beg int, end int) ([]Domain, error) {
+func ListPrivateDomains(session Session, fns ...func(*PagingOptions)) ([]Domain, error) {
 	return nil, nil
 }
 
@@ -68,7 +81,7 @@ func PublishDomain(session Session, id string, name string) error {
 }
 
 // Lists all the domains that have been published on the main index.
-func ListPublishedDomains(session Session, beg int, end int) ([]Domain, error) {
+func ListPublishedDomains(session Session, fns ...func(*PagingOptions)) ([]Domain, error) {
 	return nil, nil
 }
 
@@ -91,12 +104,37 @@ func ListInvitations(session Session) ([]Invitation, error) {
 
 // Accepts the invitation with the given id.  Returns an error if the
 // acceptance fails for any reason.
-func AcceptInvite(session Session, id uuid.UUID) error {
+func AcceptInvite(s Session, id uuid.UUID) error {
 	return nil
 }
 
 // Verifies the contents of an invitation.
-func VerifyInvitation(session Session, invite Invitation) error {
+func VerifyInvitation(cancel <-chan struct{}, session Session, invite Invitation) error {
+	auth, err := session.auth(cancel)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	domainKey, err := session.net.LoadPublicKey(cancel, auth, invite.Cert.Domain)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	issuerKey, err := session.net.LoadPublicKey(cancel, auth, invite.Cert.Issuer)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := invite.Cert.Verify(domainKey, invite.DomainSig); err != nil {
+		return errors.Wrapf(
+			err, "Error verify certificate with domain key [%v]", invite.Cert.Domain)
+	}
+
+	if err := invite.Cert.Verify(issuerKey, invite.IssuerSig); err != nil {
+		return errors.Wrapf(
+			err, "Error verify certificate with domain key [%v]", invite.Cert.Issuer)
+	}
+
 	return nil
 }
 

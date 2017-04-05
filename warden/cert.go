@@ -79,20 +79,12 @@ func newCertificate(domain string, issuer string, trustee string, lvl LevelOfTru
 
 // Verifies that the signature matches the certificate contents.
 func (c Certificate) Verify(key PublicKey, sig Signature) error {
-	bytes, err := c.Format()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return sig.Verify(key, bytes)
+	return sig.Verify(key, c.Format())
 }
 
 // Signs the certificate with the private key.
 func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
-	bytes, err := c.Format()
-	if err != nil {
-		return Signature{}, errors.WithStack(err)
-	}
-	sig, err := key.Sign(rand, hash, bytes)
+	sig, err := key.Sign(rand, hash, c.Format())
 	if err != nil {
 		return Signature{}, errors.Wrapf(err, "Error signing certificate [%v]", c)
 	}
@@ -100,13 +92,10 @@ func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature,
 }
 
 // Returns a consistent byte representation of a certificate
-func (c Certificate) Format() ([]byte, error) {
+func (c Certificate) Format() []byte {
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(&c); err != nil {
-		return nil, errors.WithStack(err)
-	}
-	return buf.Bytes(), nil
+	gob.NewEncoder(&buf).Encode(&c)
+	return buf.Bytes()
 }
 
 // Returns a consistent string representation of a certificate

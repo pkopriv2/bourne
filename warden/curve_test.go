@@ -32,7 +32,7 @@ func TestLine00(t *testing.T) {
 	assert.Equal(t, big.NewInt(0), line.Height(big.NewInt(0)))
 	assert.Equal(t, point{big.NewInt(0), big.NewInt(0)}, line.Point(big.NewInt(0)))
 
-	parsed, err := parseLineBytes(line.Bytes())
+	parsed, err := parseLineBytes(line.Format())
 	assert.Nil(t, err)
 	assert.Equal(t, line, parsed)
 }

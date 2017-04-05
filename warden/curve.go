@@ -1,14 +1,13 @@
 package warden
 
 import (
-	"bufio"
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"math/big"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/scribe"
 )
 
 // TODO: Generalize this for curves of n-degrees. (ie: lines, parabolas, cubics, quartics, etc...)
@@ -117,26 +116,21 @@ func (l line) String() string {
 	return fmt.Sprintf("Line(m=%v,y-intercept=%v)", l.Slope, l.Intercept)
 }
 
-// Cannot use typical field oriented approaches here.  Must be totally deterministic impl
-func (l line) Bytes() []byte {
-	buf := &bytes.Buffer{}
-	writer := scribe.NewStreamWriter(bufio.NewWriter(buf))
-	writer.PutBytes(l.Slope.Bytes())
-	writer.PutBytes(l.Intercept.Bytes())
-	writer.Flush()
+// consistent byte representation of line
+func (l line) Format() []byte {
+	var buf bytes.Buffer
+	gob.NewEncoder(&buf).Encode(&l)
 	return buf.Bytes()
 }
 
-func parseLineBytes(raw []byte) (line, error) {
-	reader := scribe.NewStreamReader(bufio.NewReader(bytes.NewBuffer(raw)))
-	sBytes := reader.ReadBytes()
-	iBytes := reader.ReadBytes()
-	if err := reader.Err(); err != nil {
-		return line{}, errors.WithStack(err)
-	}
+// consistent byte representation of line
+func (l line) Bytes() []byte {
+	return l.Format()
+}
 
-	slope, intercept := new(big.Int), new(big.Int)
-	return line{slope.SetBytes(sBytes), intercept.SetBytes(iBytes)}, nil
+func parseLineBytes(raw []byte) (l line, e error) {
+	e = gob.NewDecoder(bytes.NewBuffer(raw)).Decode(&l)
+	return
 }
 
 // A vector representation of a point in 2-dimensional space
@@ -172,25 +166,16 @@ func (p point) String() string {
 	return fmt.Sprintf("Point(%v,%v)", p.X, p.Y)
 }
 
+// consistent byte representation of line
 func (p point) Bytes() []byte {
-	buf := &bytes.Buffer{}
-	writer := scribe.NewStreamWriter(bufio.NewWriter(buf))
-	writer.PutBytes(p.X.Bytes())
-	writer.PutBytes(p.Y.Bytes())
-	writer.Flush()
+	var buf bytes.Buffer
+	gob.NewEncoder(&buf).Encode(&p)
 	return buf.Bytes()
 }
 
-func parsePointBytes(raw []byte) (point, error) {
-	reader := scribe.NewStreamReader(bufio.NewReader(bytes.NewBuffer(raw)))
-	xBytes := reader.ReadBytes()
-	yBytes := reader.ReadBytes()
-	if err := reader.Err(); err != nil {
-		return point{}, errors.WithStack(err)
-	}
-
-	x, y := new(big.Int), new(big.Int)
-	return point{x.SetBytes(xBytes), y.SetBytes(yBytes)}, nil
+func parsePointBytes(raw []byte) (p point, e error) {
+	e = gob.NewDecoder(bytes.NewBuffer(raw)).Decode(&p)
+	return
 }
 
 func deriveSlope(p1, p2 point) *big.Int {

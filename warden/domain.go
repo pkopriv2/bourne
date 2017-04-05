@@ -95,7 +95,7 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee strin
 
 	defer line.Destroy()
 
-	domainKey, err := d.signingKey.Decrypt(line.Bytes())
+	domainKey, err := d.signingKey.Decrypt(line.Format())
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error retrieving domain signing key [%v]", d.Id)
 	}

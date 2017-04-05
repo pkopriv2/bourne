@@ -22,45 +22,6 @@ func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions 
 	return def
 }
 
-func verifyInvitation(i Invitation, domainKey PublicKey, issuerKey PublicKey) error {
-	if err := i.Cert.Verify(domainKey, i.DomainSig); err != nil {
-		return errors.WithStack(err)
-	}
-	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
-}
-
-func acceptInvitation(rand io.Reader,
-	i Invitation,
-	o oracle,
-	trusteeKey PrivateKey,
-	trusteeOracle []byte,
-	opts oracleOptions) (oracleKey, error) {
-
-	pt, err := i.extractPoint(rand, trusteeKey)
-	if err != nil {
-		return oracleKey{},
-			errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
-	}
-	defer pt.Destroy()
-
-	line, err := pt.Derive(o.pt)
-	if err != nil {
-		return oracleKey{},
-			errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", i.Cert.Domain)
-	}
-	defer line.Destroy()
-
-	key, err := generateOracleKey(rand, i.Cert.Domain, i.Cert.Trustee, line, trusteeOracle, opts)
-	if err != nil {
-		return oracleKey{},
-			errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
-	}
-	return key, nil
-}
-
 // An invitation is a cryptographically secured message asking the recipient to share in the
 // management of a domain. The invitation may only be accepted by the intended recipient.
 // These technically can be shared publicly, but exposure should be limited (typically only the
@@ -130,6 +91,48 @@ func generateInvitation(rand io.Reader, line line,
 	}
 	return Invitation{uuid.NewV1(), cert, domainSig, issuerSig, asymKey, encPt}, nil
 }
+
+// Verifies an invitation's signatures are valid.
+func verifyInvitation(i Invitation, domainKey PublicKey, issuerKey PublicKey) error {
+	if err := i.Cert.Verify(domainKey, i.DomainSig); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+// Accepts an invitation and returns an oracle key that can be registered.
+func acceptInvitation(rand io.Reader,
+	i Invitation,
+	o oracle,
+	trusteeKey PrivateKey,
+	trusteeOracle []byte,
+	opts oracleOptions) (oracleKey, error) {
+
+	pt, err := i.extractPoint(rand, trusteeKey)
+	if err != nil {
+		return oracleKey{},
+			errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
+	}
+	defer pt.Destroy()
+
+	line, err := pt.Derive(o.pt)
+	if err != nil {
+		return oracleKey{},
+			errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", i.Cert.Domain)
+	}
+	defer line.Destroy()
+
+	key, err := generateOracleKey(rand, i.Cert.Domain, i.Cert.Trustee, line, trusteeOracle, opts)
+	if err != nil {
+		return oracleKey{},
+			errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
+	}
+	return key, nil
+}
+
 
 // Verifies that the signature matches the certificate contents.
 func (c Invitation) extractPoint(rand io.Reader, priv PrivateKey) (point, error) {

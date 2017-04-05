@@ -2,6 +2,10 @@ package warden
 
 import uuid "github.com/satori/go.uuid"
 
+type SubscriberTransport interface {
+
+}
+
 type Transport interface {
 
 	// Returns the subscriber's public key.
@@ -12,6 +16,9 @@ type Transport interface {
 
 	// Returns the signing key for the owner of the token.
 	LoadingSigningKey(cancel <-chan struct{}, a token) (SigningKey, error)
+
+	// Returns the invitation.
+	LoadInvitation(cancel <-chan struct{}, a token, id uuid.UUID) (Invitation, bool, error)
 
 	// Returns the domain's public key.
 	LoadDomainPublicKey(cancel <-chan struct{}, a token, domainKey string) (PublicKey, error)

@@ -458,7 +458,7 @@ func (s lockDat) Open(tx *bolt.Tx, code string, pass []byte) ([]byte, line, erro
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)
 	}
 
-	plain, err := cipherText.Decrypt(Bytes(curve.Bytes()).Pbkdf2(s.salt, s.iter, cipherText.Cipher.KeySize(), sha256.New()))
+	plain, err := cipherText.Decrypt(Bytes(curve.Format()).Pbkdf2(s.salt, s.iter, cipherText.Cipher.KeySize(), sha256.New()))
 	if err != nil {
 		curve.Destroy()
 		return nil, line{}, errors.Wrapf(err, "Error opening lock with access code [%v@%v]", code, s.id)
