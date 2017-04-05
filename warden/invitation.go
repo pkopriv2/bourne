@@ -22,51 +22,43 @@ func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions 
 	return def
 }
 
-func acceptInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
-	priv, err := s.mySigningKey()
-	if err != nil {
-		return errors.Wrapf(err, "Unable to retrieve session key [%v]", s.MyId())
+func verifyInvitation(i Invitation, domainKey PublicKey, issuerKey PublicKey) error {
+	if err := i.Cert.Verify(domainKey, i.DomainSig); err != nil {
+		return errors.WithStack(err)
 	}
-	defer priv.Destroy()
-
-	sig, err := i.Cert.Sign(s.rand, priv, SHA256)
-	if err != nil {
-		return errors.Wrapf(err, "Error signing certificate: ", i.Cert)
+	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
+		return errors.WithStack(err)
 	}
+	return nil
+}
 
-	pt, err := i.extractPoint(s.rand, priv)
+func acceptInvitation(rand io.Reader,
+	i Invitation,
+	o oracle,
+	trusteeKey PrivateKey,
+	trusteeOracle []byte,
+	opts oracleOptions) (oracleKey, error) {
+
+	pt, err := i.extractPoint(rand, trusteeKey)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
+		return oracleKey{},
+			errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
 	}
 	defer pt.Destroy()
 
-	domain, ok, err := LoadDomain(s, i.Cert.Domain)
+	line, err := pt.Derive(o.pt)
 	if err != nil {
-		return errors.Wrapf(err, "Err obtaining auth token [%v]", s.MyId())
-	}
-
-	if !ok {
-		return errors.Wrapf(DomainInvariantError, "No such domain [%v]", i.Cert.Domain)
-	}
-
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return errors.Wrapf(err, "Err obtaining auth token [%v]", s.MyId())
-	}
-
-	line, err := pt.Derive(domain.oracle.pt)
-	if err != nil {
-		return errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", s.MyId(), i.Cert.Domain)
+		return oracleKey{},
+			errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", i.Cert.Domain)
 	}
 	defer line.Destroy()
 
-	key, err := generateOracleKey(s.rand, i.Cert.Domain, i.Cert.Trustee, line, s.oracle, domain.oracle.opts)
+	key, err := generateOracleKey(rand, i.Cert.Domain, i.Cert.Trustee, line, trusteeOracle, opts)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
+		return oracleKey{},
+			errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
 	}
-
-	err = s.net.RegisterCertificate(cancel, auth, i.Cert, i.DomainSig, i.IssuerSig, sig, key)
-	return errors.Wrapf(err, "Unable to register certificate [%v]", i.Cert)
+	return key, nil
 }
 
 // An invitation is a cryptographically secured message asking the recipient to share in the
@@ -90,7 +82,12 @@ type Invitation struct {
 	pt  securePoint
 }
 
-func generateInvitation(rand io.Reader, line line, domainKey PrivateKey, issuerKey PrivateKey, trusteeKey PublicKey, fns ...func(*InvitationOptions)) (Invitation, error) {
+func generateInvitation(rand io.Reader, line line,
+	domainKey PrivateKey,
+	issuerKey PrivateKey,
+	trusteeKey PublicKey,
+	fns ...func(*InvitationOptions)) (Invitation, error) {
+
 	opts := buildInvitationOptions(fns...)
 
 	cert := newCertificate(
@@ -140,7 +137,6 @@ func (c Invitation) extractPoint(rand io.Reader, priv PrivateKey) (point, error)
 	if err != nil {
 		return point{}, errors.Wrapf(err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
 	}
-
 	pt, err := c.pt.Decrypt(cipherKey)
 	if err != nil {
 		return point{}, errors.Wrapf(err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
