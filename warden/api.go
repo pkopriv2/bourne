@@ -11,7 +11,6 @@ import (
 // FIXMES:
 //	* Get off gob encoding/decoding so we can easily support other languages.
 
-
 // Useful references:
 //
 // * https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
@@ -31,7 +30,7 @@ type PagingOptions struct {
 }
 
 // Constructs paging options.
-func buildPagingOptions(fns ... func(p *PagingOptions)) PagingOptions {
+func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 	opts := PagingOptions{0, 256}
 	for _, fn := range fns {
 		fn(&opts)
@@ -109,30 +108,30 @@ func AcceptInvite(s Session, id uuid.UUID) error {
 }
 
 // Verifies the contents of an invitation.
-func VerifyInvitation(cancel <-chan struct{}, session Session, invite Invitation) error {
-	auth, err := session.auth(cancel)
+func VerifyInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
+	auth, err := s.auth(cancel)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	domainKey, err := session.net.LoadPublicKey(cancel, auth, invite.Cert.Domain)
+	domainKey, err := s.net.LoadPublicKey(cancel, auth, i.Cert.Domain)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	issuerKey, err := session.net.LoadPublicKey(cancel, auth, invite.Cert.Issuer)
+	issuerKey, err := s.net.LoadPublicKey(cancel, auth, i.Cert.Issuer)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	if err := invite.Cert.Verify(domainKey, invite.DomainSig); err != nil {
+	if err := i.Cert.Verify(domainKey, i.DomainSig); err != nil {
 		return errors.Wrapf(
-			err, "Error verify certificate with domain key [%v]", invite.Cert.Domain)
+			err, "Error verify certificate with domain key [%v]", i.Cert.Domain)
 	}
 
-	if err := invite.Cert.Verify(issuerKey, invite.IssuerSig); err != nil {
+	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
 		return errors.Wrapf(
-			err, "Error verify certificate with domain key [%v]", invite.Cert.Issuer)
+			err, "Error verify certificate with domain key [%v]", i.Cert.Issuer)
 	}
 
 	return nil
