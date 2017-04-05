@@ -1,13 +1,13 @@
 package warden
 
 import (
-	"bufio"
 	"bytes"
+	"encoding/gob"
+	"fmt"
 	"io"
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/scribe"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -28,11 +28,32 @@ func (l LevelOfTrust) Greater(o LevelOfTrust) bool {
 	return l > o
 }
 
-func (l LevelOfTrust) EnsureExceeded(o LevelOfTrust) error {
+func (l LevelOfTrust) Verify(o LevelOfTrust) error {
 	if l > o {
 		return newLevelOfTrustError(l, o)
 	}
 	return nil
+}
+
+func (l LevelOfTrust) String() string {
+	switch l {
+	default:
+		return "Unknown"
+	case Verify:
+		return "Verify"
+	case Encryption:
+		return "Encryption"
+	case Sign:
+		return "Sign"
+	case Invite:
+		return "Invite"
+	case Revoke:
+		return "Revoke"
+	case Publish:
+		return "Publish"
+	case Destroy:
+		return "Destroy"
+	}
 }
 
 func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
@@ -58,12 +79,21 @@ func newCertificate(domain string, issuer string, trustee string, lvl LevelOfTru
 
 // Verifies that the signature matches the certificate contents.
 func (c Certificate) Verify(key PublicKey, sig Signature) error {
-	return sig.Verify(key, c.Bytes())
+	bytes, err := c.Format()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return sig.Verify(key, bytes)
 }
 
 // Signs the certificate with the private key.
 func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
-	sig, err := key.Sign(rand, hash, c.Bytes())
+	bytes, err := c.Format()
+	if err != nil {
+		return Signature{}, errors.WithStack(err)
+	}
+
+	sig, err := key.Sign(rand, hash, bytes)
 	if err != nil {
 		return Signature{}, errors.Wrapf(err, "Error signing certificate [%v]", c)
 
@@ -72,20 +102,17 @@ func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature,
 }
 
 // Returns a consistent byte representation of a certificate
-func (c Certificate) Bytes() []byte {
-	buf := &bytes.Buffer{}
-	w := scribe.NewStreamWriter(bufio.NewWriter(buf))
-	c.Stream(w)
-	w.Flush()
-	return buf.Bytes()
+func (c Certificate) Format() ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(&c); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return buf.Bytes(), nil
 }
 
-// FIXME: Streams the
-
 // Returns a consistent byte representation of a certificate
-func (c Certificate) Stream(w scribe.StreamWriter) {
-	w.PutUUID(c.Id)
-	w.PutString(c.Domain)
-	w.PutString(c.Issuer)
-	w.PutString(c.Trustee)
+func (c Certificate) String() string {
+	return fmt.Sprintf("Cert(id=%v,domain=%v,issuer=%v,trustee=%v,lvl=%v): %v",
+		c.Id, c.Domain, c.Issuer, c.Trustee, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
 }

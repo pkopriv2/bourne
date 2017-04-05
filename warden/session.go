@@ -32,7 +32,7 @@ func (s *Session) auth(cancel <-chan struct{}) (token, error) {
 
 // Returns the subscriber id associated with this session.  This uniquely identifies
 // an account to the world.  This may be shared over other (possibly unsecure) channels
-// in order
+// in order to share with other users.
 func (s *Session) MyId() string {
 	return s.sub.Pub.Id()
 }

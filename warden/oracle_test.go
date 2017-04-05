@@ -26,7 +26,7 @@ func TestOracle_GenerateAndAccess(t *testing.T) {
 	key, err := generateOracleKey(rand.Reader, "id", "alias", line, []byte("pass"), oracle.opts)
 	assert.Nil(t, err)
 
-	act, err := oracle.DeriveLine(key, []byte("pass"))
+	act, err := oracle.Unlock(key, []byte("pass"))
 	assert.Nil(t, err)
 	assert.Equal(t, line, act)
 }

@@ -29,16 +29,16 @@ type Domain struct {
 
 // Decrypts the domain oracle.  Requires *Encryption* trust
 func (d Domain) unlockOracle(s Session) (line, error) {
-	if err := Encryption.EnsureExceeded(d.lvl); err != nil {
+	if err := Encryption.Verify(d.lvl); err != nil {
 		return line{}, errors.WithStack(err)
 	}
 
-	return d.oracle.DeriveLine(d.oracleKey, s.oracle)
+	return d.oracle.Unlock(d.oracleKey, s.oracle)
 }
 
 // Loads all the trust certificates that have been issued by this domain.
 func (d Domain) IssuedCertificates(cancel <-chan struct{}, s Session, opts ...func(*PagingOptions)) ([]Certificate, error) {
-	if err := Verify.EnsureExceeded(d.lvl); err != nil {
+	if err := Verify.Verify(d.lvl); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
@@ -52,7 +52,7 @@ func (d Domain) IssuedCertificates(cancel <-chan struct{}, s Session, opts ...fu
 
 // Revokes all issued certificates by this domain for the given subscriber.
 func (d Domain) RevokeCertificate(cancel <-chan struct{}, s Session, subscriber string) error {
-	if err := Revoke.EnsureExceeded(d.lvl); err != nil {
+	if err := Revoke.Verify(d.lvl); err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -79,7 +79,7 @@ func (d Domain) RevokeCertificate(cancel <-chan struct{}, s Session, subscriber 
 
 // Issues an invitation to the given key.
 func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee string, opts ...func(*InvitationOptions)) (Invitation, error) {
-	if err := Invite.EnsureExceeded(d.lvl); err != nil {
+	if err := Invite.Verify(d.lvl); err != nil {
 		return Invitation{}, newLevelOfTrustError(Invite, d.lvl)
 	}
 

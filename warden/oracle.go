@@ -101,7 +101,7 @@ type oracle struct {
 }
 
 // Decrypts the oracle, returning a hash of the underlying secret.
-func (p oracle) DeriveLine(key oracleKey, pass []byte) (line, error) {
+func (p oracle) Unlock(key oracleKey, pass []byte) (line, error) {
 	if key.oid != p.Id {
 		return line{}, errors.Wrapf(TrustError, "Cannot use that key [%v] to open oracle [%v]", key.Id, p.Id)
 	}
