@@ -92,11 +92,9 @@ func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature,
 	if err != nil {
 		return Signature{}, errors.WithStack(err)
 	}
-
 	sig, err := key.Sign(rand, hash, bytes)
 	if err != nil {
 		return Signature{}, errors.Wrapf(err, "Error signing certificate [%v]", c)
-
 	}
 	return sig, nil
 }
@@ -111,7 +109,7 @@ func (c Certificate) Format() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Returns a consistent byte representation of a certificate
+// Returns a consistent string representation of a certificate
 func (c Certificate) String() string {
 	return fmt.Sprintf("Cert(id=%v,domain=%v,issuer=%v,trustee=%v,lvl=%v): %v",
 		c.Id, c.Domain, c.Issuer, c.Trustee, c.Level, c.ExpiresAt.Sub(c.IssuedAt))

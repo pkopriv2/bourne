@@ -13,15 +13,19 @@ func TestRsaKey(t *testing.T) {
 
 	t.Run("Id", func(t *testing.T) {
 		id := key.Public().Id()
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 100; i++ {
+			// fmt.Println("KEY: ", id)
 			assert.Equal(t, id, key.Public().Id())
 		}
 	})
 
 	t.Run("SignVerify", func(t *testing.T) {
-		sig, err := key.Sign(rand.Reader, SHA256, []byte("msg"))
+		msg, err := generateRandomBytes(rand.Reader, 1024)
 		assert.Nil(t, err)
-		assert.Nil(t, sig.Verify(key.Public(), []byte("msg")))
+
+		sig, err := key.Sign(rand.Reader, SHA256, msg)
+		assert.Nil(t, err)
+		assert.Nil(t, sig.Verify(key.Public(), msg))
 	})
 
 	t.Run("EncryptDecrypt", func(t *testing.T) {

@@ -37,9 +37,9 @@ func (b Bytes) Base32() string {
 }
 
 // Returns a base32 representation of the array
-func (b Bytes) Pem() string {
-	blk := &pem.Block{Type: "Bytes", Bytes: b}
-	return Bytes(pem.EncodeToMemory(blk)).Hex()
+func (b Bytes) Pem(header string) string {
+	blk := &pem.Block{Type: header, Bytes: b}
+	return string(pem.EncodeToMemory(blk))
 }
 
 

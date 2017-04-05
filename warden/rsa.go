@@ -94,12 +94,10 @@ func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) (Signature, 
 	if err != nil {
 		return Signature{}, errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", Bytes(msg), hash)
 	}
-
 	sig, err := rsa.SignPSS(rand, r.raw, hash.Crypto(), hashed, nil)
 	if err != nil {
 		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", Bytes(msg))
 	}
-
 	return Signature{hash, sig}, nil
 }
 

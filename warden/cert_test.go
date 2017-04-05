@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"crypto/rand"
 	"fmt"
 	"testing"
 	"time"
@@ -24,5 +25,14 @@ func TestCert(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Equal(t, fmt, now)
 		}
+	})
+
+	key, err  := GenRsaKey(rand.Reader, 512)
+	assert.Nil(t, err)
+
+	t.Run("Sign", func(t *testing.T) {
+		sig, err := cert.Sign(rand.Reader, key, SHA256)
+		assert.Nil(t, err)
+		assert.Nil(t, cert.Verify(key.Public(), sig))
 	})
 }
