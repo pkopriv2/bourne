@@ -135,11 +135,14 @@ func generateInvitation(rand io.Reader, line line,
 func (c Invitation) extractPoint(rand io.Reader, priv PrivateKey) (point, error) {
 	cipherKey, err := c.key.Decrypt(rand, priv)
 	if err != nil {
-		return point{}, errors.Wrapf(err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
+		return point{}, errors.Wrapf(
+			err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
 	}
+
 	pt, err := c.pt.Decrypt(cipherKey)
 	if err != nil {
-		return point{}, errors.Wrapf(err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
+		return point{}, errors.Wrapf(
+			err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
 	}
 	return pt, nil
 }
