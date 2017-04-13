@@ -16,18 +16,21 @@ type LevelOfTrust int
 
 const (
 	Verify LevelOfTrust = iota + 10
-	Encryption
+	Encrypt
 	Sign
 	Invite
 	Revoke
 	Publish
 	Destroy
+	Creator
 )
 
+// FIXME: Horrible...horrible
 func (l LevelOfTrust) Greater(o LevelOfTrust) bool {
 	return l > o
 }
 
+// FIXME: Horrible...horrible...horribler
 func (l LevelOfTrust) Verify(o LevelOfTrust) error {
 	if l > o {
 		return newLevelOfTrustError(l, o)
@@ -41,7 +44,7 @@ func (l LevelOfTrust) String() string {
 		return "Unknown"
 	case Verify:
 		return "Verify"
-	case Encryption:
+	case Encrypt:
 		return "Encryption"
 	case Sign:
 		return "Sign"
@@ -72,9 +75,15 @@ type Certificate struct {
 	ExpiresAt time.Time
 }
 
+
 func newCertificate(domain string, issuer string, trustee string, lvl LevelOfTrust, ttl time.Duration) Certificate {
 	now := time.Now()
 	return Certificate{0, uuid.NewV1(), domain, issuer, trustee, lvl, now, now.Add(ttl)}
+}
+
+// Returns the ttl of the certificate ()
+func (c Certificate) Duration() time.Duration {
+	return c.ExpiresAt.Sub(c.IssuedAt)
 }
 
 // Verifies that the signature matches the certificate contents.

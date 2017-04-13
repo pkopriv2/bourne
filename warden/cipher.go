@@ -61,6 +61,10 @@ func (s SymmetricCipher) String() string {
 	}
 }
 
+func (s SymmetricCipher) Encrypt(rand io.Reader, key []byte, msg []byte) (CipherText, error) {
+	return symmetricEncrypt(rand, s, key, msg)
+}
+
 // TODO: Determine general set of fields for non-AE modes
 //
 // Currently thinking:

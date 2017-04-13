@@ -10,6 +10,10 @@ import (
 // strength of the oracle as well as the strength of any accessors to the
 // oracle.
 type oracleOptions struct {
+
+	// the strength of the curve is ~ size(slope) + size(y-intercept)
+	CurveStrength int
+
 	// sharing options
 	ShareCipher SymmetricCipher
 	ShareHash   Hash
@@ -19,8 +23,12 @@ type oracleOptions struct {
 	SigHash Hash
 }
 
+func defaultOracleOptions() oracleOptions {
+	return oracleOptions{1024, AES_256_GCM, SHA256, 1024, SHA256}
+}
+
 func buildOracleOptions(fns ...func(*oracleOptions)) oracleOptions {
-	ret := oracleOptions{AES_256_GCM, SHA256, 1024, SHA256}
+	ret := defaultOracleOptions()
 	for _, fn := range fns {
 		fn(&ret)
 	}

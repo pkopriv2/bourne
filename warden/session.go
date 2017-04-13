@@ -17,7 +17,7 @@ type Session struct {
 	sub SigningKey
 
 	// the transport mechanism. (expected to be secure).
-	net Transport
+	net Net
 
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
@@ -42,8 +42,8 @@ func (s *Session) MyKey() PublicKey {
 	return s.sub.Pub
 }
 
-// Returns the signing key associated with this session.
-func (s *Session) mySigningKey() (PrivateKey, error) {
+// Returns the signing key associated with this session. Should be promptly destroyed.
+func (s *Session) MySigningKey() (PrivateKey, error) {
 	return s.sub.Decrypt(s.oracle)
 }
 
@@ -75,9 +75,31 @@ type SigningKey struct {
 	fnIter int
 }
 
-func (p SigningKey) Decrypt(seed []byte) (PrivateKey, error) {
+// Generates a new signing key.
+func genSigningKey(rand io.Reader, priv PrivateKey, pass []byte, ciph SymmetricCipher, hsh Hash, saltSize int, iter int) (SigningKey, error) {
+	salt, err := generateRandomBytes(rand, saltSize)
+	if err != nil {
+		return SigningKey{}, errors.WithStack(err)
+	}
+
+	ciphertext, err := ciph.Encrypt(
+		rand, Bytes(pass).Pbkdf2(salt, iter, ciph.KeySize(), hsh.Standard()), priv.Bytes())
+	if err != nil {
+		return SigningKey{}, errors.WithStack(err)
+	}
+
+	return SigningKey{
+		priv.Public(),
+		ciphertext,
+		hsh,
+		salt,
+		iter,
+	}, nil
+}
+
+func (p SigningKey) Decrypt(key []byte) (PrivateKey, error) {
 	raw, err := p.Priv.Decrypt(
-		Bytes(seed).Pbkdf2(
+		Bytes(key).Pbkdf2(
 			p.fnSalt, p.fnIter, p.Priv.Cipher.KeySize(), p.fnHash.Standard()))
 	if err != nil {
 		return nil, errors.WithStack(err)

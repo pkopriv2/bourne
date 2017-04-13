@@ -2,31 +2,21 @@ package warden
 
 import (
 	"crypto/rand"
-	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestOracleKey_GenerateAndAccess(t *testing.T) {
-	line := line{big.NewInt(1), big.NewInt(0)}
+func TestOracle(t *testing.T) {
+	o, l, e := generateOracle(rand.Reader, "id")
+	assert.Nil(t, e)
 
-	key, err := generateOracleKey(rand.Reader, "id", "alias", line, []byte("pass"), buildOracleOptions())
-	assert.Nil(t, err)
+	t.Run("GenerateAndUnlock", func(t *testing.T) {
+		k, e := generateOracleKey(rand.Reader, o.Id, "id", l, []byte("pass"), o.opts)
+		assert.Nil(t, e)
 
-	pt, err := key.access([]byte("pass"))
-	assert.Nil(t, err)
-	assert.True(t, line.Contains(pt))
-}
-
-func TestOracle_GenerateAndAccess(t *testing.T) {
-	oracle, line, err := generateOracle(rand.Reader, "id")
-	assert.Nil(t, err)
-
-	key, err := generateOracleKey(rand.Reader, "id", "alias", line, []byte("pass"), oracle.opts)
-	assert.Nil(t, err)
-
-	act, err := oracle.Unlock(key, []byte("pass"))
-	assert.Nil(t, err)
-	assert.Equal(t, line, act)
+		act, e := o.Unlock(k, []byte("pass"))
+		assert.Nil(t, e)
+		assert.Equal(t, l, act)
+	})
 }

@@ -1,6 +1,10 @@
 package warden
 
-import "github.com/pkg/errors"
+import (
+	"io"
+
+	"github.com/pkg/errors"
+)
 
 var (
 	UnknownKeyAlgorithmError = errors.New("Warden:UnknownKeyAlgorithm")
@@ -30,5 +34,15 @@ func (k KeyAlgorithm) ParsePrivateKey(raw []byte) (PrivateKey, error) {
 		return nil, errors.WithStack(UnknownKeyAlgorithmError)
 	case RSA:
 		return parseRsaPrivateKey(raw)
+	}
+}
+
+// Parses the private key from a standard binary format.
+func (k KeyAlgorithm) Gen(rand io.Reader, strength int) (PrivateKey, error) {
+	switch k {
+	default:
+		return nil, errors.WithStack(UnknownKeyAlgorithmError)
+	case RSA:
+		return GenRsaKey(rand, strength)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -48,11 +49,6 @@ func Connect(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
-// Publishes the key to the main key index using the given name
-func PublishMyKey(session Session) error {
-	return nil
-}
-
 // Lists a subsection of public key ids from [beg,end).
 func ListPublishedKeys(cancel <-chan struct{}, session Session, fns ...func(*PagingOptions)) ([]string, error) {
 	return nil, nil
@@ -69,42 +65,69 @@ func CreateDomain(session Session) (Domain, error) {
 	return Domain{}, nil
 }
 
-// Lists all the domains created/trusted by the session's owner.
-func ListPrivateDomains(session Session, fns ...func(*PagingOptions)) ([]Domain, error) {
-	return nil, nil
-}
-
-// Publishes the domain to the main index using the given name.  It will now be globally searchable.
-func PublishDomain(session Session, id string, name string) error {
-	return nil
-}
-
 // Lists all the domains that have been published on the main index.
-func ListPublishedDomains(session Session, fns ...func(*PagingOptions)) ([]Domain, error) {
+func ListDomains(session Session, fns ...func(*PagingOptions)) ([]string, error) {
 	return nil, nil
 }
 
 // Loads the domain with the given name.  The domain will be returned only
 // if your public key has been invited to manage the domain and the invitation
 // has been accepted.
-func LoadDomain(session Session, id string) (Domain, bool, error) {
-	return Domain{}, false, nil
+func LoadDomain(cancel <-chan struct{}, s Session, id string) (Domain, bool, error) {
+	auth, err := s.auth(cancel)
+	if err != nil {
+		return Domain{}, false, errors.WithStack(err)
+	}
+	return s.net.Domains.ById(cancel, auth, id)
 }
 
-// Requests an invite to the domain of the given id.
-func RequestInvite(session Session, id string, level LevelOfTrust) error {
-	return nil
-}
+// Lists the session owner's currently pending invitations.
+func ListInvitations(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Invitation, error) {
+	auth, err := s.auth(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
-// Lists your session's currently pending invitations.
-func ListInvitations(session Session) ([]Invitation, error) {
-	return nil, nil
+	opts := buildPagingOptions(fns...)
+	return s.net.Invites.BySubscriber(cancel, auth, s.MyId(), opts.Beg, opts.End)
 }
 
 // Accepts the invitation with the given id.  Returns an error if the
 // acceptance fails for any reason.
-func AcceptInvite(s Session, id uuid.UUID) error {
-	return nil
+//
+// TODO: verify invitation prior to accepting.
+func AcceptInvite(cancel <-chan struct{}, s Session, id uuid.UUID) error {
+	auth, err := s.auth(cancel)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	inv, ok, err := s.net.Invites.ById(cancel, auth, id)
+	if err != nil || !ok {
+		return errors.WithStack(common.Or(err, DomainInvariantError))
+	}
+
+	dom, ok, err := s.net.Domains.ById(cancel, auth, inv.Cert.Domain)
+	if err != nil || !ok {
+		return errors.WithStack(err)
+	}
+
+	priv, err := s.MySigningKey()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	key, err := acceptInvitation(s.rand, inv, dom.oracle, priv, s.myOracle(), dom.oracle.opts)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	sig, err := inv.Cert.Sign(s.rand, priv, dom.oracle.opts.SigHash)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	return s.net.Certs.Register(cancel, auth, inv.Cert, key, inv.DomainSig, inv.IssuerSig, sig)
 }
 
 // Verifies the contents of an invitation.
@@ -114,12 +137,12 @@ func VerifyInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
 		return errors.WithStack(err)
 	}
 
-	domainKey, err := s.net.LoadPublicKey(cancel, auth, i.Cert.Domain)
+	domainKey, err := s.net.Keys.ByDomain(cancel, auth, i.Cert.Domain)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	issuerKey, err := s.net.LoadPublicKey(cancel, auth, i.Cert.Issuer)
+	issuerKey, err := s.net.Keys.BySubscriber(cancel, auth, i.Cert.Issuer)
 	if err != nil {
 		return errors.WithStack(err)
 	}

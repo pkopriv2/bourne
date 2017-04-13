@@ -15,7 +15,7 @@ type InvitationOptions struct {
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
-	def := InvitationOptions{Encryption, 365 * 24 * time.Hour, buildOracleOptions()}
+	def := InvitationOptions{Encrypt, 365 * 24 * time.Hour, buildOracleOptions()}
 	for _, fn := range opts {
 		fn(&def)
 	}
@@ -29,13 +29,11 @@ func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions 
 type Invitation struct {
 	Id uuid.UUID
 
-	// Contains the embedded cert (must be signed by all parties)
+	// The embedded cert.
 	Cert Certificate
 
-	// The domain signature.  A valid certificate requires 3 signatures (issuer, domain, trustee)
+	// The required signatures
 	DomainSig Signature
-
-	// The issuer signature.
 	IssuerSig Signature
 
 	// The embedded curve information
@@ -43,7 +41,8 @@ type Invitation struct {
 	pt  securePoint
 }
 
-func generateInvitation(rand io.Reader, line line,
+func generateInvitation(rand io.Reader,
+	line line,
 	domainKey PrivateKey,
 	issuerKey PrivateKey,
 	trusteeKey PublicKey,
@@ -107,11 +106,11 @@ func verifyInvitation(i Invitation, domainKey PublicKey, issuerKey PublicKey) er
 func acceptInvitation(rand io.Reader,
 	i Invitation,
 	o oracle,
-	trusteeKey PrivateKey,
-	trusteeOracle []byte,
+	key PrivateKey,
+	pass []byte,
 	opts oracleOptions) (oracleKey, error) {
 
-	pt, err := i.extractPoint(rand, trusteeKey)
+	pt, err := i.extractPoint(rand, key)
 	if err != nil {
 		return oracleKey{},
 			errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
@@ -125,14 +124,13 @@ func acceptInvitation(rand io.Reader,
 	}
 	defer line.Destroy()
 
-	key, err := generateOracleKey(rand, i.Cert.Domain, i.Cert.Trustee, line, trusteeOracle, opts)
+	oKey, err := generateOracleKey(rand, i.Cert.Domain, i.Cert.Trustee, line, pass, opts)
 	if err != nil {
 		return oracleKey{},
 			errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
 	}
-	return key, nil
+	return oKey, nil
 }
-
 
 // Verifies that the signature matches the certificate contents.
 func (c Invitation) extractPoint(rand io.Reader, priv PrivateKey) (point, error) {
