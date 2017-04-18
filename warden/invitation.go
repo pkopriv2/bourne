@@ -117,14 +117,14 @@ func acceptInvitation(rand io.Reader,
 	}
 	defer pt.Destroy()
 
-	line, err := pt.Derive(o.pt)
+	line, err := pt.Derive(o.Pt)
 	if err != nil {
 		return oracleKey{},
 			errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", i.Cert.Domain)
 	}
 	defer line.Destroy()
 
-	oKey, err := generateOracleKey(rand, i.Cert.Domain, i.Cert.Trustee, line, pass, opts)
+	oKey, err := genOracleKey(rand, line, pass, opts)
 	if err != nil {
 		return oracleKey{},
 			errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)

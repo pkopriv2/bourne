@@ -1,12 +1,30 @@
 package warden
 
-import uuid "github.com/satori/go.uuid"
+import (
+	"io"
+
+	uuid "github.com/satori/go.uuid"
+)
 
 type Net struct {
 	Keys    KeyTransport
 	Certs   CertTransport
 	Invites InvitationTransport
 	Domains DomainTransport
+}
+
+type AuthChallenge struct {
+	Msg []byte
+	sig Signature
+}
+
+func (a AuthChallenge) Sign(rand io.Reader, k PrivateKey, h Hash) (Signature, error) {
+	return Signature{}, nil
+}
+
+type AuthTransport interface {
+	WithSignatureInit(id string) ([]byte, Signature, error)
+	WithSignatureAuth(id string, s Signature) (token, error)
 }
 
 type KeyTransport interface {
@@ -65,6 +83,6 @@ type DomainTransport interface {
 	// List the domain ids by index
 	ByIndex(cancel <-chan struct{}, a token, idx string, beg, end int) ([]string, error)
 
-	// Registers a domain.
-	Register(cancel <-chan struct{}, a token, desc string, o oracle, s SigningKey) error
+	// Registers a newly created domain.
+	Register(cancel <-chan struct{}, a token, dom Domain) error
 }

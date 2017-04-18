@@ -28,7 +28,7 @@ func buildDomainOptions(fns ...func(*DomainOptions)) DomainOptions {
 	return ret
 }
 
-// The domain is two things.  1) it is a description of a domain
+// A domain is a session owner's view of an actual domain.
 type Domain struct {
 
 	// the identifier of the domain.
@@ -50,9 +50,11 @@ type Domain struct {
 	oracleKey oracleKey
 
 	// the encrypted signing key.  (Only available for trusted users)
-	signingKey SigningKey
+	signingKey KeyPair
 }
 
+// generates a domain, but has no server-side effects.  the domain must still
+// be registered.
 func generateDomain(s Session, desc string, fns ...func(s *DomainOptions)) (Domain, error) {
 	opts := buildDomainOptions(fns...)
 
@@ -63,22 +65,22 @@ func generateDomain(s Session, desc string, fns ...func(s *DomainOptions)) (Doma
 	}
 	defer priv.Destroy()
 
-	pub, domId, myId := priv.Public(), priv.Public().Id(), s.MyId()
+	domId, myId := priv.Public().Id(), s.MyId()
 
-	oracle, curve, err := generateOracle(rand.Reader, domId)
+	oracle, curve, err := genOracle(rand.Reader)
 	if err != nil {
 		return Domain{}, errors.Wrapf(err,
 			"Error generating domain: %v", desc)
 	}
 	defer curve.Destroy()
 
-	oracleKey, err := generateOracleKey(s.rand, domId, myId, curve, s.myOracle(), opts.oracleOptions)
+	oracleKey, err := genOracleKey(s.rand, curve, s.myOracle(), opts.oracleOptions)
 	if err != nil {
 		return Domain{}, errors.Wrapf(err,
 			"Error generating private oracle key [%v]", myId)
 	}
 
-	sign, err := genSigningKey(s.rand, priv, curve.Bytes(), opts.SigningCipher, opts.SigningHash, opts.SigningSalt, opts.SigningIter)
+	sign, err := genKeyPair(s.rand, priv, curve.Bytes(), opts.SigningCipher, opts.SigningHash, opts.SigningSalt, opts.SigningIter)
 	if err != nil {
 		return Domain{}, errors.Wrapf(err,
 			"Error generating signing key [%v]: %v", opts.SigningAlgorithm, opts.SigningStrength)
@@ -89,14 +91,14 @@ func generateDomain(s Session, desc string, fns ...func(s *DomainOptions)) (Doma
 		domId,
 		desc,
 		cert,
-		pub,
+		priv.Public(),
 		oracle,
 		oracleKey,
 		sign,
 	}, nil
 }
 
-// Decrypts the domain oracle.  Requires *Encrypt* level trust
+// Extracts the domain oracle curve.  Requires *Encrypt* level trust
 func (d Domain) unlockCurve(s Session) (line, error) {
 	if err := Encrypt.Verify(d.cert.Level); err != nil {
 		return line{}, errors.WithStack(err)
@@ -141,13 +143,13 @@ func (d Domain) RenewCertificate(cancel <-chan struct{}, s Session) (Domain, err
 
 	cert := newCertificate(d.Id, myId, myId, d.cert.Level, d.cert.Duration())
 
-	mySig, err := d.cert.Sign(s.rand, mySigningKey, d.oracle.opts.SigHash)
+	mySig, err := d.cert.Sign(s.rand, mySigningKey, d.oracle.Opts.SigHash)
 	if err != nil {
 		return Domain{}, errors.Wrapf(err,
 			"Error signing cert with session signing key [%v]", s.MyId())
 	}
 
-	domSig, err := d.cert.Sign(s.rand, domSigningKey, d.oracle.opts.SigHash)
+	domSig, err := d.cert.Sign(s.rand, domSigningKey, d.oracle.Opts.SigHash)
 	if err != nil {
 		return Domain{}, errors.Wrapf(err,
 			"Error signing with domain key [%v]", d.Id)
@@ -231,7 +233,6 @@ func (d Domain) IssueInvitation(cancel <-chan struct{}, s Session, trustee strin
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Unable to unlock domain oracle [%v]", d.Id)
 	}
-
 	defer line.Destroy()
 
 	domainKey, err := d.signingKey.Decrypt(line.Format())

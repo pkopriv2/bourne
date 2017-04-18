@@ -56,6 +56,8 @@ func (l LevelOfTrust) String() string {
 		return "Publish"
 	case Destroy:
 		return "Destroy"
+	case Creator:
+		return "Creator"
 	}
 }
 

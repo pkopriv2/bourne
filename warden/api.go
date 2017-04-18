@@ -15,6 +15,14 @@ import (
 // Useful references:
 //
 // * https://www.owasp.org/index.php/Key_Management_Cheat_Sheet
+// * Secret sharing survey:
+//		* https://www.cs.bgu.ac.il/~beimel/Papers/Survey.pdf
+// * Computational secrecy:
+//		* http://www.cs.cornell.edu/courses/cs754/2001fa/secretshort.pdf
+// * SSRI (Secure store retrieval and )
+//		* http://ac.els-cdn.com/S0304397598002631/1-s2.0-S0304397598002631-main.pdf?_tid=d4544ec8-221e-11e7-9744-00000aacb35f&acdnat=1492290326_2f9f40490893fb853da9d080f5b47634
+// * Blakley's scheme
+//		* https://en.wikipedia.org/wiki/Secret_sharing#Blakley.27s_scheme
 
 // Common errors
 var (
@@ -44,30 +52,40 @@ func Subscribe(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
-// Loads a subscription.
+// Loads a subscription
 func Connect(addr string) (KeyPad, error) {
 	return nil, nil
 }
 
-// Lists a subsection of public key ids from [beg,end).
-func ListPublishedKeys(cancel <-chan struct{}, session Session, fns ...func(*PagingOptions)) ([]string, error) {
-	return nil, nil
-}
+// Creates a local domain.
+func CreateDomain(cancel <-chan struct{}, s Session, desc string, fns ...func(*DomainOptions)) (Domain, error) {
+	auth, err := s.auth(cancel)
+	if err != nil {
+		return Domain{}, errors.WithStack(err)
+	}
 
-// Loads the public key of the given subscriber
-func LoadSubscriberKey(session Session, id string) (PublicKey, error) {
-	return nil, nil
-}
+	dom, err := generateDomain(s, desc, fns...)
+	if err != nil {
+		return Domain{}, errors.WithStack(err)
+	}
 
-// Registers/creates a domain.  The domain will be controlled by newly generated public/private key
-// pair and a certificate of trust will be issued to the session's owner.
-func CreateDomain(session Session) (Domain, error) {
-	return Domain{}, nil
+	if err := s.net.Domains.Register(cancel, auth, dom); err != nil {
+		return Domain{}, errors.WithStack(err)
+	}
+
+	return dom, nil
 }
 
 // Lists all the domains that have been published on the main index.
-func ListDomains(session Session, fns ...func(*PagingOptions)) ([]string, error) {
-	return nil, nil
+func ListDomains(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]string, error) {
+	opts := buildPagingOptions(fns...)
+
+	auth, err := s.auth(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return s.net.Domains.ByIndex(cancel, auth, s.myIndex(), opts.Beg, opts.End)
 }
 
 // Loads the domain with the given name.  The domain will be returned only
@@ -78,6 +96,7 @@ func LoadDomain(cancel <-chan struct{}, s Session, id string) (Domain, bool, err
 	if err != nil {
 		return Domain{}, false, errors.WithStack(err)
 	}
+
 	return s.net.Domains.ById(cancel, auth, id)
 }
 
@@ -117,12 +136,12 @@ func AcceptInvite(cancel <-chan struct{}, s Session, id uuid.UUID) error {
 		return errors.WithStack(err)
 	}
 
-	key, err := acceptInvitation(s.rand, inv, dom.oracle, priv, s.myOracle(), dom.oracle.opts)
+	key, err := acceptInvitation(s.rand, inv, dom.oracle, priv, s.myOracle(), dom.oracle.Opts)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	sig, err := inv.Cert.Sign(s.rand, priv, dom.oracle.opts.SigHash)
+	sig, err := inv.Cert.Sign(s.rand, priv, dom.oracle.Opts.SigHash)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -160,19 +179,16 @@ func VerifyInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
 	return nil
 }
 
-// Lists your session's currently outstanding trust invitations.
-func LoadCertificate(session Session, id uuid.UUID) (Certificate, bool, error) {
-	return Certificate{}, false, nil
-}
-
 // Lists all the certificates of trust that have been issued to the given session.
-func ListCertificates(session Session) ([]Certificate, error) {
-	return nil, nil
-}
+func ListCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
+	opts := buildPagingOptions(fns...)
 
-// Verifies the contents of a certificate.
-func VerifyCertificate(session Session, cert Certificate) error {
-	return nil
+	auth, err := s.auth(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return s.net.Certs.ActiveBySubscriber(cancel, auth, s.MyId(), opts.Beg, opts.End)
 }
 
 // A signer contains the knowledge necessary to digitally sign messages.

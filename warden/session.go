@@ -14,15 +14,18 @@ import (
 type Session struct {
 
 	// the encrypted subscription key.
-	sub SigningKey
+	sub KeyPair
 
 	// the transport mechanism. (expected to be secure).
 	net Net
 
+	// the personal index of the session.  (usually part of organization)
+	idx string
+
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
 
-	// the subcriber's oracle/seed.
+	// the subcriber's oracle.  safe to store in memory.
 	oracle []byte
 }
 
@@ -65,30 +68,35 @@ func (s *Session) myOracle() []byte {
 	return s.oracle
 }
 
-// A signing key is an encrypted private key.  It may only be decrypted
-// by someone who has been trusted to sign on its behalf.
-type SigningKey struct {
-	Pub    PublicKey
-	Priv   CipherText
-	fnHash Hash
-	fnSalt []byte
-	fnIter int
+// Returns the index of this session.
+func (s *Session) myIndex() string {
+	return s.idx
 }
 
-// Generates a new signing key.
-func genSigningKey(rand io.Reader, priv PrivateKey, pass []byte, ciph SymmetricCipher, hsh Hash, saltSize int, iter int) (SigningKey, error) {
+// A signing key is an encrypted private key.  It may only be decrypted
+// by someone who has been trusted to sign on its behalf.
+type KeyPair struct {
+	Pub    PublicKey
+	Priv   CipherText
+	FnHash Hash
+	FnSalt []byte
+	FnIter int
+}
+
+// Generates a new encrypted key pair
+func genKeyPair(rand io.Reader, priv PrivateKey, pass []byte, ciph SymmetricCipher, hsh Hash, saltSize int, iter int) (KeyPair, error) {
 	salt, err := generateRandomBytes(rand, saltSize)
 	if err != nil {
-		return SigningKey{}, errors.WithStack(err)
+		return KeyPair{}, errors.WithStack(err)
 	}
 
 	ciphertext, err := ciph.Encrypt(
 		rand, Bytes(pass).Pbkdf2(salt, iter, ciph.KeySize(), hsh.Standard()), priv.Bytes())
 	if err != nil {
-		return SigningKey{}, errors.WithStack(err)
+		return KeyPair{}, errors.WithStack(err)
 	}
 
-	return SigningKey{
+	return KeyPair{
 		priv.Public(),
 		ciphertext,
 		hsh,
@@ -97,10 +105,10 @@ func genSigningKey(rand io.Reader, priv PrivateKey, pass []byte, ciph SymmetricC
 	}, nil
 }
 
-func (p SigningKey) Decrypt(key []byte) (PrivateKey, error) {
+func (p KeyPair) Decrypt(key []byte) (PrivateKey, error) {
 	raw, err := p.Priv.Decrypt(
 		Bytes(key).Pbkdf2(
-			p.fnSalt, p.fnIter, p.Priv.Cipher.KeySize(), p.fnHash.Standard()))
+			p.FnSalt, p.FnIter, p.Priv.Cipher.KeySize(), p.FnHash.Standard()))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

@@ -146,7 +146,7 @@ type KeyExchange struct {
 	KeyAlg    KeyAlgorithm
 	KeyCipher SymmetricCipher
 	KeyHash   Hash
-	CipherKey Bytes
+	KeyBytes  Bytes
 }
 
 func generateKeyExchange(rand io.Reader, pub PublicKey, cipher SymmetricCipher, hash Hash) (KeyExchange, []byte, error) {
@@ -164,7 +164,7 @@ func generateKeyExchange(rand io.Reader, pub PublicKey, cipher SymmetricCipher, 
 }
 
 func (k KeyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
-	key, err := priv.Decrypt(rand, k.KeyHash, k.CipherKey)
+	key, err := priv.Decrypt(rand, k.KeyHash, k.KeyBytes)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -172,7 +172,7 @@ func (k KeyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
 }
 
 func (c KeyExchange) String() string {
-	return fmt.Sprintf("AsymmetricCipherText(alg=%v+%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.CipherKey.Base64())
+	return fmt.Sprintf("AsymmetricCipherText(alg=%v+%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.KeyBytes.Base64())
 }
 
 func initRandomSymmetricKey(rand io.Reader, alg SymmetricCipher) ([]byte, error) {
