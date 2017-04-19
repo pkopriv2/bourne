@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -53,8 +54,13 @@ func Subscribe(addr string) (KeyPad, error) {
 }
 
 // Loads a subscription
-func Connect(addr string) (KeyPad, error) {
-	return nil, nil
+func ConnectWithLogin(addr, user, pass string) (Session, error) {
+	return Session{}, nil
+}
+
+//
+func ConnectWithSignature(addr, user string, signer Signer) (Session, error) {
+	return Session{}, nil
 }
 
 // Creates a local domain.
@@ -212,6 +218,11 @@ type Signature struct {
 // Verifies the signature with the given public key.  Returns nil if the verification succeeded.
 func (s Signature) Verify(key PublicKey, msg []byte) error {
 	return key.Verify(s.Hash, msg, s.Data)
+}
+
+// Returns a simple string rep of the signature.
+func (s Signature) String() string {
+	return fmt.Sprintf("Signature(hash=%v): %v", s.Hash, Bytes(s.Data))
 }
 
 // Public keys are the basis of identity within the trust ecosystem.  In plain english,

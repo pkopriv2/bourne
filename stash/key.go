@@ -53,6 +53,10 @@ func UUID(key uuid.UUID) Key {
 	return Key(key.Bytes())
 }
 
+func ParseUUID(val []byte) (uuid.UUID, error) {
+	return uuid.FromBytes(val)
+}
+
 func Int(key int) Key {
 	return Key(IntBytes(key))
 }
@@ -93,3 +97,4 @@ func ParseBool(val []byte) (ret bool, err error) {
 	ret = raw == 1
 	return
 }
+

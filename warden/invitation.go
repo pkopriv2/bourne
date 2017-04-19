@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -37,8 +38,12 @@ type Invitation struct {
 	IssuerSig Signature
 
 	// The embedded curve information
-	key KeyExchange
-	pt  securePoint
+	Key KeyExchange
+	Pt  securePoint
+}
+
+func (i Invitation) String() string {
+	return fmt.Sprintf("Invitation(id=%v): %v", i.Id, i.Cert)
 }
 
 func generateInvitation(rand io.Reader,
@@ -134,13 +139,13 @@ func acceptInvitation(rand io.Reader,
 
 // Verifies that the signature matches the certificate contents.
 func (c Invitation) extractPoint(rand io.Reader, priv PrivateKey) (point, error) {
-	cipherKey, err := c.key.Decrypt(rand, priv)
+	cipherKey, err := c.Key.Decrypt(rand, priv)
 	if err != nil {
 		return point{}, errors.Wrapf(
 			err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())
 	}
 
-	pt, err := c.pt.Decrypt(cipherKey)
+	pt, err := c.Pt.Decrypt(cipherKey)
 	if err != nil {
 		return point{}, errors.Wrapf(
 			err, "Error extracting point from invitation [%v] using key [%v]", priv.Public().Id())

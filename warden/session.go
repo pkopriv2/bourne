@@ -14,7 +14,7 @@ import (
 type Session struct {
 
 	// the encrypted subscription key.
-	sub KeyPair
+	key KeyPair
 
 	// the transport mechanism. (expected to be secure).
 	net Net
@@ -37,17 +37,17 @@ func (s *Session) auth(cancel <-chan struct{}) (token, error) {
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
 func (s *Session) MyId() string {
-	return s.sub.Pub.Id()
+	return s.key.Pub.Id()
 }
 
 // Returns the subscriber key of this session.
 func (s *Session) MyKey() PublicKey {
-	return s.sub.Pub
+	return s.key.Pub
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
 func (s *Session) MySigningKey() (PrivateKey, error) {
-	return s.sub.Decrypt(s.oracle)
+	return s.key.Decrypt(s.oracle)
 }
 
 // Returns the personal encryption seed of this subscription.  The seed is actually

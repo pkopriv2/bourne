@@ -172,7 +172,7 @@ func (k KeyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
 }
 
 func (c KeyExchange) String() string {
-	return fmt.Sprintf("AsymmetricCipherText(alg=%v+%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.KeyBytes.Base64())
+	return fmt.Sprintf("AsymmetricCipherText(alg=%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.KeyBytes)
 }
 
 func initRandomSymmetricKey(rand io.Reader, alg SymmetricCipher) ([]byte, error) {

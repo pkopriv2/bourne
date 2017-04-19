@@ -111,6 +111,6 @@ func (c Certificate) Format() []byte {
 
 // Returns a consistent string representation of a certificate
 func (c Certificate) String() string {
-	return fmt.Sprintf("Cert(id=%v,domain=%v,issuer=%v,trustee=%v,lvl=%v): %v",
-		c.Id, c.Domain, c.Issuer, c.Trustee, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
+	return fmt.Sprintf("Cert(domain=%v,issuer=%v,trustee=%v,lvl=%v): %v",
+		c.Domain, c.Issuer, c.Trustee, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
 }
