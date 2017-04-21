@@ -1,6 +1,11 @@
 package warden
 
-import "io"
+import (
+	"io"
+	"math/rand"
+
+	"github.com/pkg/errors"
+)
 
 type SubscriberOptions struct {
 	OracleOptions
@@ -22,41 +27,40 @@ func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
 }
 
 type Subscriber struct {
-	Identity KeyPair
-	Oracle   SignedOracle
+	Pub    PublicKey
+	Oracle SignedOracle
 }
 
-func (s Subscriber) Id() string {
-	return s.Identity.Pub.Id()
-}
-
-func NewSubscriber(rand io.Reader, priv PrivateKey, pass []byte, fns ...func(*SubscriberOptions)) (s Subscriber, a SignedOracleKey, e error) {
+func NewSubscriber(random io.Reader, sign Signer, fns ...func(*SubscriberOptions)) (Subscriber, SignedOracleKey, error) {
 	opts := buildSubscriberOptions(fns...)
 
-	oracle, line, err := genOracle(rand, opts.OracleOptions)
+	oracle, line, err := genOracle(random, opts.OracleOptions)
 	if err != nil {
-		return Subscriber{}, SignedOracleKey{}, err
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+	defer line.Destroy()
+
+	// FIXME: Determine if it's safe to use a signature like this. (ie as an encryption key)
+	pass, err := sign.Sign(rand.New(rand.NewSource(0)), SHA256, sign.Public().Bytes())
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+	defer Bytes(pass.Data).Destroy()
+
+	oracleKey, err := genOracleKey(random, line, pass.Data, opts.OracleOptions)
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
 	}
 
-	oracleKey, err := genOracleKey(rand, line, pass, opts.OracleOptions)
+	signedOracle, err := oracle.Sign(random, sign, opts.SigningHash)
 	if err != nil {
-		return Subscriber{}, SignedOracleKey{}, err
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
 	}
 
-	signedOracle, err := oracle.Sign(rand, priv, opts.SigningHash)
+	signedOracleKey, err := oracleKey.Sign(random, sign, opts.SigningHash)
 	if err != nil {
-		return Subscriber{}, SignedOracleKey{}, err
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
 	}
 
-	signedOracleKey, err := oracleKey.Sign(rand, priv, opts.SigningHash)
-	if err != nil {
-		return Subscriber{}, SignedOracleKey{}, err
-	}
-
-	ident, err := genKeyPair(rand, priv, line.Bytes(), opts.SigningCipher, opts.SigningHash, opts.SigningSalt, opts.SigningIter)
-	if err != nil {
-		return Subscriber{}, SignedOracleKey{}, err
-	}
-
-	return Subscriber{ident, signedOracle}, signedOracleKey, nil
+	return Subscriber{sign.Public(), signedOracle}, signedOracleKey, nil
 }

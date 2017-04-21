@@ -84,14 +84,14 @@ func CreateDomain(cancel <-chan struct{}, s Session, desc string, fns ...func(*D
 
 // // Lists all the domains that have been published on the main index.
 // func ListDomains(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]string, error) {
-	// opts := buildPagingOptions(fns...)
+// opts := buildPagingOptions(fns...)
 //
-	// auth, err := s.auth(cancel)
-	// if err != nil {
-		// return nil, errors.WithStack(err)
-	// }
+// auth, err := s.auth(cancel)
+// if err != nil {
+// return nil, errors.WithStack(err)
+// }
 //
-	// return s.net.Domains.ByIndex(cancel, auth, s.myIndex(), opts.Beg, opts.End)
+// return s.net.Domains.ByIndex(cancel, auth, s.myIndex(), opts.Beg, opts.End)
 // }
 
 // Loads the domain with the given name.  The domain will be returned only
@@ -211,6 +211,7 @@ type Signer interface {
 // A signature is a cryptographically secure structure that may be used to both prove
 // the authenticity of an accompanying document, as well as the identity of the signer.
 type Signature struct {
+	Key  string
 	Hash Hash
 	Data []byte
 }

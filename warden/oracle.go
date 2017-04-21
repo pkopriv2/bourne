@@ -128,7 +128,7 @@ func (p Oracle) Unlock(key OracleKey, pass []byte) (line, error) {
 	return ymxb, nil
 }
 
-func (p Oracle) Sign(rand io.Reader, priv PrivateKey, hash Hash) (SignedOracle, error) {
+func (p Oracle) Sign(rand io.Reader, priv Signer, hash Hash) (SignedOracle, error) {
 	fmt, err := p.Format()
 	if err != nil {
 		return SignedOracle{}, err
@@ -152,7 +152,7 @@ type OracleKey struct {
 	// the secure point.  (Must be paired with another point to be useful)
 	Pt securePoint
 
-	// the secure point encryption key options
+	// encryption key derivation arguments point
 	KeyHash Hash
 	KeySalt []byte
 	KeyIter int
@@ -187,7 +187,7 @@ func genOracleKey(rand io.Reader, line line, pass []byte, opts OracleOptions) (O
 	return OracleKey{enc, opts.ShareHash, salt, opts.ShareIter}, nil
 }
 
-func (p OracleKey) Sign(rand io.Reader, priv PrivateKey, hash Hash) (SignedOracleKey, error) {
+func (p OracleKey) Sign(rand io.Reader, priv Signer, hash Hash) (SignedOracleKey, error) {
 	fmt, err := p.Format()
 	if err != nil {
 		return SignedOracleKey{}, err

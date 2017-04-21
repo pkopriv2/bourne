@@ -36,7 +36,7 @@ func (b Bytes) Base32() string {
 	return base32.StdEncoding.EncodeToString(b)
 }
 
-// Returns a base32 representation of the array
+// Returns a pem representation of the array
 func (b Bytes) Pem(header string) string {
 	blk := &pem.Block{Type: header, Bytes: b}
 	return string(pem.EncodeToMemory(blk))

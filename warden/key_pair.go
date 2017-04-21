@@ -6,6 +6,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+type SignedKeyPair struct {
+	KeyPair
+	Sig Signature
+}
+
 // A signing key is an encrypted private key.  It may only be decrypted
 // by someone who has been trusted to sign on its behalf.
 type KeyPair struct {

@@ -33,9 +33,6 @@ func buildDomainOptions(fns ...func(*DomainOptions)) DomainOptions {
 // trust level.
 type Domain struct {
 
-	// the domain description
-	Description string
-
 	// the session owner's certificate with the domain.
 	cert SignedCertificate
 
@@ -112,7 +109,6 @@ func generateDomain(s Session, desc string, fns ...func(s *DomainOptions)) (Doma
 	}
 
 	return Domain{
-		desc,
 		SignedCertificate{cert, domSig, mySig, mySig},
 		signedOracle,
 		signedOracleKey,
@@ -192,7 +188,6 @@ func (d Domain) RenewCertificate(cancel <-chan struct{}, s Session) (Domain, err
 	}
 
 	return Domain{
-		d.Description,
 		SignedCertificate{cert, domSig, mySig, mySig},
 		d.oracle,
 		d.oracleKey,
