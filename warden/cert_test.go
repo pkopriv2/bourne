@@ -17,9 +17,13 @@ func TestCert(t *testing.T) {
 	})
 
 	t.Run("Format", func(t *testing.T) {
-		fmt := cert.Format()
+		fmt, err := cert.Format()
+		assert.Nil(t, err)
+
 		for i := 0; i < 10; i++ {
-			assert.Equal(t, fmt, cert.Format())
+			cur, err := cert.Format()
+			assert.Nil(t, err)
+			assert.Equal(t, fmt, cur)
 		}
 	})
 

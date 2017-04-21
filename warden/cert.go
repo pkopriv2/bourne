@@ -65,6 +65,29 @@ func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
 	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
 }
 
+type SignedCertificate struct {
+	Certificate
+
+	DomainSig  Signature
+	IssuerSig  Signature
+	TrusteeSig Signature
+}
+
+func (s SignedCertificate) Verify(domain PublicKey, issuer PublicKey, trustee PublicKey) error {
+	fmt, err := s.Format()
+	if err != nil {
+		return err
+	}
+
+	if err := s.DomainSig.Verify(domain, fmt); err != nil {
+		return err
+	}
+	if err := s.IssuerSig.Verify(issuer, fmt); err != nil {
+		return err
+	}
+	return s.TrusteeSig.Verify(trustee, fmt)
+}
+
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
 	Fmt       int
@@ -76,7 +99,6 @@ type Certificate struct {
 	IssuedAt  time.Time
 	ExpiresAt time.Time
 }
-
 
 func newCertificate(domain string, issuer string, trustee string, lvl LevelOfTrust, ttl time.Duration) Certificate {
 	now := time.Now()
@@ -90,23 +112,35 @@ func (c Certificate) Duration() time.Duration {
 
 // Verifies that the signature matches the certificate contents.
 func (c Certificate) Verify(key PublicKey, sig Signature) error {
-	return sig.Verify(key, c.Format())
+	fmt, err := c.Format()
+	if err != nil {
+		return err
+	}
+
+	return sig.Verify(key, fmt)
 }
 
 // Signs the certificate with the private key.
 func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
-	sig, err := key.Sign(rand, hash, c.Format())
+	fmt, err := c.Format()
+	if err != nil {
+		return Signature{}, err
+	}
+
+	sig, err := key.Sign(rand, hash, fmt)
 	if err != nil {
 		return Signature{}, errors.Wrapf(err, "Error signing certificate [%v]", c)
 	}
 	return sig, nil
 }
 
-// Returns a consistent byte representation of a certificate
-func (c Certificate) Format() []byte {
+// Returns a consistent byte representation of a certificate.  Used for signing.
+func (c Certificate) Format() ([]byte, error) {
 	var buf bytes.Buffer
-	gob.NewEncoder(&buf).Encode(&c)
-	return buf.Bytes()
+	if err := gob.NewEncoder(&buf).Encode(&c); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // Returns a consistent string representation of a certificate

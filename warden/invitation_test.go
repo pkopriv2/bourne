@@ -12,7 +12,7 @@ func TestInvitation(t *testing.T) {
 	issuerKey, err := GenRsaKey(rand.Reader, 1024)
 	trusteeKey, err := GenRsaKey(rand.Reader, 1024)
 
-	oracle, line, err := genOracle(rand.Reader)
+	oracle, line, err := genOracle(rand.Reader, buildOracleOptions())
 	assert.Nil(t, err)
 
 	inv, err := generateInvitation(rand.Reader, line, domainKey, issuerKey, trusteeKey.Public())
@@ -34,7 +34,7 @@ func TestInvitation(t *testing.T) {
 		oracleKey, err := acceptInvitation(rand.Reader, inv, oracle, trusteeKey, []byte("pass"), buildOracleOptions())
 		assert.Nil(t, err)
 
-		pt, err := oracleKey.access([]byte("pass"))
+		pt, err := oracleKey.Extract([]byte("pass"))
 		assert.Nil(t, err)
 		assert.NotNil(t, pt)
 	})

@@ -25,6 +25,7 @@ func (a AuthChallenge) Sign(rand io.Reader, k PrivateKey, h Hash) (Signature, er
 type AuthTransport interface {
 	WithSignatureInit(id string) ([]byte, Signature, error)
 	WithSignatureAuth(id string, s Signature) (token, error)
+	Register(cancel <-chan struct{}, a token, id string) error
 }
 
 type KeyTransport interface {
@@ -69,7 +70,7 @@ type CertTransport interface {
 	ActiveBySubscriberAndDomain(cancel <-chan struct{}, a token, sub, dom string) (Certificate, bool, error)
 
 	// Registers a certificate (and corresponding oracle key).
-	Register(cancel <-chan struct{}, a token, c Certificate, k oracleKey, domSig, issSig, truSig Signature) error
+	Register(cancel <-chan struct{}, a token, c Certificate, k OracleKey, domSig, issSig, truSig Signature) error
 
 	// Revokes a certificate.
 	Revoke(cancel <-chan struct{}, a token, id uuid.UUID) error
@@ -79,9 +80,6 @@ type DomainTransport interface {
 
 	// Loads the domain by id
 	ById(cancel <-chan struct{}, a token, id string) (Domain, bool, error)
-
-	// List the domain ids by index
-	ByIndex(cancel <-chan struct{}, a token, idx string, beg, end int) ([]string, error)
 
 	// Registers a newly created domain.
 	Register(cancel <-chan struct{}, a token, dom Domain) error

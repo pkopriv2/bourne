@@ -12,7 +12,7 @@ import (
 type InvitationOptions struct {
 	Lvl        LevelOfTrust
 	Expiration time.Duration
-	ShareOpts  oracleOptions
+	ShareOpts  OracleOptions
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
@@ -110,28 +110,28 @@ func verifyInvitation(i Invitation, domainKey PublicKey, issuerKey PublicKey) er
 // Accepts an invitation and returns an oracle key that can be registered.
 func acceptInvitation(rand io.Reader,
 	i Invitation,
-	o oracle,
+	o Oracle,
 	key PrivateKey,
 	pass []byte,
-	opts oracleOptions) (oracleKey, error) {
+	opts OracleOptions) (OracleKey, error) {
 
 	pt, err := i.extractPoint(rand, key)
 	if err != nil {
-		return oracleKey{},
+		return OracleKey{},
 			errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
 	}
 	defer pt.Destroy()
 
 	line, err := pt.Derive(o.Pt)
 	if err != nil {
-		return oracleKey{},
+		return OracleKey{},
 			errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", i.Cert.Domain)
 	}
 	defer line.Destroy()
 
 	oKey, err := genOracleKey(rand, line, pass, opts)
 	if err != nil {
-		return oracleKey{},
+		return OracleKey{},
 			errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
 	}
 	return oKey, nil

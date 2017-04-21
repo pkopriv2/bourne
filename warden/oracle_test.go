@@ -8,7 +8,7 @@ import (
 )
 
 func TestOracle(t *testing.T) {
-	o, l, e := genOracle(rand.Reader)
+	o, l, e := genOracle(rand.Reader, buildOracleOptions())
 	assert.Nil(t, e)
 
 	t.Run("GenerateAndUnlock", func(t *testing.T) {

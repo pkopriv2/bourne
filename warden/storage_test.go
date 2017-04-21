@@ -4,10 +4,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/boltdb/bolt"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
-	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -23,38 +21,48 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
-	t.Run("LoadInvitation_NoExist", func(t *testing.T) {
-		db.View(func(tx *bolt.Tx) error {
-			_, f, e := loadBoltInvitation(tx, uuid.NewV1())
-			assert.False(t, f)
-			assert.Nil(t, e)
-			return nil
-		})
+	t.Run("LoadSubscriber_NoExist", func(t *testing.T) {
+		_, o, e := BoltLoadSubscriber(db, "noexist")
+		assert.Nil(t, e)
+		assert.False(t, o)
 	})
 
-	t.Run("LoadInvitation", func(t *testing.T) {
-		db.Update(func(tx *bolt.Tx) error {
-			_, l, e := genOracle(rand.Reader)
-			assert.Nil(t, e)
+	t.Run("EnsureSubscriber_NoExist", func(t *testing.T) {
+		_, e := BoltEnsureSubscriber(db, "noexist")
+		assert.NotNil(t, e)
+	})
 
-			domain, e := GenRsaKey(rand.Reader, 1024)
-			assert.Nil(t, e)
+	t.Run("StoreSubscriber_Exists", func(t *testing.T) {
+		priv, e := GenRsaKey(rand.Reader, 1024)
+		assert.Nil(t, e)
 
-			issuer, e := GenRsaKey(rand.Reader, 1024)
-			assert.Nil(t, e)
+		sub, key, e := NewSubscriber(rand.Reader, priv, []byte("password"))
+		assert.Nil(t, e)
+		assert.Nil(t, BoltStoreSubscriber(db, sub, key))
+		assert.NotNil(t, BoltStoreSubscriber(db, sub, key))
+	})
 
-			trustee, e := GenRsaKey(rand.Reader, 1024)
-			assert.Nil(t, e)
+	t.Run("StoreSubscriber", func(t *testing.T) {
+		priv, e := GenRsaKey(rand.Reader, 1024)
+		assert.Nil(t, e)
 
-			inv, e := generateInvitation(rand.Reader, l, domain, issuer, trustee.Public())
-			assert.Nil(t, e)
-			assert.Nil(t, registerBoltInvitation(tx, inv))
+		sub, key, e := NewSubscriber(rand.Reader, priv, []byte("password"))
+		assert.Nil(t, e)
+		assert.Nil(t, BoltStoreSubscriber(db, sub, key))
 
-			act, f, e := loadBoltInvitation(tx, inv.Id)
-			assert.Nil(t, e)
-			assert.True(t, f)
-			assert.Equal(t, inv, act)
-			return nil
-		})
+		actSub, o, e := BoltLoadSubscriber(db, sub.Id())
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.Equal(t, sub, actSub.Subscriber)
+
+		actSub, e = BoltEnsureSubscriber(db, sub.Id())
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.Equal(t, sub, actSub.Subscriber)
+
+		actAuth, o, e := BoltLoadSubscriberAuth(db, sub.Id(), DefaultAuthMethod)
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.Equal(t, key, actAuth.SignedOracleKey)
 	})
 }

@@ -82,17 +82,17 @@ func CreateDomain(cancel <-chan struct{}, s Session, desc string, fns ...func(*D
 	return dom, nil
 }
 
-// Lists all the domains that have been published on the main index.
-func ListDomains(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]string, error) {
-	opts := buildPagingOptions(fns...)
-
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return s.net.Domains.ByIndex(cancel, auth, s.myIndex(), opts.Beg, opts.End)
-}
+// // Lists all the domains that have been published on the main index.
+// func ListDomains(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]string, error) {
+	// opts := buildPagingOptions(fns...)
+//
+	// auth, err := s.auth(cancel)
+	// if err != nil {
+		// return nil, errors.WithStack(err)
+	// }
+//
+	// return s.net.Domains.ByIndex(cancel, auth, s.myIndex(), opts.Beg, opts.End)
+// }
 
 // Loads the domain with the given name.  The domain will be returned only
 // if your public key has been invited to manage the domain and the invitation
@@ -142,7 +142,7 @@ func AcceptInvite(cancel <-chan struct{}, s Session, id uuid.UUID) error {
 		return errors.WithStack(err)
 	}
 
-	key, err := acceptInvitation(s.rand, inv, dom.oracle, priv, s.myOracle(), dom.oracle.Opts)
+	key, err := acceptInvitation(s.rand, inv, dom.oracle.Oracle, priv, s.myOracle(), dom.oracle.Opts)
 	if err != nil {
 		return errors.WithStack(err)
 	}
