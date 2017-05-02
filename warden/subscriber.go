@@ -2,24 +2,23 @@ package warden
 
 import (
 	"io"
-	"math/rand"
 
 	"github.com/pkg/errors"
+	uuid "github.com/satori/go.uuid"
 )
 
 type SubscriberOptions struct {
-	OracleOptions
+	Oracle OracleOptions
+	Invite KeyPairOptions
+	Sign   KeyPairOptions
+}
 
-	SigningAlgorithm KeyAlgorithm
-	SigningStrength  int
-	SigningCipher    SymmetricCipher
-	SigningHash      Hash
-	SigningIter      int
-	SigningSalt      int
+func (s *SubscriberOptions) InviteOptions(fn func(*KeyPairOptions)) {
+	s.Invite = buildKeyPairOptions(fn)
 }
 
 func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
-	ret := SubscriberOptions{defaultOracleOptions(), RSA, 2048, AES_256_GCM, SHA256, 1024, 32}
+	ret := SubscriberOptions{buildOracleOptions(), buildKeyPairOptions(), buildKeyPairOptions()}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -27,40 +26,68 @@ func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
 }
 
 type Subscriber struct {
-	Pub    PublicKey
+	Id     uuid.UUID
 	Oracle SignedOracle
+	Sign   SignedKeyPair
+	Invite SignedKeyPair
 }
 
-func NewSubscriber(random io.Reader, sign Signer, fns ...func(*SubscriberOptions)) (Subscriber, SignedOracleKey, error) {
+func NewSubscriber(random io.Reader, pass []byte, fns ...func(*SubscriberOptions)) (Subscriber, SignedOracleKey, error) {
 	opts := buildSubscriberOptions(fns...)
 
-	oracle, line, err := genOracle(random, opts.OracleOptions)
+	oracle, line, err := genOracle(random, opts.Oracle)
 	if err != nil {
 		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
 	}
 	defer line.Destroy()
 
-	// FIXME: Determine if it's safe to use a signature like this. (ie as an encryption key)
-	pass, err := sign.Sign(rand.New(rand.NewSource(0)), SHA256, sign.Public().Bytes())
+	sign, err := opts.Sign.Algorithm.Gen(random, opts.Invite.Strength)
 	if err != nil {
 		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
 	}
-	defer Bytes(pass.Data).Destroy()
+	defer sign.Destroy()
 
-	oracleKey, err := genOracleKey(random, line, pass.Data, opts.OracleOptions)
+	invite, err := opts.Invite.Algorithm.Gen(random, opts.Invite.Strength)
 	if err != nil {
 		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
 	}
+	defer invite.Destroy()
 
-	signedOracle, err := oracle.Sign(random, sign, opts.SigningHash)
-	if err != nil {
-		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
-	}
-
-	signedOracleKey, err := oracleKey.Sign(random, sign, opts.SigningHash)
+	oracleKey, err := genOracleKey(random, line, pass, opts.Oracle)
 	if err != nil {
 		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
 	}
 
-	return Subscriber{sign.Public(), signedOracle}, signedOracleKey, nil
+	signPair, err := genKeyPair(random, sign, line.Bytes(), opts.Invite)
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+
+	invPair, err := genKeyPair(random, invite, line.Bytes(), opts.Invite)
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+
+	signedOracle, err := oracle.Sign(random, sign, opts.Sign.Hash)
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+
+	signedOracleKey, err := oracleKey.Sign(random, sign, opts.Sign.Hash)
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+
+	// TODO: this is self signed..don't think that matters
+	signedSignKey, err := signPair.Sign(random, sign, opts.Sign.Hash)
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+
+	signedInviteKey, err := invPair.Sign(random, sign, opts.Sign.Hash)
+	if err != nil {
+		return Subscriber{}, SignedOracleKey{}, errors.WithStack(err)
+	}
+
+	return Subscriber{uuid.NewV1(), signedOracle, signedSignKey, signedInviteKey}, signedOracleKey, nil
 }

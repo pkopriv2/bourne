@@ -49,17 +49,12 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 }
 
 // Registers a new subscription with the trust service.
-func Subscribe(addr string) (KeyPad, error) {
-	return nil, nil
-}
-
-// Loads a subscription
-func ConnectWithLogin(addr, user, pass string) (Session, error) {
+func Subscribe(ctx common.Context, addr string, creds func(KeyPad)) (Session, error) {
 	return Session{}, nil
 }
 
-//
-func ConnectWithSignature(addr, user string, signer Signer) (Session, error) {
+// Loads a subscription
+func Connect(ctx common.Context, addr string, creds func(KeyPad)) (Session, error) {
 	return Session{}, nil
 }
 
@@ -97,7 +92,7 @@ func CreateDomain(cancel <-chan struct{}, s Session, desc string, fns ...func(*D
 // Loads the domain with the given name.  The domain will be returned only
 // if your public key has been invited to manage the domain and the invitation
 // has been accepted.
-func LoadDomain(cancel <-chan struct{}, s Session, id string) (Domain, bool, error) {
+func LoadDomain(cancel <-chan struct{}, s Session, id uuid.UUID) (Domain, bool, error) {
 	auth, err := s.auth(cancel)
 	if err != nil {
 		return Domain{}, false, errors.WithStack(err)
@@ -174,12 +169,12 @@ func VerifyInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
 
 	if err := i.Cert.Verify(domainKey, i.DomainSig); err != nil {
 		return errors.Wrapf(
-			err, "Error verify certificate with domain key [%v]", i.Cert.Domain)
+			err, "Error verifying certificate with domain key [%v]", i.Cert.Domain)
 	}
 
 	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
 		return errors.Wrapf(
-			err, "Error verify certificate with domain key [%v]", i.Cert.Issuer)
+			err, "Error verifying certificate with domain key [%v]", i.Cert.Issuer)
 	}
 
 	return nil
@@ -211,9 +206,9 @@ type Signer interface {
 // A signature is a cryptographically secure structure that may be used to both prove
 // the authenticity of an accompanying document, as well as the identity of the signer.
 type Signature struct {
-	Key  string
-	Hash Hash
-	Data []byte
+	Key string
+	Hash  Hash
+	Data  []byte
 }
 
 // Verifies the signature with the given public key.  Returns nil if the verification succeeded.

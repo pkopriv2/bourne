@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"testing"
 
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,7 +16,9 @@ func TestInvitation(t *testing.T) {
 	oracle, line, err := genOracle(rand.Reader, buildOracleOptions())
 	assert.Nil(t, err)
 
-	inv, err := generateInvitation(rand.Reader, line, domainKey, issuerKey, trusteeKey.Public())
+	cert := newCertificate(uuid.NewV1(), uuid.NewV1(), uuid.NewV1(), Creator, OneHundredYears)
+
+	inv, err := generateInvitation(rand.Reader, line, cert, domainKey, issuerKey, trusteeKey.Public(), buildInvitationOptions())
 	assert.Nil(t, err)
 
 	t.Run("Verify_BadDomainKey", func(t *testing.T) {

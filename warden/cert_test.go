@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCert(t *testing.T) {
-	cert := newCertificate("domain", "issuer", "trustee", Verify, 30*time.Second)
+	cert := newCertificate(uuid.NewV1(), uuid.NewV1(), uuid.NewV1(), Verify, 30*time.Second)
 
 	t.Run("String", func(t *testing.T) {
 		fmt.Println(fmt.Sprintf("%v", cert.String()))
@@ -27,7 +28,7 @@ func TestCert(t *testing.T) {
 		}
 	})
 
-	key, err  := GenRsaKey(rand.Reader, 512)
+	key, err := GenRsaKey(rand.Reader, 512)
 	assert.Nil(t, err)
 
 	t.Run("Sign", func(t *testing.T) {

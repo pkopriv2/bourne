@@ -31,10 +31,10 @@ type AuthTransport interface {
 type KeyTransport interface {
 
 	// Loads public key by subscriber
-	BySubscriber(cancel <-chan struct{}, a token, id string) (PublicKey, error)
+	BySubscriber(cancel <-chan struct{}, a token, id uuid.UUID) (PublicKey, error)
 
 	// Loads the public key by dom
-	ByDomain(cancel <-chan struct{}, a token, id string) (PublicKey, error)
+	ByDomain(cancel <-chan struct{}, a token, id uuid.UUID) (PublicKey, error)
 }
 
 type InvitationTransport interface {
@@ -43,7 +43,7 @@ type InvitationTransport interface {
 	ById(cancel <-chan struct{}, a token, id uuid.UUID) (Invitation, bool, error)
 
 	// Loads invitations by subscriber
-	BySubscriber(cancel <-chan struct{}, a token, subscriber string, beg, end int) ([]Invitation, error)
+	BySubscriber(cancel <-chan struct{}, a token, id uuid.UUID, beg, end int) ([]Invitation, error)
 
 	// Loads invitations by dom
 	ByDomain(cancel <-chan struct{}, a token, dom string, beg, end int) ([]Invitation, error)
@@ -61,13 +61,13 @@ type InvitationTransport interface {
 type CertTransport interface {
 
 	// Loads active certificates by subscriber
-	ActiveBySubscriber(cancel <-chan struct{}, a token, sub string, beg, end int) ([]Certificate, error)
+	ActiveBySubscriber(cancel <-chan struct{}, a token, id uuid.UUID, beg, end int) ([]Certificate, error)
 
 	// Loads active certs by domain.
-	ActiveByDomain(cancel <-chan struct{}, a token, dom string, beg, end int) ([]Certificate, error)
+	ActiveByDomain(cancel <-chan struct{}, a token, id uuid.UUID, beg, end int) ([]Certificate, error)
 
 	// Loads active cert by (subscriber, domain) tuple.  Only 1 ever allowed.
-	ActiveBySubscriberAndDomain(cancel <-chan struct{}, a token, sub, dom string) (Certificate, bool, error)
+	ActiveBySubscriberAndDomain(cancel <-chan struct{}, a token, sub, dom uuid.UUID) (Certificate, bool, error)
 
 	// Registers a certificate (and corresponding oracle key).
 	Register(cancel <-chan struct{}, a token, c Certificate, k OracleKey, domSig, issSig, truSig Signature) error
@@ -79,7 +79,7 @@ type CertTransport interface {
 type DomainTransport interface {
 
 	// Loads the domain by id
-	ById(cancel <-chan struct{}, a token, id string) (Domain, bool, error)
+	ById(cancel <-chan struct{}, a token, id uuid.UUID) (Domain, bool, error)
 
 	// Registers a newly created domain.
 	Register(cancel <-chan struct{}, a token, dom Domain) error

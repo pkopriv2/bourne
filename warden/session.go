@@ -1,6 +1,10 @@
 package warden
 
-import "io"
+import (
+	"io"
+
+	uuid "github.com/satori/go.uuid"
+)
 
 // A session represents an authenticated session with the trust ecosystem.  Sessions
 // contain a signed message from the trust service - plus a hashed form of the
@@ -9,14 +13,11 @@ import "io"
 // fear of leaking any critical details.
 type Session struct {
 
-	// the encrypted subscription key.
-	key KeyPair
+	// the subscriber
+	sub Subscriber
 
 	// the transport mechanism. (expected to be secure).
 	net Net
-
-	// the personal index of the session.  (usually part of organization)
-	idx string
 
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
@@ -38,18 +39,23 @@ func (s *Session) Destroy() {
 // Returns the subscriber id associated with this session.  This uniquely identifies
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
-func (s *Session) MyId() string {
-	return s.key.Pub.Id()
+func (s *Session) MyId() uuid.UUID {
+	return s.sub.Id
 }
 
 // Returns the subscriber key of this session.
 func (s *Session) MyKey() PublicKey {
-	return s.key.Pub
+	return s.sub.Sign.Pub
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
 func (s *Session) MySigningKey() (PrivateKey, error) {
-	return s.key.Decrypt(s.oracle)
+	return s.sub.Sign.Decrypt(s.oracle)
+}
+
+// Returns the invitation key associated with this session. Should be promptly destroyed.
+func (s *Session) MyInviteKey() (PrivateKey, error) {
+	return s.sub.Invite.Decrypt(s.oracle)
 }
 
 // Returns the personal encryption seed of this subscription.  The seed is actually

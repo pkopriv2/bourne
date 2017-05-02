@@ -3,20 +3,18 @@ package warden
 import (
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 )
 
 type InvitationOptions struct {
-	Lvl        LevelOfTrust
-	Expiration time.Duration
-	ShareOpts  OracleOptions
+	CertificateOptions
+	ShareOpts OracleOptions
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
-	def := InvitationOptions{Encrypt, 365 * 24 * time.Hour, buildOracleOptions()}
+	def := InvitationOptions{buildCertificateOptions(), buildOracleOptions()}
 	for _, fn := range opts {
 		fn(&def)
 	}
@@ -48,19 +46,11 @@ func (i Invitation) String() string {
 
 func generateInvitation(rand io.Reader,
 	line line,
+	cert Certificate,
 	domainKey PrivateKey,
 	issuerKey PrivateKey,
 	trusteeKey PublicKey,
-	fns ...func(*InvitationOptions)) (Invitation, error) {
-
-	opts := buildInvitationOptions(fns...)
-
-	cert := newCertificate(
-		domainKey.Public().Id(),
-		issuerKey.Public().Id(),
-		trusteeKey.Id(),
-		opts.Lvl,
-		opts.Expiration)
+	opts InvitationOptions) (Invitation, error) {
 
 	domainSig, err := cert.Sign(rand, domainKey, opts.ShareOpts.SigHash)
 	if err != nil {

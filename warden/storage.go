@@ -3,6 +3,7 @@ package warden
 import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	uuid "github.com/satori/go.uuid"
 )
 
 // Basic errors
@@ -13,6 +14,14 @@ var (
 
 type StoredSubscriber struct {
 	Subscriber
+}
+
+type StoredPublicKey struct {
+	PublicKey
+}
+
+type StoredKeyPair struct {
+	SignedKeyPair
 }
 
 type StoredAuthenticator struct {
@@ -34,7 +43,10 @@ type Storage interface {
 	SaveSubscriber(sub Subscriber, auth SignedOracleKey) error
 
 	// Loads the subscriber, returning true if it existed.
-	LoadSubscriberByKey(id string) (Subscriber, bool, error)
+	LoadSubscriberById(id uuid.UUID) (Subscriber, bool, error)
+
+	// // Loads the subscriber, returning true if it existed.
+	// LoadSubscriberByKey(key string) (Subscriber, bool, error)
 
 	// // Stores an auxiliary encrypted key pair.
 	// SaveAuxKey(sub,alias string, pair SignedKeyPair) error
