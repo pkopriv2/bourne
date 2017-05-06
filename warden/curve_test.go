@@ -16,9 +16,9 @@ func TestEncryptPoint(t *testing.T) {
 	pt, err := generatePoint(source, line, 1)
 	assert.Nil(t, err)
 
-	key := Bytes([]byte("pass")).Pbkdf2([]byte{}, 1, 32, SHA256.Standard())
+	key := cryptoBytes([]byte("pass")).Pbkdf2([]byte{}, 1, 32, SHA256.standard())
 
-	enc, err := encryptPoint(source, pt, AES_256_GCM, key)
+	enc, err := encryptPoint(source, pt, Aes256Gcm, key)
 	assert.Nil(t, err)
 	assert.NotNil(t, enc)
 

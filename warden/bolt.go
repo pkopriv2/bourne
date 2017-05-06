@@ -97,7 +97,7 @@ func (b *boltStorage) SaveSubscriber(sub Subscriber, auth SignedOracleKey) error
 	})
 }
 
-func (b *boltStorage) LoadSubscriber(id string) (s StoredSubscriber, o bool, e error) {
+func (b *boltStorage) LoadSubscriber(id string) (s storedSubscriber, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		s, o, e = boltLoadSubscriber(tx, id)
 		return e
@@ -142,35 +142,35 @@ func (b *boltStorage) LoadSubscriberAuxKey(id, name string, pair SignedKeyPair) 
 // return
 // }
 
-func (b *boltStorage) LoadDomain(id string) (d StoredDomain, o bool, e error) {
+func (b *boltStorage) LoadTrust(id string) (d storedTrust, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
-		d, o, e = boltLoadDomain(tx, id)
+		d, o, e = boltLoadTrust(tx, id)
 		return e
 	})
 	return
 }
 
-func (b *boltStorage) SaveDomain(dom Domain) error {
-	var issuer StoredSubscriber
+func (b *boltStorage) SaveTrust(dom Trust) error {
+	var issuer storedSubscriber
 	// issuer, err := EnsureSubscriber(b, dom.cert.Issuer)
 	// if err != nil {
 	// return errors.WithStack(err)
 	// }
 
-	if err := dom.cert.Verify(dom.ident.Pub, issuer.Sign.Pub, issuer.Sign.Pub); err != nil {
+	if err := dom.Cert.Verify(dom.ident.Pub, issuer.Sign.Pub, issuer.Sign.Pub); err != nil {
 		return errors.Wrapf(err, "Unable to create domain [%v].  Invalid certificate.", dom.Id)
 	}
 
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
-		if err := boltStoreDomain(tx, dom.ident, dom.oracle); err != nil {
+		if err := boltStoreTrust(tx, dom.ident, dom.oracle); err != nil {
 			return err
 		}
 
-		if err := boltStoreCert(tx, dom.cert); err != nil {
+		if err := boltStoreCert(tx, dom.Cert); err != nil {
 			return err
 		}
 
-		if err := boltStoreDomainAuth(tx, dom.Id, dom.cert.Trustee, dom.oracleKey); err != nil {
+		if err := boltStoreTrustAuth(tx, dom.Id, dom.Cert.Trustee, dom.oracleKey); err != nil {
 			return err
 		}
 
@@ -180,16 +180,16 @@ func (b *boltStorage) SaveDomain(dom Domain) error {
 
 func (b *boltStorage) SaveCert(dom, subscriber string) (d SignedCertificate, k SignedOracleKey, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
-		// d, o, e = boltLoadDomainAuth(tx, dom, subscriber)
+		// d, o, e = boltLoadTrustAuth(tx, dom, subscriber)
 		// return e
 		return nil
 	})
 	return
 }
 
-func (b *boltStorage) LoadCertByDomainAndSubscriber(dom, subscriber string) (d SignedCertificate, k SignedOracleKey, o bool, e error) {
+func (b *boltStorage) LoadCertByTrustAndSubscriber(dom, subscriber string) (d SignedCertificate, k SignedOracleKey, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
-		// d, o, e = boltLoadDomainAuth(tx, dom, subscriber)
+		// d, o, e = boltLoadTrustAuth(tx, dom, subscriber)
 		// return e
 		return nil
 	})
@@ -202,7 +202,7 @@ func boltStoreSubscriber(tx *bolt.Tx, sub Subscriber) error {
 		return errors.Wrapf(err, "Subscriber already exists [%v]", sub.Id)
 	}
 
-	raw, err := gobBytes(StoredSubscriber{sub})
+	raw, err := gobBytes(storedSubscriber{sub})
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding subscriber [%v]", sub.Id)
 	}
@@ -215,13 +215,13 @@ func boltStoreSubscriber(tx *bolt.Tx, sub Subscriber) error {
 	return nil
 }
 
-func boltLoadSubscriber(tx *bolt.Tx, id string) (s StoredSubscriber, o bool, e error) {
+func boltLoadSubscriber(tx *bolt.Tx, id string) (s storedSubscriber, o bool, e error) {
 	o, e = parseGobBytes(tx.Bucket(subscriberBucket).Get(stash.String(id)), &s)
 	return
 }
 
 func boltStoreSubscriberAuth(tx *bolt.Tx, id uuid.UUID, alias string, k SignedOracleKey) error {
-	raw, err := gobBytes(StoredAuthenticator{k})
+	raw, err := gobBytes(storedAuthenticator{k})
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding oracle key [%v]", k)
 	}
@@ -233,20 +233,20 @@ func boltStoreSubscriberAuth(tx *bolt.Tx, id uuid.UUID, alias string, k SignedOr
 	return nil
 }
 
-func boltLoadSubscriberAuth(tx *bolt.Tx, sub, method string) (k StoredAuthenticator, o bool, e error) {
+func boltLoadSubscriberAuth(tx *bolt.Tx, sub, method string) (k storedAuthenticator, o bool, e error) {
 	o, e = parseGobBytes(
 		tx.Bucket(subscriberAuthBucket).Get(stash.String(sub).ChildString(method)), &k)
 	return
 }
 
-func boltStoreDomain(tx *bolt.Tx, identity KeyPair, oracle SignedOracle) error {
+func boltStoreTrust(tx *bolt.Tx, identity KeyPair, oracle SignedOracle) error {
 	id := identity.Pub.Id()
 
 	if err := boltEnsureEmpty(tx.Bucket(domainBucket), stash.String(id)); err != nil {
-		return errors.Wrapf(err, "Domain already exists [%v]", id)
+		return errors.Wrapf(err, "Trust already exists [%v]", id)
 	}
 
-	raw, err := gobBytes(StoredDomain{identity, oracle})
+	raw, err := gobBytes(storedTrust{identity, oracle})
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding domain [%v]", id)
 	}
@@ -259,12 +259,12 @@ func boltStoreDomain(tx *bolt.Tx, identity KeyPair, oracle SignedOracle) error {
 	return nil
 }
 
-func boltLoadDomain(tx *bolt.Tx, id string) (d StoredDomain, o bool, e error) {
+func boltLoadTrust(tx *bolt.Tx, id string) (d storedTrust, o bool, e error) {
 	o, e = parseGobBytes(tx.Bucket(domainBucket).Get(stash.String(id)), &d)
 	return
 }
 
-func boltStoreDomainAuth(tx *bolt.Tx, dom, sub uuid.UUID, o SignedOracleKey) error {
+func boltStoreTrustAuth(tx *bolt.Tx, dom, sub uuid.UUID, o SignedOracleKey) error {
 	rawKey, err := gobBytes(o)
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding oracle key [%v]", o)
@@ -277,7 +277,7 @@ func boltStoreDomainAuth(tx *bolt.Tx, dom, sub uuid.UUID, o SignedOracleKey) err
 	return nil
 }
 
-func boltLoadDomainAuth(tx *bolt.Tx, dom, sub string) (k StoredAuthenticator, o bool, e error) {
+func boltLoadTrustAuth(tx *bolt.Tx, dom, sub string) (k storedAuthenticator, o bool, e error) {
 	o, e = parseGobBytes(tx.Bucket(domainAuthBucket).Get(stash.String(dom).ChildString(sub)), &k)
 	return
 }
@@ -305,13 +305,13 @@ func boltStoreCert(tx *bolt.Tx, c SignedCertificate) error {
 
 	// update domain index
 	if err := boltUpdateIndex(
-		tx.Bucket(domainCertBucket), stash.UUID(c.Domain), c.Id); err != nil {
+		tx.Bucket(domainCertBucket), stash.UUID(c.Trust), c.Id); err != nil {
 		return errors.Wrapf(err, "Error writing cert index [%v]", c.Id)
 	}
 
 	// update latest index
 	if err := boltUpdateIndex(
-		tx.Bucket(certLatestBucket), stash.UUID(c.Domain).ChildUUID(c.Trustee), c.Id); err != nil {
+		tx.Bucket(certLatestBucket), stash.UUID(c.Trust).ChildUUID(c.Trustee), c.Id); err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -341,7 +341,7 @@ func boltStoreInvite(tx *bolt.Tx, i Invitation) error {
 
 	// update domain index: :dom:/id:
 	if err := boltUpdateIndex(
-		tx.Bucket(domainInviteBucket), stash.UUID(i.Cert.Domain), i.Id); err != nil {
+		tx.Bucket(domainInviteBucket), stash.UUID(i.Cert.Trust), i.Id); err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -392,7 +392,7 @@ func boltLoadInvitesByIds(tx *bolt.Tx, ids []uuid.UUID) ([]Invitation, error) {
 	return invites, nil
 }
 
-func boltLoadCertIdsByDomain(tx *bolt.Tx, dom string, beg, end int) ([]uuid.UUID, error) {
+func boltLoadCertIdsByTrust(tx *bolt.Tx, dom string, beg, end int) ([]uuid.UUID, error) {
 	return boltScanIndex(tx.Bucket(domainCertBucket), stash.String(dom), beg, end)
 }
 
@@ -400,7 +400,7 @@ func boltLoadCertIdsBySubscriber(tx *bolt.Tx, subscriber string, beg int, end in
 	return boltScanIndex(tx.Bucket(subscriberCertBucket), stash.String(subscriber), beg, end)
 }
 
-func loadBoltInviteIdsByDomain(tx *bolt.Tx, dom string, beg int, end int) ([]uuid.UUID, error) {
+func loadBoltInviteIdsByTrust(tx *bolt.Tx, dom string, beg int, end int) ([]uuid.UUID, error) {
 	return boltScanIndex(tx.Bucket(domainInviteBucket), stash.String(dom), beg, end)
 }
 
@@ -408,7 +408,7 @@ func boltLoadInviteIdsBySubscriber(tx *bolt.Tx, subscriber string, beg int, end 
 	return boltScanIndex(tx.Bucket(subscriberInviteBucket), stash.String(subscriber), beg, end)
 }
 
-func boltLoadCertIdBySubscriberAndDomain(tx *bolt.Tx, dom, sub string) (i uuid.UUID, o bool, e error) {
+func boltLoadCertIdBySubscriberAndTrust(tx *bolt.Tx, dom, sub string) (i uuid.UUID, o bool, e error) {
 	raw := tx.Bucket(certLatestBucket).Get(stash.String(dom).ChildString(sub))
 	if raw == nil {
 		return
@@ -422,24 +422,24 @@ func boltUpdateActiveIndex(bucket *bolt.Bucket, root []byte, id uuid.UUID) error
 	return errors.WithStack(bucket.Put(root, stash.UUID(id)))
 }
 
-func boltLoadCertBySubscriberAndDomain(tx *bolt.Tx, sub, dom string) (SignedCertificate, bool, error) {
-	id, ok, err := boltLoadCertIdBySubscriberAndDomain(tx, sub, dom)
+func boltLoadCertBySubscriberAndTrust(tx *bolt.Tx, sub, dom string) (SignedCertificate, bool, error) {
+	id, ok, err := boltLoadCertIdBySubscriberAndTrust(tx, sub, dom)
 	if err != nil || !ok {
 		return SignedCertificate{}, false, err
 	}
 	return boltLoadCertById(tx, id)
 }
 
-func boltLoadCertsByDomain(tx *bolt.Tx, dom string, beg, end int) ([]SignedCertificate, error) {
-	ids, err := boltLoadCertIdsByDomain(tx, dom, beg, end)
+func boltLoadCertsByTrust(tx *bolt.Tx, dom string, beg, end int) ([]SignedCertificate, error) {
+	ids, err := boltLoadCertIdsByTrust(tx, dom, beg, end)
 	if err != nil {
 		return nil, err
 	}
 	return boltLoadCertsByIds(tx, ids)
 }
 
-func boltLoadInvitesByDomain(tx *bolt.Tx, dom string, beg, end int) ([]Invitation, error) {
-	ids, err := boltLoadCertIdsByDomain(tx, dom, beg, end)
+func boltLoadInvitesByTrust(tx *bolt.Tx, dom string, beg, end int) ([]Invitation, error) {
+	ids, err := boltLoadCertIdsByTrust(tx, dom, beg, end)
 	if err != nil {
 		return nil, err
 	}

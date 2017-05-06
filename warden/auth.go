@@ -10,19 +10,19 @@ import (
 )
 
 // The decrypted token.  Internal only and only decrypted by the owner of the token key.
-type token struct {
+type auth struct {
 	IssuedTo string
 	IssuedBy string
 	Created  time.Time
 	Expires  time.Time
 }
 
-func newToken(issuedTo string, issuedBy string, ttl time.Duration) token {
+func newToken(issuedTo string, issuedBy string, ttl time.Duration) auth {
 	now := time.Now()
-	return token{issuedTo, issuedBy, time.Now(), now.Add(ttl)}
+	return auth{issuedTo, issuedBy, time.Now(), now.Add(ttl)}
 }
 
-func (s token) Write(w scribe.Writer) {
+func (s auth) Write(w scribe.Writer) {
 	w.WriteString("issuedTo", s.IssuedTo)
 	w.WriteString("issuedBy", s.IssuedBy)
 	created, _ := s.Created.MarshalBinary()
@@ -31,7 +31,7 @@ func (s token) Write(w scribe.Writer) {
 	w.WriteBytes("expires", expires)
 }
 
-func (s token) Read(r scribe.Reader) (e error) {
+func (s auth) Read(r scribe.Reader) (e error) {
 	var created, expired []byte
 	e = common.Or(e, r.ReadString("issuedTo", &s.IssuedTo))
 	e = common.Or(e, r.ReadString("issuedBy", &s.IssuedBy))
@@ -42,15 +42,15 @@ func (s token) Read(r scribe.Reader) (e error) {
 	return
 }
 
-func (s token) Sign(rand io.Reader, signer Signer, hash Hash) ([]byte, error) {
+func (s auth) Sign(rand io.Reader, signer Signer, hash Hash) ([]byte, error) {
 	return nil, nil
 }
 
-func (s token) Bytes() []byte {
+func (s auth) Bytes() []byte {
 	return scribe.Write(s).Bytes()
 }
 
-func (s token) Parse(raw []byte) error {
+func (s auth) Parse(raw []byte) error {
 	msg, err := scribe.Parse(raw)
 	if err != nil {
 		return errors.WithStack(err)

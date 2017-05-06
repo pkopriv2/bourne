@@ -27,10 +27,10 @@ import (
 
 // Common errors
 var (
-	SessionExpiredError  = errors.New("Warden:ExpiredSession")
-	SessionInvalidError  = errors.New("Warden:InvalidSession")
-	DomainInvariantError = errors.New("Warden:DomainInvariantError")
-	TrustError           = errors.New("Warden:TrustError")
+	SessionExpiredError = errors.New("Warden:ExpiredSession")
+	SessionInvalidError = errors.New("Warden:InvalidSession")
+	InvariantError      = errors.New("Warden:InvariantError")
+	TrustError          = errors.New("Warden:TrustError")
 )
 
 // The paging options
@@ -58,140 +58,6 @@ func Connect(ctx common.Context, addr string, creds func(KeyPad)) (Session, erro
 	return Session{}, nil
 }
 
-// Creates a local domain.
-func CreateDomain(cancel <-chan struct{}, s Session, desc string, fns ...func(*DomainOptions)) (Domain, error) {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return Domain{}, errors.WithStack(err)
-	}
-
-	dom, err := generateDomain(s, desc, fns...)
-	if err != nil {
-		return Domain{}, errors.WithStack(err)
-	}
-
-	if err := s.net.Domains.Register(cancel, auth, dom); err != nil {
-		return Domain{}, errors.WithStack(err)
-	}
-
-	return dom, nil
-}
-
-// // Lists all the domains that have been published on the main index.
-// func ListDomains(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]string, error) {
-// opts := buildPagingOptions(fns...)
-//
-// auth, err := s.auth(cancel)
-// if err != nil {
-// return nil, errors.WithStack(err)
-// }
-//
-// return s.net.Domains.ByIndex(cancel, auth, s.myIndex(), opts.Beg, opts.End)
-// }
-
-// Loads the domain with the given name.  The domain will be returned only
-// if your public key has been invited to manage the domain and the invitation
-// has been accepted.
-func LoadDomain(cancel <-chan struct{}, s Session, id uuid.UUID) (Domain, bool, error) {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return Domain{}, false, errors.WithStack(err)
-	}
-
-	return s.net.Domains.ById(cancel, auth, id)
-}
-
-// Lists the session owner's currently pending invitations.
-func ListInvitations(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Invitation, error) {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	opts := buildPagingOptions(fns...)
-	return s.net.Invites.BySubscriber(cancel, auth, s.MyId(), opts.Beg, opts.End)
-}
-
-// Accepts the invitation with the given id.  Returns an error if the
-// acceptance fails for any reason.
-//
-// TODO: verify invitation prior to accepting.
-func AcceptInvite(cancel <-chan struct{}, s Session, id uuid.UUID) error {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	inv, ok, err := s.net.Invites.ById(cancel, auth, id)
-	if err != nil || !ok {
-		return errors.WithStack(common.Or(err, DomainInvariantError))
-	}
-
-	dom, ok, err := s.net.Domains.ById(cancel, auth, inv.Cert.Domain)
-	if err != nil || !ok {
-		return errors.WithStack(err)
-	}
-
-	priv, err := s.MySigningKey()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	key, err := acceptInvitation(s.rand, inv, dom.oracle.Oracle, priv, s.myOracle(), dom.oracle.Opts)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	sig, err := inv.Cert.Sign(s.rand, priv, dom.oracle.Opts.SigHash)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	return s.net.Certs.Register(cancel, auth, inv.Cert, key, inv.DomainSig, inv.IssuerSig, sig)
-}
-
-// Verifies the contents of an invitation.
-func VerifyInvitation(cancel <-chan struct{}, s Session, i Invitation) error {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	domainKey, err := s.net.Keys.ByDomain(cancel, auth, i.Cert.Domain)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	issuerKey, err := s.net.Keys.BySubscriber(cancel, auth, i.Cert.Issuer)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	if err := i.Cert.Verify(domainKey, i.DomainSig); err != nil {
-		return errors.Wrapf(
-			err, "Error verifying certificate with domain key [%v]", i.Cert.Domain)
-	}
-
-	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
-		return errors.Wrapf(
-			err, "Error verifying certificate with domain key [%v]", i.Cert.Issuer)
-	}
-
-	return nil
-}
-
-// Lists all the certificates of trust that have been issued to the given session.
-func ListCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	opts := buildPagingOptions(fns...)
-
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return s.net.Certs.ActiveBySubscriber(cancel, auth, s.MyId(), opts.Beg, opts.End)
-}
-
 // A signer contains the knowledge necessary to digitally sign messages.
 //
 // For high-security environments, only a signer is required to authenticate with the
@@ -206,9 +72,9 @@ type Signer interface {
 // A signature is a cryptographically secure structure that may be used to both prove
 // the authenticity of an accompanying document, as well as the identity of the signer.
 type Signature struct {
-	Key string
-	Hash  Hash
-	Data  []byte
+	Key  string
+	Hash Hash
+	Data []byte
 }
 
 // Verifies the signature with the given public key.  Returns nil if the verification succeeded.
@@ -218,7 +84,7 @@ func (s Signature) Verify(key PublicKey, msg []byte) error {
 
 // Returns a simple string rep of the signature.
 func (s Signature) String() string {
-	return fmt.Sprintf("Signature(hash=%v): %v", s.Hash, Bytes(s.Data))
+	return fmt.Sprintf("Signature(hash=%v): %v", s.Hash, cryptoBytes(s.Data))
 }
 
 // Public keys are the basis of identity within the trust ecosystem.  In plain english,
@@ -235,7 +101,7 @@ type PublicKey interface {
 	Algorithm() KeyAlgorithm
 	Verify(hash Hash, msg []byte, sig []byte) error
 	Encrypt(rand io.Reader, hash Hash, plaintext []byte) ([]byte, error)
-	Bytes() []byte
+	format() []byte
 }
 
 // Private keys represent proof of ownership of a public key and form the basis of
@@ -247,7 +113,7 @@ type PrivateKey interface {
 	Signer
 	Algorithm() KeyAlgorithm
 	Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error)
-	Bytes() []byte
+	format() []byte
 	Destroy()
 }
 

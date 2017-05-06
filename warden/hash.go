@@ -8,7 +8,6 @@ import (
 	"hash"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/scribe"
 )
 
 // Common hash implementations.
@@ -22,7 +21,7 @@ const (
 
 type Hash int
 
-func (h Hash) Standard() hash.Hash {
+func (h Hash) standard() hash.Hash {
 	switch h {
 	default:
 		return nil
@@ -35,7 +34,7 @@ func (h Hash) Standard() hash.Hash {
 	}
 }
 
-func (h Hash) Crypto() crypto.Hash {
+func (h Hash) crypto() crypto.Hash {
 	switch h {
 	default:
 		return 0
@@ -62,22 +61,9 @@ func (h Hash) String() string {
 }
 
 func (h Hash) Hash(msg []byte) ([]byte, error) {
-	impl := h.Standard()
+	impl := h.standard()
 	if _, err := impl.Write(msg); err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return impl.Sum(nil), nil
-}
-
-func (h Hash) Bytes() []byte {
-	return scribe.Write(h).Bytes()
-}
-
-func (h Hash) Write(w scribe.Writer) {
-	w.WriteInt("ord", int(h))
-}
-
-func ReadHash(r scribe.Reader) (h Hash, e error) {
-	e = r.ReadInt("ord", (*int)(&h))
-	return
 }

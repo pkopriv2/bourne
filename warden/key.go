@@ -18,7 +18,7 @@ const (
 )
 
 // Parses the public key from a standard binary format.
-func (k KeyAlgorithm) ParsePublicKey(raw []byte) (PublicKey, error) {
+func (k KeyAlgorithm) parsePublicKey(raw []byte) (PublicKey, error) {
 	switch k {
 	default:
 		return nil, errors.WithStack(UnknownKeyAlgorithmError)
@@ -28,7 +28,7 @@ func (k KeyAlgorithm) ParsePublicKey(raw []byte) (PublicKey, error) {
 }
 
 // Parses the private key from a standard binary format.
-func (k KeyAlgorithm) ParsePrivateKey(raw []byte) (PrivateKey, error) {
+func (k KeyAlgorithm) parsePrivateKey(raw []byte) (PrivateKey, error) {
 	switch k {
 	default:
 		return nil, errors.WithStack(UnknownKeyAlgorithmError)

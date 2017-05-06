@@ -12,28 +12,28 @@ var (
 	StorageInvariantError = errors.Wrap(StorageError, "Warden:StorageError")
 )
 
-type StoredSubscriber struct {
+type storedSubscriber struct {
 	Subscriber
 }
 
-type StoredPublicKey struct {
+type storedPublicKey struct {
 	PublicKey
 }
 
-type StoredKeyPair struct {
+type storedKeyPair struct {
 	SignedKeyPair
 }
 
-type StoredAuthenticator struct {
+type storedAuthenticator struct {
 	SignedOracleKey
 }
 
-type StoredDomain struct {
+type storedTrust struct {
 	Identity KeyPair
 	Oracle   SignedOracle
 }
 
-type Storage interface {
+type storage interface {
 
 	// Stores the subscriber and the default authenticator.  These elements
 	// of a subscriber are guaranteed to be static throughout its lifetime.
@@ -63,8 +63,8 @@ type Storage interface {
 	// SaveSubscriberAuth(subscriber, method string, auth SignedOracleKey) error
 	// LoadSubscriberAuth(subscriber, method string) (StoredAuthenticator, bool, error)
 
-	LoadDomain(id string) (StoredDomain, bool, error)
-	SaveDomain(dom Domain) error
+	LoadTrust(id string) (storedTrust, bool, error)
+	SaveTrust(dom Trust) error
 
 	// LoadCertificate(id uuid.UUID) (SignedCertificate, error)
 }
@@ -85,10 +85,10 @@ type Storage interface {
 // return s, nil
 // }
 
-func EnsureDomain(store Storage, id string) (StoredDomain, error) {
-	d, o, e := store.LoadDomain(id)
+func ensureTrust(store storage, id string) (storedTrust, error) {
+	d, o, e := store.LoadTrust(id)
 	if e != nil || !o {
-		return d, common.Or(e, errors.Wrapf(StorageInvariantError, "Domain not found [%v]", id))
+		return d, common.Or(e, errors.Wrapf(StorageInvariantError, "Trust not found [%v]", id))
 	}
 	return d, nil
 }

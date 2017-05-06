@@ -12,7 +12,7 @@ import (
 
 // TODO: Generalize this for curves of n-degrees. (ie: lines, parabolas, cubics, quartics, etc...)
 // An encrypted point (just wraps a simple cipher whose key is a PBKDF2 hash)
-type securePoint CipherText
+type securePoint cipherText
 
 // Returns the point, encrypted by using the given pass as the key for the cipher.
 func encryptPoint(rand io.Reader, pt point, alg SymmetricCipher, key []byte) (securePoint, error) {
@@ -26,7 +26,7 @@ func encryptPoint(rand io.Reader, pt point, alg SymmetricCipher, key []byte) (se
 
 // Decrypts the point using the salt, iterations and raw bytes.
 func (e securePoint) Decrypt(key []byte) (point, error) {
-	raw, err := CipherText(e).Decrypt(key)
+	raw, err := cipherText(e).Decrypt(key)
 	if err != nil {
 		return point{}, errors.WithStack(err)
 	}
@@ -35,7 +35,7 @@ func (e securePoint) Decrypt(key []byte) (point, error) {
 
 // Returns the raw representation of the encrypted point.
 func (e securePoint) Bytes() []byte {
-	return CipherText(e).Bytes()
+	return cipherText(e).Bytes()
 }
 
 // Generates a random line.  The domain is used to determine the number of bytes to use when generating
@@ -87,8 +87,8 @@ func (l line) Destroy() {
 	sBytes := l.Slope.Bytes()
 	iBytes := l.Intercept.Bytes()
 
-	Bytes(sBytes).Destroy()
-	Bytes(iBytes).Destroy()
+	cryptoBytes(sBytes).Destroy()
+	cryptoBytes(iBytes).Destroy()
 
 	l.Slope.SetBytes(sBytes)
 	l.Slope.SetBytes(iBytes)
@@ -143,8 +143,8 @@ func (p point) Destroy() {
 	xBytes := p.X.Bytes()
 	yBytes := p.Y.Bytes()
 
-	Bytes(xBytes).Destroy()
-	Bytes(yBytes).Destroy()
+	cryptoBytes(xBytes).Destroy()
+	cryptoBytes(yBytes).Destroy()
 
 	p.X.SetBytes(xBytes)
 	p.Y.SetBytes(yBytes)

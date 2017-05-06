@@ -38,13 +38,8 @@ const (
 	Creator
 )
 
-// FIXME: Horrible...horrible
-func (l LevelOfTrust) Greater(o LevelOfTrust) bool {
-	return l > o
-}
-
 // FIXME: Horrible...horrible...horribler
-func (l LevelOfTrust) Verify(o LevelOfTrust) error {
+func (l LevelOfTrust) verify(o LevelOfTrust) error {
 	if l > o {
 		return newLevelOfTrustError(l, o)
 	}
@@ -81,7 +76,7 @@ func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
 type SignedCertificate struct {
 	Certificate
 
-	DomainSig  Signature
+	TrustSig   Signature
 	IssuerSig  Signature
 	TrusteeSig Signature
 }
@@ -92,7 +87,7 @@ func (s SignedCertificate) Verify(domain PublicKey, issuer PublicKey, trustee Pu
 		return err
 	}
 
-	if err := s.DomainSig.Verify(domain, fmt); err != nil {
+	if err := s.TrustSig.Verify(domain, fmt); err != nil {
 		return err
 	}
 	if err := s.IssuerSig.Verify(issuer, fmt); err != nil {
@@ -105,7 +100,7 @@ func (s SignedCertificate) Verify(domain PublicKey, issuer PublicKey, trustee Pu
 type Certificate struct {
 	Fmt       int
 	Id        uuid.UUID
-	Domain    uuid.UUID
+	Trust     uuid.UUID
 	Issuer    uuid.UUID
 	Trustee   uuid.UUID
 	Level     LevelOfTrust
@@ -159,5 +154,5 @@ func (c Certificate) Format() ([]byte, error) {
 // Returns a consistent string representation of a certificate
 func (c Certificate) String() string {
 	return fmt.Sprintf("Cert(domain=%v,issuer=%v,trustee=%v,lvl=%v): %v",
-		c.Domain, c.Issuer, c.Trustee, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
+		c.Trust, c.Issuer, c.Trustee, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
 }

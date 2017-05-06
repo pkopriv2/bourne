@@ -22,7 +22,7 @@ func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions 
 }
 
 // An invitation is a cryptographically secured message asking the recipient to share in the
-// management of a domain. The invitation may only be accepted by the intended recipient.
+// management of a trust. The invitation may only be accepted by the intended recipient.
 // These technically can be shared publicly, but exposure should be limited (typically only the
 // trust system needs to know).
 type Invitation struct {
@@ -32,11 +32,11 @@ type Invitation struct {
 	Cert Certificate
 
 	// The required signatures
-	DomainSig Signature
+	TrustSig  Signature
 	IssuerSig Signature
 
 	// The embedded curve information
-	Key KeyExchange
+	Key keyExchange
 	Pt  securePoint
 }
 
@@ -47,48 +47,48 @@ func (i Invitation) String() string {
 func generateInvitation(rand io.Reader,
 	line line,
 	cert Certificate,
-	domainKey PrivateKey,
+	trustKey PrivateKey,
 	issuerKey PrivateKey,
 	trusteeKey PublicKey,
 	opts InvitationOptions) (Invitation, error) {
 
-	domainSig, err := cert.Sign(rand, domainKey, opts.ShareOpts.SigHash)
+	trustSig, err := cert.Sign(rand, trustKey, opts.ShareOpts.SigHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Error signing certificate with key [%v]: %v", cert.Domain, cert)
+			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
 	}
 
 	issuerSig, err := cert.Sign(rand, issuerKey, opts.ShareOpts.SigHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Error signing certificate with key [%v]: %v", cert.Domain, cert)
+			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
 	}
 
 	rawPt, err := generatePoint(rand, line, opts.ShareOpts.ShareCipher.KeySize())
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Domain)
+			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Trust)
 	}
 	defer rawPt.Destroy()
 
 	asymKey, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.ShareOpts.ShareCipher, opts.ShareOpts.ShareHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Error generating key exchange [%v,%v]", AES_128_GCM, SHA256)
+			err, "Error generating key exchange [%v,%v]", Aes128Gcm, SHA256)
 	}
-	defer Bytes(cipherKey).Destroy()
+	defer cryptoBytes(cipherKey).Destroy()
 
 	encPt, err := encryptPoint(rand, rawPt, opts.ShareOpts.ShareCipher, cipherKey)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Domain)
+			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Trust)
 	}
-	return Invitation{uuid.NewV1(), cert, domainSig, issuerSig, asymKey, encPt}, nil
+	return Invitation{uuid.NewV1(), cert, trustSig, issuerSig, asymKey, encPt}, nil
 }
 
 // Verifies an invitation's signatures are valid.
-func verifyInvitation(i Invitation, domainKey PublicKey, issuerKey PublicKey) error {
-	if err := i.Cert.Verify(domainKey, i.DomainSig); err != nil {
+func (i Invitation) verify(trustKey, issuerKey PublicKey) error {
+	if err := i.Cert.Verify(trustKey, i.TrustSig); err != nil {
 		return errors.WithStack(err)
 	}
 	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
@@ -98,8 +98,7 @@ func verifyInvitation(i Invitation, domainKey PublicKey, issuerKey PublicKey) er
 }
 
 // Accepts an invitation and returns an oracle key that can be registered.
-func acceptInvitation(rand io.Reader,
-	i Invitation,
+func (i Invitation) accept(rand io.Reader,
 	o Oracle,
 	key PrivateKey,
 	pass []byte,
@@ -115,14 +114,14 @@ func acceptInvitation(rand io.Reader,
 	line, err := pt.Derive(o.Pt)
 	if err != nil {
 		return OracleKey{},
-			errors.Wrapf(err, "Err obtaining deriving line for domain [%v]", i.Cert.Domain)
+			errors.Wrapf(err, "Err obtaining deriving line for trust [%v]", i.Cert.Trust)
 	}
 	defer line.Destroy()
 
 	oKey, err := genOracleKey(rand, line, pass, opts)
 	if err != nil {
 		return OracleKey{},
-			errors.Wrapf(err, "Unable to generate new oracle key for domain [%v]", i.Cert.Domain)
+			errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.Trust)
 	}
 	return oKey, nil
 }

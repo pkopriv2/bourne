@@ -22,19 +22,19 @@ func TestInvitation(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Run("Verify_BadDomainKey", func(t *testing.T) {
-		assert.NotNil(t, verifyInvitation(inv, issuerKey.Public(), issuerKey.Public()))
+		assert.NotNil(t, inv.verify(issuerKey.Public(), issuerKey.Public()))
 	})
 
 	t.Run("Verify_BadIssuerKey", func(t *testing.T) {
-		assert.NotNil(t, verifyInvitation(inv, domainKey.Public(), domainKey.Public()))
+		assert.NotNil(t, inv.verify(issuerKey.Public(), issuerKey.Public()))
 	})
 
 	t.Run("Verify", func(t *testing.T) {
-		assert.Nil(t, verifyInvitation(inv, domainKey.Public(), issuerKey.Public()))
+		assert.Nil(t, inv.verify(issuerKey.Public(), issuerKey.Public()))
 	})
 
 	t.Run("Accept", func(t *testing.T) {
-		oracleKey, err := acceptInvitation(rand.Reader, inv, oracle, trusteeKey, []byte("pass"), buildOracleOptions())
+		oracleKey, err := inv.accept(rand.Reader, oracle, trusteeKey, []byte("pass"), buildOracleOptions())
 		assert.Nil(t, err)
 
 		pt, err := oracleKey.Extract([]byte("pass"))

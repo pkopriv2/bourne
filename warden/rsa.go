@@ -27,7 +27,7 @@ func (r *rsaPublicKey) Algorithm() KeyAlgorithm {
 }
 
 func (r *rsaPublicKey) Id() string {
-	hash, err := Bytes(r.Bytes()).Hash(SHA1)
+	hash, err := cryptoBytes(r.format()).Hash(SHA1)
 	if err != nil {
 		panic(err)
 	}
@@ -37,23 +37,23 @@ func (r *rsaPublicKey) Id() string {
 func (r *rsaPublicKey) Verify(hash Hash, msg []byte, sig []byte) error {
 	hashed, err := hash.Hash(msg)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", Bytes(msg), hash)
+		return errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", cryptoBytes(msg), hash)
 	}
-	if err := rsa.VerifyPSS(r.Raw, hash.Crypto(), hashed, sig, nil); err != nil {
-		return errors.Wrapf(err, "Unable to verify signature [%v] with key [%v]", Bytes(sig), r.Raw)
+	if err := rsa.VerifyPSS(r.Raw, hash.crypto(), hashed, sig, nil); err != nil {
+		return errors.Wrapf(err, "Unable to verify signature [%v] with key [%v]", cryptoBytes(sig), r.Id())
 	}
 	return nil
 }
 
 func (r *rsaPublicKey) Encrypt(rand io.Reader, hash Hash, msg []byte) ([]byte, error) {
-	msg, err := rsa.EncryptOAEP(hash.Standard(), rand, r.Raw, msg, nil)
+	msg, err := rsa.EncryptOAEP(hash.standard(), rand, r.Raw, msg, nil)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Error encrypting message [%v] with key [%v]", Bytes(msg), r.Raw)
+		return nil, errors.Wrapf(err, "Error encrypting message [%v] with key [%v]", cryptoBytes(msg), r.Raw)
 	}
 	return msg, nil
 }
 
-func (r *rsaPublicKey) Bytes() []byte {
+func (r *rsaPublicKey) format() []byte {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(r.Raw); err != nil {
@@ -92,19 +92,19 @@ func (r *rsaPrivateKey) Public() PublicKey {
 func (r *rsaPrivateKey) Sign(rand io.Reader, hash Hash, msg []byte) (Signature, error) {
 	hashed, err := hash.Hash(msg)
 	if err != nil {
-		return Signature{}, errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", Bytes(msg), hash)
+		return Signature{}, errors.Wrapf(err, "Unable to hash message [%v] using alg [%v]", cryptoBytes(msg), hash)
 	}
-	sig, err := rsa.SignPSS(rand, r.Raw, hash.Crypto(), hashed, nil)
+	sig, err := rsa.SignPSS(rand, r.Raw, hash.crypto(), hashed, nil)
 	if err != nil {
-		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", Bytes(msg))
+		return Signature{}, errors.Wrapf(err, "Unable to sign msg [%v]", cryptoBytes(msg))
 	}
 	return Signature{r.public().Id(), hash, sig}, nil
 }
 
 func (r *rsaPrivateKey) Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error) {
-	plaintext, err := rsa.DecryptOAEP(hash.Standard(), rand, r.Raw, ciphertext, nil)
+	plaintext, err := rsa.DecryptOAEP(hash.standard(), rand, r.Raw, ciphertext, nil)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to decrypt ciphertext [%v]", Bytes(ciphertext))
+		return nil, errors.Wrapf(err, "Unable to decrypt ciphertext [%v]", cryptoBytes(ciphertext))
 	}
 	return plaintext, nil
 }
@@ -113,7 +113,7 @@ func (r *rsaPrivateKey) Destroy() {
 	// FIXME: implement
 }
 
-func (r *rsaPrivateKey) Bytes() []byte {
+func (r *rsaPrivateKey) format() []byte {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(r.Raw); err != nil {

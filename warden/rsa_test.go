@@ -38,7 +38,7 @@ func TestRsaKey(t *testing.T) {
 	})
 
 	t.Run("PrivateKey_WriteParse", func(t *testing.T) {
-		priv, err := key.Algorithm().ParsePrivateKey(key.Bytes())
+		priv, err := key.Algorithm().parsePrivateKey(key.format())
 		assert.Nil(t, err)
 
 		msg := []byte("msg")
@@ -53,7 +53,7 @@ func TestRsaKey(t *testing.T) {
 	})
 
 	t.Run("PublicKey_WriteParse", func(t *testing.T) {
-		pub, err := key.Algorithm().ParsePublicKey(key.Public().Bytes())
+		pub, err := key.Algorithm().parsePublicKey(key.Public().format())
 		assert.Nil(t, err)
 
 		msg := []byte("msg")

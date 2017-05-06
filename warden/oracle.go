@@ -26,7 +26,7 @@ type OracleOptions struct {
 }
 
 func defaultOracleOptions() OracleOptions {
-	return OracleOptions{1024, AES_256_GCM, SHA256, 1024, SHA256}
+	return OracleOptions{1024, Aes256Gcm, SHA256, 1024, SHA256}
 }
 
 func buildOracleOptions(fns ...func(*OracleOptions)) OracleOptions {
@@ -178,7 +178,7 @@ func genOracleKey(rand io.Reader, line line, pass []byte, opts OracleOptions) (O
 	}
 
 	enc, err := encryptPoint(rand, pt, opts.ShareCipher,
-		Bytes(pass).Pbkdf2(salt, opts.ShareIter, size, opts.ShareHash.Standard()))
+		cryptoBytes(pass).Pbkdf2(salt, opts.ShareIter, size, opts.ShareHash.standard()))
 	if err != nil {
 		return OracleKey{}, errors.WithMessage(
 			err, "Error generating oracle key")
@@ -207,5 +207,5 @@ func (p OracleKey) Format() ([]byte, error) {
 
 func (p OracleKey) Extract(pass []byte) (point, error) {
 	return p.Pt.Decrypt(
-		Bytes(pass).Pbkdf2(p.KeySalt, p.KeyIter, p.Pt.Cipher.KeySize(), p.KeyHash.Standard()))
+		cryptoBytes(pass).Pbkdf2(p.KeySalt, p.KeyIter, p.Pt.Cipher.KeySize(), p.KeyHash.standard()))
 }

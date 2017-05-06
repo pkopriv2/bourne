@@ -17,7 +17,7 @@ type KeyPairOptions struct {
 }
 
 func buildKeyPairOptions(fns ...func(*KeyPairOptions)) KeyPairOptions {
-	ret := KeyPairOptions{RSA, 2048, AES_256_GCM, SHA256, 1024, 32}
+	ret := KeyPairOptions{RSA, 2048, Aes256Gcm, SHA256, 1024, 32}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -33,9 +33,9 @@ type SignedKeyPair struct {
 // by someone who has been trusted to sign on its behalf.
 type KeyPair struct {
 	Pub  PublicKey
-	Priv CipherText
 	Opts KeyPairOptions
-	Salt []byte
+	priv cipherText
+	salt []byte
 }
 
 // Generates a new encrypted key pair
@@ -45,22 +45,22 @@ func genKeyPair(rand io.Reader, priv PrivateKey, pass []byte, opts KeyPairOption
 		return KeyPair{}, errors.WithStack(err)
 	}
 
-	ciphertext, err := opts.Cipher.Encrypt(
-		rand, Bytes(pass).Pbkdf2(salt, opts.Iter, opts.Cipher.KeySize(), opts.Hash.Standard()), priv.Bytes())
+	ciphertext, err := opts.Cipher.encrypt(
+		rand, cryptoBytes(pass).Pbkdf2(salt, opts.Iter, opts.Cipher.KeySize(), opts.Hash.standard()), priv.format())
 	if err != nil {
 		return KeyPair{}, errors.WithStack(err)
 	}
 
 	return KeyPair{
 		priv.Public(),
-		ciphertext,
 		opts,
+		ciphertext,
 		salt,
 	}, nil
 }
 
 func (p KeyPair) Format() ([]byte, error) {
-	return p.Pub.Bytes(), nil
+	return p.Pub.format(), nil
 }
 
 func (p KeyPair) Sign(rand io.Reader, priv Signer, hash Hash) (SignedKeyPair, error) {
@@ -78,15 +78,15 @@ func (p KeyPair) Sign(rand io.Reader, priv Signer, hash Hash) (SignedKeyPair, er
 }
 
 func (p KeyPair) Decrypt(key []byte) (PrivateKey, error) {
-	raw, err := p.Priv.Decrypt(
-		Bytes(key).Pbkdf2(
-			p.Salt, p.Opts.Iter, p.Priv.Cipher.KeySize(), p.Opts.Hash.Standard()))
+	raw, err := p.priv.Decrypt(
+		cryptoBytes(key).Pbkdf2(
+			p.salt, p.Opts.Iter, p.priv.Cipher.KeySize(), p.Opts.Hash.standard()))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	defer raw.Destroy()
 
-	priv, err := p.Pub.Algorithm().ParsePrivateKey(raw)
+	priv, err := p.Pub.Algorithm().parsePrivateKey(raw)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
