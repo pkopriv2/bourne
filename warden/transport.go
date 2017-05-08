@@ -2,8 +2,10 @@ package warden
 
 import uuid "github.com/satori/go.uuid"
 
+type authFn func(cancel <-chan struct{}) (auth, error)
+
 type transport struct {
-	Keys    keyTransport
+	// Keys    keyTransport
 	Certs   certTransport
 	Invites inviteTransport
 	Trusts  trustTransport
@@ -20,63 +22,66 @@ type transport struct {
 //
 // type AuthTransport interface {
 // WithSignatureInit(id string) ([]byte, Signature, error)
-// WithSignatureAuth(id string, s Signature) (auth, error)
-// Register(cancel <-chan struct{}, a auth, id string) error
+// WithSignatureAuth(id string, s Signature) (authFn, error)
+// Register(cancel <-chan struct{}, a authFn, id string) error
 // }
 
 type keyTransport interface {
 
 	// Loads public key by subscriber
-	BySubscriber(cancel <-chan struct{}, a auth, id uuid.UUID) (PublicKey, error)
+	BySubscriberAndAlias(cancel <-chan struct{}, a authFn, id uuid.UUID, alias string) (KeyPair, error)
+
+	// Loads public key by subscriber
+	PublicBySubscriber(cancel <-chan struct{}, a authFn, id uuid.UUID) (PublicKey, error)
 
 	// Loads the public key by dom
-	ByTrust(cancel <-chan struct{}, a auth, id uuid.UUID) (PublicKey, error)
+	PublicByTrust(cancel <-chan struct{}, a authFn, id uuid.UUID) (PublicKey, error)
 }
 
 type inviteTransport interface {
 
 	// Loads invitations by subscriber and dom
-	ById(cancel <-chan struct{}, a auth, id uuid.UUID) (Invitation, bool, error)
+	ById(cancel <-chan struct{}, a authFn, id uuid.UUID) (Invitation, bool, error)
 
 	// Loads invitations by subscriber
-	BySubscriber(cancel <-chan struct{}, a auth, id uuid.UUID, beg, end int) ([]Invitation, error)
+	BySubscriber(cancel <-chan struct{}, a authFn, id uuid.UUID, beg, end int) ([]Invitation, error)
 
 	// Loads invitations by dom
-	ByTrust(cancel <-chan struct{}, a auth, dom string, beg, end int) ([]Invitation, error)
+	ByTrust(cancel <-chan struct{}, a authFn, dom string, beg, end int) ([]Invitation, error)
 
 	// Loads invitations by subscriber and dom
-	BySubscriberAndTrust(cancel <-chan struct{}, a auth, subscriber, dom string) (Invitation, bool, error)
+	BySubscriberAndTrust(cancel <-chan struct{}, a authFn, subscriber, dom string) (Invitation, bool, error)
 
 	// Registers an invitation with the trust service.
-	Upload(cancel <-chan struct{}, a auth, i Invitation) error
+	Upload(cancel <-chan struct{}, a authFn, i Invitation) error
 
 	// Revokes a certificate.
-	Revoke(cancel <-chan struct{}, a auth, id uuid.UUID) error
+	Revoke(cancel <-chan struct{}, a authFn, id uuid.UUID) error
 }
 
 type certTransport interface {
 
 	// Loads active certificates by subscriber
-	ActiveBySubscriber(cancel <-chan struct{}, a auth, id uuid.UUID, beg, end int) ([]Certificate, error)
+	ActiveBySubscriber(cancel <-chan struct{}, a authFn, id uuid.UUID, beg, end int) ([]Certificate, error)
 
 	// Loads active certs by domain.
-	ActiveByTrust(cancel <-chan struct{}, a auth, id uuid.UUID, beg, end int) ([]Certificate, error)
-
-	// Loads active cert by (subscriber, domain) tuple.  Only 1 ever allowed.
-	ActiveBySubscriberAndTrust(cancel <-chan struct{}, a auth, sub, dom uuid.UUID) (Certificate, bool, error)
+	ActiveByTrust(cancel <-chan struct{}, a authFn, id uuid.UUID, beg, end int) ([]Certificate, error)
 
 	// Registers a certificate (and corresponding oracle key).
-	Register(cancel <-chan struct{}, a auth, c Certificate, k OracleKey, domSig, issSig, truSig Signature) error
+	Register(cancel <-chan struct{}, a authFn, c Certificate, k privateShard, domSig, issSig, truSig Signature) error
 
 	// Revokes a certificate.
-	Revoke(cancel <-chan struct{}, a auth, id uuid.UUID) error
+	Revoke(cancel <-chan struct{}, a authFn, id uuid.UUID) error
 }
 
 type trustTransport interface {
 
 	// Loads the domain by id
-	ById(cancel <-chan struct{}, a auth, id uuid.UUID) (Trust, bool, error)
+	ById(cancel <-chan struct{}, a authFn, id uuid.UUID) (KeyRing, bool, error)
+
+	// Loads the trust by subscriber
+	BySubscriber(cancel <-chan struct{}, a authFn, id uuid.UUID, beg, end int) ([]KeyRing, error)
 
 	// Registers a newly created domain.
-	Register(cancel <-chan struct{}, a auth, dom Trust) error
+	Register(cancel <-chan struct{}, a authFn, dom KeyRing, sign SignedKeyPair) error
 }

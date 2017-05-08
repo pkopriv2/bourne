@@ -25,12 +25,12 @@ type storedKeyPair struct {
 }
 
 type storedAuthenticator struct {
-	SignedOracleKey
+	signedPrivateShard
 }
 
 type storedTrust struct {
 	Identity KeyPair
-	Oracle   SignedOracle
+	Oracle   signedPublicShard
 }
 
 type storage interface {
@@ -40,7 +40,7 @@ type storage interface {
 	//
 	// Returns an error if the subscriber already exists or the authenticator
 	// has not been properly signed.
-	SaveSubscriber(sub Subscriber, auth SignedOracleKey) error
+	SaveSubscriber(sub Subscriber, auth signedPrivateShard) error
 
 	// Loads the subscriber, returning true if it existed.
 	LoadSubscriberById(id uuid.UUID) (Subscriber, bool, error)
@@ -64,7 +64,7 @@ type storage interface {
 	// LoadSubscriberAuth(subscriber, method string) (StoredAuthenticator, bool, error)
 
 	LoadTrust(id string) (storedTrust, bool, error)
-	SaveTrust(dom Trust) error
+	SaveTrust(dom KeyRing) error
 
 	// LoadCertificate(id uuid.UUID) (SignedCertificate, error)
 }

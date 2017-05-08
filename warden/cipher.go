@@ -7,20 +7,11 @@ import (
 	"io"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/scribe"
 )
 
 var (
 	CipherUnknownError = errors.New("Warden:CipherUnknown")
 	CipherKeyError     = errors.New("Warden:CipherKey")
-)
-
-// Common bit->byte conversions
-const (
-	bits128 = 128 / 8
-	bits192 = 192 / 8
-	bits256 = 256 / 8
 )
 
 // Supported symmetric ciphers.  This library is intended to ONLY offer support ciphers
@@ -64,6 +55,13 @@ func (s SymmetricCipher) String() string {
 func (s SymmetricCipher) encrypt(rand io.Reader, key []byte, msg []byte) (cipherText, error) {
 	return symmetricEncrypt(rand, s, key, msg)
 }
+
+// Common bit->byte conversions
+const (
+	bits128 = 128 / 8
+	bits192 = 192 / 8
+	bits256 = 256 / 8
+)
 
 // TODO: Determine general set of fields for non-AE modes
 //
@@ -113,33 +111,8 @@ func (c cipherText) Decrypt(key []byte) (cryptoBytes, error) {
 	return ret, nil
 }
 
-func (c cipherText) Bytes() []byte {
-	return scribe.Write(c).Bytes()
-}
-
-func (c cipherText) Write(w scribe.Writer) {
-	w.WriteInt("cipher", int(c.Cipher))
-	w.WriteBytes("nonce", c.Nonce)
-	w.WriteBytes("data", c.Data)
-}
-
 func (c cipherText) String() string {
 	return fmt.Sprintf("SymCipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, c.Data)
-}
-
-func readCipherText(r scribe.Reader) (s cipherText, err error) {
-	err = r.ReadInt("cipher", (*int)(&s.Cipher))
-	err = common.Or(err, r.ReadBytes("nonce", (*[]byte)(&s.Nonce)))
-	err = common.Or(err, r.ReadBytes("data", (*[]byte)(&s.Data)))
-	return
-}
-
-func parseCipherTextBytes(raw []byte) (cipherText, error) {
-	msg, err := scribe.Parse(raw)
-	if err != nil {
-		return cipherText{}, err
-	}
-	return readCipherText(msg)
 }
 
 type keyExchange struct {

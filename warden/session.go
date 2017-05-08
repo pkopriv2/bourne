@@ -3,8 +3,6 @@ package warden
 import (
 	"io"
 
-	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -15,17 +13,20 @@ import (
 // fear of leaking any critical details.
 type Session struct {
 
-	// the subscriber
-	sub Subscriber
+	// the subscriber's unique identifier
+	subId uuid.UUID
+
+	// the subcriber's public signing key.  safe to store in memory.
+	subKey PublicKey
+
+	// the subscriber's current oracle value.
+	subOracle []byte
 
 	// the transport mechanism. (expected to be secure).
 	net transport
 
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
-
-	// the subcriber's oracle.  safe to store in memory.
-	oracle []byte
 }
 
 // Returns an authentication token.
@@ -53,164 +54,97 @@ func (s *Session) rpc(cancel <-chan struct{}, fn func(auth) error) error {
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
 func (s *Session) myOracle() []byte {
-	return s.oracle
+	return s.subOracle
+}
+
+// Returns the signing key associated with this session. Should be promptly destroyed.
+func (s *Session) mySigningKey() (PrivateKey, error) {
+	return nil, nil
+}
+
+// Returns the invitation key associated with this session. Should be promptly destroyed.
+func (s *Session) myInviteKey() (PrivateKey, error) {
+	return nil, nil
 }
 
 // Destroys the session's memory - zeroing out any sensitive info
 func (s *Session) Destroy() {
-	cryptoBytes(s.oracle).Destroy()
+	cryptoBytes(s.subOracle).Destroy()
 }
 
 // Returns the subscriber id associated with this session.  This uniquely identifies
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
 func (s *Session) MyId() uuid.UUID {
-	return s.sub.Id
+	return s.subId
 }
 
 // Returns the session owner's public key.  This key and its id may be shared freely.
 func (s *Session) MyKey() PublicKey {
-	return s.sub.Sign.Pub
-}
-
-// Returns the signing key associated with this session. Should be promptly destroyed.
-func (s *Session) mySigningKey() (PrivateKey, error) {
-	return s.sub.Sign.Decrypt(s.oracle)
-}
-
-// Returns the invitation key associated with this session. Should be promptly destroyed.
-func (s *Session) myInviteKey() (PrivateKey, error) {
-	return s.sub.Invite.Decrypt(s.oracle)
+	return s.subKey
 }
 
 // Lists the session owner's currently pending invitations.
 func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
 	opts := buildPagingOptions(fns...)
-	return s.net.Invites.BySubscriber(cancel, auth, s.MyId(), opts.Beg, opts.End)
+	return s.net.Invites.BySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
 }
 
 // Lists the session owner's currently active certificates.
 func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
 	opts := buildPagingOptions(fns...)
-	return s.net.Certs.ActiveBySubscriber(cancel, auth, s.MyId(), opts.Beg, opts.End)
+	return s.net.Certs.ActiveBySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
 }
 
-// Lists the trusts that were created by the session owner.
-func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
-	panic("Not yet implemented")
+// Keys that have been in some way trusted by the owner of the session.
+func (s *Session) MyTrustedKeys(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]KeyRing, error) {
+	opts := buildPagingOptions(fns...)
+	return s.net.Trusts.BySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
+}
+
+// Create a proxy session for the
+func (s *Session) Proxy(cancel <-chan struct{}, id uuid.UUID) (*Session, error) {
+	return &Session{}, nil
 }
 
 // Creates a new trust with the given alias.  An alias is a non-unique alternative lookup name.
-func (s *Session) NewTrust(cancel <-chan struct{}, alias string, fns ...func(s *TrustOptions)) (Trust, error) {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return Trust{}, errors.WithStack(err)
-	}
-
-	dom, err := generateTrust(s, alias, fns...)
-	if err != nil {
-		return Trust{}, errors.WithStack(err)
-	}
-
-	if err := s.net.Trusts.Register(cancel, auth, dom); err != nil {
-		return Trust{}, errors.WithStack(err)
-	}
-
-	return dom, nil
+func (s *Session) NewProxy(cancel <-chan struct{}, alias string, fns ...func(s *SharingOptions)) (KeyRing, error) {
+	return KeyRing{}, nil
 }
 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) LoadTrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return Trust{}, false, errors.WithStack(err)
-	}
-
-	return s.net.Trusts.ById(cancel, auth, id)
+func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (KeyRing, bool, error) {
+	return s.net.Trusts.ById(cancel, s.auth, id)
 }
 
 // Loads the trust with the given signing key.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) LoadTrustByKey(cancel <-chan struct{}, key string) (Trust, bool, error) {
-	return Trust{}, false, nil
+func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (KeyRing, bool, error) {
+	return KeyRing{}, false, nil
+}
+
+// Loads the trust with the given id.  The trust will be returned only
+// if your public key has been invited to manage the trust and the invitation
+// has been accepted.
+func (s *Session) InviteById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
+	return s.net.Invites.ById(cancel, s.auth, id)
 }
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) Accept(cancel <-chan struct{}, id uuid.UUID) error {
-	auth, err := s.auth(cancel)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	inv, ok, err := s.net.Invites.ById(cancel, auth, id)
-	if err != nil || !ok {
-		return errors.WithStack(common.Or(err, InvariantError))
-	}
-
-	dom, ok, err := s.net.Trusts.ById(cancel, auth, inv.Cert.Trust)
-	if err != nil || !ok {
-		return errors.WithStack(err)
-	}
-
-	priv, err := s.mySigningKey()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	key, err := inv.accept(s.rand, dom.oracle.Oracle, priv, s.myOracle(), dom.oracle.Opts)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	sig, err := inv.Cert.Sign(s.rand, priv, dom.oracle.Opts.SigHash)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	return s.net.Certs.Register(cancel, auth, inv.Cert, key, inv.TrustSig, inv.IssuerSig, sig)
+func (s *Session) AcceptTrust(cancel <-chan struct{}, i Invitation) error {
+	return i.acceptInvitation(cancel, s)
 }
 
-// // Determines the authenticity of the provided invitation.
-// func (s *Session) VerifyInvitation(cancel <-chan struct{}, i Invitation) error {
-// auth, err := s.auth(cancel)
-// if err != nil {
-// return errors.WithStack(err)
-// }
-//
-// trustKey, err := s.net.Keys.ByTrust(cancel, auth, i.Cert.Trust)
-// if err != nil {
-// return errors.WithStack(err)
-// }
-//
-// issuerKey, err := s.net.Keys.BySubscriber(cancel, auth, i.Cert.Issuer)
-// if err != nil {
-// return errors.WithStack(err)
-// }
-//
-// return i.verify(trustKey, issuerKey)
-// }
-
-// Revokes trust from the given subscriber.
-func (s *Session) Revoke(cancel <-chan struct{}, t Trust, sub uuid.UUID) error {
-	return nil
+// Revokes trust from the given subscriber for the given trust.
+func (s *Session) RevokeTrust(cancel <-chan struct{}, t KeyRing, sub uuid.UUID) error {
+	return t.revokeCertificate(cancel, s, sub)
 }
 
-// Renews the certificate associated with the given trust, returning the
-// updated trust.
-func (s *Session) Renew(cancel <-chan struct{}, t Trust) (Trust, error) {
-	return Trust{}, nil
+// Renew's the session owner's certificate with the trust.
+func (s *Session) RenewTrust(cancel <-chan struct{}, t KeyRing) (KeyRing, error) {
+	return t.renewCertificate(cancel, s)
 }

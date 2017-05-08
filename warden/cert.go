@@ -129,7 +129,7 @@ func (c Certificate) Verify(key PublicKey, sig Signature) error {
 }
 
 // Signs the certificate with the private key.
-func (c Certificate) Sign(rand io.Reader, key PrivateKey, hash Hash) (Signature, error) {
+func (c Certificate) Sign(rand io.Reader, key Signer, hash Hash) (Signature, error) {
 	fmt, err := c.Format()
 	if err != nil {
 		return Signature{}, err

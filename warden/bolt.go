@@ -88,7 +88,7 @@ func (b *boltStorage) Bolt() *bolt.DB {
 	return (*bolt.DB)(b)
 }
 
-func (b *boltStorage) SaveSubscriber(sub Subscriber, auth SignedOracleKey) error {
+func (b *boltStorage) SaveSubscriber(sub Subscriber, auth signedPrivateShard) error {
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
 		if err := boltStoreSubscriber(tx, sub); err != nil {
 			return err
@@ -150,35 +150,36 @@ func (b *boltStorage) LoadTrust(id string) (d storedTrust, o bool, e error) {
 	return
 }
 
-func (b *boltStorage) SaveTrust(dom Trust) error {
-	var issuer storedSubscriber
-	// issuer, err := EnsureSubscriber(b, dom.cert.Issuer)
-	// if err != nil {
-	// return errors.WithStack(err)
+func (b *boltStorage) SaveTrust(dom KeyRing) error {
+	return nil
+	// var issuer storedSubscriber
+	// // issuer, err := EnsureSubscriber(b, dom.cert.Issuer)
+	// // if err != nil {
+	// // return errors.WithStack(err)
+	// // }
+	//
+	// if err := dom.Cert.Verify(dom.signingKey.Pub, issuer.Sign.Pub, issuer.Sign.Pub); err != nil {
+	// return errors.Wrapf(err, "Unable to create domain [%v].  Invalid certificate.", dom.Id)
 	// }
-
-	if err := dom.Cert.Verify(dom.ident.Pub, issuer.Sign.Pub, issuer.Sign.Pub); err != nil {
-		return errors.Wrapf(err, "Unable to create domain [%v].  Invalid certificate.", dom.Id)
-	}
-
-	return b.Bolt().Update(func(tx *bolt.Tx) error {
-		if err := boltStoreTrust(tx, dom.ident, dom.oracle); err != nil {
-			return err
-		}
-
-		if err := boltStoreCert(tx, dom.Cert); err != nil {
-			return err
-		}
-
-		if err := boltStoreTrustAuth(tx, dom.Id, dom.Cert.Trustee, dom.oracleKey); err != nil {
-			return err
-		}
-
-		return nil
-	})
+	//
+	// return b.Bolt().Update(func(tx *bolt.Tx) error {
+	// if err := boltStoreTrust(tx, dom.signingKey, dom.oracle); err != nil {
+	// return err
+	// }
+	//
+	// if err := boltStoreCert(tx, dom.Cert); err != nil {
+	// return err
+	// }
+	//
+	// if err := boltStoreTrustAuth(tx, dom.Id, dom.Cert.Trustee, dom.oracleKey); err != nil {
+	// return err
+	// }
+	//
+	// return nil
+	// })
 }
 
-func (b *boltStorage) SaveCert(dom, subscriber string) (d SignedCertificate, k SignedOracleKey, o bool, e error) {
+func (b *boltStorage) SaveCert(dom, subscriber string) (d SignedCertificate, k signedPrivateShard, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		// d, o, e = boltLoadTrustAuth(tx, dom, subscriber)
 		// return e
@@ -187,7 +188,7 @@ func (b *boltStorage) SaveCert(dom, subscriber string) (d SignedCertificate, k S
 	return
 }
 
-func (b *boltStorage) LoadCertByTrustAndSubscriber(dom, subscriber string) (d SignedCertificate, k SignedOracleKey, o bool, e error) {
+func (b *boltStorage) LoadCertByTrustAndSubscriber(dom, subscriber string) (d SignedCertificate, k signedPrivateShard, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		// d, o, e = boltLoadTrustAuth(tx, dom, subscriber)
 		// return e
@@ -220,7 +221,7 @@ func boltLoadSubscriber(tx *bolt.Tx, id string) (s storedSubscriber, o bool, e e
 	return
 }
 
-func boltStoreSubscriberAuth(tx *bolt.Tx, id uuid.UUID, alias string, k SignedOracleKey) error {
+func boltStoreSubscriberAuth(tx *bolt.Tx, id uuid.UUID, alias string, k signedPrivateShard) error {
 	raw, err := gobBytes(storedAuthenticator{k})
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding oracle key [%v]", k)
@@ -239,7 +240,7 @@ func boltLoadSubscriberAuth(tx *bolt.Tx, sub, method string) (k storedAuthentica
 	return
 }
 
-func boltStoreTrust(tx *bolt.Tx, identity KeyPair, oracle SignedOracle) error {
+func boltStoreTrust(tx *bolt.Tx, identity KeyPair, oracle signedPublicShard) error {
 	id := identity.Pub.Id()
 
 	if err := boltEnsureEmpty(tx.Bucket(domainBucket), stash.String(id)); err != nil {
@@ -264,7 +265,7 @@ func boltLoadTrust(tx *bolt.Tx, id string) (d storedTrust, o bool, e error) {
 	return
 }
 
-func boltStoreTrustAuth(tx *bolt.Tx, dom, sub uuid.UUID, o SignedOracleKey) error {
+func boltStoreTrustAuth(tx *bolt.Tx, dom, sub uuid.UUID, o signedPrivateShard) error {
 	rawKey, err := gobBytes(o)
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding oracle key [%v]", o)

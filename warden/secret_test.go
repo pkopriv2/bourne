@@ -8,14 +8,17 @@ import (
 )
 
 func TestOracle(t *testing.T) {
-	o, l, e := genOracle(rand.Reader, buildOracleOptions())
+	o, l, e := genSharedSecret(rand.Reader, buildSecretOptions())
 	assert.Nil(t, e)
 
 	t.Run("GenerateAndUnlock", func(t *testing.T) {
-		k, e := genOracleKey(rand.Reader, l, []byte("pass"), o.Opts)
+		k, e := genPrivateShard(rand.Reader, l, []byte("pass"), o.Opts)
 		assert.Nil(t, e)
 
-		act, e := o.Unlock(k, []byte("pass"))
+		sh, e := k.Decrypt([]byte("pass"))
+		assert.Nil(t, e)
+
+		act, e := o.Pub.Derive(sh)
 		assert.Nil(t, e)
 		assert.Equal(t, l, act)
 	})

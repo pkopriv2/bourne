@@ -10,32 +10,75 @@ import (
 	"github.com/pkg/errors"
 )
 
-// TODO: Generalize this for curves of n-degrees. (ie: lines, parabolas, cubics, quartics, etc...)
-// An encrypted point (just wraps a simple cipher whose key is a PBKDF2 hash)
-type securePoint cipherText
-
-// Returns the point, encrypted by using the given pass as the key for the cipher.
-func encryptPoint(rand io.Reader, pt point, alg SymmetricCipher, key []byte) (securePoint, error) {
-	ct, err := symmetricEncrypt(rand, alg, key, pt.Bytes())
-	if err != nil {
-		return securePoint{}, errors.WithStack(err) // Dealing with secure data.  No additional context
-	}
-
-	return securePoint(ct), nil
+// FIXME: This IS NOT shamir's algorithm - but should be enough to get going.
+type shamirSecret struct {
+	line line
+	dom  int
 }
 
-// Decrypts the point using the salt, iterations and raw bytes.
-func (e securePoint) Decrypt(key []byte) (point, error) {
-	raw, err := cipherText(e).Decrypt(key)
+func generateShamirSecret(rand io.Reader, strength int) (Secret, error) {
+	line, err := generateLine(rand, strength)
 	if err != nil {
-		return point{}, errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
-	return parsePointBytes(raw)
+
+	return &shamirSecret{line, strength}, nil
 }
 
-// Returns the raw representation of the encrypted point.
-func (e securePoint) Bytes() []byte {
-	return cipherText(e).Bytes()
+func (s *shamirSecret) Alg() ShardingAlgorithm {
+	return Shamir
+}
+
+func (s *shamirSecret) Shard(rand io.Reader) (Shard, error) {
+	pt, err := generatePoint(rand, s.line, s.dom)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &shamirShard{pt, s.dom}, nil
+}
+
+func (s *shamirSecret) Format() ([]byte, error) {
+	return gobBytes(s.line)
+}
+
+func (s *shamirSecret) Destroy() {
+	s.line.Destroy()
+}
+
+type shamirShard struct {
+	Pt  point
+	Dom int
+}
+
+func parseShamirShard(raw []byte) (s *shamirShard, e error) {
+	_, e = parseGobBytes(raw, &s)
+	return
+}
+
+func (s *shamirShard) Alg() ShardingAlgorithm {
+	return Shamir
+}
+
+func (s *shamirShard) Derive(raw Shard) (Secret, error) {
+	sh, ok := raw.(*shamirShard)
+	if !ok {
+		return nil, errors.Wrap(InvariantError, "Not compatible")
+	}
+
+	line, err := s.Pt.Derive(sh.Pt)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return &shamirSecret{line, s.Dom}, nil
+}
+
+func (s *shamirShard) Format() ([]byte, error) {
+	return gobBytes(s)
+}
+
+func (s *shamirShard) Destroy() {
+	s.Pt.Destroy()
 }
 
 // Generates a random line.  The domain is used to determine the number of bytes to use when generating
