@@ -100,13 +100,13 @@ func generateTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	fmt, err := secret.Format()
+	pass, err := secret.Format()
 	if err != nil {
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
-	defer cryptoBytes(fmt).Destroy()
+	defer cryptoBytes(pass).Destroy()
 
-	pair, err := genKeyPair(s.rand, trustSigningKey, fmt, opts.KeyOpts)
+	pair, err := genKeyPair(s.rand, trustSigningKey, pass, opts.KeyOpts)
 	if err != nil {
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
@@ -139,62 +139,86 @@ func (d Trust) unlockSecret(s *Session) (Secret, error) {
 	if err := Encrypt.verify(d.Cert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return nil, nil
+
+	myShard, err := d.privShard.Decrypt(s.myOracle())
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	secret, err := d.pubShard.Derive(myShard)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return secret, nil
 }
 
 func (d Trust) unlockSigningKey(cancel <-chan struct{}, s *Session, secret Secret) (PrivateKey, error) {
 	if err := Sign.verify(d.Cert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	// key, err := secret.Format()
+	// if err != nil {
+	// return nil, errors.WithStack(err)
+	// }
+
 	return nil, nil
 }
 
 func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, error) {
-	return d, nil
-	// if err := Invite.verify(d.Cert.Level); err != nil {
-	// return KeyRing{}, errors.WithStack(err)
-	// }
-	//
-	// myId := s.MyId()
-	//
-	// mySigningKey, err := s.mySigningKey()
-	// if err != nil {
-	// return KeyRing{}, errors.Wrapf(err,
-	// "Error extracting session signing key [%v]", s.MyId())
-	// }
-	// defer mySigningKey.Destroy()
-	//
-	// domSigningKey, err := d.unlockSigningKey(cancel, s, )
-	// if err != nil {
-	// return KeyRing{}, errors.WithStack(err)
-	// }
-	// defer domSigningKey.Destroy()
-	//
-	// cert := newCertificate(d.Id, myId, myId, d.Cert.Level, d.Cert.Duration())
-	//
-	// mySig, err := d.Cert.Sign(s.rand, mySigningKey, d.oracle.Opts.SigHash)
-	// if err != nil {
-	// return KeyRing{}, errors.Wrapf(err,
-	// "Error signing cert with session signing key [%v]", s.MyId())
-	// }
-	//
-	// domSig, err := d.Cert.Sign(s.rand, domSigningKey, d.oracle.Opts.SigHash)
-	// if err != nil {
-	// return KeyRing{}, errors.Wrapf(err,
-	// "Error signing with  key [%v]", d.Id)
-	// }
-	//
-	// if err := s.net.Certs.Register(cancel, s.auth, cert, d.oracleKey.oracleKey, domSig, mySig, mySig); err != nil {
-	// return KeyRing{}, errors.Wrapf(err, "Error registering ")
-	// }
-	//
-	// return KeyRing{
-	// d.Id,
-	// nil,
-	// SignedCertificate{cert, domSig, mySig, mySig},
-	// d.oracle,
-	// d.oracleKey,
-	// }, nil
+	if err := Invite.verify(d.Cert.Level); err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	secret, err := d.unlockSecret(s)
+	if err != nil {
+		return Trust{}, errors.Wrap(err, "Error deriving trust secret.")
+	}
+	defer secret.Destroy()
+
+	trustSigningKey, err := d.unlockSigningKey(cancel, s, secret)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+	defer trustSigningKey.Destroy()
+
+	mySigningKey, err := s.mySigningKey()
+	if err != nil {
+		return Trust{}, errors.Wrapf(err, "Error extracting session signing key [%v]", s.MyId())
+	}
+	defer mySigningKey.Destroy()
+
+	cert := newCertificate(d.Id, s.MyId(), s.MyId(), d.Cert.Level, d.Cert.Duration())
+
+	myCert, err := signCertificate(
+		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, d.Opts.SignatureHash)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	shard, err := secret.Shard(s.rand)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	myShard, err := encryptShard(s.rand, mySigningKey, shard, s.myOracle())
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	if err := s.net.Certs.Register(cancel, s.auth, myCert, myShard); err != nil {
+		return Trust{}, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), d.Id)
+	}
+
+	return Trust{
+		d.Id,
+		d.Pub,
+		myCert,
+		d.Opts,
+		d.pubShard,
+		myShard,
+	}, nil
 }
 
 // Loads all the trust certificates that have been issued by this .
