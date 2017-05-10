@@ -13,28 +13,28 @@ import (
 // FIXME: This IS NOT shamir's algorithm - but should be enough to get going.
 type shamirSecret struct {
 	line line
-	dom  int
+	opts SecretOptions
 }
 
-func generateShamirSecret(rand io.Reader, strength int) (Secret, error) {
-	line, err := generateLine(rand, strength)
+func generateShamirSecret(rand io.Reader, opts SecretOptions) (Secret, error) {
+	line, err := generateLine(rand, opts.ShardStrength)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	return &shamirSecret{line, strength}, nil
+	return &shamirSecret{line, opts}, nil
 }
 
-func (s *shamirSecret) Alg() ShardingAlgorithm {
-	return Shamir
+func (s *shamirSecret) Opts() SecretOptions {
+	return s.opts
 }
 
 func (s *shamirSecret) Shard(rand io.Reader) (Shard, error) {
-	pt, err := generatePoint(rand, s.line, s.dom)
+	pt, err := generatePoint(rand, s.line, s.opts.ShardStrength)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return &shamirShard{pt, s.dom}, nil
+	return &shamirShard{pt, s.opts}, nil
 }
 
 func (s *shamirSecret) Format() ([]byte, error) {
@@ -46,8 +46,8 @@ func (s *shamirSecret) Destroy() {
 }
 
 type shamirShard struct {
-	Pt  point
-	Dom int
+	Pt   point
+	RawOpts SecretOptions
 }
 
 func parseShamirShard(raw []byte) (s *shamirShard, e error) {
@@ -55,14 +55,18 @@ func parseShamirShard(raw []byte) (s *shamirShard, e error) {
 	return
 }
 
-func (s *shamirShard) Alg() ShardingAlgorithm {
-	return Shamir
+func (s *shamirShard) Opts() SecretOptions {
+	return s.RawOpts
 }
 
 func (s *shamirShard) Derive(raw Shard) (Secret, error) {
 	sh, ok := raw.(*shamirShard)
 	if !ok {
-		return nil, errors.Wrap(InvariantError, "Not compatible")
+		return nil, errors.Wrap(TrustError, "Incompatible shards.")
+	}
+
+	if s.Opts() != sh.Opts() {
+		return nil, errors.Wrap(TrustError, "Incompatible shards.")
 	}
 
 	line, err := s.Pt.Derive(sh.Pt)
@@ -70,7 +74,7 @@ func (s *shamirShard) Derive(raw Shard) (Secret, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	return &shamirSecret{line, s.Dom}, nil
+	return &shamirSecret{line, s.Opts()}, nil
 }
 
 func (s *shamirShard) Format() ([]byte, error) {

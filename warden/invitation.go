@@ -3,18 +3,19 @@ package warden
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 )
 
 type InvitationOptions struct {
-	CertificateOptions
-	ShareOpts SecretOptions
+	Lvl LevelOfTrust
+	Exp time.Duration
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
-	def := InvitationOptions{buildCertificateOptions(), buildSecretOptions()}
+	def := InvitationOptions{Encrypt, 365 * 24 * time.Hour}
 	for _, fn := range opts {
 		fn(&def)
 	}
@@ -41,32 +42,32 @@ func (i Invitation) String() string {
 	return fmt.Sprintf("Invitation(id=%v): %v", i.Id, i.Cert)
 }
 
-func generateInvitation(rand io.Reader,
+func createInvitation(rand io.Reader,
 	secret Secret,
 	cert Certificate,
 	ringKey Signer,
 	issuerKey Signer,
 	trusteeKey PublicKey,
-	opts InvitationOptions) (Invitation, error) {
+	opts TrustOptions) (Invitation, error) {
 
 	shard, err := secret.Shard(rand)
 	if err != nil {
 		return Invitation{}, errors.Wrap(err, "Error creating shard from secret")
 	}
 
-	trustSig, err := cert.Sign(rand, ringKey, opts.ShareOpts.SigHash)
+	trustSig, err := cert.Sign(rand, ringKey, opts.SignatureHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
 	}
 
-	issuerSig, err := cert.Sign(rand, issuerKey, opts.ShareOpts.SigHash)
+	issuerSig, err := cert.Sign(rand, issuerKey, opts.SignatureHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
 	}
 
-	asymKey, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.ShareOpts.InviteCipher, opts.ShareOpts.InviteHash)
+	asymKey, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.InvitationCipher, opts.InvitationHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error generating key exchange [%v,%v]", Aes128Gcm, SHA256)
@@ -79,7 +80,7 @@ func generateInvitation(rand io.Reader,
 			err, "Error generating bytes for shards.")
 	}
 
-	ct, err := opts.ShareOpts.InviteCipher.encrypt(rand, cipherKey, msg)
+	ct, err := opts.InvitationCipher.encrypt(rand, cipherKey, msg)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Trust)
@@ -95,22 +96,28 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	priv, err := s.mySigningKey()
+	mySigningKey, err := s.mySigningKey()
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	key, err := i.accept(s.rand, dom.oracle.publicShard, priv, s.myOracle(), dom.oracle.Opts)
+	myInviteKey, err := s.myInviteKey()
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	sig, err := i.Cert.Sign(s.rand, priv, dom.oracle.Opts.SigHash)
+	myShard, err := i.accept(s.rand, mySigningKey, myInviteKey, dom.pubShard, s.myOracle())
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	return s.net.Certs.Register(cancel, s.auth, i.Cert, key, i.TrustSig, i.IssuerSig, sig)
+	mySig, err := i.Cert.Sign(s.rand, mySigningKey, dom.Opts.SignatureHash)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, mySig}
+	return s.net.Certs.Register(cancel, s.auth, cert, myShard)
 }
 
 // Verifies an invitation's signatures are valid.
@@ -125,35 +132,34 @@ func (i Invitation) verify(trustKey, issuerKey PublicKey) error {
 }
 
 // Accepts an invitation and returns an oracle key that can be registered.
-func (i Invitation) accept(rand io.Reader,
-	o publicShard, key PrivateKey,
-	pass []byte,
-	opts SecretOptions) (privateShard, error) {
-
-	shard, err := i.extractShard(rand, key, o.Pub.Alg())
+func (i Invitation) accept(rand io.Reader, signer Signer, key PrivateKey, pub Shard, pass []byte) (signedEncryptedShard, error) {
+	tmp, err := i.extractShard(rand, key, pub.Opts().ShardAlg)
 	if err != nil {
-		return privateShard{},
-			errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
+		return signedEncryptedShard{}, errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
 	}
-	defer shard.Destroy()
+	defer tmp.Destroy()
 
-	secret, err := o.Pub.Derive(shard)
+	secret, err := pub.Derive(tmp)
 	if err != nil {
-		return privateShard{},
-			errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
+		return signedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
 	}
 	defer secret.Destroy()
 
-	oKey, err := genPrivateShard(rand, secret, pass, opts)
+	new, err := secret.Shard(rand)
 	if err != nil {
-		return privateShard{},
-			errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.Trust)
+		return signedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
 	}
-	return oKey, nil
+	defer new.Destroy()
+
+	enc, err := encryptShard(rand, signer, new, pass)
+	if err != nil {
+		return signedEncryptedShard{}, errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.Trust)
+	}
+	return enc, nil
 }
 
 // Verifies that the signature matches the certificate contents.
-func (c Invitation) extractShard(rand io.Reader, priv PrivateKey, alg ShardingAlgorithm) (Shard, error) {
+func (c Invitation) extractShard(rand io.Reader, priv PrivateKey, alg SecretAlgorithm) (Shard, error) {
 	cipherKey, err := c.key.Decrypt(rand, priv)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error extracting cipher key from invitation: %v", c.Id)

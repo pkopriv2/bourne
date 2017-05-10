@@ -87,6 +87,31 @@ func (s Signature) String() string {
 	return fmt.Sprintf("Signature(hash=%v): %v", s.Hash, cryptoBytes(s.Data))
 }
 
+
+// A formatter just formats a particular object.  Used to produce consistent digital signatures.
+type Formatter interface {
+	Format() ([]byte, error)
+}
+
+// Signs the object with the signer and hash
+func sign(rand io.Reader, obj Formatter, signer Signer, hash Hash) (Signature, error) {
+	fmt, err := obj.Format()
+	if err != nil {
+		return Signature{}, errors.WithStack(err)
+	}
+
+	sig, err := signer.Sign(rand, hash, fmt)
+	if err != nil {
+		return Signature{}, errors.WithStack(err)
+	}
+	return sig, nil
+}
+
+// A destroyer simply destroys itself.
+type Destroyer interface {
+	Destroy()
+}
+
 // Public keys are the basis of identity within the trust ecosystem.  In plain english,
 // I don't trust your identity, I only trust your keys.  Therefore, risk planning starts
 // with limiting the exposure of your trusted keys.  The more trusted a key, the greater

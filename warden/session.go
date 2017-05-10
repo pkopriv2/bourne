@@ -97,7 +97,7 @@ func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOpti
 }
 
 // Keys that have been in some way trusted by the owner of the session.
-func (s *Session) MyTrustedKeys(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]KeyRing, error) {
+func (s *Session) MyTrustedKeys(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
 	opts := buildPagingOptions(fns...)
 	return s.net.Trusts.BySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
 }
@@ -108,22 +108,22 @@ func (s *Session) Proxy(cancel <-chan struct{}, id uuid.UUID) (*Session, error) 
 }
 
 // Creates a new trust with the given alias.  An alias is a non-unique alternative lookup name.
-func (s *Session) NewProxy(cancel <-chan struct{}, alias string, fns ...func(s *SharingOptions)) (KeyRing, error) {
-	return KeyRing{}, nil
+func (s *Session) NewProxy(cancel <-chan struct{}, alias string, fns ...func(s *TrustOptions)) (Trust, error) {
+	return Trust{}, nil
 }
 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (KeyRing, bool, error) {
+func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
 	return s.net.Trusts.ById(cancel, s.auth, id)
 }
 
 // Loads the trust with the given signing key.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (KeyRing, bool, error) {
-	return KeyRing{}, false, nil
+func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (Trust, bool, error) {
+	return Trust{}, false, nil
 }
 
 // Loads the trust with the given id.  The trust will be returned only
@@ -140,11 +140,11 @@ func (s *Session) AcceptTrust(cancel <-chan struct{}, i Invitation) error {
 }
 
 // Revokes trust from the given subscriber for the given trust.
-func (s *Session) RevokeTrust(cancel <-chan struct{}, t KeyRing, sub uuid.UUID) error {
+func (s *Session) RevokeTrust(cancel <-chan struct{}, t Trust, sub uuid.UUID) error {
 	return t.revokeCertificate(cancel, s, sub)
 }
 
 // Renew's the session owner's certificate with the trust.
-func (s *Session) RenewTrust(cancel <-chan struct{}, t KeyRing) (KeyRing, error) {
+func (s *Session) RenewTrust(cancel <-chan struct{}, t Trust) (Trust, error) {
 	return t.renewCertificate(cancel, s)
 }

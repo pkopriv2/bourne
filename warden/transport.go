@@ -68,7 +68,7 @@ type certTransport interface {
 	ActiveByTrust(cancel <-chan struct{}, a authFn, id uuid.UUID, beg, end int) ([]Certificate, error)
 
 	// Registers a certificate (and corresponding oracle key).
-	Register(cancel <-chan struct{}, a authFn, c Certificate, k privateShard, domSig, issSig, truSig Signature) error
+	Register(cancel <-chan struct{}, a authFn, c SignedCertificate, k signedEncryptedShard) error
 
 	// Revokes a certificate.
 	Revoke(cancel <-chan struct{}, a authFn, id uuid.UUID) error
@@ -77,11 +77,11 @@ type certTransport interface {
 type trustTransport interface {
 
 	// Loads the domain by id
-	ById(cancel <-chan struct{}, a authFn, id uuid.UUID) (KeyRing, bool, error)
+	ById(cancel <-chan struct{}, a authFn, id uuid.UUID) (Trust, bool, error)
 
 	// Loads the trust by subscriber
-	BySubscriber(cancel <-chan struct{}, a authFn, id uuid.UUID, beg, end int) ([]KeyRing, error)
+	BySubscriber(cancel <-chan struct{}, a authFn, id uuid.UUID, beg, end int) ([]Trust, error)
 
 	// Registers a newly created domain.
-	Register(cancel <-chan struct{}, a authFn, dom KeyRing, sign SignedKeyPair) error
+	Register(cancel <-chan struct{}, a authFn, dom Trust, sign SignedKeyPair) error
 }

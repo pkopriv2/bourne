@@ -9,122 +9,147 @@ import (
 
 const OneHundredYears = 100 * 365 * 24 * time.Hour
 
-type SharingOptions struct {
+// General trust options.
+type TrustOptions struct {
 	SecretOptions
-	Sign KeyPairOptions
+
+	// invitation options
+	InvitationCipher SymmetricCipher
+	InvitationHash   Hash
+	InvitationIter   int // used for key derivations only
+
+	// signature options
+	SignatureHash Hash
+
+	// default key options.
+	KeyOpts KeyPairOptions
 }
 
-func buildSharingOptions(fns ...func(*SharingOptions)) SharingOptions {
-	ret := SharingOptions{buildSecretOptions(), buildKeyPairOptions()}
+func buildTrustOptions(fns ...func(*TrustOptions)) TrustOptions {
+	ret := TrustOptions{buildSecretOptions(), Aes256Gcm, SHA256, 1024, SHA256, buildKeyPairOptions()}
 	for _, fn := range fns {
 		fn(&ret)
 	}
 	return ret
 }
 
-// A key ring is the basis of the trust system.
-type KeyRing struct {
+// A trust is a personal view of a digital trust.  Fields will be populated
+// based on the subscriber's relationship with the trust.
+type Trust struct {
 	Id uuid.UUID
 
-	// the public signing key of the ring.  (This is used to uniquely identify a ring)
+	// the public signing key of the trust.
 	Pub PublicKey
 
-	// the session owner's certificate with the .
+	// the session owner's certificate with the trust.
 	Cert SignedCertificate
 
-	// the key ring's encrypted oracle. (Only available for key ringed users)
-	oracle signedPublicShard
+	// the options of the trust
+	Opts TrustOptions
 
-	// the encrypted oracle. (Only available for key ringed users)
-	oracleKey signedPrivateShard
+	// the public shard portion of the shared secret.
+	pubShard signedShard
+
+	// the private shard portion of the shared secret. (may only be unlocked by owner)
+	privShard signedEncryptedShard
 }
 
-// generates a key ring, but has no server-side effects.
-func generateKeyRing(s *Session, name string, fns ...func(s *SharingOptions)) (KeyRing, SignedKeyPair, error) {
-	opts := buildSharingOptions(fns...)
+// generates a trust, but has no server-side effects.
+func generateTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, SignedKeyPair, error) {
+	opts := buildTrustOptions(fns...)
 
 	mySigningKey, err := s.mySigningKey()
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, errors.Wrapf(err,
+		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
 			"Error extracting session signing key [%v]", s.MyId())
 	}
 	defer mySigningKey.Destroy()
 
-	priv, err := opts.Sign.Algorithm.Gen(s.rand, opts.Sign.Strength)
+	trustSigningKey, err := opts.KeyOpts.Algorithm.Gen(s.rand, opts.KeyOpts.Strength)
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, errors.Wrapf(err,
-			"Error generating  key [%v]: %v", opts.Sign.Algorithm, opts.Sign.Strength)
+		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
+			"Error generating  key [%v]: %v", opts.KeyOpts.Algorithm, opts.KeyOpts.Strength)
 	}
-	defer priv.Destroy()
+	defer trustSigningKey.Destroy()
 
-	domId, myId := uuid.NewV1(), s.MyId()
-
-	oracle, curve, err := genSharedSecret(s.rand, opts.SecretOptions)
+	secret, err := genSecret(s.rand, opts.SecretOptions)
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, errors.Wrapf(err,
-			"Error generating key ring: %v", name)
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
-	defer curve.Destroy()
+	defer secret.Destroy()
 
-	oracleKey, err := genPrivateShard(s.rand, curve, s.myOracle(), opts.SecretOptions)
+	pubShard, err := secret.Shard(s.rand)
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, errors.Wrapf(err,
-			"Error generating private oracle key [%v]", myId)
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
+	defer pubShard.Destroy()
 
-	// ident, err := genKeyPair(s.rand, priv, curve.Bytes(), opts.Sign)
-	// if err != nil {
-	// return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
-	// "Error generating signing key with opts: %+v", opts.Sign)
-	// }
-
-	cert := newCertificate(domId, myId, myId, Creator, OneHundredYears)
-
-	signedOracle, err := oracle.Sign(s.rand, priv, opts.Sign.Hash)
+	privShard, err := secret.Shard(s.rand)
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, err
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+	}
+	defer privShard.Destroy()
+
+	signedShard, err := signShard(s.rand, mySigningKey, pubShard)
+	if err != nil {
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	signedOracleKey, err := oracleKey.Sign(s.rand, priv, opts.Sign.Hash)
+	encShard, err := encryptShard(s.rand, mySigningKey, privShard, s.myOracle())
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, err
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	domSig, err := cert.Sign(s.rand, priv, opts.Sign.Hash)
+	fmt, err := secret.Format()
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, err
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+	}
+	defer cryptoBytes(fmt).Destroy()
+
+	pair, err := genKeyPair(s.rand, trustSigningKey, fmt, opts.KeyOpts)
+	if err != nil {
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	mySig, err := cert.Sign(s.rand, priv, opts.Sign.Hash)
+	cert := newCertificate(uuid.NewV1(), s.MyId(), s.MyId(), Creator, OneHundredYears)
+
+	signedPair, err := pair.Sign(s.rand, mySigningKey, opts.SignatureHash)
 	if err != nil {
-		return KeyRing{}, SignedKeyPair{}, err
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	return KeyRing{
-		domId,
-		nil,
-		SignedCertificate{cert, domSig, mySig, mySig},
-		signedOracle,
-		signedOracleKey,
-	}, SignedKeyPair{}, nil
+	signedCert, err := signCertificate(
+		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, opts.SignatureHash)
+	if err != nil {
+		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+	}
+
+	return Trust{
+		cert.Trust,
+		trustSigningKey.Public(),
+		signedCert,
+		opts,
+		signedShard,
+		encShard,
+	}, signedPair, nil
 }
 
-// Extracts the  oracle curve.  Requires *Encrypt* level key ring
-func (d KeyRing) unlockSecret(s *Session) (Secret, error) {
+// Extracts the  oracle curve.  Requires *Encrypt* level trust
+func (d Trust) unlockSecret(s *Session) (Secret, error) {
 	if err := Encrypt.verify(d.Cert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return nil, nil
 }
 
-func (d KeyRing) unlockSigningKey(cancel <-chan struct{}, s *Session, secret Secret) (PrivateKey, error) {
+func (d Trust) unlockSigningKey(cancel <-chan struct{}, s *Session, secret Secret) (PrivateKey, error) {
 	if err := Sign.verify(d.Cert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return nil, nil
 }
 
-func (d KeyRing) renewCertificate(cancel <-chan struct{}, s *Session) (KeyRing, error) {
+func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, error) {
 	return d, nil
 	// if err := Invite.verify(d.Cert.Level); err != nil {
 	// return KeyRing{}, errors.WithStack(err)
@@ -172,8 +197,8 @@ func (d KeyRing) renewCertificate(cancel <-chan struct{}, s *Session) (KeyRing, 
 	// }, nil
 }
 
-// Loads all the key ring certificates that have been issued by this .
-func (t KeyRing) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
+// Loads all the trust certificates that have been issued by this .
+func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
 	if err := Verify.verify(t.Cert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -183,7 +208,7 @@ func (t KeyRing) listCertificates(cancel <-chan struct{}, s Session, fns ...func
 }
 
 // Revokes all issued certificates by this  for the given subscriber.
-func (t KeyRing) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uuid.UUID) error {
+func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uuid.UUID) error {
 	if err := Revoke.verify(t.Cert.Level); err != nil {
 		return errors.WithStack(err)
 	}
@@ -196,7 +221,7 @@ func (t KeyRing) revokeCertificate(cancel <-chan struct{}, s *Session, trustee u
 }
 
 // Issues an invitation to the given key.
-func (t KeyRing) invite(cancel <-chan struct{}, s *Session, trustee KeyRing, fns ...func(*InvitationOptions)) (Invitation, error) {
+func (t Trust) invite(cancel <-chan struct{}, s *Session, trustee Trust, fns ...func(*InvitationOptions)) (Invitation, error) {
 	if err := Invite.verify(t.Cert.Level); err != nil {
 		return Invitation{}, newLevelOfTrustError(Invite, t.Cert.Level)
 	}
@@ -223,7 +248,7 @@ func (t KeyRing) invite(cancel <-chan struct{}, s *Session, trustee KeyRing, fns
 
 	cert := newCertificate(t.Id, s.MyId(), trustee.Id, opts.Lvl, opts.Exp)
 
-	inv, err := generateInvitation(s.rand, secret, cert, ringKey, issuerKey, trustee.Pub, opts)
+	inv, err := createInvitation(s.rand, secret, cert, ringKey, issuerKey, trustee.Pub, t.Opts)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trustee, t.Id)
 	}

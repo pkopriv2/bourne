@@ -11,18 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-type CertificateOptions struct {
-	Lvl LevelOfTrust
-	Exp time.Duration
-}
-
-func buildCertificateOptions(opts ...func(*CertificateOptions)) CertificateOptions {
-	def := CertificateOptions{Encrypt, 365 * 24 * time.Hour}
-	for _, fn := range opts {
-		fn(&def)
-	}
-	return def
-}
 
 // Trust levels dictate the terms for what actions a user can take on a domain.
 type LevelOfTrust int
@@ -79,6 +67,25 @@ type SignedCertificate struct {
 	TrustSig   Signature
 	IssuerSig  Signature
 	TrusteeSig Signature
+}
+
+func signCertificate(rand io.Reader, c Certificate, trust,issuer,trustee Signer, h Hash) (SignedCertificate, error) {
+	trustSig, err := c.Sign(rand, trust, h)
+	if err != nil {
+		return SignedCertificate{}, errors.WithStack(err)
+	}
+
+	issuerSig, err := c.Sign(rand, issuer, h)
+	if err != nil {
+		return SignedCertificate{}, errors.WithStack(err)
+	}
+
+	trusteeSig, err := c.Sign(rand, trustee, h)
+	if err != nil {
+		return SignedCertificate{}, errors.WithStack(err)
+	}
+
+	return SignedCertificate{c, trustSig, issuerSig, trusteeSig}, nil
 }
 
 func (s SignedCertificate) Verify(domain PublicKey, issuer PublicKey, trustee PublicKey) error {

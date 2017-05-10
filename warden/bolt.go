@@ -88,7 +88,7 @@ func (b *boltStorage) Bolt() *bolt.DB {
 	return (*bolt.DB)(b)
 }
 
-func (b *boltStorage) SaveSubscriber(sub Subscriber, auth signedPrivateShard) error {
+func (b *boltStorage) SaveSubscriber(sub Subscriber, auth signedEncryptedShard) error {
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
 		if err := boltStoreSubscriber(tx, sub); err != nil {
 			return err
@@ -150,7 +150,7 @@ func (b *boltStorage) LoadTrust(id string) (d storedTrust, o bool, e error) {
 	return
 }
 
-func (b *boltStorage) SaveTrust(dom KeyRing) error {
+func (b *boltStorage) SaveTrust(dom Trust) error {
 	return nil
 	// var issuer storedSubscriber
 	// // issuer, err := EnsureSubscriber(b, dom.cert.Issuer)
@@ -179,7 +179,7 @@ func (b *boltStorage) SaveTrust(dom KeyRing) error {
 	// })
 }
 
-func (b *boltStorage) SaveCert(dom, subscriber string) (d SignedCertificate, k signedPrivateShard, o bool, e error) {
+func (b *boltStorage) SaveCert(dom, subscriber string) (d SignedCertificate, k signedEncryptedShard, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		// d, o, e = boltLoadTrustAuth(tx, dom, subscriber)
 		// return e
@@ -188,7 +188,7 @@ func (b *boltStorage) SaveCert(dom, subscriber string) (d SignedCertificate, k s
 	return
 }
 
-func (b *boltStorage) LoadCertByTrustAndSubscriber(dom, subscriber string) (d SignedCertificate, k signedPrivateShard, o bool, e error) {
+func (b *boltStorage) LoadCertByTrustAndSubscriber(dom, subscriber string) (d SignedCertificate, k signedEncryptedShard, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		// d, o, e = boltLoadTrustAuth(tx, dom, subscriber)
 		// return e
@@ -221,7 +221,7 @@ func boltLoadSubscriber(tx *bolt.Tx, id string) (s storedSubscriber, o bool, e e
 	return
 }
 
-func boltStoreSubscriberAuth(tx *bolt.Tx, id uuid.UUID, alias string, k signedPrivateShard) error {
+func boltStoreSubscriberAuth(tx *bolt.Tx, id uuid.UUID, alias string, k signedEncryptedShard) error {
 	raw, err := gobBytes(storedAuthenticator{k})
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding oracle key [%v]", k)
@@ -240,7 +240,7 @@ func boltLoadSubscriberAuth(tx *bolt.Tx, sub, method string) (k storedAuthentica
 	return
 }
 
-func boltStoreTrust(tx *bolt.Tx, identity KeyPair, oracle signedPublicShard) error {
+func boltStoreTrust(tx *bolt.Tx, identity KeyPair, oracle signedShard) error {
 	id := identity.Pub.Id()
 
 	if err := boltEnsureEmpty(tx.Bucket(domainBucket), stash.String(id)); err != nil {
@@ -265,7 +265,7 @@ func boltLoadTrust(tx *bolt.Tx, id string) (d storedTrust, o bool, e error) {
 	return
 }
 
-func boltStoreTrustAuth(tx *bolt.Tx, dom, sub uuid.UUID, o signedPrivateShard) error {
+func boltStoreTrustAuth(tx *bolt.Tx, dom, sub uuid.UUID, o signedEncryptedShard) error {
 	rawKey, err := gobBytes(o)
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding oracle key [%v]", o)
