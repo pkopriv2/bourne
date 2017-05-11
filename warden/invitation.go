@@ -55,13 +55,13 @@ func createInvitation(rand io.Reader,
 		return Invitation{}, errors.Wrap(err, "Error creating shard from secret")
 	}
 
-	trustSig, err := cert.Sign(rand, ringKey, opts.SignatureHash)
+	trustSig, err := sign(rand, cert, ringKey, opts.SignatureHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
 	}
 
-	issuerSig, err := cert.Sign(rand, issuerKey, opts.SignatureHash)
+	issuerSig, err := sign(rand, cert, issuerKey, opts.SignatureHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
@@ -91,7 +91,7 @@ func createInvitation(rand io.Reader,
 
 // Accepts an invitation and returns an oracle key that can be registered.
 func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
-	dom, ok, err := s.net.Trusts.ById(cancel, s.auth, i.Cert.Trust)
+	trust, ok, err := s.net.Trusts.ById(cancel, s.auth, i.Cert.Trust)
 	if err != nil || !ok {
 		return errors.WithStack(err)
 	}
@@ -106,29 +106,26 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	myShard, err := i.accept(s.rand, mySigningKey, myInviteKey, dom.pubShard, s.myOracle())
+	myShard, err := i.accept(s.rand, mySigningKey, myInviteKey, trust.pubShard, s.myOracle())
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	mySig, err := i.Cert.Sign(s.rand, mySigningKey, dom.Opts.SignatureHash)
+	mySig, err := sign(s.rand, i.Cert, mySigningKey, trust.Opts.SignatureHash)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, mySig}
-	return s.net.Certs.Register(cancel, s.auth, cert, myShard)
+	return errors.WithStack(s.net.Certs.Register(cancel, s.auth, cert, myShard))
 }
 
 // Verifies an invitation's signatures are valid.
 func (i Invitation) verify(trustKey, issuerKey PublicKey) error {
-	if err := i.Cert.Verify(trustKey, i.TrustSig); err != nil {
+	if err := verify(i.Cert, trustKey, i.TrustSig); err != nil {
 		return errors.WithStack(err)
 	}
-	if err := i.Cert.Verify(issuerKey, i.IssuerSig); err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
+	return errors.WithStack(verify(i.Cert, issuerKey, i.IssuerSig))
 }
 
 // Accepts an invitation and returns an oracle key that can be registered.

@@ -3,6 +3,7 @@ package warden
 import (
 	"io"
 
+	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -22,6 +23,9 @@ type Session struct {
 	// the subscriber's current oracle value.
 	subOracle []byte
 
+	// the credentials
+	login func(KeyPad)
+
 	// the transport mechanism. (expected to be secure).
 	net transport
 
@@ -30,13 +34,8 @@ type Session struct {
 }
 
 // Returns an authentication token.
-func (s *Session) auth(cancel <-chan struct{}) (auth, error) {
-	return auth{}, nil
-}
-
-// Sends
-func (s *Session) rpc(cancel <-chan struct{}, fn func(auth) error) error {
-	return nil
+func (s *Session) auth(cancel <-chan struct{}) (signedAuth, error) {
+	return signedAuth{}, nil
 }
 
 // Returns the personal encryption seed of this subscription.  The seed is actually
@@ -86,14 +85,14 @@ func (s *Session) MyKey() PublicKey {
 
 // Lists the session owner's currently pending invitations.
 func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
-	opts := buildPagingOptions(fns...)
-	return s.net.Invites.BySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
+	invites, err := s.net.Invites.BySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
+	return invites, errors.WithStack(err)
 }
 
 // Lists the session owner's currently active certificates.
 func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	opts := buildPagingOptions(fns...)
-	return s.net.Certs.ActiveBySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
+	certs, err := s.net.Certs.ActiveBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
+	return certs, errors.WithStack(err)
 }
 
 // Keys that have been in some way trusted by the owner of the session.
@@ -102,21 +101,12 @@ func (s *Session) MyTrustedKeys(cancel <-chan struct{}, fns ...func(*PagingOptio
 	return s.net.Trusts.BySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
 }
 
-// Create a proxy session for the
-func (s *Session) Proxy(cancel <-chan struct{}, id uuid.UUID) (*Session, error) {
-	return &Session{}, nil
-}
-
-// Creates a new trust with the given alias.  An alias is a non-unique alternative lookup name.
-func (s *Session) NewProxy(cancel <-chan struct{}, alias string, fns ...func(s *TrustOptions)) (Trust, error) {
-	return Trust{}, nil
-}
-
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
 func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
-	return s.net.Trusts.ById(cancel, s.auth, id)
+	trust, ok, err := s.net.Trusts.ById(cancel, s.auth, id)
+	return trust, ok, errors.WithStack(err)
 }
 
 // Loads the trust with the given signing key.  The trust will be returned only
@@ -130,21 +120,25 @@ func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (Trust, bool, e
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
 func (s *Session) InviteById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
-	return s.net.Invites.ById(cancel, s.auth, id)
+	trust, ok, err := s.net.Invites.ById(cancel, s.auth, id)
+	return trust, ok, errors.WithStack(err)
 }
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
 func (s *Session) AcceptTrust(cancel <-chan struct{}, i Invitation) error {
-	return i.acceptInvitation(cancel, s)
+	err := i.acceptInvitation(cancel, s)
+	return errors.WithStack(err)
 }
 
 // Revokes trust from the given subscriber for the given trust.
 func (s *Session) RevokeTrust(cancel <-chan struct{}, t Trust, sub uuid.UUID) error {
-	return t.revokeCertificate(cancel, s, sub)
+	err := t.revokeCertificate(cancel, s, sub)
+	return errors.WithStack(err)
 }
 
 // Renew's the session owner's certificate with the trust.
 func (s *Session) RenewTrust(cancel <-chan struct{}, t Trust) (Trust, error) {
-	return t.renewCertificate(cancel, s)
+	trust, err := t.renewCertificate(cancel, s)
+	return trust, errors.WithStack(err)
 }

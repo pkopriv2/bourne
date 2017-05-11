@@ -11,7 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-
 // Trust levels dictate the terms for what actions a user can take on a domain.
 type LevelOfTrust int
 
@@ -69,18 +68,18 @@ type SignedCertificate struct {
 	TrusteeSig Signature
 }
 
-func signCertificate(rand io.Reader, c Certificate, trust,issuer,trustee Signer, h Hash) (SignedCertificate, error) {
-	trustSig, err := c.Sign(rand, trust, h)
+func signCertificate(rand io.Reader, c Certificate, trust, issuer, trustee Signer, h Hash) (SignedCertificate, error) {
+	trustSig, err := sign(rand, c, trust, h)
 	if err != nil {
 		return SignedCertificate{}, errors.WithStack(err)
 	}
 
-	issuerSig, err := c.Sign(rand, issuer, h)
+	issuerSig, err := sign(rand, c, issuer, h)
 	if err != nil {
 		return SignedCertificate{}, errors.WithStack(err)
 	}
 
-	trusteeSig, err := c.Sign(rand, trustee, h)
+	trusteeSig, err := sign(rand, c, issuer, h)
 	if err != nil {
 		return SignedCertificate{}, errors.WithStack(err)
 	}
@@ -88,19 +87,14 @@ func signCertificate(rand io.Reader, c Certificate, trust,issuer,trustee Signer,
 	return SignedCertificate{c, trustSig, issuerSig, trusteeSig}, nil
 }
 
-func (s SignedCertificate) Verify(domain PublicKey, issuer PublicKey, trustee PublicKey) error {
-	fmt, err := s.Format()
-	if err != nil {
-		return err
+func (s SignedCertificate) Verify(trust, issuer, trustee PublicKey) error {
+	if err := verify(s.Certificate, trust, s.TrustSig); err != nil {
+		return errors.WithStack(err)
 	}
-
-	if err := s.TrustSig.Verify(domain, fmt); err != nil {
-		return err
+	if err := verify(s.Certificate, issuer, s.IssuerSig); err != nil {
+		return errors.WithStack(err)
 	}
-	if err := s.IssuerSig.Verify(issuer, fmt); err != nil {
-		return err
-	}
-	return s.TrusteeSig.Verify(trustee, fmt)
+	return errors.WithStack(verify(s.Certificate, trustee, s.TrusteeSig))
 }
 
 // A certificate is a receipt that trust has been established.
@@ -127,26 +121,7 @@ func (c Certificate) Duration() time.Duration {
 
 // Verifies that the signature matches the certificate contents.
 func (c Certificate) Verify(key PublicKey, sig Signature) error {
-	fmt, err := c.Format()
-	if err != nil {
-		return err
-	}
-
-	return sig.Verify(key, fmt)
-}
-
-// Signs the certificate with the private key.
-func (c Certificate) Sign(rand io.Reader, key Signer, hash Hash) (Signature, error) {
-	fmt, err := c.Format()
-	if err != nil {
-		return Signature{}, err
-	}
-
-	sig, err := key.Sign(rand, hash, fmt)
-	if err != nil {
-		return Signature{}, errors.Wrapf(err, "Error signing certificate [%v]", c)
-	}
-	return sig, nil
+	return verify(c, key, sig)
 }
 
 // Returns a consistent byte representation of a certificate.  Used for signing.

@@ -9,6 +9,13 @@ import (
 
 const OneHundredYears = 100 * 365 * 24 * time.Hour
 
+type KeyType int
+
+const (
+	SigningKey KeyType = iota
+	InviteKey
+)
+
 // General trust options.
 type TrustOptions struct {
 	SecretOptions
@@ -38,6 +45,9 @@ func buildTrustOptions(fns ...func(*TrustOptions)) TrustOptions {
 type Trust struct {
 	Id uuid.UUID
 
+	// the common name of the trust. (not advertized, but public)
+	Name string
+
 	// the public signing key of the trust.
 	Pub PublicKey
 
@@ -55,7 +65,7 @@ type Trust struct {
 }
 
 // generates a trust, but has no server-side effects.
-func generateTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, SignedKeyPair, error) {
+func newTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, SignedKeyPair, error) {
 	opts := buildTrustOptions(fns...)
 
 	mySigningKey, err := s.mySigningKey()
@@ -106,7 +116,7 @@ func generateTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust
 	}
 	defer cryptoBytes(pass).Destroy()
 
-	pair, err := genKeyPair(s.rand, trustSigningKey, pass, opts.KeyOpts)
+	pair, err := encryptKey(s.rand, trustSigningKey, pass, opts.KeyOpts)
 	if err != nil {
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
@@ -126,6 +136,7 @@ func generateTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust
 
 	return Trust{
 		cert.Trust,
+		name,
 		trustSigningKey.Public(),
 		signedCert,
 		opts,
@@ -158,12 +169,18 @@ func (d Trust) unlockSigningKey(cancel <-chan struct{}, s *Session, secret Secre
 		return nil, errors.WithStack(err)
 	}
 
-	// key, err := secret.Format()
-	// if err != nil {
-	// return nil, errors.WithStack(err)
-	// }
+	pair, err := s.net.Keys.ByTrustAndType(cancel, s.auth, d.Id, SigningKey)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
-	return nil, nil
+	key, err := secret.Format()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	priv, err := pair.Decrypt(key)
+	return priv, errors.WithStack(err)
 }
 
 func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, error) {
@@ -213,6 +230,7 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 
 	return Trust{
 		d.Id,
+		d.Name,
 		d.Pub,
 		myCert,
 		d.Opts,
@@ -226,9 +244,7 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 	if err := Verify.verify(t.Cert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
-
-	opts := buildPagingOptions(fns...)
-	return s.net.Certs.ActiveByTrust(cancel, s.auth, t.Id, opts.Beg, opts.End)
+	return s.net.Certs.ActiveByTrust(cancel, s.auth, t.Id, buildPagingOptions(fns...))
 }
 
 // Revokes all issued certificates by this  for the given subscriber.

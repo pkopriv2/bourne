@@ -49,12 +49,12 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 }
 
 // Registers a new subscription with the trust service.
-func Subscribe(ctx common.Context, addr string, creds func(KeyPad)) (Session, error) {
+func Subscribe(ctx common.Context, addr string, login func(KeyPad)) (Session, error) {
 	return Session{}, nil
 }
 
 // Loads a subscription
-func Connect(ctx common.Context, addr string, creds func(KeyPad)) (Session, error) {
+func Connect(ctx common.Context, addr string, login func(KeyPad)) (Session, error) {
 	return Session{}, nil
 }
 
@@ -87,7 +87,6 @@ func (s Signature) String() string {
 	return fmt.Sprintf("Signature(hash=%v): %v", s.Hash, cryptoBytes(s.Data))
 }
 
-
 // A formatter just formats a particular object.  Used to produce consistent digital signatures.
 type Formatter interface {
 	Format() ([]byte, error)
@@ -105,6 +104,30 @@ func sign(rand io.Reader, obj Formatter, signer Signer, hash Hash) (Signature, e
 		return Signature{}, errors.WithStack(err)
 	}
 	return sig, nil
+}
+
+// Verifies the object with the signer and hash
+func verify(obj Formatter, key PublicKey, sig Signature) error {
+	fmt, err := obj.Format()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(key.Verify(sig.Hash, fmt, sig.Data))
+}
+
+// Decrypts the object with the key.
+func decrypt(obj Decrypter, key Formatter) ([]byte, error) {
+	fmt, err := key.Format()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	ret, err := obj.Decrypt(fmt)
+	return ret, errors.WithStack(err)
+}
+
+// A destroyer simply destroys itself.
+type Decrypter interface {
+	Decrypt([]byte) ([]byte, error)
 }
 
 // A destroyer simply destroys itself.
@@ -154,7 +177,7 @@ type KeyPad interface {
 	//
 	// Note: The public key is only used as a means of performing a simple account
 	// lookup and is not used to verify the signature.
-	WithSignature(signer Signer) (Session, error)
+	WithSignature(signer Signer) (signedAuth, error)
 }
 
 type Document struct {

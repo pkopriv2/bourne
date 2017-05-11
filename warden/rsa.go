@@ -23,7 +23,7 @@ type rsaPublicKey struct {
 }
 
 func (r *rsaPublicKey) Algorithm() KeyAlgorithm {
-	return RSA
+	return Rsa
 }
 
 func (r *rsaPublicKey) Id() string {
@@ -78,7 +78,7 @@ type rsaPrivateKey struct {
 }
 
 func (r *rsaPrivateKey) Algorithm() KeyAlgorithm {
-	return RSA
+	return Rsa
 }
 
 func (r *rsaPrivateKey) public() *rsaPublicKey {

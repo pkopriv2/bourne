@@ -17,7 +17,7 @@ type KeyPairOptions struct {
 }
 
 func buildKeyPairOptions(fns ...func(*KeyPairOptions)) KeyPairOptions {
-	ret := KeyPairOptions{RSA, 2048, Aes256Gcm, SHA256, 1024, 32}
+	ret := KeyPairOptions{Rsa, 2048, Aes256Gcm, SHA256, 1024, 32}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -29,8 +29,7 @@ type SignedKeyPair struct {
 	Sig Signature
 }
 
-// A signing key is an encrypted private key.  It may only be decrypted
-// by someone who has been trusted to sign on its behalf.
+// A key pair
 type KeyPair struct {
 	Pub  PublicKey
 	Opts KeyPairOptions
@@ -39,7 +38,7 @@ type KeyPair struct {
 }
 
 // Generates a new encrypted key pair
-func genKeyPair(rand io.Reader, priv PrivateKey, pass []byte, opts KeyPairOptions) (KeyPair, error) {
+func encryptKey(rand io.Reader, priv PrivateKey, pass []byte, opts KeyPairOptions) (KeyPair, error) {
 	salt, err := generateRandomBytes(rand, opts.Salt)
 	if err != nil {
 		return KeyPair{}, errors.WithStack(err)
@@ -64,16 +63,10 @@ func (p KeyPair) Format() ([]byte, error) {
 }
 
 func (p KeyPair) Sign(rand io.Reader, priv Signer, hash Hash) (SignedKeyPair, error) {
-	fmt, err := p.Format()
+	sig, err := sign(rand, p, priv, hash)
 	if err != nil {
 		return SignedKeyPair{}, errors.WithStack(err)
 	}
-
-	sig, err := priv.Sign(rand, hash, fmt)
-	if err != nil {
-		return SignedKeyPair{}, errors.WithStack(err)
-	}
-
 	return SignedKeyPair{p, sig}, nil
 }
 

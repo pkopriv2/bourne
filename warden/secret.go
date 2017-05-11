@@ -152,12 +152,7 @@ type signedShard struct {
 
 // Verifies the signed oracle
 func (s signedShard) Verify(key PublicKey) error {
-	fmt, err := s.Format()
-	if err != nil {
-		return err
-	}
-
-	return s.Sig.Verify(key, fmt)
+	return errors.WithStack(verify(s.Shard, key, s.Sig))
 }
 
 // A signed oracle key.  (Used to prove legitimacy of raw key)
@@ -218,6 +213,5 @@ func (p encryptedShard) Decrypt(pass []byte) (Shard, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
 	return ret, nil
 }

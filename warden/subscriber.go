@@ -26,7 +26,7 @@ func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
 
 type Subscriber struct {
 	Id     uuid.UUID
-	Oracle Shard
+	Oracle signedEncryptedShard
 	Sign   SignedKeyPair
 	Invite SignedKeyPair
 }

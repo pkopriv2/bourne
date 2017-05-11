@@ -32,7 +32,7 @@ func TestCert(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Run("Sign", func(t *testing.T) {
-		sig, err := cert.Sign(rand.Reader, key, SHA256)
+		sig, err := sign(rand.Reader, cert, key, SHA256)
 		assert.Nil(t, err)
 		assert.Nil(t, cert.Verify(key.Public(), sig))
 	})

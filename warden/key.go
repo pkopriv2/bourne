@@ -13,7 +13,7 @@ var (
 type KeyAlgorithm int
 
 const (
-	RSA KeyAlgorithm = iota
+	Rsa KeyAlgorithm = iota
 	// Elliptic
 )
 
@@ -22,7 +22,7 @@ func (k KeyAlgorithm) parsePublicKey(raw []byte) (PublicKey, error) {
 	switch k {
 	default:
 		return nil, errors.WithStack(UnknownKeyAlgorithmError)
-	case RSA:
+	case Rsa:
 		return parseRsaPublicKey(raw)
 	}
 }
@@ -32,7 +32,7 @@ func (k KeyAlgorithm) parsePrivateKey(raw []byte) (PrivateKey, error) {
 	switch k {
 	default:
 		return nil, errors.WithStack(UnknownKeyAlgorithmError)
-	case RSA:
+	case Rsa:
 		return parseRsaPrivateKey(raw)
 	}
 }
@@ -42,7 +42,7 @@ func (k KeyAlgorithm) Gen(rand io.Reader, strength int) (PrivateKey, error) {
 	switch k {
 	default:
 		return nil, errors.WithStack(UnknownKeyAlgorithmError)
-	case RSA:
+	case Rsa:
 		return GenRsaKey(rand, strength)
 	}
 }
