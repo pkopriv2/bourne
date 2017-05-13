@@ -22,6 +22,22 @@ func signAuth(rand io.Reader, signer Signer, auth auth, hash Hash) (signedAuth, 
 	return signedAuth{auth, sig}, nil
 }
 
+type authChallenge struct {
+	Now time.Time
+}
+
+func newAuthChallenge() authChallenge {
+	return authChallenge{time.Now()}
+}
+
+func (a authChallenge) Format() ([]byte, error) {
+	fmt, err := gobBytes(a.Now)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return fmt, nil
+}
+
 type auth struct {
 	IssuedTo uuid.UUID
 	IssuedBy uuid.UUID

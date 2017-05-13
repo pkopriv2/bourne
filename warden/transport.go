@@ -13,13 +13,15 @@ type transport struct {
 }
 
 type subTransport interface {
-	ById(cancel <-chan struct{}, id uuid.UUID) (Subscriber, error)
+
+	RegisterBySignature(cancel <-chan struct{}, key string, challenge authChallenge, sig Signature) (signedAuth, error)
 }
 
 type authTransport interface {
 
 	// Loads public key by subscriber
-	BySignature(cancel <-chan struct{}, key string, msg []byte, sig Signature) (signedAuth, error)
+	BySignature(cancel <-chan struct{}, key string, challenge authChallenge, sig Signature) (signedAuth, error)
+
 }
 
 type keyTransport interface {

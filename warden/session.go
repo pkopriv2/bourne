@@ -15,15 +15,15 @@ import (
 type Session struct {
 
 	// the subscriber's unique identifier
-	subId uuid.UUID
+	id uuid.UUID
 
 	// the subcriber's public signing key.  safe to store in memory.
-	subKey PublicKey
+	pub PublicKey
 
 	// the subscriber's current oracle value.
-	subOracle []byte
+	oracle []byte
 
-	// the credentials
+	// the login credentials
 	login func(KeyPad)
 
 	// the transport mechanism. (expected to be secure).
@@ -53,7 +53,7 @@ func (s *Session) auth(cancel <-chan struct{}) (signedAuth, error) {
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
 func (s *Session) myOracle() []byte {
-	return s.subOracle
+	return s.oracle
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
@@ -68,19 +68,19 @@ func (s *Session) myInviteKey() (PrivateKey, error) {
 
 // Destroys the session's memory - zeroing out any sensitive info
 func (s *Session) Destroy() {
-	cryptoBytes(s.subOracle).Destroy()
+	cryptoBytes(s.oracle).Destroy()
 }
 
 // Returns the subscriber id associated with this session.  This uniquely identifies
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
 func (s *Session) MyId() uuid.UUID {
-	return s.subId
+	return s.id
 }
 
 // Returns the session owner's public key.  This key and its id may be shared freely.
 func (s *Session) MyKey() PublicKey {
-	return s.subKey
+	return s.pub
 }
 
 // Lists the session owner's currently pending invitations.

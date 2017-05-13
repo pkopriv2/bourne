@@ -48,13 +48,15 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 	return opts
 }
 
+
+
 // Registers a new subscription with the trust service.
-func Subscribe(ctx common.Context, addr string, login func(KeyPad)) (Session, error) {
+func Subscribe(ctx common.Context, addr string, login func(KeyPad) signedAuth) (Session, error) {
 	return Session{}, nil
 }
 
 // Loads a subscription
-func Connect(ctx common.Context, addr string, login func(KeyPad)) (Session, error) {
+func Connect(ctx common.Context, addr string, login func(KeyPad) signedAuth) (Session, error) {
 	return Session{}, nil
 }
 
@@ -165,20 +167,6 @@ type PrivateKey interface {
 	Destroy()
 }
 
-// A key pad gives access to the various authentication methods and will
-// be used during the registration process.
-//
-// Future: Accept alternative login methods (e.g. pins, passwords, multi-factor, etc...)
-type KeyPad interface {
-
-	// Authenticates using a simple signature scheme. The signer will be asked
-	// to sign a simple message, which will then be used as proof that the caller
-	// has direct signing access to the private key component of the public key.
-	//
-	// Note: The public key is only used as a means of performing a simple account
-	// lookup and is not used to verify the signature.
-	WithSignature(signer Signer) (signedAuth, error)
-}
 
 type Document struct {
 	Id       uuid.UUID
