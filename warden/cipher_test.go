@@ -18,7 +18,7 @@ func TestEncrypt(t *testing.T) {
 		assert.NotNil(t, err)
 	})
 
-	key, err := generateRandomBytes(rand.Reader, bits128)
+	key, err := genRandomBytes(rand.Reader, bits128)
 	assert.Nil(t, err)
 
 	ct, err := symmetricEncrypt(rand.Reader, Aes128Gcm, key, []byte("msg"))

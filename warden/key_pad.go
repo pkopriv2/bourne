@@ -1,35 +1,32 @@
 package warden
 
-import (
-	"io"
-	"time"
-
-	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/common"
-)
+import "github.com/pkg/errors"
 
 // A key pad gives access to the various authentication methods and will
 // be used during the registration process.
 //
 // Future: Accept alternative login methods (e.g. pins, passwords, multi-factor, etc...)
 
-type KeyPad struct {
-	ctx  common.Context
-	rand io.Reader
-	net  transport
+type KeyPad interface {
+	WithSignature(Signer)
+	// WithPassword(account string, pass []byte) error
 }
 
-func (k KeyPad) WithSignature(signer Signer, timeout time.Duration) (signedAuth, error) {
-	ctrl := k.ctx.Timer(timeout)
-	defer ctrl.Close()
+// A one time keypad.  Destroyed after first use.
+type oneTimePad struct {
+	Signer Signer
+}
 
-	auth := newAuthChallenge()
+func (c *oneTimePad) WithSignature(s Signer) {
+	c.Signer = s
+}
 
-	sig, err := sign(k.rand, auth, signer, SHA256)
-	if err != nil {
-		return signedAuth{}, errors.WithStack(err)
+func enterCreds(fn func(KeyPad) error) (*oneTimePad, error) {
+	pad := &oneTimePad{}
+
+	if err := fn(pad); err != nil {
+		return nil, errors.WithStack(err)
 	}
 
-	ret, err := k.net.Auth.BySignature(ctrl.Closed(), signer.Public().Id(), auth, sig)
-	return ret, errors.WithStack(err)
+	return pad, nil
 }

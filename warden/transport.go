@@ -2,26 +2,27 @@ package warden
 
 import uuid "github.com/satori/go.uuid"
 
-type tokenizer func(cancel <-chan struct{}) (signedAuth, error)
+type tokenizer func(cancel <-chan struct{}) (Token, error)
 
 type transport struct {
-	Auth    authTransport
-	Keys    keyTransport
-	Certs   certTransport
-	Invites inviteTransport
-	Trusts  trustTransport
+	Auth        authTransport
+	Keys        keyTransport
+	Certs       certTransport
+	Invites     inviteTransport
+	Trusts      trustTransport
+	Subscribers subTransport
 }
 
 type subTransport interface {
 
-	RegisterBySignature(cancel <-chan struct{}, key string, challenge authChallenge, sig Signature) (signedAuth, error)
+	// Registers a subscriber with a signature challenge.
+	RegisterBySignature(cancel <-chan struct{}, subscriber Subscriber, challenge signatureChallenge, sig Signature) error
 }
 
 type authTransport interface {
 
 	// Loads public key by subscriber
-	BySignature(cancel <-chan struct{}, key string, challenge authChallenge, sig Signature) (signedAuth, error)
-
+	BySignature(cancel <-chan struct{}, key string, challenge signatureChallenge, sig Signature) (Token, error)
 }
 
 type keyTransport interface {

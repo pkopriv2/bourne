@@ -38,24 +38,20 @@ type KeyPair struct {
 }
 
 // Generates a new encrypted key pair
-func encryptKey(rand io.Reader, priv PrivateKey, pass []byte, opts KeyPairOptions) (KeyPair, error) {
-	salt, err := generateRandomBytes(rand, opts.Salt)
+func encryptKey(rand io.Reader, creator Signer, priv PrivateKey, pass []byte, opts KeyPairOptions) (SignedKeyPair, error) {
+	salt, err := genRandomBytes(rand, opts.Salt)
 	if err != nil {
-		return KeyPair{}, errors.WithStack(err)
+		return SignedKeyPair{}, errors.WithStack(err)
 	}
 
 	ciphertext, err := opts.Cipher.encrypt(
 		rand, cryptoBytes(pass).Pbkdf2(salt, opts.Iter, opts.Cipher.KeySize(), opts.Hash.standard()), priv.format())
 	if err != nil {
-		return KeyPair{}, errors.WithStack(err)
+		return SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	return KeyPair{
-		priv.Public(),
-		opts,
-		ciphertext,
-		salt,
-	}, nil
+	raw := KeyPair{priv.Public(), opts, ciphertext, salt}
+	return raw.Sign(rand, creator, opts.Hash)
 }
 
 func (p KeyPair) Format() ([]byte, error) {

@@ -12,6 +12,11 @@ type SubscriberOptions struct {
 	InviteKey     KeyPairOptions
 	SigningKey    KeyPairOptions
 	SignatureHash Hash
+	NonceSize     int
+}
+
+func (s *SubscriberOptions) SigningOptions(fn func(*KeyPairOptions)) {
+	s.SigningKey = buildKeyPairOptions(fn)
 }
 
 func (s *SubscriberOptions) InviteOptions(fn func(*KeyPairOptions)) {
@@ -19,7 +24,7 @@ func (s *SubscriberOptions) InviteOptions(fn func(*KeyPairOptions)) {
 }
 
 func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
-	ret := SubscriberOptions{buildSecretOptions(), buildKeyPairOptions(), buildKeyPairOptions(), SHA256}
+	ret := SubscriberOptions{buildSecretOptions(), buildKeyPairOptions(), buildKeyPairOptions(), SHA256, 16}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -27,14 +32,21 @@ func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
 }
 
 type Subscriber struct {
-	Id     uuid.UUID
-	Shard  signedShard
-	Sign   SignedKeyPair
-	Invite SignedKeyPair
+	Id      uuid.UUID
+	Creator PublicKey
+	Nonce   []byte
+	Shard   signedShard
+	Sign    SignedKeyPair
+	Invite  SignedKeyPair
 }
 
-func NewSubscriber(rand io.Reader, pass []byte, fns ...func(*SubscriberOptions)) (Subscriber, signedEncryptedShard, error) {
+func NewSubscriber(rand io.Reader, creator Signer, pass []byte, fns ...func(*SubscriberOptions)) (Subscriber, signedEncryptedShard, error) {
 	opts := buildSubscriberOptions(fns...)
+
+	nonce, err := genRandomBytes(rand, opts.NonceSize)
+	if err != nil {
+		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
+	}
 
 	secret, err := genSecret(rand, opts.Secret)
 	if err != nil {
@@ -42,11 +54,22 @@ func NewSubscriber(rand io.Reader, pass []byte, fns ...func(*SubscriberOptions))
 	}
 	defer secret.Destroy()
 
-	secretKey, err := secret.Format()
+	secretKey, err := secret.Hash(SHA256)
 	if err != nil {
 		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
 	}
 	defer cryptoBytes(secretKey).Destroy()
+
+	rawPrivShard, err := secret.Shard(rand)
+	if err != nil {
+		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
+	}
+	defer rawPrivShard.Destroy()
+
+	rawPubShard, err := secret.Shard(rand)
+	if err != nil {
+		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
+	}
 
 	rawSigningKey, err := opts.SigningKey.Algorithm.Gen(rand, opts.SigningKey.Strength)
 	if err != nil {
@@ -60,13 +83,12 @@ func NewSubscriber(rand io.Reader, pass []byte, fns ...func(*SubscriberOptions))
 	}
 	defer rawInviteKey.Destroy()
 
-	rawPrivShard, err := secret.Shard(rand)
+	encSigningKey, err := encryptKey(rand, rawSigningKey, rawSigningKey, secretKey, opts.SigningKey)
 	if err != nil {
 		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
 	}
-	defer rawPrivShard.Destroy()
 
-	rawPubShard, err := secret.Shard(rand)
+	encInviteKey, err := encryptKey(rand, rawSigningKey, rawInviteKey, secretKey, opts.InviteKey)
 	if err != nil {
 		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
 	}
@@ -81,26 +103,20 @@ func NewSubscriber(rand io.Reader, pass []byte, fns ...func(*SubscriberOptions))
 		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
 	}
 
-	encSigningKey, err := encryptKey(rand, rawSigningKey, secretKey, opts.SigningKey)
-	if err != nil {
-		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
-	}
-
-	encInviteKey, err := encryptKey(rand, rawInviteKey, secretKey, opts.InviteKey)
-	if err != nil {
-		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
-	}
-
-	// self signed - consider accepting a signer.
-	sigSigningKey, err := encSigningKey.Sign(rand, rawSigningKey, opts.SignatureHash)
-	if err != nil {
-		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
-	}
-
 	sigInviteKey, err := encInviteKey.Sign(rand, rawSigningKey, opts.SignatureHash)
 	if err != nil {
 		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
 	}
 
-	return Subscriber{uuid.NewV1(), sigPubShard, sigSigningKey, sigInviteKey}, encPrivShard, nil
+	// if subscriber opted out of signature based registration, then just self sign.
+	if creator == nil {
+		creator = rawSigningKey
+	}
+
+	sigSigningKey, err := encSigningKey.Sign(rand, creator, opts.SignatureHash)
+	if err != nil {
+		return Subscriber{}, signedEncryptedShard{}, errors.WithStack(err)
+	}
+
+	return Subscriber{uuid.NewV1(), creator.Public(), nonce, sigPubShard, sigSigningKey, sigInviteKey}, encPrivShard, nil
 }

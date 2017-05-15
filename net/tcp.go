@@ -53,7 +53,7 @@ func (u *TcpListener) Close() error {
 	return u.listener.Close()
 }
 
-func (u *TcpListener) Addr() net.Addr {
+func (u *TcpListener) Addr() Addr {
 	return u.listener.Addr()
 }
 

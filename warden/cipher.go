@@ -153,11 +153,11 @@ func initRandomSymmetricKey(rand io.Reader, alg SymmetricCipher) ([]byte, error)
 	default:
 		return nil, errors.Wrapf(CipherUnknownError, "Unknown cipher: %v", alg)
 	case Aes128Gcm:
-		return generateRandomBytes(rand, bits128)
+		return genRandomBytes(rand, bits128)
 	case Aes192Gcm:
-		return generateRandomBytes(rand, bits192)
+		return genRandomBytes(rand, bits192)
 	case Aes256Gcm:
-		return generateRandomBytes(rand, bits256)
+		return genRandomBytes(rand, bits256)
 	}
 }
 
@@ -209,11 +209,11 @@ func ensureKeySize(expected int, key []byte) error {
 // Creates a new random nonce.  Nonces are essentially the same
 // thing as initialization vectors and should be use
 func generateNonce(rand io.Reader, size int) ([]byte, error) {
-	return generateRandomBytes(rand, size)
+	return genRandomBytes(rand, size)
 }
 
 // Generates some random bytes (this should be considered )
-func generateRandomBytes(rand io.Reader, size int) ([]byte, error) {
+func genRandomBytes(rand io.Reader, size int) ([]byte, error) {
 	arr := make([]byte, size)
 	if _, err := io.ReadFull(rand, arr); err != nil {
 		return nil, errors.WithStack(err)

@@ -50,6 +50,8 @@ type SecretOptions struct {
 	ShardAlg      SecretAlgorithm
 	ShardStrength int
 
+	SecretHash Hash
+
 	// shard encryption options
 	ShardCipher SymmetricCipher
 	ShardHash   Hash
@@ -58,7 +60,7 @@ type SecretOptions struct {
 }
 
 func defaultSecretOptions() SecretOptions {
-	return SecretOptions{Shamir, 32, Aes256Gcm, SHA256, 1024, 32}
+	return SecretOptions{Shamir, 32, SHA256, Aes256Gcm, SHA256, 1024, 32}
 }
 
 func buildSecretOptions(fns ...func(*SecretOptions)) SecretOptions {
@@ -70,8 +72,7 @@ func buildSecretOptions(fns ...func(*SecretOptions)) SecretOptions {
 }
 
 type Secret interface {
-	Formatter
-
+	Hash(Hash) ([]byte, error)
 	Opts() SecretOptions
 	Shard(rand io.Reader) (Shard, error)
 	Destroy()
@@ -84,7 +85,6 @@ type Shard interface {
 	Derive(Shard) (Secret, error)
 	Destroy()
 }
-
 
 // Generates a new random oracle + the curve that generated the oracle.  The returned curve
 // may be used to generate oracle keys.
@@ -122,7 +122,7 @@ func encryptShard(rand io.Reader, signer Signer, shard Shard, pass []byte) (sign
 		return signedEncryptedShard{}, errors.WithStack(err)
 	}
 
-	salt, err := generateRandomBytes(rand, opts.ShardSalt)
+	salt, err := genRandomBytes(rand, opts.ShardSalt)
 	if err != nil {
 		return signedEncryptedShard{}, errors.Wrapf(err, "Error generating salt of strength [%v]")
 	}
@@ -181,7 +181,6 @@ type encryptedShard struct {
 	KeySalt []byte
 	KeyIter int
 }
-
 
 func (p encryptedShard) Sign(rand io.Reader, priv Signer, hash Hash) (signedEncryptedShard, error) {
 	fmt, err := p.Format()

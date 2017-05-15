@@ -8,29 +8,28 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// The decrypted token.  Internal only and only decrypted by the owner of the token key.
-type signedAuth struct {
+type Token struct {
 	auth
 	Sig Signature
 }
 
-func signAuth(rand io.Reader, signer Signer, auth auth, hash Hash) (signedAuth, error) {
+func signAuth(rand io.Reader, signer Signer, auth auth, hash Hash) (Token, error) {
 	sig, err := sign(rand, auth, signer, hash)
 	if err != nil {
-		return signedAuth{}, errors.WithStack(err)
+		return Token{}, errors.WithStack(err)
 	}
-	return signedAuth{auth, sig}, nil
+	return Token{auth, sig}, nil
 }
 
-type authChallenge struct {
+type signatureChallenge struct {
 	Now time.Time
 }
 
-func newAuthChallenge() authChallenge {
-	return authChallenge{time.Now()}
+func newAuthChallenge() signatureChallenge {
+	return signatureChallenge{time.Now()}
 }
 
-func (a authChallenge) Format() ([]byte, error) {
+func (a signatureChallenge) Format() ([]byte, error) {
 	fmt, err := gobBytes(a.Now)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -54,8 +53,4 @@ func newAuth(issuedTo, issuedBy uuid.UUID, ttl time.Duration) auth {
 func (s auth) Format() ([]byte, error) {
 	fmt, err := gobBytes(s)
 	return fmt, errors.WithStack(err)
-}
-
-func (s auth) Sign(rand io.Reader, signer Signer, hash Hash) ([]byte, error) {
-	return nil, nil
 }

@@ -37,8 +37,9 @@ func (s *shamirSecret) Shard(rand io.Reader) (Shard, error) {
 	return &shamirShard{pt, s.opts}, nil
 }
 
-func (s *shamirSecret) Format() ([]byte, error) {
-	return gobBytes(s.line)
+func (s *shamirSecret) Hash(h Hash) ([]byte, error) {
+	ret, err := s.line.Hash(h)
+	return ret, errors.WithStack(err)
 }
 
 func (s *shamirSecret) Destroy() {
@@ -46,7 +47,7 @@ func (s *shamirSecret) Destroy() {
 }
 
 type shamirShard struct {
-	Pt   point
+	Pt      point
 	RawOpts SecretOptions
 }
 
@@ -115,7 +116,7 @@ func generatePoint(rand io.Reader, line line, domain int) (point, error) {
 // Generates a random integer using the size to determine the number of bytes to use when generating the
 // random value.
 func generateBigInt(rand io.Reader, size int) (*big.Int, error) {
-	buf, err := generateRandomBytes(rand, size)
+	buf, err := genRandomBytes(rand, size)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Unable to generate random *big.Int of size [%v]", size)
 	}
@@ -163,16 +164,15 @@ func (l line) String() string {
 	return fmt.Sprintf("Line(m=%v,y-intercept=%v)", l.Slope, l.Intercept)
 }
 
-// consistent byte representation of line
-func (l line) Format() []byte {
-	var buf bytes.Buffer
-	gob.NewEncoder(&buf).Encode(&l)
-	return buf.Bytes()
-}
 
 // consistent byte representation of line
-func (l line) Bytes() []byte {
-	return l.Format()
+func (l line) Hash(hash Hash) ([]byte, error) {
+	raw, err :=  gobBytes(l)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	ret, err := hash.Hash(raw)
+	return ret, errors.WithStack(err)
 }
 
 func parseLineBytes(raw []byte) (l line, e error) {

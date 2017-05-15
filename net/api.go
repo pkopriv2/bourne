@@ -23,11 +23,17 @@ type Connection interface {
 	Remote() net.Addr
 }
 
+// copy of go addr interface.
+type Addr interface {
+	Network() string // name of the network
+	String() string  // string form of address
+}
+
 // A simple listener abstraction.  This will be the basis of
 // establishing network services
 type Listener interface {
 	io.Closer
-	Addr() net.Addr
+	Addr() Addr
 	Conn() (Connection, error)
 	Accept() (Connection, error)
 }

@@ -48,15 +48,18 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 	return opts
 }
 
-
-
 // Registers a new subscription with the trust service.
-func Subscribe(ctx common.Context, addr string, login func(KeyPad) signedAuth) (Session, error) {
-	return Session{}, nil
+func Subscribe(ctx common.Context, addr string, pad func(KeyPad) error) (*Session, error) {
+	// creds, err := enterCreds(pad)
+	// if err != nil {
+		// return nil, errors.WithStack(err)
+	// }
+
+	return nil, nil
 }
 
 // Loads a subscription
-func Connect(ctx common.Context, addr string, login func(KeyPad) signedAuth) (Session, error) {
+func Connect(ctx common.Context, addr string, login func(KeyPad) Token) (Session, error) {
 	return Session{}, nil
 }
 
@@ -166,7 +169,6 @@ type PrivateKey interface {
 	format() []byte
 	Destroy()
 }
-
 
 type Document struct {
 	Id       uuid.UUID

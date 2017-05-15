@@ -68,12 +68,27 @@ type Trust struct {
 func newTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, SignedKeyPair, error) {
 	opts := buildTrustOptions(fns...)
 
-	mySigningKey, err := s.mySigningKey()
+	mySecret, err := s.mySecret()
+	if err != nil {
+		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
+			"Error extracting session signing key [%v]", s.MyId())
+	}
+	defer mySecret.Destroy()
+
+	mySecretKey, err := mySecret.Hash(SHA256)
+	if err != nil {
+		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
+			"Error extracting session signing key [%v]", s.MyId())
+	}
+	defer mySecret.Destroy()
+
+	mySigningKey, err := s.mySigningKey(mySecret)
 	if err != nil {
 		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
 			"Error extracting session signing key [%v]", s.MyId())
 	}
 	defer mySigningKey.Destroy()
+
 
 	trustSigningKey, err := opts.KeyOpts.Algorithm.Gen(s.rand, opts.KeyOpts.Strength)
 	if err != nil {
@@ -105,28 +120,23 @@ func newTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, Sig
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	encShard, err := encryptShard(s.rand, mySigningKey, privShard, s.myOracle())
+	encShard, err := encryptShard(s.rand, mySigningKey, privShard, mySecretKey)
 	if err != nil {
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
-	pass, err := secret.Format()
+	pass, err := secret.Hash(opts.SecretHash)
 	if err != nil {
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 	defer cryptoBytes(pass).Destroy()
 
-	pair, err := encryptKey(s.rand, trustSigningKey, pass, opts.KeyOpts)
+	signedPair, err := encryptKey(s.rand, mySigningKey, trustSigningKey, pass, opts.KeyOpts)
 	if err != nil {
 		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
 	}
 
 	cert := newCertificate(uuid.NewV1(), s.MyId(), s.MyId(), Creator, OneHundredYears)
-
-	signedPair, err := pair.Sign(s.rand, mySigningKey, opts.SignatureHash)
-	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
-	}
 
 	signedCert, err := signCertificate(
 		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, opts.SignatureHash)
@@ -151,7 +161,17 @@ func (d Trust) unlockSecret(s *Session) (Secret, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	myShard, err := d.privShard.Decrypt(s.myOracle())
+	mySecret, err := s.mySecret()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	mySecretKey, err := s.myEncryptionKey(mySecret)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	myShard, err := d.privShard.Decrypt(mySecretKey)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -174,7 +194,7 @@ func (d Trust) unlockSigningKey(cancel <-chan struct{}, s *Session, secret Secre
 		return nil, errors.WithStack(err)
 	}
 
-	key, err := secret.Format()
+	key, err := secret.Hash(SHA256)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -200,7 +220,19 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 	}
 	defer trustSigningKey.Destroy()
 
-	mySigningKey, err := s.mySigningKey()
+	mySecret, err := s.mySecret()
+	if err != nil {
+		return Trust{}, errors.Wrapf(err, "Error extracting session signing key [%v]", s.MyId())
+	}
+	defer mySecret.Destroy()
+
+	myEncryptionKey, err := s.myEncryptionKey(mySecret)
+	if err != nil {
+		return Trust{}, errors.Wrapf(err, "Error extracting session signing key [%v]", s.MyId())
+	}
+	defer cryptoBytes(myEncryptionKey).Destroy()
+
+	mySigningKey, err := s.mySigningKey(mySecret)
 	if err != nil {
 		return Trust{}, errors.Wrapf(err, "Error extracting session signing key [%v]", s.MyId())
 	}
@@ -219,7 +251,7 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 		return Trust{}, errors.WithStack(err)
 	}
 
-	myShard, err := encryptShard(s.rand, mySigningKey, shard, s.myOracle())
+	myShard, err := encryptShard(s.rand, mySigningKey, shard, myEncryptionKey)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
@@ -268,6 +300,12 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trustee Trust, fns ...
 
 	opts := buildInvitationOptions(fns...)
 
+	mySecret, err := s.mySecret()
+	if err != nil {
+		return Invitation{}, errors.Wrapf(err, "Unable to unlock  oracle [%v]", t.Id)
+	}
+	defer mySecret.Destroy()
+
 	secret, err := t.unlockSecret(s)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Unable to unlock  oracle [%v]", t.Id)
@@ -280,7 +318,7 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trustee Trust, fns ...
 	}
 	defer ringKey.Destroy()
 
-	issuerKey, err := s.mySigningKey()
+	issuerKey, err := s.mySigningKey(mySecret)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error retrieving my signing key [%v]", s.MyId())
 	}

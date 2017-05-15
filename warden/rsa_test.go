@@ -20,7 +20,7 @@ func TestRsaKey(t *testing.T) {
 	})
 
 	t.Run("SignVerify", func(t *testing.T) {
-		msg, err := generateRandomBytes(rand.Reader, 1024)
+		msg, err := genRandomBytes(rand.Reader, 1024)
 		assert.Nil(t, err)
 
 		sig, err := key.Sign(rand.Reader, SHA256, msg)

@@ -96,7 +96,18 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	mySigningKey, err := s.mySigningKey()
+	mySecret, err := s.mySecret()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer mySecret.Destroy()
+
+	mySecretKey, err := mySecret.Hash(SHA256)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	mySigningKey, err := s.mySigningKey(mySecret)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -106,7 +117,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	myShard, err := i.accept(s.rand, mySigningKey, myInviteKey, trust.pubShard, s.myOracle())
+	myShard, err := i.accept(s.rand, mySigningKey, myInviteKey, trust.pubShard, mySecretKey)
 	if err != nil {
 		return errors.WithStack(err)
 	}

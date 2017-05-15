@@ -14,17 +14,14 @@ import (
 // fear of leaking any critical details.
 type Session struct {
 
-	// the subscriber's unique identifier
-	id uuid.UUID
-
-	// the subcriber's public signing key.  safe to store in memory.
-	pub PublicKey
-
-	// the subscriber's current oracle value.
-	oracle []byte
-
 	// the login credentials
-	login func(KeyPad)
+	login func(KeyPad) error
+
+	// the session's subscriber info
+	sub Subscriber
+
+	// the session's encrypted shard.
+	loginShard signedEncryptedShard
 
 	// the transport mechanism. (expected to be secure).
 	net transport
@@ -34,8 +31,16 @@ type Session struct {
 }
 
 // Returns an authentication token.
-func (s *Session) auth(cancel <-chan struct{}) (signedAuth, error) {
-	return signedAuth{}, nil
+func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
+	return Token{}, nil
+}
+
+func (s *Session) mySecret() (Secret, error) {
+	creds, err := enterCreds(s.login)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return nil, nil
 }
 
 // Returns the personal encryption seed of this subscription.  The seed is actually
@@ -52,12 +57,13 @@ func (s *Session) auth(cancel <-chan struct{}) (signedAuth, error) {
 // the system itself is never in danger because the risk has been spread over the
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
-func (s *Session) myOracle() []byte {
-	return s.oracle
+func (s *Session) myEncryptionKey(secret Secret) ([]byte, error) {
+	ret, err := secret.Hash(SHA256)
+	return ret, errors.WithStack(err)
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
-func (s *Session) mySigningKey() (PrivateKey, error) {
+func (s *Session) mySigningKey(secret Secret) (PrivateKey, error) {
 	return nil, nil
 }
 
@@ -68,7 +74,6 @@ func (s *Session) myInviteKey() (PrivateKey, error) {
 
 // Destroys the session's memory - zeroing out any sensitive info
 func (s *Session) Destroy() {
-	cryptoBytes(s.oracle).Destroy()
 }
 
 // Returns the subscriber id associated with this session.  This uniquely identifies
@@ -96,7 +101,7 @@ func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOpti
 }
 
 // Keys that have been in some way trusted by the owner of the session.
-func (s *Session) MyTrustedKeys(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
+func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
 	opts := buildPagingOptions(fns...)
 	return s.net.Trusts.BySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
 }
