@@ -130,9 +130,9 @@ func decrypt(obj Decrypter, key Formatter) ([]byte, error) {
 	return ret, errors.WithStack(err)
 }
 
-// A destroyer simply destroys itself.
+// A decrypter decrypts itself with the given key
 type Decrypter interface {
-	Decrypt([]byte) ([]byte, error)
+	Decrypt(key []byte) ([]byte, error)
 }
 
 // A destroyer simply destroys itself.

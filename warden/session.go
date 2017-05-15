@@ -4,7 +4,12 @@ import (
 	"io"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
+)
+
+var (
+	UnsupportedLoginError = errors.New("Warden:UnsupportedLogin")
 )
 
 // A session represents an authenticated session with the trust ecosystem.  Sessions
@@ -13,6 +18,8 @@ import (
 // on its own - therefore it is safe to maintain the session in memory, without
 // fear of leaking any critical details.
 type Session struct {
+	//
+	ctx common.Context
 
 	// the login credentials
 	login func(KeyPad) error
@@ -28,6 +35,14 @@ type Session struct {
 
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
+
+	// the token pool.
+	tokens chan Token
+}
+
+// Returns an authentication token.
+func (s *Session) Close() error {
+	return nil
 }
 
 // Returns an authentication token.
@@ -35,18 +50,41 @@ func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
 	return Token{}, nil
 }
 
-func (s *Session) mySecret() (Secret, error) {
-	creds, err := enterCreds(s.login)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+// Returns the secret by signature method.
+func (s *Session) mySecretBySignature(signer Signer) (Secret, error) {
 	return nil, nil
+	// key, err := signer.Sign(s.rand, s.sub.SigningKey.Opts.Hash, s.sub.Nonce)
+	// if err != nil {
+		// return nil, errors.WithStack(err)
+	// }
+	// defer destroyBytes(key.Data)
+//
+	// shard, err := s.loginShard.Decrypt(key.Data)
+	// if err != nil {
+		// return nil, errors.WithStack(err)
+	// }
+	// defer shard.Destroy()
+//
+	// secret, err := shard.Derive(s.sub.Pub)
+	// return secret, errors.WithStack(err)
 }
 
-// Returns the personal encryption seed of this subscription.  The seed is actually
-// safe to store in memory over an extended period of time.  This is because the
-// seed isn't actually useful on it's own.  It must be paired with elements of the
-// data that is being accessed in order to be useful.
+// Returns the session owner's secret.  This should be destroyed promptly after use.
+func (s *Session) mySecret() (Secret, error) {
+	return nil, nil
+	// creds, err := enterCreds(s.login)
+	// if err != nil {
+		// return nil, errors.WithStack(err)
+	// }
+//
+	// if creds.Signer != nil {
+		// return s.mySecretBySignature(creds.Signer)
+	// }
+//
+	// return nil, errors.Wrapf(UnsupportedLoginError, "Must use one of [WithSignature]")
+}
+
+// Returns the personal encryption seed of this subscription.
 //
 // In order for a attacker to penetrate further, he would need both the seed and a valid
 // token. The token would give him temporary access to the subscription, but
@@ -57,19 +95,31 @@ func (s *Session) mySecret() (Secret, error) {
 // the system itself is never in danger because the risk has been spread over the
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
-func (s *Session) myEncryptionKey(secret Secret) ([]byte, error) {
+func (s *Session) myEncryptionSeed(secret Secret) ([]byte, error) {
 	ret, err := secret.Hash(SHA256)
 	return ret, errors.WithStack(err)
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
 func (s *Session) mySigningKey(secret Secret) (PrivateKey, error) {
-	return nil, nil
+	seed, err := s.myEncryptionSeed(secret)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	key, err := s.sub.SigningKey.Decrypt(seed)
+	return key, errors.WithStack(err)
 }
 
 // Returns the invitation key associated with this session. Should be promptly destroyed.
-func (s *Session) myInviteKey() (PrivateKey, error) {
-	return nil, nil
+func (s *Session) myInviteKey(secret Secret) (PrivateKey, error) {
+	seed, err := s.myEncryptionSeed(secret)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	key, err := s.sub.InviteKey.Decrypt(seed)
+	return key, errors.WithStack(err)
 }
 
 // Destroys the session's memory - zeroing out any sensitive info
@@ -80,17 +130,17 @@ func (s *Session) Destroy() {
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
 func (s *Session) MyId() uuid.UUID {
-	return s.id
+	return s.sub.Id
 }
 
-// Returns the session owner's public key.  This key and its id may be shared freely.
+// Returns the session owner's public signing key.  This key and its id may be shared freely.
 func (s *Session) MyKey() PublicKey {
-	return s.pub
+	return s.sub.SigningKey.Pub
 }
 
 // Lists the session owner's currently pending invitations.
 func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
-	invites, err := s.net.Invites.BySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
+	invites, err := s.net.Invites.InvitationsBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
 	return invites, errors.WithStack(err)
 }
 
@@ -125,7 +175,7 @@ func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (Trust, bool, e
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
 func (s *Session) InviteById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
-	trust, ok, err := s.net.Invites.ById(cancel, s.auth, id)
+	trust, ok, err := s.net.Invites.InvitationById(cancel, s.auth, id)
 	return trust, ok, errors.WithStack(err)
 }
 

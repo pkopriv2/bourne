@@ -46,6 +46,10 @@ func (s *shamirSecret) Destroy() {
 	s.line.Destroy()
 }
 
+func (s *shamirSecret) String() string {
+	return fmt.Sprintf("Line: %v", s.line)
+}
+
 type shamirShard struct {
 	Pt      point
 	RawOpts SecretOptions

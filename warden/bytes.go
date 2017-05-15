@@ -11,6 +11,11 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
+
+// Zeroes the input array of bytes
+func destroyBytes(buf []byte) {
+	cryptoBytes(buf).Destroy()
+}
 // Useful cryptographic binary functions.
 type cryptoBytes []byte
 

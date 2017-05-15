@@ -14,6 +14,20 @@ var (
 	CipherKeyError     = errors.New("Warden:CipherKey")
 )
 
+type CipherKeyOptions struct {
+	Cipher SymmetricCipher
+	Hash   Hash
+	Iter   int
+}
+
+func buildCipherKeyOpts(fns ...func(*CipherKeyOptions)) CipherKeyOptions {
+	ret := CipherKeyOptions{Aes256Gcm, SHA256, 1024}
+	for _, fn := range fns {
+		fn(&ret)
+	}
+	return ret
+}
+
 // Supported symmetric ciphers.  This library is intended to ONLY offer support ciphers
 // that implement the Authenticated Encryption with Associated Data (AEAD)
 // standard.  Currently, that only includes the GCM family of streaming modes.

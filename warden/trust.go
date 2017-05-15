@@ -18,22 +18,23 @@ const (
 
 // General trust options.
 type TrustOptions struct {
-	SecretOptions
+	Secret SecretOptions
 
-	// invitation options
-	InvitationCipher SymmetricCipher
-	InvitationHash   Hash
-	InvitationIter   int // used for key derivations only
+	// ecryption key options
+	EncryptionKey CipherKeyOptions
+
+	// Invitation options
+	InvitationKey CipherKeyOptions
 
 	// signature options
-	SignatureHash Hash
+	SigningHash Hash
 
 	// default key options.
-	KeyOpts KeyPairOptions
+	SigningKey KeyPairOptions
 }
 
 func buildTrustOptions(fns ...func(*TrustOptions)) TrustOptions {
-	ret := TrustOptions{buildSecretOptions(), Aes256Gcm, SHA256, 1024, SHA256, buildKeyPairOptions()}
+	ret := TrustOptions{buildSecretOptions(), buildCipherKeyOpts(), buildCipherKeyOpts(), SHA256, buildKeyPairOptions()}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -48,116 +49,109 @@ type Trust struct {
 	// the common name of the trust. (not advertized, but public)
 	Name string
 
-	// the public signing key of the trust.
-	Pub PublicKey
-
-	// the session owner's certificate with the trust.
-	Cert SignedCertificate
-
 	// the options of the trust
 	Opts TrustOptions
 
-	// the public shard portion of the shared secret.
+	// the signing key pair.
+	signingKey SignedKeyPair
+
+	// the public portion of the shared secret
 	pubShard signedShard
 
+	// the certificate affirming the caller's relationship with the trust
+	myCert SignedCertificate
+
 	// the private shard portion of the shared secret. (may only be unlocked by owner)
-	privShard signedEncryptedShard
+	myShard signedEncryptedShard
 }
 
 // generates a trust, but has no server-side effects.
-func newTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, SignedKeyPair, error) {
+func newTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, error) {
 	opts := buildTrustOptions(fns...)
 
 	mySecret, err := s.mySecret()
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
+		return Trust{}, errors.Wrapf(err,
 			"Error extracting session signing key [%v]", s.MyId())
 	}
 	defer mySecret.Destroy()
 
-	mySecretKey, err := mySecret.Hash(SHA256)
+	myEncryptionSeed, err := mySecret.Hash(opts.Secret.SecretHash)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
+		return Trust{}, errors.Wrapf(err,
 			"Error extracting session signing key [%v]", s.MyId())
 	}
 	defer mySecret.Destroy()
 
 	mySigningKey, err := s.mySigningKey(mySecret)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
+		return Trust{}, errors.Wrapf(err,
 			"Error extracting session signing key [%v]", s.MyId())
 	}
 	defer mySigningKey.Destroy()
 
-
-	trustSigningKey, err := opts.KeyOpts.Algorithm.Gen(s.rand, opts.KeyOpts.Strength)
+	trustSigningKey, err := opts.SigningKey.Algorithm.Gen(s.rand, opts.SigningKey.Strength)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.Wrapf(err,
-			"Error generating  key [%v]: %v", opts.KeyOpts.Algorithm, opts.KeyOpts.Strength)
+		return Trust{}, errors.Wrapf(err,
+			"Error generating  key [%v]: %v", opts.SigningKey.Algorithm, opts.SigningKey.Strength)
 	}
 	defer trustSigningKey.Destroy()
 
-	secret, err := genSecret(s.rand, opts.SecretOptions)
+	secret, err := genSecret(s.rand, opts.Secret)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+		return Trust{}, errors.WithStack(err)
 	}
 	defer secret.Destroy()
 
 	pubShard, err := secret.Shard(s.rand)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+		return Trust{}, errors.WithStack(err)
 	}
 	defer pubShard.Destroy()
 
-	privShard, err := secret.Shard(s.rand)
+	myShard, err := secret.Shard(s.rand)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+		return Trust{}, errors.WithStack(err)
 	}
-	defer privShard.Destroy()
+	defer myShard.Destroy()
 
-	signedShard, err := signShard(s.rand, mySigningKey, pubShard)
+	pubShardSig, err := signShard(s.rand, mySigningKey, pubShard)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
-	}
-
-	encShard, err := encryptShard(s.rand, mySigningKey, privShard, mySecretKey)
-	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+		return Trust{}, errors.WithStack(err)
 	}
 
-	pass, err := secret.Hash(opts.SecretHash)
+	myShardEnc, err := encryptShard(s.rand, mySigningKey, myShard, myEncryptionSeed)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+		return Trust{}, errors.WithStack(err)
 	}
-	defer cryptoBytes(pass).Destroy()
 
-	signedPair, err := encryptKey(s.rand, mySigningKey, trustSigningKey, pass, opts.KeyOpts)
+	signingKey, err := encryptKey(s.rand, mySigningKey, trustSigningKey, myEncryptionSeed, opts.SigningKey)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+		return Trust{}, errors.WithStack(err)
 	}
 
 	cert := newCertificate(uuid.NewV1(), s.MyId(), s.MyId(), Creator, OneHundredYears)
 
 	signedCert, err := signCertificate(
-		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, opts.SignatureHash)
+		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, opts.SigningHash)
 	if err != nil {
-		return Trust{}, SignedKeyPair{}, errors.WithStack(err)
+		return Trust{}, errors.WithStack(err)
 	}
 
 	return Trust{
-		cert.Trust,
-		name,
-		trustSigningKey.Public(),
-		signedCert,
-		opts,
-		signedShard,
-		encShard,
-	}, signedPair, nil
+		Id:         cert.Trust,
+		Name:       name,
+		signingKey: signingKey,
+		myCert:     signedCert,
+		Opts:       opts,
+		pubShard:   pubShardSig,
+		myShard:    myShardEnc,
+	}, nil
 }
 
 // Extracts the  oracle curve.  Requires *Encrypt* level trust
 func (d Trust) unlockSecret(s *Session) (Secret, error) {
-	if err := Encrypt.verify(d.Cert.Level); err != nil {
+	if err := Encrypt.verify(d.myCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
@@ -166,12 +160,12 @@ func (d Trust) unlockSecret(s *Session) (Secret, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	mySecretKey, err := s.myEncryptionKey(mySecret)
+	mySecretKey, err := s.myEncryptionSeed(mySecret)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	myShard, err := d.privShard.Decrypt(mySecretKey)
+	myShard, err := d.myShard.Decrypt(mySecretKey)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -184,30 +178,26 @@ func (d Trust) unlockSecret(s *Session) (Secret, error) {
 	return secret, nil
 }
 
+func (d Trust) unlockEncryptionSeed(secret Secret) ([]byte, error) {
+	key, err := secret.Hash(d.Opts.Secret.SecretHash)
+	return key, errors.WithStack(err)
+}
+
 func (d Trust) unlockSigningKey(cancel <-chan struct{}, s *Session, secret Secret) (PrivateKey, error) {
-	if err := Sign.verify(d.Cert.Level); err != nil {
+	if err := Sign.verify(d.myCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	pair, err := s.net.Keys.ByTrustAndType(cancel, s.auth, d.Id, SigningKey)
+	key, err := d.unlockEncryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	key, err := secret.Hash(SHA256)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	priv, err := pair.Decrypt(key)
+	priv, err := d.signingKey.Decrypt(key)
 	return priv, errors.WithStack(err)
 }
 
 func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, error) {
-	if err := Invite.verify(d.Cert.Level); err != nil {
-		return Trust{}, errors.WithStack(err)
-	}
-
 	secret, err := d.unlockSecret(s)
 	if err != nil {
 		return Trust{}, errors.Wrap(err, "Error deriving trust secret.")
@@ -226,11 +216,11 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 	}
 	defer mySecret.Destroy()
 
-	myEncryptionKey, err := s.myEncryptionKey(mySecret)
+	myEncryptionSeed, err := s.myEncryptionSeed(mySecret)
 	if err != nil {
 		return Trust{}, errors.Wrapf(err, "Error extracting session signing key [%v]", s.MyId())
 	}
-	defer cryptoBytes(myEncryptionKey).Destroy()
+	defer cryptoBytes(myEncryptionSeed).Destroy()
 
 	mySigningKey, err := s.mySigningKey(mySecret)
 	if err != nil {
@@ -238,42 +228,42 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 	}
 	defer mySigningKey.Destroy()
 
-	cert := newCertificate(d.Id, s.MyId(), s.MyId(), d.Cert.Level, d.Cert.Duration())
+	cert := newCertificate(d.Id, s.MyId(), s.MyId(), d.myCert.Level, d.myCert.Duration())
 
 	myCert, err := signCertificate(
-		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, d.Opts.SignatureHash)
+		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, d.Opts.SigningHash)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 
-	shard, err := secret.Shard(s.rand)
+	myShard, err := secret.Shard(s.rand)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+	defer myShard.Destroy()
+
+	myShardEnc, err := encryptShard(s.rand, mySigningKey, myShard, myEncryptionSeed)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 
-	myShard, err := encryptShard(s.rand, mySigningKey, shard, myEncryptionKey)
-	if err != nil {
-		return Trust{}, errors.WithStack(err)
-	}
-
-	if err := s.net.Certs.Register(cancel, s.auth, myCert, myShard); err != nil {
+	if err := s.net.Certs.Register(cancel, s.auth, myCert, myShardEnc); err != nil {
 		return Trust{}, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), d.Id)
 	}
 
 	return Trust{
-		d.Id,
-		d.Name,
-		d.Pub,
-		myCert,
-		d.Opts,
-		d.pubShard,
-		myShard,
+		Id:         d.Id,
+		Name:       d.Name,
+		Opts:       d.Opts,
+		signingKey: d.signingKey,
+		pubShard:   d.pubShard,
+		myShard:    myShardEnc,
 	}, nil
 }
 
 // Loads all the trust certificates that have been issued by this .
 func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	if err := Verify.verify(t.Cert.Level); err != nil {
+	if err := Verify.verify(t.myCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return s.net.Certs.ActiveByTrust(cancel, s.auth, t.Id, buildPagingOptions(fns...))
@@ -281,21 +271,21 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 
 // Revokes all issued certificates by this  for the given subscriber.
 func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uuid.UUID) error {
-	if err := Revoke.verify(t.Cert.Level); err != nil {
+	if err := Revoke.verify(t.myCert.Level); err != nil {
 		return errors.WithStack(err)
 	}
 
-	if err := s.net.Certs.Revoke(cancel, s.auth, t.Cert.Id); err != nil {
-		return errors.Wrapf(err, "Unable to revoke certificate [%v] for subscriber [%v]", t.Cert.Id, trustee)
+	if err := s.net.Certs.Revoke(cancel, s.auth, t.myCert.Id); err != nil {
+		return errors.Wrapf(err, "Unable to revoke certificate [%v] for subscriber [%v]", t.myCert.Id, trustee)
 	}
 
 	return nil
 }
 
 // Issues an invitation to the given key.
-func (t Trust) invite(cancel <-chan struct{}, s *Session, trustee Trust, fns ...func(*InvitationOptions)) (Invitation, error) {
-	if err := Invite.verify(t.Cert.Level); err != nil {
-		return Invitation{}, newLevelOfTrustError(Invite, t.Cert.Level)
+func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, trusteeKey PublicKey, fns ...func(*InvitationOptions)) (Invitation, error) {
+	if err := Invite.verify(t.myCert.Level); err != nil {
+		return Invitation{}, newLevelOfTrustError(Invite, t.myCert.Level)
 	}
 
 	opts := buildInvitationOptions(fns...)
@@ -324,11 +314,11 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trustee Trust, fns ...
 	}
 	defer issuerKey.Destroy()
 
-	cert := newCertificate(t.Id, s.MyId(), trustee.Id, opts.Lvl, opts.Exp)
+	cert := newCertificate(t.Id, s.MyId(), trusteeId, opts.Lvl, opts.Exp)
 
-	inv, err := createInvitation(s.rand, secret, cert, ringKey, issuerKey, trustee.Pub, t.Opts)
+	inv, err := createInvitation(s.rand, secret, cert, ringKey, issuerKey, trusteeKey, t.Opts)
 	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trustee, t.Id)
+		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trusteeId, t.Id)
 	}
 
 	if err := s.net.Invites.Upload(cancel, s.auth, inv); err != nil {

@@ -55,19 +55,19 @@ func createInvitation(rand io.Reader,
 		return Invitation{}, errors.Wrap(err, "Error creating shard from secret")
 	}
 
-	trustSig, err := sign(rand, cert, ringKey, opts.SignatureHash)
+	trustSig, err := sign(rand, cert, ringKey, opts.SigningHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
 	}
 
-	issuerSig, err := sign(rand, cert, issuerKey, opts.SignatureHash)
+	issuerSig, err := sign(rand, cert, issuerKey, opts.SigningHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
 	}
 
-	asymKey, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.InvitationCipher, opts.InvitationHash)
+	asymKey, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.EncryptionKey.Cipher, opts.EncryptionKey.Hash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error generating key exchange [%v,%v]", Aes128Gcm, SHA256)
@@ -80,7 +80,7 @@ func createInvitation(rand io.Reader,
 			err, "Error generating bytes for shards.")
 	}
 
-	ct, err := opts.InvitationCipher.encrypt(rand, cipherKey, msg)
+	ct, err := opts.EncryptionKey.Cipher.encrypt(rand, cipherKey, msg)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Trust)
@@ -102,7 +102,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 	}
 	defer mySecret.Destroy()
 
-	mySecretKey, err := mySecret.Hash(SHA256)
+	mySecretKey, err := s.myEncryptionSeed(mySecret)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -112,7 +112,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	myInviteKey, err := s.myInviteKey()
+	myInviteKey, err := s.myInviteKey(mySecret)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -122,7 +122,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	mySig, err := sign(s.rand, i.Cert, mySigningKey, trust.Opts.SignatureHash)
+	mySig, err := sign(s.rand, i.Cert, mySigningKey, trust.Opts.SigningHash)
 	if err != nil {
 		return errors.WithStack(err)
 	}

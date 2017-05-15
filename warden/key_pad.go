@@ -8,7 +8,7 @@ import "github.com/pkg/errors"
 // Future: Accept alternative login methods (e.g. pins, passwords, multi-factor, etc...)
 
 type KeyPad interface {
-	WithSignature(Signer)
+	BySignature(Signer) error
 	// WithPassword(account string, pass []byte) error
 }
 
@@ -17,16 +17,15 @@ type oneTimePad struct {
 	Signer Signer
 }
 
-func (c *oneTimePad) WithSignature(s Signer) {
+func (c *oneTimePad) BySignature(s Signer) error {
 	c.Signer = s
+	return nil
 }
 
 func enterCreds(fn func(KeyPad) error) (*oneTimePad, error) {
 	pad := &oneTimePad{}
-
 	if err := fn(pad); err != nil {
 		return nil, errors.WithStack(err)
 	}
-
 	return pad, nil
 }

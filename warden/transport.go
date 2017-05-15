@@ -6,7 +6,7 @@ type tokenizer func(cancel <-chan struct{}) (Token, error)
 
 type transport struct {
 	Auth        authTransport
-	Keys        keyTransport
+	// Keys        keyTransport
 	Certs       certTransport
 	Invites     inviteTransport
 	Trusts      trustTransport
@@ -17,45 +17,27 @@ type subTransport interface {
 
 	// Registers a subscriber with a signature challenge.
 	RegisterBySignature(cancel <-chan struct{}, subscriber Subscriber, challenge signatureChallenge, sig Signature) error
+
+	SubscriberByKey(cancel <-chan struct{}, auth tokenizer, key string) (Subscriber, bool, error)
 }
 
 type authTransport interface {
 
 	// Loads public key by subscriber
-	BySignature(cancel <-chan struct{}, key string, challenge signatureChallenge, sig Signature) (Token, error)
-}
-
-type keyTransport interface {
-
-	// Loads public key by subscriber
-	ByTrustAndType(cancel <-chan struct{}, a tokenizer, id uuid.UUID, alias KeyType) (KeyPair, error)
-
-	// Loads public key by subscriber
-	BySubscriberAndType(cancel <-chan struct{}, a tokenizer, id uuid.UUID, alias KeyType) (KeyPair, error)
-
-	// Loads public key by subscriber
-	ById(cancel <-chan struct{}, a tokenizer, id uuid.UUID, alias KeyType) (KeyPair, error)
-
-	// Loads public key by subscriber
-	PublicBySubscriber(cancel <-chan struct{}, a tokenizer, id uuid.UUID) (PublicKey, error)
-
-	// Loads the public key by dom
-	PublicByTrust(cancel <-chan struct{}, a tokenizer, id uuid.UUID) (PublicKey, error)
+	AuthBySignature(cancel <-chan struct{}, key string, challenge signatureChallenge, sig Signature) (Token, error)
 }
 
 type inviteTransport interface {
 
 	// Loads invitations by subscriber and dom
-	ById(cancel <-chan struct{}, a tokenizer, id uuid.UUID) (Invitation, bool, error)
+	InvitationById(cancel <-chan struct{}, a tokenizer, id uuid.UUID) (Invitation, bool, error)
 
 	// Loads invitations by subscriber
-	BySubscriber(cancel <-chan struct{}, a tokenizer, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
+	InvitationsBySubscriber(cancel <-chan struct{}, a tokenizer, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
 
 	// Loads invitations by dom
-	ByTrust(cancel <-chan struct{}, a tokenizer, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
+	// InvitationsByTrust(cancel <-chan struct{}, a tokenizer, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
 
-	// Loads invitations by subscriber and dom
-	BySubscriberAndTrust(cancel <-chan struct{}, a tokenizer, subscriber, dom string) (Invitation, bool, error)
 
 	// Registers an invitation with the trust service.
 	Upload(cancel <-chan struct{}, a tokenizer, i Invitation) error
