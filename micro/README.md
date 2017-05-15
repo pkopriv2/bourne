@@ -8,8 +8,8 @@ Micro is a micro request/response server - similar to RPC except that it support
 
     ```
 
-    fn := func(Request) Response {
-        return Response{}
+    fn := func(micro.Request) micro.Response {
+        return micro.Response{}
     }
 
 	l, err := net.Listen(10*time.Second, ":0")
@@ -17,7 +17,7 @@ Micro is a micro request/response server - similar to RPC except that it support
 		panic(err) // do something better
 	}
 
-	server, err := NewServer(ctx, l, fn, 10)
+	server, err := micro.NewServer(ctx, l, fn, 10)
 	if err != nil {
 		panic(err) // do something better
 	}
