@@ -4,7 +4,6 @@ import (
 	"io"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -18,8 +17,8 @@ var (
 // on its own - therefore it is safe to maintain the session in memory, without
 // fear of leaking any critical details.
 type Session struct {
-	//
-	ctx common.Context
+	// //
+	// ctx common.Context
 
 	// the login credentials
 	login func(KeyPad) error
@@ -27,8 +26,8 @@ type Session struct {
 	// the session's subscriber info
 	sub Subscriber
 
-	// the session's encrypted shard.
-	loginShard signedEncryptedShard
+	// the access shard used for this session
+	priv AccessShard
 
 	// the transport mechanism. (expected to be secure).
 	net transport
@@ -50,38 +49,10 @@ func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
 	return Token{}, nil
 }
 
-// Returns the secret by signature method.
-func (s *Session) mySecretBySignature(signer Signer) (Secret, error) {
-	return nil, nil
-	// key, err := signer.Sign(s.rand, s.sub.SigningKey.Opts.Hash, s.sub.Nonce)
-	// if err != nil {
-		// return nil, errors.WithStack(err)
-	// }
-	// defer destroyBytes(key.Data)
-//
-	// shard, err := s.loginShard.Decrypt(key.Data)
-	// if err != nil {
-		// return nil, errors.WithStack(err)
-	// }
-	// defer shard.Destroy()
-//
-	// secret, err := shard.Derive(s.sub.Pub)
-	// return secret, errors.WithStack(err)
-}
-
 // Returns the session owner's secret.  This should be destroyed promptly after use.
 func (s *Session) mySecret() (Secret, error) {
-	return nil, nil
-	// creds, err := enterCreds(s.login)
-	// if err != nil {
-		// return nil, errors.WithStack(err)
-	// }
-//
-	// if creds.Signer != nil {
-		// return s.mySecretBySignature(creds.Signer)
-	// }
-//
-	// return nil, errors.Wrapf(UnsupportedLoginError, "Must use one of [WithSignature]")
+	secret, err := s.sub.mySecret(s.priv, s.login)
+	return secret, errors.WithStack(err)
 }
 
 // Returns the personal encryption seed of this subscription.
@@ -96,29 +67,19 @@ func (s *Session) mySecret() (Secret, error) {
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
 func (s *Session) myEncryptionSeed(secret Secret) ([]byte, error) {
-	ret, err := secret.Hash(SHA256)
-	return ret, errors.WithStack(err)
+	seed, err := s.sub.myEncryptionSeed(secret)
+	return seed, errors.WithStack(err)
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
 func (s *Session) mySigningKey(secret Secret) (PrivateKey, error) {
-	seed, err := s.myEncryptionSeed(secret)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	key, err := s.sub.SigningKey.Decrypt(seed)
+	key, err := s.sub.mySigningKey(secret)
 	return key, errors.WithStack(err)
 }
 
 // Returns the invitation key associated with this session. Should be promptly destroyed.
-func (s *Session) myInviteKey(secret Secret) (PrivateKey, error) {
-	seed, err := s.myEncryptionSeed(secret)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	key, err := s.sub.InviteKey.Decrypt(seed)
+func (s *Session) myInvitationKey(secret Secret) (PrivateKey, error) {
+	key, err := s.sub.myInvitationKey(secret)
 	return key, errors.WithStack(err)
 }
 
@@ -140,27 +101,27 @@ func (s *Session) MyKey() PublicKey {
 
 // Lists the session owner's currently pending invitations.
 func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
-	invites, err := s.net.Invites.InvitationsBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
+	invites, err := s.net.InvitationsBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
 	return invites, errors.WithStack(err)
 }
 
 // Lists the session owner's currently active certificates.
 func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	certs, err := s.net.Certs.ActiveBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
+	certs, err := s.net.CertsBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
 	return certs, errors.WithStack(err)
 }
 
 // Keys that have been in some way trusted by the owner of the session.
 func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
 	opts := buildPagingOptions(fns...)
-	return s.net.Trusts.BySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
+	return s.net.TrustsBySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
 }
 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
 func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
-	trust, ok, err := s.net.Trusts.ById(cancel, s.auth, id)
+	trust, ok, err := s.net.TrustById(cancel, s.auth, id)
 	return trust, ok, errors.WithStack(err)
 }
 
@@ -174,8 +135,8 @@ func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (Trust, bool, e
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) InviteById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
-	trust, ok, err := s.net.Invites.InvitationById(cancel, s.auth, id)
+func (s *Session) InvitationById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
+	trust, ok, err := s.net.InvitationById(cancel, s.auth, id)
 	return trust, ok, errors.WithStack(err)
 }
 

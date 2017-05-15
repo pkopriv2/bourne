@@ -56,13 +56,13 @@ type Trust struct {
 	signingKey SignedKeyPair
 
 	// the public portion of the shared secret
-	pubShard signedShard
+	pubShard SignedShard
 
 	// the certificate affirming the caller's relationship with the trust
 	myCert SignedCertificate
 
 	// the private shard portion of the shared secret. (may only be unlocked by owner)
-	myShard signedEncryptedShard
+	myShard SignedEncryptedShard
 }
 
 // generates a trust, but has no server-side effects.
@@ -247,7 +247,7 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 		return Trust{}, errors.WithStack(err)
 	}
 
-	if err := s.net.Certs.Register(cancel, s.auth, myCert, myShardEnc); err != nil {
+	if err := s.net.CertRegister(cancel, s.auth, myCert, myShardEnc); err != nil {
 		return Trust{}, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), d.Id)
 	}
 
@@ -266,7 +266,7 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 	if err := Verify.verify(t.myCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return s.net.Certs.ActiveByTrust(cancel, s.auth, t.Id, buildPagingOptions(fns...))
+	return s.net.CertsByTrust(cancel, s.auth, t.Id, buildPagingOptions(fns...))
 }
 
 // Revokes all issued certificates by this  for the given subscriber.
@@ -275,7 +275,7 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uui
 		return errors.WithStack(err)
 	}
 
-	if err := s.net.Certs.Revoke(cancel, s.auth, t.myCert.Id); err != nil {
+	if err := s.net.CertRevoke(cancel, s.auth, t.myCert.Id); err != nil {
 		return errors.Wrapf(err, "Unable to revoke certificate [%v] for subscriber [%v]", t.myCert.Id, trustee)
 	}
 
@@ -321,7 +321,7 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, t
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trusteeId, t.Id)
 	}
 
-	if err := s.net.Invites.Upload(cancel, s.auth, inv); err != nil {
+	if err := s.net.InvitationRegister(cancel, s.auth, inv); err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error registering invitation: %v", inv)
 	}
 

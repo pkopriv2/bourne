@@ -5,7 +5,6 @@ import (
 	"math/rand"
 
 	"github.com/pkg/errors"
-	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -15,6 +14,10 @@ type SubscriberOptions struct {
 	SigningKey    KeyPairOptions
 	SignatureHash Hash
 	NonceSize     int
+}
+
+func (s *SubscriberOptions) SecretOptions(fn func(*SecretOptions)) {
+	s.Secret = buildSecretOptions(fn)
 }
 
 func (s *SubscriberOptions) SigningOptions(fn func(*KeyPairOptions)) {
@@ -33,83 +36,19 @@ func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
 	return ret
 }
 
-type Authenticator interface {
+type AccessShard interface {
 	Derive(pub Shard, pad *oneTimePad) (Secret, error)
-}
-
-type SignatureAuth struct {
-	Nonce []byte
-	Hash  Hash
-	Priv  signedEncryptedShard
-}
-
-func newSignatureAuth(random io.Reader, secret Secret, pad *oneTimePad, opts SubscriberOptions) (SignatureAuth, error) {
-	if pad.Signer == nil {
-		return SignatureAuth{}, errors.Wrap(UnsupportedLoginError, "Expected a signature based login")
-	}
-
-	nonce, err := genRandomBytes(random, opts.NonceSize)
-	if err != nil {
-		return SignatureAuth{}, errors.WithStack(err)
-	}
-
-	// We must use a stable random source for the signature based keys.
-	sig, err := pad.Signer.Sign(rand.New(rand.NewSource(0)), opts.Secret.SecretHash, nonce)
-	if err != nil {
-		return SignatureAuth{}, errors.WithStack(err)
-	}
-	defer destroyBytes(sig.Data)
-
-	ctx := common.NewEmptyContext()
-	ctx.Logger().Info("Signed nonce [%v]", sig)
-	ctx.Logger().Info("Auth secret [%+v]", secret)
-
-	shard, err := secret.Shard(random)
-	if err != nil {
-		return SignatureAuth{}, errors.WithStack(err)
-	}
-	defer shard.Destroy()
-
-	shardEnc, err := encryptShard(random, pad.Signer, shard, sig.Data)
-	if err != nil {
-		return SignatureAuth{}, errors.WithStack(err)
-	}
-
-	return SignatureAuth{nonce, opts.SignatureHash, shardEnc}, nil
-}
-
-func (s SignatureAuth) Derive(pub Shard, pad *oneTimePad) (Secret, error) {
-	if pad.Signer == nil {
-		return nil, errors.Wrap(UnsupportedLoginError, "Expected a signature based login")
-	}
-
-	sig, err := pad.Signer.Sign(rand.New(rand.NewSource(0)), s.Hash, s.Nonce)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	ctx := common.NewEmptyContext()
-	ctx.Logger().Info("Signed nonce [%v]", sig)
-
-	priv, err := s.Priv.Decrypt(sig.Data)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	secret, err := pub.Derive(priv)
-	ctx.Logger().Info("Derived secret [%v]", secret)
-	return secret, errors.WithStack(err)
 }
 
 type Subscriber struct {
 	Id         uuid.UUID
-	Pub        signedShard
+	Pub        SignedShard
 	SigningKey SignedKeyPair
 	InviteKey  SignedKeyPair
 	Opts       SubscriberOptions
 }
 
-func (s Subscriber) mySecret(auth Authenticator, login func(KeyPad) error) (Secret, error) {
+func (s Subscriber) mySecret(auth AccessShard, login func(KeyPad) error) (Secret, error) {
 	creds, err := enterCreds(login)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -119,8 +58,13 @@ func (s Subscriber) mySecret(auth Authenticator, login func(KeyPad) error) (Secr
 	return secret, errors.WithStack(err)
 }
 
-func (s Subscriber) mySigningKey(secret Secret) (PrivateKey, error) {
+func (s Subscriber) myEncryptionSeed(secret Secret) ([]byte, error) {
 	key, err := secret.Hash(s.Opts.SignatureHash)
+	return key, errors.WithStack(err)
+}
+
+func (s Subscriber) mySigningKey(secret Secret) (PrivateKey, error) {
+	key, err := s.myEncryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -130,7 +74,7 @@ func (s Subscriber) mySigningKey(secret Secret) (PrivateKey, error) {
 }
 
 func (s Subscriber) myInvitationKey(secret Secret) (PrivateKey, error) {
-	key, err := secret.Hash(s.Opts.Secret.SecretHash)
+	key, err := s.myEncryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -139,7 +83,7 @@ func (s Subscriber) myInvitationKey(secret Secret) (PrivateKey, error) {
 	return inviteKey, errors.WithStack(err)
 }
 
-func NewSubscriber(rand io.Reader, login func(KeyPad) error, fns ...func(*SubscriberOptions)) (Subscriber, Authenticator, error) {
+func NewSubscriber(rand io.Reader, pad *oneTimePad, fns ...func(*SubscriberOptions)) (Subscriber, AccessShard, error) {
 	opts := buildSubscriberOptions(fns...)
 
 	// generate all the secret data.
@@ -172,6 +116,7 @@ func NewSubscriber(rand io.Reader, login func(KeyPad) error, fns ...func(*Subscr
 	}
 	defer rawInviteKey.Destroy()
 
+	// for now, just self sign.
 	encSigningKey, err := encryptKey(rand, rawSigningKey, rawSigningKey, secretKey, opts.SigningKey)
 	if err != nil {
 		return Subscriber{}, nil, errors.WithStack(err)
@@ -187,14 +132,9 @@ func NewSubscriber(rand io.Reader, login func(KeyPad) error, fns ...func(*Subscr
 		return Subscriber{}, nil, errors.WithStack(err)
 	}
 
-	creds, err := enterCreds(login)
-	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
-	}
-
-	var auth Authenticator
-	if creds.Signer != nil {
-		auth, err = newSignatureAuth(rand, secret, creds, opts)
+	var auth AccessShard
+	if pad.Signer != nil {
+		auth, err = newSignatureAuth(rand, secret, pad, opts)
 		if err != nil {
 			return Subscriber{}, nil, errors.WithStack(err)
 		}
@@ -211,4 +151,63 @@ func NewSubscriber(rand io.Reader, login func(KeyPad) error, fns ...func(*Subscr
 		InviteKey:  encInviteKey,
 		Opts:       opts,
 	}, auth, nil
+}
+
+// Authenticator implementations.
+
+// Signature based authenticator.  This assumes that the signer in question.
+type SignatureShard struct {
+	Nonce []byte
+	Hash  Hash
+	Priv  SignedEncryptedShard
+}
+
+func newSignatureAuth(random io.Reader, secret Secret, pad *oneTimePad, opts SubscriberOptions) (SignatureShard, error) {
+	if pad.Signer == nil {
+		return SignatureShard{}, errors.Wrap(UnsupportedLoginError, "Expected a signature based login")
+	}
+
+	nonce, err := genRandomBytes(random, opts.NonceSize)
+	if err != nil {
+		return SignatureShard{}, errors.WithStack(err)
+	}
+
+	// We must use a stable random source for the signature based keys.
+	sig, err := pad.Signer.Sign(rand.New(rand.NewSource(0)), opts.Secret.SecretHash, nonce)
+	if err != nil {
+		return SignatureShard{}, errors.WithStack(err)
+	}
+	defer destroyBytes(sig.Data)
+
+	shard, err := secret.Shard(random)
+	if err != nil {
+		return SignatureShard{}, errors.WithStack(err)
+	}
+	defer shard.Destroy()
+
+	shardEnc, err := encryptShard(random, pad.Signer, shard, sig.Data)
+	if err != nil {
+		return SignatureShard{}, errors.WithStack(err)
+	}
+
+	return SignatureShard{nonce, opts.SignatureHash, shardEnc}, nil
+}
+
+func (s SignatureShard) Derive(pub Shard, pad *oneTimePad) (Secret, error) {
+	if pad.Signer == nil {
+		return nil, errors.Wrap(UnsupportedLoginError, "Expected a signature based login")
+	}
+
+	sig, err := pad.Signer.Sign(rand.New(rand.NewSource(0)), s.Hash, s.Nonce)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	priv, err := s.Priv.Decrypt(sig.Data)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	secret, err := pub.Derive(priv)
+	return secret, errors.WithStack(err)
 }

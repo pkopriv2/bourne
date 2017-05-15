@@ -91,7 +91,7 @@ func createInvitation(rand io.Reader,
 
 // Accepts an invitation and returns an oracle key that can be registered.
 func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
-	trust, ok, err := s.net.Trusts.ById(cancel, s.auth, i.Cert.Trust)
+	trust, ok, err := s.net.TrustById(cancel, s.auth, i.Cert.Trust)
 	if err != nil || !ok {
 		return errors.WithStack(err)
 	}
@@ -112,7 +112,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	myInviteKey, err := s.myInviteKey(mySecret)
+	myInviteKey, err := s.myInvitationKey(mySecret)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -128,7 +128,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 	}
 
 	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, mySig}
-	return errors.WithStack(s.net.Certs.Register(cancel, s.auth, cert, myShard))
+	return errors.WithStack(s.net.CertRegister(cancel, s.auth, cert, myShard))
 }
 
 // Verifies an invitation's signatures are valid.
@@ -140,28 +140,28 @@ func (i Invitation) verify(trustKey, issuerKey PublicKey) error {
 }
 
 // Accepts an invitation and returns an oracle key that can be registered.
-func (i Invitation) accept(rand io.Reader, signer Signer, key PrivateKey, pub Shard, pass []byte) (signedEncryptedShard, error) {
+func (i Invitation) accept(rand io.Reader, signer Signer, key PrivateKey, pub Shard, pass []byte) (SignedEncryptedShard, error) {
 	tmp, err := i.extractShard(rand, key, pub.Opts().ShardAlg)
 	if err != nil {
-		return signedEncryptedShard{}, errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
 	}
 	defer tmp.Destroy()
 
 	secret, err := pub.Derive(tmp)
 	if err != nil {
-		return signedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
 	}
 	defer secret.Destroy()
 
 	new, err := secret.Shard(rand)
 	if err != nil {
-		return signedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
 	}
 	defer new.Destroy()
 
 	enc, err := encryptShard(rand, signer, new, pass)
 	if err != nil {
-		return signedEncryptedShard{}, errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.Trust)
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.Trust)
 	}
 	return enc, nil
 }

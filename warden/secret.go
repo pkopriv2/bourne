@@ -97,72 +97,72 @@ func genSecret(rand io.Reader, opts SecretOptions) (Secret, error) {
 }
 
 // Signs the shard, returning a signed shard.
-func signShard(rand io.Reader, signer Signer, shard Shard) (signedShard, error) {
+func signShard(rand io.Reader, signer Signer, shard Shard) (SignedShard, error) {
 	opts := shard.Opts()
 
 	fmt, err := shard.Format()
 	if err != nil {
-		return signedShard{}, errors.WithStack(err)
+		return SignedShard{}, errors.WithStack(err)
 	}
 
 	sig, err := signer.Sign(rand, opts.ShardHash, fmt)
 	if err != nil {
-		return signedShard{}, errors.WithStack(err)
+		return SignedShard{}, errors.WithStack(err)
 	}
 
-	return signedShard{shard, sig}, nil
+	return SignedShard{shard, sig}, nil
 }
 
 // Encrypts and signs the shard.
-func encryptShard(rand io.Reader, signer Signer, shard Shard, pass []byte) (signedEncryptedShard, error) {
+func encryptShard(rand io.Reader, signer Signer, shard Shard, pass []byte) (SignedEncryptedShard, error) {
 	opts := shard.Opts()
 
 	fmt, err := shard.Format()
 	if err != nil {
-		return signedEncryptedShard{}, errors.WithStack(err)
+		return SignedEncryptedShard{}, errors.WithStack(err)
 	}
 
 	salt, err := genRandomBytes(rand, opts.ShardSalt)
 	if err != nil {
-		return signedEncryptedShard{}, errors.Wrapf(err, "Error generating salt of strength [%v]")
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Error generating salt of strength [%v]")
 	}
 
 	key := cryptoBytes(pass).Pbkdf2(salt, opts.ShardIter, opts.ShardCipher.KeySize(), opts.ShardHash.standard())
 
 	ct, err := symmetricEncrypt(rand, opts.ShardCipher, key, fmt)
 	if err != nil {
-		return signedEncryptedShard{}, errors.WithStack(err)
+		return SignedEncryptedShard{}, errors.WithStack(err)
 	}
 
 	raw := encryptedShard{opts.ShardAlg, ct, opts.ShardHash, salt, opts.ShardIter}
 
 	ret, err := raw.Sign(rand, signer, opts.ShardHash)
 	if err != nil {
-		return signedEncryptedShard{}, errors.WithStack(err)
+		return SignedEncryptedShard{}, errors.WithStack(err)
 	}
 
 	return ret, nil
 }
 
 // A signed oracle.  (Used to prove legitimacy of an oracle)
-type signedShard struct {
+type SignedShard struct {
 	Shard
 	Sig Signature
 }
 
 // Verifies the signed oracle
-func (s signedShard) Verify(key PublicKey) error {
+func (s SignedShard) Verify(key PublicKey) error {
 	return errors.WithStack(verify(s.Shard, key, s.Sig))
 }
 
 // A signed oracle key.  (Used to prove legitimacy of raw key)
-type signedEncryptedShard struct {
+type SignedEncryptedShard struct {
 	encryptedShard
 	Sig Signature
 }
 
 // Verifies the signed oracle key
-func (s signedEncryptedShard) Verify(key PublicKey) error {
+func (s SignedEncryptedShard) Verify(key PublicKey) error {
 	fmt, err := s.Format()
 	if err != nil {
 		return err
@@ -182,18 +182,18 @@ type encryptedShard struct {
 	KeyIter int
 }
 
-func (p encryptedShard) Sign(rand io.Reader, priv Signer, hash Hash) (signedEncryptedShard, error) {
+func (p encryptedShard) Sign(rand io.Reader, priv Signer, hash Hash) (SignedEncryptedShard, error) {
 	fmt, err := p.Format()
 	if err != nil {
-		return signedEncryptedShard{}, err
+		return SignedEncryptedShard{}, err
 	}
 
 	sig, err := priv.Sign(rand, hash, fmt)
 	if err != nil {
-		return signedEncryptedShard{}, err
+		return SignedEncryptedShard{}, err
 	}
 
-	return signedEncryptedShard{p, sig}, nil
+	return SignedEncryptedShard{p, sig}, nil
 }
 
 func (p encryptedShard) Format() ([]byte, error) {
