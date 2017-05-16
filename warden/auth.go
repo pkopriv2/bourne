@@ -9,27 +9,26 @@ import (
 )
 
 type Token struct {
-	auth
+	Auth
 	Sig Signature
 }
 
-func signAuth(rand io.Reader, signer Signer, auth auth, hash Hash) (Token, error) {
-	sig, err := sign(rand, auth, signer, hash)
-	if err != nil {
-		return Token{}, errors.WithStack(err)
-	}
-	return Token{auth, sig}, nil
+func (t Token) Verify(key PublicKey) error {
+	err := verify(t.Auth, key, t.Sig)
+	return errors.Wrapf(err, "Invalid token [%v, %v]", t.Created, t.Expires)
 }
 
-type signatureChallenge struct {
+type sigChallenge struct {
 	Now time.Time
 }
 
-func newAuthChallenge() signatureChallenge {
-	return signatureChallenge{time.Now()}
+func newSigChallenge(rand io.Reader, signer Signer, hash Hash) (sigChallenge, Signature, error) {
+	now := sigChallenge{time.Now()}
+	sig, err := now.Sign(rand, signer, hash)
+	return now, sig, errors.WithStack(err)
 }
 
-func (a signatureChallenge) Format() ([]byte, error) {
+func (a sigChallenge) Format() ([]byte, error) {
 	fmt, err := gobBytes(a.Now)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -37,20 +36,38 @@ func (a signatureChallenge) Format() ([]byte, error) {
 	return fmt, nil
 }
 
-type auth struct {
-	IssuedTo uuid.UUID
-	IssuedBy uuid.UUID
-	Role     string
+func (s sigChallenge) Sign(rand io.Reader, signer Signer, hash Hash) (Signature, error) {
+	sig, err := sign(rand, s, signer, hash)
+	if err != nil {
+		return Signature{}, errors.WithStack(err)
+	}
+	return sig, nil
+}
+
+type Auth struct {
+	MemberId uuid.UUID
 	Created  time.Time
 	Expires  time.Time
 }
 
-func newAuth(issuedTo, issuedBy uuid.UUID, ttl time.Duration) auth {
+func newAuth(memberId uuid.UUID, ttl time.Duration) Auth {
 	now := time.Now()
-	return auth{issuedTo, issuedBy, "", time.Now(), now.Add(ttl)}
+	return Auth{memberId, time.Now(), now.Add(ttl)}
 }
 
-func (s auth) Format() ([]byte, error) {
+func (s Auth) Expired(now time.Time) bool {
+	return s.Created.After(now) || s.Expires.Before(now)
+}
+
+func (s Auth) Format() ([]byte, error) {
 	fmt, err := gobBytes(s)
 	return fmt, errors.WithStack(err)
+}
+
+func (s Auth) Sign(rand io.Reader, signer Signer, hash Hash) (Token, error) {
+	sig, err := sign(rand, s, signer, hash)
+	if err != nil {
+		return Token{}, errors.WithStack(err)
+	}
+	return Token{s, sig}, nil
 }

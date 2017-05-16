@@ -3,29 +3,53 @@ package warden
 import (
 	"crypto/rand"
 	"testing"
+	"time"
 
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/micro"
+	"github.com/pkopriv2/bourne/net"
 	"github.com/pkopriv2/bourne/stash"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestStorage(t *testing.T) {
-	db, err := stash.OpenTransient(common.NewEmptyContext())
+func TestRpc(t *testing.T) {
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
+	db, err := stash.OpenTransient(ctx)
 	if err != nil {
 		t.FailNow()
 		return
 	}
 
-	store, err := newBoltStorage(db)
-	if err != nil {
+	store, e := newBoltStorage(db)
+	if e != nil {
 		t.FailNow()
 		return
 	}
 
-	if err := initBoltBuckets(db); err != nil {
+	serverKey, e := GenRsaKey(rand.Reader, 1024)
+	if e != nil {
 		t.FailNow()
 		return
 	}
+
+	l, e := net.NewTcpNetwork().Listen(30*time.Second, ":0")
+	if e != nil {
+		t.FailNow()
+		return
+	}
+
+	s, e := newServer(ctx, store, l, rand.Reader, serverKey, 5)
+	if e != nil {
+		t.FailNow()
+		return
+	}
+
+	cl, e := s.Client(micro.Gob)
+	assert.Nil(t, e)
+
+	rpc := newClient(cl)
 
 	owner, err := GenRsaKey(rand.Reader, 1024)
 	if err != nil {
@@ -33,35 +57,35 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
-	t.Run("SaveMember", func(t *testing.T) {
-		login := func(pad KeyPad) error {
+	t.Run("Register", func(t *testing.T) {
+		creds, e := enterCreds(func(pad KeyPad) error {
 			return pad.BySignature(owner)
-		}
-
-		creds, e := enterCreds(login)
-
-		sub, auth, e := newMember(rand.Reader, creds)
+		})
 		assert.Nil(t, e)
 
-		mem, ac, e := store.SaveMember(sub, auth)
+		mem, ac, e := newMember(rand.Reader, creds)
 		assert.Nil(t, e)
-		assert.Equal(t, mem.Id, ac.MemberId)
+		assert.Nil(t, rpc.Register(nil, mem, ac))
 
-		m, o, e := store.LoadMemberById(mem.Id)
+		c, sig, e := newSigChallenge(rand.Reader, owner, SHA256)
+		assert.Nil(t, e)
+
+		token, e := rpc.TokenBySignature(nil, ac.Lookup(), c, sig, 30*time.Minute)
+		assert.Nil(t, e)
+		assert.NotNil(t, token)
+
+		actMem, actAc, o, e := rpc.MemberByLookup(nil, token, ac.Lookup())
 		assert.Nil(t, e)
 		assert.True(t, o)
+		assert.NotNil(t, actMem)
+		assert.NotNil(t, actAc)
 
-		a, o, e := store.LoadAccessCode(auth.Lookup())
-		assert.Nil(t, e)
-		assert.True(t, o)
-		assert.Equal(t, mem.Id, a.MemberId)
-
-		now, e := m.secret(a, login)
+		expSecret, e := ac.Derive(mem.Pub, creds)
 		assert.Nil(t, e)
 
-		was, e := mem.secret(auth, login)
+		actSecret, e := actAc.Derive(actMem.Pub, creds)
 		assert.Nil(t, e)
-		assert.Equal(t, was, now)
+		assert.Equal(t, expSecret, actSecret)
 	})
 
 	// t.Run("LoadSubscriber_NoExist", func(t *testing.T) {

@@ -1,6 +1,10 @@
 package warden
 
-import "github.com/pkg/errors"
+import (
+	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
+	uuid "github.com/satori/go.uuid"
+)
 
 // Basic errors
 var (
@@ -16,11 +20,11 @@ type storage interface {
 	// Returns an error if the subscriber already exists.
 	SaveMember(sub Membership, auth AccessShard) (Member, AccessCode, error)
 
-	// // Member
-	// LoadMemberLookup(lookup []byte) (Member, AccessCode, error)
-	//
-	// // Loads the subscriber, returning true if it existed.
-	// LoadMemberById(id uuid.UUID) (Member, bool, error)
+	// Member
+	LoadMemberByLookup(lookup []byte) (Member, AccessCode, bool, error)
+
+	// Loads the subscriber, returning true if it existed.
+	LoadMemberById(id uuid.UUID) (Member, bool, error)
 
 	// // Loads the subscriber, returning true if it existed.
 	// LoadMemberByKey(key string) (Member, bool, error)
@@ -45,13 +49,13 @@ type storage interface {
 	// LoadCertificate(id uuid.UUID) (SignedCertificate, error)
 }
 
-// func EnsureMember(store storage, id uuid.UUID) (Member, error) {
-// s, o, e := store.LoadMemberById(id)
-// if e != nil || !o {
-// return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No member [%v]", id))
-// }
-// return s, nil
-// }
+func EnsureMember(store storage, id uuid.UUID) (Member, error) {
+	s, o, e := store.LoadMemberById(id)
+	if e != nil || !o {
+		return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No member [%v]", id))
+	}
+	return s, nil
+}
 
 // func EnsureMemberAuth(store Storage, id, method string) (StoredAuthenticator, error) {
 // s, o, e := store.LoadMemberAuth(id, method)

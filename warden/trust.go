@@ -247,7 +247,12 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 		return Trust{}, errors.WithStack(err)
 	}
 
-	if err := s.net.CertRegister(cancel, s.auth, myCert, myShardEnc); err != nil {
+	token, err := s.auth(cancel)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	if err := s.net.CertRegister(cancel, token, myCert, myShardEnc); err != nil {
 		return Trust{}, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), d.Id)
 	}
 
@@ -266,7 +271,13 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 	if err := Verify.verify(t.myCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return s.net.CertsByTrust(cancel, s.auth, t.Id, buildPagingOptions(fns...))
+
+	token, err := s.auth(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return s.net.CertsByTrust(cancel, token, t.Id, buildPagingOptions(fns...))
 }
 
 // Revokes all issued certificates by this  for the given subscriber.
@@ -275,7 +286,12 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uui
 		return errors.WithStack(err)
 	}
 
-	if err := s.net.CertRevoke(cancel, s.auth, t.myCert.Id); err != nil {
+	token, err := s.auth(cancel)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := s.net.CertRevoke(cancel, token, t.myCert.Id); err != nil {
 		return errors.Wrapf(err, "Unable to revoke certificate [%v] for subscriber [%v]", t.myCert.Id, trustee)
 	}
 
@@ -321,7 +337,12 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, t
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trusteeId, t.Id)
 	}
 
-	if err := s.net.InvitationRegister(cancel, s.auth, inv); err != nil {
+	token, err := s.auth(cancel)
+	if err != nil {
+		return Invitation{}, errors.WithStack(err)
+	}
+
+	if err := s.net.InvitationRegister(cancel, token, inv); err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error registering invitation: %v", inv)
 	}
 

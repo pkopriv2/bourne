@@ -66,7 +66,7 @@ func (s SymmetricCipher) String() string {
 	}
 }
 
-func (s SymmetricCipher) encrypt(rand io.Reader, key []byte, msg []byte) (cipherText, error) {
+func (s SymmetricCipher) encrypt(rand io.Reader, key []byte, msg []byte) (CipherText, error) {
 	return symmetricEncrypt(rand, s, key, msg)
 }
 
@@ -81,33 +81,33 @@ const (
 //
 // Currently thinking:
 //  * Mac
-type cipherText struct {
+type CipherText struct {
 	Cipher SymmetricCipher
 	Nonce  []byte
 	Data   []byte
 }
 
 // Runs the given symmetric encryption algorithm on the message using the key as the key.  Returns the resulting cipher text
-func symmetricEncrypt(rand io.Reader, alg SymmetricCipher, key []byte, msg []byte) (cipherText, error) {
+func symmetricEncrypt(rand io.Reader, alg SymmetricCipher, key []byte, msg []byte) (CipherText, error) {
 	block, err := initBlockCipher(alg, key)
 	if err != nil {
-		return cipherText{}, errors.WithStack(err)
+		return CipherText{}, errors.WithStack(err)
 	}
 
 	strm, err := initStreamCipher(alg, block)
 	if err != nil {
-		return cipherText{}, errors.WithStack(err)
+		return CipherText{}, errors.WithStack(err)
 	}
 
 	nonce, err := generateNonce(rand, strm.NonceSize())
 	if err != nil {
-		return cipherText{}, errors.Wrapf(err, "Error generating nonce of [%v] bytes", strm.NonceSize())
+		return CipherText{}, errors.Wrapf(err, "Error generating nonce of [%v] bytes", strm.NonceSize())
 	}
 
-	return cipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
+	return CipherText{alg, nonce, strm.Seal(nil, nonce, msg, nil)}, nil
 }
 
-func (c cipherText) Decrypt(key []byte) (cryptoBytes, error) {
+func (c CipherText) Decrypt(key []byte) (cryptoBytes, error) {
 	block, err := initBlockCipher(c.Cipher, key)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -125,7 +125,7 @@ func (c cipherText) Decrypt(key []byte) (cryptoBytes, error) {
 	return ret, nil
 }
 
-func (c cipherText) String() string {
+func (c CipherText) String() string {
 	return fmt.Sprintf("CipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, cryptoBytes(c.Data))
 }
 

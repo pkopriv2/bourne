@@ -30,7 +30,7 @@ type Session struct {
 	priv AccessCode
 
 	// the transport mechanism. (expected to be secure).
-	net transport
+	net Transport
 
 	// the random source.  should be cryptographically strong.
 	rand io.Reader
@@ -101,27 +101,47 @@ func (s *Session) MyKey() PublicKey {
 
 // Lists the session owner's currently pending invitations.
 func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
-	invites, err := s.net.InvitationsBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
+	token, err := s.auth(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	invites, err := s.net.InvitationsBySubscriber(cancel, token, s.MyId(), buildPagingOptions(fns...))
 	return invites, errors.WithStack(err)
 }
 
 // Lists the session owner's currently active certificates.
 func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	certs, err := s.net.CertsBySubscriber(cancel, s.auth, s.MyId(), buildPagingOptions(fns...))
+	token, err := s.auth(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	certs, err := s.net.CertsBySubscriber(cancel, token, s.MyId(), buildPagingOptions(fns...))
 	return certs, errors.WithStack(err)
 }
 
 // Keys that have been in some way trusted by the owner of the session.
 func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
+	token, err := s.auth(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	opts := buildPagingOptions(fns...)
-	return s.net.TrustsBySubscriber(cancel, s.auth, s.MyId(), opts.Beg, opts.End)
+	return s.net.TrustsBySubscriber(cancel, token, s.MyId(), opts.Beg, opts.End)
 }
 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
 func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
-	trust, ok, err := s.net.TrustById(cancel, s.auth, id)
+	token, err := s.auth(cancel)
+	if err != nil {
+		return Trust{}, false, errors.WithStack(err)
+	}
+
+	trust, ok, err := s.net.TrustById(cancel, token, id)
 	return trust, ok, errors.WithStack(err)
 }
 
@@ -136,7 +156,12 @@ func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (Trust, bool, e
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
 func (s *Session) InvitationById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
-	trust, ok, err := s.net.InvitationById(cancel, s.auth, id)
+	token, err := s.auth(cancel)
+	if err != nil {
+		return Invitation{}, false, errors.WithStack(err)
+	}
+
+	trust, ok, err := s.net.InvitationById(cancel, token, id)
 	return trust, ok, errors.WithStack(err)
 }
 

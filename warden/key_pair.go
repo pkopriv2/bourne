@@ -33,8 +33,8 @@ type SignedKeyPair struct {
 type KeyPair struct {
 	Pub  PublicKey
 	Opts KeyPairOptions
-	priv cipherText
-	salt []byte
+	Priv CipherText
+	Salt []byte
 }
 
 // Generates a new encrypted key pair
@@ -67,9 +67,9 @@ func (p KeyPair) Sign(rand io.Reader, priv Signer, hash Hash) (SignedKeyPair, er
 }
 
 func (p KeyPair) Decrypt(key []byte) (PrivateKey, error) {
-	raw, err := p.priv.Decrypt(
+	raw, err := p.Priv.Decrypt(
 		cryptoBytes(key).Pbkdf2(
-			p.salt, p.Opts.Iter, p.priv.Cipher.KeySize(), p.Opts.Hash.standard()))
+			p.Salt, p.Opts.Iter, p.Priv.Cipher.KeySize(), p.Opts.Hash.standard()))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

@@ -3,6 +3,7 @@ package warden
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
@@ -95,16 +96,18 @@ func (b *boltStorage) SaveMember(sub Membership, auth AccessShard) (mem Member, 
 	code = AccessCode{auth, mem.Id}
 
 	err = b.Bolt().Update(func(tx *bolt.Tx) error {
+		fmt.Println("Returning: ", code.Lookup())
 		if err := boltStoreMember(tx, mem); err != nil {
 			return errors.WithStack(err)
 		}
 
+		fmt.Println("Lookup: ", code.Lookup())
 		return errors.WithStack(boltStoreAccessCode(tx, code))
 	})
 	return
 }
 
-func (b *boltStorage) LoadMember(id uuid.UUID) (m Member, o bool, e error) {
+func (b *boltStorage) LoadMemberById(id uuid.UUID) (m Member, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		m, o, e = boltLoadMember(tx, id)
 		return errors.WithStack(e)
@@ -120,21 +123,33 @@ func (b *boltStorage) LoadAccessCode(lookup []byte) (s AccessCode, o bool, e err
 	return
 }
 
+func (b *boltStorage) LoadMemberByLookup(lookup []byte) (m Member, s AccessCode, o bool, e error) {
+	s, o, e = b.LoadAccessCode(lookup)
+	if e != nil || !o {
+		return Member{}, AccessCode{}, false, errors.WithStack(e)
+	}
+
+	m, o, e = b.LoadMemberById(s.MemberId)
+	if e != nil || !o {
+		return Member{}, AccessCode{}, false, errors.WithStack(e)
+	}
+	return
+}
+
 // func (b *boltStorage) SaveMemberAuth(id uuid.UUID, auth AccessShard) error {
-// sub, err := EnsureMember(b, id)
+// _, err := EnsureMember(b, id)
 // if err != nil {
 // return errors.WithStack(err)
 // }
 //
-// if err := auth.Verify(sub.Identity); err != nil {
-// return errors.Wrapf(err, "Cannot add auth [%v] to member [%v]. Invalid signature.", id, method)
-// }
+// // if err := auth.Verify(sub.Identity); err != nil {
+// // return errors.Wrapf(err, "Cannot add auth [%v] to member [%v]. Invalid signature.", id, method)
+// // }
 //
 // return b.Bolt().Update(func(tx *bolt.Tx) error {
-// return boltStoreMemberAuth(tx, id, method, auth)
+// return boltStoreAccessCode(tx, id, method, auth)
 // })
 // }
-//
 
 // func (b *boltStorage) LoadTrust(id string) (d storedTrust, o bool, e error) {
 // e = b.Bolt().View(func(tx *bolt.Tx) error {
@@ -220,7 +235,7 @@ func boltStoreAccessCode(tx *bolt.Tx, a AccessCode) error {
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding access code [%v]", a)
 	}
-	if err := tx.Bucket(memberAuthBucket).Put(stash.Key(a.Lookup()), raw); err != nil {
+	if err := tx.Bucket(memberAuthBucket).Put(a.Lookup(), raw); err != nil {
 		return errors.Wrapf(err, "Error encoding access code [%v]", a)
 	}
 	return nil

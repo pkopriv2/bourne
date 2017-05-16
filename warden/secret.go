@@ -174,7 +174,7 @@ func (s SignedEncryptedShard) Verify(key PublicKey) error {
 // the corresponding oracle's secret line.
 type EncryptedShard struct {
 	Alg SecretAlgorithm
-	Msg cipherText
+	Msg CipherText
 
 	// encryption key derivation arguments point
 	KeyHash Hash

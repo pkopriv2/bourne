@@ -223,5 +223,5 @@ func (s SignatureShard) Derive(pub Shard, pad *oneTimePad) (Secret, error) {
 }
 
 func (s SignatureShard) Lookup() []byte {
-	return stash.String("SIG").ChildString(s.Pub.Id())
+	return stash.String("SIG:/").ChildString(s.Pub.Id())
 }

@@ -35,7 +35,7 @@ type Invitation struct {
 
 	// The embedded secret information
 	key keyExchange
-	msg cipherText
+	msg CipherText
 }
 
 func (i Invitation) String() string {
@@ -91,7 +91,12 @@ func createInvitation(rand io.Reader,
 
 // Accepts an invitation and returns an oracle key that can be registered.
 func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
-	trust, ok, err := s.net.TrustById(cancel, s.auth, i.Cert.Trust)
+	token, err := s.auth(cancel)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	trust, ok, err := s.net.TrustById(cancel, token, i.Cert.Trust)
 	if err != nil || !ok {
 		return errors.WithStack(err)
 	}
@@ -128,7 +133,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 	}
 
 	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, mySig}
-	return errors.WithStack(s.net.CertRegister(cancel, s.auth, cert, myShard))
+	return errors.WithStack(s.net.CertRegister(cancel, token, cert, myShard))
 }
 
 // Verifies an invitation's signatures are valid.
