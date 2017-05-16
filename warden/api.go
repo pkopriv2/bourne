@@ -1,7 +1,6 @@
 package warden
 
 import (
-	"crypto/rand"
 	"fmt"
 	"io"
 	"time"
@@ -50,22 +49,18 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 }
 
 // Registers a new subscription with the trust service.
-func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, opts ...func(*SubscriberOptions)) (*Session, error) {
-	creds, err := enterCreds(login)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, opts ...func(*MemberOptions)) (*Session, error) {
+	// creds, err := enterCreds(login)
+	// if err != nil {
+	// return nil, errors.WithStack(err)
+	// }
+	//
+	// sub, auth, err := newMember(rand.Reader, creds, opts...)
+	// if err != nil {
+	// return nil, errors.WithStack(err)
+	// }
 
-	sub, auth, err := NewSubscriber(rand.Reader, creds, opts...)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return &Session{
-		login: login,
-		sub:   sub,
-		priv:  auth,
-	}, nil
+	return nil, nil
 }
 
 // Loads a subscription

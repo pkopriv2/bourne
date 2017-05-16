@@ -5,10 +5,11 @@ import (
 	"math/rand"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
-type SubscriberOptions struct {
+type MemberOptions struct {
 	Secret        SecretOptions
 	InviteKey     KeyPairOptions
 	SigningKey    KeyPairOptions
@@ -16,39 +17,49 @@ type SubscriberOptions struct {
 	NonceSize     int
 }
 
-func (s *SubscriberOptions) SecretOptions(fn func(*SecretOptions)) {
+func (s *MemberOptions) SecretOptions(fn func(*SecretOptions)) {
 	s.Secret = buildSecretOptions(fn)
 }
 
-func (s *SubscriberOptions) SigningOptions(fn func(*KeyPairOptions)) {
+func (s *MemberOptions) SigningOptions(fn func(*KeyPairOptions)) {
 	s.SigningKey = buildKeyPairOptions(fn)
 }
 
-func (s *SubscriberOptions) InviteOptions(fn func(*KeyPairOptions)) {
+func (s *MemberOptions) InviteOptions(fn func(*KeyPairOptions)) {
 	s.InviteKey = buildKeyPairOptions(fn)
 }
 
-func buildSubscriberOptions(fns ...func(*SubscriberOptions)) SubscriberOptions {
-	ret := SubscriberOptions{buildSecretOptions(), buildKeyPairOptions(), buildKeyPairOptions(), SHA256, 16}
+func buildSubscriberOptions(fns ...func(*MemberOptions)) MemberOptions {
+	ret := MemberOptions{buildSecretOptions(), buildKeyPairOptions(), buildKeyPairOptions(), SHA256, 16}
 	for _, fn := range fns {
 		fn(&ret)
 	}
 	return ret
 }
 
+type Member struct {
+	Membership
+	Id uuid.UUID
+}
+
+type AccessCode struct {
+	AccessShard
+	MemberId uuid.UUID
+}
+
 type AccessShard interface {
+	Lookup() []byte // must be globally unique.
 	Derive(pub Shard, pad *oneTimePad) (Secret, error)
 }
 
-type Subscriber struct {
-	Id         uuid.UUID
+type Membership struct {
 	Pub        SignedShard
 	SigningKey SignedKeyPair
 	InviteKey  SignedKeyPair
-	Opts       SubscriberOptions
+	Opts       MemberOptions
 }
 
-func (s Subscriber) mySecret(auth AccessShard, login func(KeyPad) error) (Secret, error) {
+func (s Membership) secret(auth AccessShard, login func(KeyPad) error) (Secret, error) {
 	creds, err := enterCreds(login)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -58,13 +69,13 @@ func (s Subscriber) mySecret(auth AccessShard, login func(KeyPad) error) (Secret
 	return secret, errors.WithStack(err)
 }
 
-func (s Subscriber) myEncryptionSeed(secret Secret) ([]byte, error) {
+func (s Membership) encryptionSeed(secret Secret) ([]byte, error) {
 	key, err := secret.Hash(s.Opts.SignatureHash)
 	return key, errors.WithStack(err)
 }
 
-func (s Subscriber) mySigningKey(secret Secret) (PrivateKey, error) {
-	key, err := s.myEncryptionSeed(secret)
+func (s Membership) signingKey(secret Secret) (PrivateKey, error) {
+	key, err := s.encryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -73,8 +84,8 @@ func (s Subscriber) mySigningKey(secret Secret) (PrivateKey, error) {
 	return signingKey, errors.WithStack(err)
 }
 
-func (s Subscriber) myInvitationKey(secret Secret) (PrivateKey, error) {
-	key, err := s.myEncryptionSeed(secret)
+func (s Membership) invitationKey(secret Secret) (PrivateKey, error) {
+	key, err := s.encryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -83,86 +94,85 @@ func (s Subscriber) myInvitationKey(secret Secret) (PrivateKey, error) {
 	return inviteKey, errors.WithStack(err)
 }
 
-func NewSubscriber(rand io.Reader, pad *oneTimePad, fns ...func(*SubscriberOptions)) (Subscriber, AccessShard, error) {
+func newMember(rand io.Reader, pad *oneTimePad, fns ...func(*MemberOptions)) (Membership, AccessShard, error) {
 	opts := buildSubscriberOptions(fns...)
 
-	// generate all the secret data.
+	// generate the user's secret.
 	secret, err := genSecret(rand, opts.Secret)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 	defer secret.Destroy()
 
 	secretKey, err := secret.Hash(opts.Secret.SecretHash)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 	defer cryptoBytes(secretKey).Destroy()
 
-	rawPubShard, err := secret.Shard(rand)
+	rawShard, err := secret.Shard(rand)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 
 	rawSigningKey, err := opts.SigningKey.Algorithm.Gen(rand, opts.SigningKey.Strength)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 	defer rawSigningKey.Destroy()
 
 	rawInviteKey, err := opts.InviteKey.Algorithm.Gen(rand, opts.InviteKey.Strength)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 	defer rawInviteKey.Destroy()
 
 	// for now, just self sign.
 	encSigningKey, err := encryptKey(rand, rawSigningKey, rawSigningKey, secretKey, opts.SigningKey)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 
 	encInviteKey, err := encryptKey(rand, rawSigningKey, rawInviteKey, secretKey, opts.InviteKey)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 
-	sigPubShard, err := signShard(rand, rawSigningKey, rawPubShard)
+	sigPubShard, err := signShard(rand, rawSigningKey, rawShard)
 	if err != nil {
-		return Subscriber{}, nil, errors.WithStack(err)
+		return Membership{}, nil, errors.WithStack(err)
 	}
 
 	var auth AccessShard
 	if pad.Signer != nil {
-		auth, err = newSignatureAuth(rand, secret, pad, opts)
+		auth, err = newSignatureShard(rand, secret, pad, opts)
 		if err != nil {
-			return Subscriber{}, nil, errors.WithStack(err)
+			return Membership{}, nil, errors.WithStack(err)
 		}
 	}
 
 	if auth == nil {
-		return Subscriber{}, nil, errors.Wrap(UnsupportedLoginError, "Must provide at least one login method")
+		return Membership{}, nil, errors.Wrap(UnsupportedLoginError, "Must provide at least one login method")
 	}
 
-	return Subscriber{
-		Id:         uuid.NewV1(),
+	return Membership{
 		Pub:        sigPubShard,
 		SigningKey: encSigningKey,
 		InviteKey:  encInviteKey,
-		Opts:       opts,
-	}, auth, nil
+		Opts:       opts}, auth, nil
 }
 
 // Authenticator implementations.
 
 // Signature based authenticator.  This assumes that the signer in question.
 type SignatureShard struct {
+	Pub   PublicKey
 	Nonce []byte
 	Hash  Hash
 	Priv  SignedEncryptedShard
 }
 
-func newSignatureAuth(random io.Reader, secret Secret, pad *oneTimePad, opts SubscriberOptions) (SignatureShard, error) {
+func newSignatureShard(random io.Reader, secret Secret, pad *oneTimePad, opts MemberOptions) (SignatureShard, error) {
 	if pad.Signer == nil {
 		return SignatureShard{}, errors.Wrap(UnsupportedLoginError, "Expected a signature based login")
 	}
@@ -190,7 +200,7 @@ func newSignatureAuth(random io.Reader, secret Secret, pad *oneTimePad, opts Sub
 		return SignatureShard{}, errors.WithStack(err)
 	}
 
-	return SignatureShard{nonce, opts.SignatureHash, shardEnc}, nil
+	return SignatureShard{Pub: pad.Signer.Public(), Nonce: nonce, Hash: opts.SignatureHash, Priv: shardEnc}, nil
 }
 
 func (s SignatureShard) Derive(pub Shard, pad *oneTimePad) (Secret, error) {
@@ -210,4 +220,8 @@ func (s SignatureShard) Derive(pub Shard, pad *oneTimePad) (Secret, error) {
 
 	secret, err := pub.Derive(priv)
 	return secret, errors.WithStack(err)
+}
+
+func (s SignatureShard) Lookup() []byte {
+	return stash.String("SIG").ChildString(s.Pub.Id())
 }

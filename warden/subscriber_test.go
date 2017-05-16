@@ -19,7 +19,7 @@ func TestSubscriber(t *testing.T) {
 			return nil
 		})
 
-		_, _, e = NewSubscriber(rand.Reader, creds)
+		_, _, e = newMember(rand.Reader, creds)
 		assert.NotNil(t, e)
 	})
 
@@ -28,20 +28,20 @@ func TestSubscriber(t *testing.T) {
 			return pad.BySignature(owner)
 		})
 
-		sub, auth, e := NewSubscriber(rand.Reader, creds)
+		sub, auth, e := newMember(rand.Reader, creds)
 		assert.Nil(t, e)
 
-		secret, e := sub.mySecret(auth, func(pad KeyPad) error {
+		secret, e := sub.secret(auth, func(pad KeyPad) error {
 			return pad.BySignature(owner)
 		})
 
-		_, e = sub.myEncryptionSeed(secret)
+		_, e = sub.encryptionSeed(secret)
 		assert.Nil(t, e)
 
-		_, e = sub.mySigningKey(secret)
+		_, e = sub.signingKey(secret)
 		assert.Nil(t, e)
 
-		_, e = sub.myInvitationKey(secret)
+		_, e = sub.invitationKey(secret)
 		assert.Nil(t, e)
 	})
 }

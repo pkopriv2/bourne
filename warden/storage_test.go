@@ -1,10 +1,12 @@
 package warden
 
 import (
+	"crypto/rand"
 	"testing"
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestStorage(t *testing.T) {
@@ -14,7 +16,7 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
-	_, err = newBoltStorage(db)
+	store, err := newBoltStorage(db)
 	if err != nil {
 		t.FailNow()
 		return
@@ -25,6 +27,44 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
+	owner, err := GenRsaKey(rand.Reader, 1024)
+	if err != nil {
+		t.FailNow()
+		return
+	}
+
+	t.Run("SaveMember", func(t *testing.T) {
+		login := func(pad KeyPad) error {
+			return pad.BySignature(owner)
+		}
+
+		creds, e := enterCreds(login)
+
+		sub, auth, e := newMember(rand.Reader, creds)
+		assert.Nil(t, e)
+
+		mem, ac, e := store.SaveMember(sub, auth)
+		assert.Nil(t, e)
+		assert.Equal(t, mem.Id, ac.MemberId)
+
+		m, o, e := store.LoadMember(mem.Id)
+		assert.Nil(t, e)
+		assert.True(t, o)
+
+		a, o, e := store.LoadAccessCode(auth.Lookup())
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.Equal(t, mem.Id, a.MemberId)
+
+		now, e := m.secret(a, login)
+		assert.Nil(t, e)
+
+		was, e := mem.secret(auth, login)
+		assert.Nil(t, e)
+		assert.Equal(t, was, now)
+	})
+
+	//
 	// t.Run("LoadSubscriber_NoExist", func(t *testing.T) {
 	// _, o, e := store.LoadSubscriber("noexist")
 	// assert.Nil(t, e)

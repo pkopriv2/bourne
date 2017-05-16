@@ -134,7 +134,7 @@ func encryptShard(rand io.Reader, signer Signer, shard Shard, pass []byte) (Sign
 		return SignedEncryptedShard{}, errors.WithStack(err)
 	}
 
-	raw := encryptedShard{opts.ShardAlg, ct, opts.ShardHash, salt, opts.ShardIter}
+	raw := EncryptedShard{opts.ShardAlg, ct, opts.ShardHash, salt, opts.ShardIter}
 
 	ret, err := raw.Sign(rand, signer, opts.ShardHash)
 	if err != nil {
@@ -157,7 +157,7 @@ func (s SignedShard) Verify(key PublicKey) error {
 
 // A signed oracle key.  (Used to prove legitimacy of raw key)
 type SignedEncryptedShard struct {
-	encryptedShard
+	EncryptedShard
 	Sig Signature
 }
 
@@ -172,7 +172,7 @@ func (s SignedEncryptedShard) Verify(key PublicKey) error {
 
 // An oracle key is required to unlock an oracle.  It contains a point on
 // the corresponding oracle's secret line.
-type encryptedShard struct {
+type EncryptedShard struct {
 	Alg SecretAlgorithm
 	Msg cipherText
 
@@ -182,7 +182,7 @@ type encryptedShard struct {
 	KeyIter int
 }
 
-func (p encryptedShard) Sign(rand io.Reader, priv Signer, hash Hash) (SignedEncryptedShard, error) {
+func (p EncryptedShard) Sign(rand io.Reader, priv Signer, hash Hash) (SignedEncryptedShard, error) {
 	fmt, err := p.Format()
 	if err != nil {
 		return SignedEncryptedShard{}, err
@@ -196,11 +196,11 @@ func (p encryptedShard) Sign(rand io.Reader, priv Signer, hash Hash) (SignedEncr
 	return SignedEncryptedShard{p, sig}, nil
 }
 
-func (p encryptedShard) Format() ([]byte, error) {
+func (p EncryptedShard) Format() ([]byte, error) {
 	return gobBytes(p)
 }
 
-func (p encryptedShard) Decrypt(pass []byte) (Shard, error) {
+func (p EncryptedShard) Decrypt(pass []byte) (Shard, error) {
 	key := cryptoBytes(pass).Pbkdf2(p.KeySalt, p.KeyIter, p.Msg.Cipher.KeySize(), p.KeyHash.standard())
 
 	raw, err := p.Msg.Decrypt(key)

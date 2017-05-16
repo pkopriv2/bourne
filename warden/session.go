@@ -24,10 +24,10 @@ type Session struct {
 	login func(KeyPad) error
 
 	// the session's subscriber info
-	sub Subscriber
+	sub Member
 
 	// the access shard used for this session
-	priv AccessShard
+	priv AccessCode
 
 	// the transport mechanism. (expected to be secure).
 	net transport
@@ -51,7 +51,7 @@ func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
 
 // Returns the session owner's secret.  This should be destroyed promptly after use.
 func (s *Session) mySecret() (Secret, error) {
-	secret, err := s.sub.mySecret(s.priv, s.login)
+	secret, err := s.sub.secret(s.priv, s.login)
 	return secret, errors.WithStack(err)
 }
 
@@ -67,19 +67,19 @@ func (s *Session) mySecret() (Secret, error) {
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
 func (s *Session) myEncryptionSeed(secret Secret) ([]byte, error) {
-	seed, err := s.sub.myEncryptionSeed(secret)
+	seed, err := s.sub.encryptionSeed(secret)
 	return seed, errors.WithStack(err)
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
 func (s *Session) mySigningKey(secret Secret) (PrivateKey, error) {
-	key, err := s.sub.mySigningKey(secret)
+	key, err := s.sub.signingKey(secret)
 	return key, errors.WithStack(err)
 }
 
 // Returns the invitation key associated with this session. Should be promptly destroyed.
 func (s *Session) myInvitationKey(secret Secret) (PrivateKey, error) {
-	key, err := s.sub.myInvitationKey(secret)
+	key, err := s.sub.invitationKey(secret)
 	return key, errors.WithStack(err)
 }
 

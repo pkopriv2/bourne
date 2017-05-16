@@ -7,13 +7,13 @@ type tokenizer func(cancel <-chan struct{}) (Token, error)
 type transport interface {
 
 	// Registers a new subscriber.
-	Register(cancel <-chan struct{}, subscriber Subscriber, auth AccessShard) error
+	Register(cancel <-chan struct{}, subscriber Membership, auth AccessShard) error
 
 	// Loads public key by subscriber
 	AuthBySignature(cancel <-chan struct{}, key string, challenge signatureChallenge, sig Signature) (Token, error)
 
 	// Returns the subscriber of the given key.
-	SubscriberByKey(cancel <-chan struct{}, auth tokenizer, key string) (Subscriber, bool, error)
+	SubscriberByKey(cancel <-chan struct{}, auth tokenizer, key string) (Member, bool, error)
 
 	// Loads invitations by subscriber and dom
 	InvitationById(cancel <-chan struct{}, a tokenizer, id uuid.UUID) (Invitation, bool, error)

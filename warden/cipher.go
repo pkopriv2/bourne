@@ -83,8 +83,8 @@ const (
 //  * Mac
 type cipherText struct {
 	Cipher SymmetricCipher
-	Nonce  cryptoBytes
-	Data   cryptoBytes
+	Nonce  []byte
+	Data   []byte
 }
 
 // Runs the given symmetric encryption algorithm on the message using the key as the key.  Returns the resulting cipher text
@@ -126,7 +126,7 @@ func (c cipherText) Decrypt(key []byte) (cryptoBytes, error) {
 }
 
 func (c cipherText) String() string {
-	return fmt.Sprintf("SymCipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, c.Data)
+	return fmt.Sprintf("CipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, cryptoBytes(c.Data))
 }
 
 type keyExchange struct {
