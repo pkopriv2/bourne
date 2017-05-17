@@ -57,10 +57,12 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		session, err := Subscribe(ctx, cl.Remote().String(), func(pad KeyPad) error {
-			return pad.BySignature(owner, func(o *SessionOptions) {
-				o.TokenExpiration = 5 * time.Second
-			})
+		login := func(pad KeyPad) error {
+			return pad.BySignature(owner)
+		}
+
+		session, err := Subscribe(ctx, cl.Remote().String(), login, func(o *SubscribeOptions) {
+			o.TokenExpiration = 2 * time.Second
 		})
 
 		if err != nil {

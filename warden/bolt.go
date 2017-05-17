@@ -3,7 +3,6 @@ package warden
 import (
 	"bytes"
 	"encoding/gob"
-	"fmt"
 
 	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
@@ -96,12 +95,9 @@ func (b *boltStorage) SaveMember(sub Membership, auth AccessShard) (mem Member, 
 	code = AccessCode{auth, mem.Id}
 
 	err = b.Bolt().Update(func(tx *bolt.Tx) error {
-		fmt.Println("Returning: ", code.Lookup())
 		if err := boltStoreMember(tx, mem); err != nil {
 			return errors.WithStack(err)
 		}
-
-		fmt.Println("Lookup: ", code.Lookup())
 		return errors.WithStack(boltStoreAccessCode(tx, code))
 	})
 	return

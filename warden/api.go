@@ -38,18 +38,30 @@ var (
 	TrustError        = errors.New("Warden:TrustError")
 )
 
-// Subscribe options
-type SubscribeOptions struct {
-	member MemberOptions
-	Deps   *Dependencies
+// The paging options
+type PagingOptions struct {
+	Beg int
+	End int
 }
 
-func (s *SubscribeOptions) MemberOptions(fn func(*MemberOptions)) {
-	s.member = buildMemberOptions(fn)
+// Constructs paging options.
+func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
+	opts := PagingOptions{0, 256}
+	for _, fn := range fns {
+		fn(&opts)
+	}
+	return opts
+}
+
+// Subscribe options
+type SubscribeOptions struct {
+	MemberOptions
+	SessionOptions
+	Deps *Dependencies
 }
 
 func buildSubscribeOptions(fns ...func(*SubscribeOptions)) SubscribeOptions {
-	ret := SubscribeOptions{member: buildMemberOptions()}
+	ret := SubscribeOptions{MemberOptions: buildMemberOptions(), SessionOptions: buildSessionOptions(), Deps: nil}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -58,11 +70,12 @@ func buildSubscribeOptions(fns ...func(*SubscribeOptions)) SubscribeOptions {
 
 // Connection options.
 type ConnectOptions struct {
+	SessionOptions
 	Deps *Dependencies
 }
 
 func buildConnectOptions(fns ...func(*ConnectOptions)) ConnectOptions {
-	ret := ConnectOptions{}
+	ret := ConnectOptions{SessionOptions: buildSessionOptions()}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -102,52 +115,36 @@ func buildDependencies(ctx common.Context, addr string, timeout time.Duration, f
 	return ret, nil
 }
 
-// The paging options
-type PagingOptions struct {
-	Beg int
-	End int
-}
-
-// Constructs paging options.
-func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
-	opts := PagingOptions{0, 256}
-	for _, fn := range fns {
-		fn(&opts)
-	}
-	return opts
-}
-
 // Registers a new subscription with the trust service.
 func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*SubscribeOptions)) (*Session, error) {
-
 	creds, err := enterCreds(login)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	timer := ctx.Timer(creds.Opts.NetTimeout)
-	defer timer.Closed()
-
 	opts := buildSubscribeOptions(fns...)
 	if opts.Deps == nil {
-		deps, err := buildDependencies(ctx, addr, creds.Opts.NetTimeout)
+		deps, err := buildDependencies(ctx, addr, opts.SessionOptions.NetTimeout)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 		opts.Deps = &deps
 	}
 
+	timer := ctx.Timer(opts.NetTimeout)
+	defer timer.Closed()
+
 	membership, shard, err := newMember(opts.Deps.Rand, creds)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	member, code, token, err := opts.Deps.Net.Register(timer.Closed(), membership, shard, creds.Opts.TokenExpiration)
+	member, code, token, err := opts.Deps.Net.Register(timer.Closed(), membership, shard, opts.SessionOptions.TokenExpiration)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	session, err := newSession(ctx, member, code, token, login, creds.Opts, *opts.Deps)
+	session, err := newSession(ctx, member, code, token, login, opts.SessionOptions, *opts.Deps)
 	return session, errors.WithStack(err)
 }
 
@@ -158,20 +155,20 @@ func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...f
 		return nil, errors.WithStack(err)
 	}
 
-	timer := ctx.Timer(creds.Opts.NetTimeout)
-	defer timer.Closed()
-
 
 	opts := buildConnectOptions(fns...)
 	if opts.Deps == nil {
-		deps, err := buildDependencies(ctx, addr, creds.Opts.NetTimeout)
+		deps, err := buildDependencies(ctx, addr, opts.SessionOptions.NetTimeout)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 		opts.Deps = &deps
 	}
 
-	token, err := auth(timer.Closed(), opts.Deps.Rand, opts.Deps.Net, creds, creds.Opts)
+	timer := ctx.Timer(opts.SessionOptions.NetTimeout)
+	defer timer.Closed()
+
+	token, err := auth(timer.Closed(), opts.Deps.Rand, opts.Deps.Net, creds, opts.SessionOptions)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -187,7 +184,7 @@ func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...f
 		return nil, errors.Wrapf(InvariantError, "No such member [%v]", lookup)
 	}
 
-	session, err := newSession(ctx, mem, ac, token, login, creds.Opts, *opts.Deps)
+	session, err := newSession(ctx, mem, ac, token, login, opts.SessionOptions, *opts.Deps)
 	return session, errors.WithStack(err)
 }
 

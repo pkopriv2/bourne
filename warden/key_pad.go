@@ -8,17 +8,15 @@ import "github.com/pkg/errors"
 // Future: Accept alternative login methods (e.g. pins, passwords, multi-factor, etc...)
 
 type KeyPad interface {
-	BySignature(Signer, ...func(*SessionOptions)) error
+	BySignature(Signer) error
 }
 
 // A one time keypad.  Destroyed after first use.
 type oneTimePad struct {
-	Opts   SessionOptions
 	Signer Signer
 }
 
-func (c *oneTimePad) BySignature(s Signer, opts ...func(*SessionOptions)) error {
-	c.Opts = buildSessionOptions(opts...)
+func (c *oneTimePad) BySignature(s Signer) error {
 	c.Signer = s
 	return nil
 }

@@ -129,6 +129,8 @@ func (s *Session) start(t Token) {
 					time.Sleep(timeout)
 					continue
 				}
+
+				s.logger.Info("Successfully renewed token [%v]", t.Expires)
 				token = &t
 			}
 

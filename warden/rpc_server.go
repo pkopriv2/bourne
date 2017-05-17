@@ -22,6 +22,7 @@ type rpcServer struct {
 
 // Returns a new service handler for the ractlica
 func newServer(ctx common.Context, storage storage, listener net.Listener, rand io.Reader, sign Signer, workers int) (micro.Server, error) {
+	ctx = ctx.Sub("Server: %v", listener.Addr())
 	server := &rpcServer{ctx: ctx, logger: ctx.Logger(), storage: storage, sign: sign, rand: rand}
 	return micro.NewServer(ctx, listener, newServerHandler(server), workers)
 }
@@ -65,6 +66,7 @@ func (s *rpcServer) TokenBySignature(r rpcTokenBySignature) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 
+	s.logger.Error("Verifying signature for member [%v]", mem.Id)
 	if !o {
 		s.logger.Error("No member for lookup [%v]", r.Lookup)
 		return micro.NewErrorResponse(errors.Wrapf(RpcError, "No such member by lookup [%v]", r.Lookup))
