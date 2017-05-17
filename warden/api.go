@@ -1,12 +1,15 @@
 package warden
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/micro"
+	"github.com/pkopriv2/bourne/net"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -31,9 +34,73 @@ var (
 	TokenExpiredError = errors.New("Warden:TokenExpired")
 	TokenInvalidError = errors.New("Warden:TokenInvalid")
 	UnauthorizedError = errors.New("Warden:Unauthorized")
-	// InvariantError    = errors.New("Warden:InvariantError")
+	InvariantError    = errors.New("Warden:InvariantError")
 	TrustError        = errors.New("Warden:TrustError")
 )
+
+// Subscribe options
+type SubscribeOptions struct {
+	member MemberOptions
+	Deps   *Dependencies
+}
+
+func (s *SubscribeOptions) MemberOptions(fn func(*MemberOptions)) {
+	s.member = buildMemberOptions(fn)
+}
+
+func buildSubscribeOptions(fns ...func(*SubscribeOptions)) SubscribeOptions {
+	ret := SubscribeOptions{member: buildMemberOptions()}
+	for _, fn := range fns {
+		fn(&ret)
+	}
+	return ret
+}
+
+// Connection options.
+type ConnectOptions struct {
+	Deps *Dependencies
+}
+
+func buildConnectOptions(fns ...func(*ConnectOptions)) ConnectOptions {
+	ret := ConnectOptions{}
+	for _, fn := range fns {
+		fn(&ret)
+	}
+	return ret
+}
+
+// Core dependencies
+type Dependencies struct {
+	Net  Transport
+	Rand io.Reader
+}
+
+func buildDependencies(ctx common.Context, addr string, timeout time.Duration, fns ...func(*Dependencies)) (Dependencies, error) {
+	ret := Dependencies{}
+	for _, fn := range fns {
+		fn(&ret)
+	}
+
+	if ret.Rand == nil {
+		ret.Rand = rand.Reader
+	}
+
+	if ret.Net == nil {
+		conn, err := net.NewTcpNetwork().Dial(timeout, addr)
+		if err != nil {
+			return Dependencies{}, errors.WithStack(err)
+		}
+
+		cl, err := micro.NewClient(ctx, conn, micro.Gob)
+		if err != nil {
+			return Dependencies{}, errors.WithStack(err)
+		}
+
+		ret.Net = newClient(cl)
+	}
+
+	return ret, nil
+}
 
 // The paging options
 type PagingOptions struct {
@@ -51,23 +118,94 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 }
 
 // Registers a new subscription with the trust service.
-func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, opts ...func(*MemberOptions)) (*Session, error) {
-	// creds, err := enterCreds(login)
-	// if err != nil {
-	// return nil, errors.WithStack(err)
-	// }
-	//
-	// sub, auth, err := newMember(rand.Reader, creds, opts...)
-	// if err != nil {
-	// return nil, errors.WithStack(err)
-	// }
+func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*SubscribeOptions)) (*Session, error) {
 
-	return nil, nil
+	creds, err := enterCreds(login)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	timer := ctx.Timer(creds.Opts.NetTimeout)
+	defer timer.Closed()
+
+	opts := buildSubscribeOptions(fns...)
+	if opts.Deps == nil {
+		deps, err := buildDependencies(ctx, addr, creds.Opts.NetTimeout)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		opts.Deps = &deps
+	}
+
+	membership, shard, err := newMember(opts.Deps.Rand, creds)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	member, code, token, err := opts.Deps.Net.Register(timer.Closed(), membership, shard, creds.Opts.TokenExpiration)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	session, err := newSession(ctx, member, code, token, login, creds.Opts, *opts.Deps)
+	return session, errors.WithStack(err)
 }
 
 // Loads a subscription
-func Connect(ctx common.Context, addr string, login func(KeyPad) Token) (Session, error) {
-	return Session{}, nil
+func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*ConnectOptions)) (*Session, error) {
+	creds, err := enterCreds(login)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	timer := ctx.Timer(creds.Opts.NetTimeout)
+	defer timer.Closed()
+
+
+	opts := buildConnectOptions(fns...)
+	if opts.Deps == nil {
+		deps, err := buildDependencies(ctx, addr, creds.Opts.NetTimeout)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		opts.Deps = &deps
+	}
+
+	token, err := auth(timer.Closed(), opts.Deps.Rand, opts.Deps.Net, creds, creds.Opts)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	lookup := newSigLookup(creds.Signer.Public())
+
+	mem, ac, o, err := opts.Deps.Net.MemberByLookup(timer.Closed(), token, lookup)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if !o {
+		return nil, errors.Wrapf(InvariantError, "No such member [%v]", lookup)
+	}
+
+	session, err := newSession(ctx, mem, ac, token, login, creds.Opts, *opts.Deps)
+	return session, errors.WithStack(err)
+}
+
+func authBySignature(cancel <-chan struct{}, rand io.Reader, net Transport, signer Signer, opts SessionOptions) (Token, error) {
+	ch, sig, err := newSigChallenge(rand, signer, opts.TokenHash)
+	if err != nil {
+		return Token{}, errors.WithStack(err)
+	}
+
+	token, err := net.TokenBySignature(cancel, newSigLookup(signer.Public()), ch, sig, opts.TokenExpiration)
+	return token, errors.WithStack(err)
+}
+
+func auth(cancel <-chan struct{}, rand io.Reader, net Transport, creds *oneTimePad, opts SessionOptions) (Token, error) {
+	if creds.Signer != nil {
+		return authBySignature(cancel, rand, net, creds.Signer, opts)
+	}
+	return Token{}, errors.Wrap(InvariantError, "Invalid login type")
 }
 
 // A signer contains the knowledge necessary to digitally sign messages.

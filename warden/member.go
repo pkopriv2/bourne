@@ -29,7 +29,7 @@ func (s *MemberOptions) InviteOptions(fn func(*KeyPairOptions)) {
 	s.InviteKey = buildKeyPairOptions(fn)
 }
 
-func buildSubscriberOptions(fns ...func(*MemberOptions)) MemberOptions {
+func buildMemberOptions(fns ...func(*MemberOptions)) MemberOptions {
 	ret := MemberOptions{buildSecretOptions(), buildKeyPairOptions(), buildKeyPairOptions(), SHA256, 16}
 	for _, fn := range fns {
 		fn(&ret)
@@ -95,7 +95,7 @@ func (s Membership) invitationKey(secret Secret) (PrivateKey, error) {
 }
 
 func newMember(rand io.Reader, pad *oneTimePad, fns ...func(*MemberOptions)) (Membership, AccessShard, error) {
-	opts := buildSubscriberOptions(fns...)
+	opts := buildMemberOptions(fns...)
 
 	// generate the user's secret.
 	secret, err := genSecret(rand, opts.Secret)
@@ -223,5 +223,9 @@ func (s SignatureShard) Derive(pub Shard, pad *oneTimePad) (Secret, error) {
 }
 
 func (s SignatureShard) Lookup() []byte {
-	return stash.String("SIG:/").ChildString(s.Pub.Id())
+	return lookupByKey(s.Pub)
+}
+
+func lookupByKey(key PublicKey) []byte {
+	return stash.String("SIG:/").ChildString(key.Id())
 }

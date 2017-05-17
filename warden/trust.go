@@ -247,7 +247,7 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 		return Trust{}, errors.WithStack(err)
 	}
 
-	token, err := s.auth(cancel)
+	token, err := s.token(cancel)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
@@ -272,7 +272,7 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 		return nil, errors.WithStack(err)
 	}
 
-	token, err := s.auth(cancel)
+	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -286,7 +286,7 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uui
 		return errors.WithStack(err)
 	}
 
-	token, err := s.auth(cancel)
+	token, err := s.token(cancel)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -337,7 +337,7 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, t
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trusteeId, t.Id)
 	}
 
-	token, err := s.auth(cancel)
+	token, err := s.token(cancel)
 	if err != nil {
 		return Invitation{}, errors.WithStack(err)
 	}

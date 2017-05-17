@@ -35,7 +35,7 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 		switch body := req.Body.(type) {
 		default:
 			panic(errors.New("Unreachable"))
-		case rpcRegister:
+		case rpcRegisterRequest:
 			return s.Register(body)
 		case rpcTokenBySignature:
 			return s.TokenBySignature(body)
@@ -45,9 +45,18 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 	}
 }
 
-func (s *rpcServer) Register(r rpcRegister) micro.Response {
-	_, _, e := s.storage.SaveMember(r.Mem, r.Access)
-	return micro.NewErrorResponse(errors.WithStack(e))
+func (s *rpcServer) Register(r rpcRegisterRequest) micro.Response {
+	mem, ac, e := s.storage.SaveMember(r.Mem, r.Access)
+	if e != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
+	}
+
+	token, err := newAuth(mem.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	return micro.NewStandardResponse(rpcRegisterResponse{mem, ac, token})
 }
 
 func (s *rpcServer) TokenBySignature(r rpcTokenBySignature) micro.Response {
@@ -57,24 +66,28 @@ func (s *rpcServer) TokenBySignature(r rpcTokenBySignature) micro.Response {
 	}
 
 	if !o {
+		s.logger.Error("No member for lookup [%v]", r.Lookup)
 		return micro.NewErrorResponse(errors.Wrapf(RpcError, "No such member by lookup [%v]", r.Lookup))
 	}
 
 	shard, ok := ac.AccessShard.(SignatureShard)
 	if !ok {
+		s.logger.Error("Unexpected request type", r.Lookup)
 		return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unexpected request [%v]", ac))
 	}
-
 	if r.Sig.Key != shard.Pub.Id() {
-		return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unauthorized"))
+		s.logger.Error("Unauthorized access attempt: %v", r.Lookup)
+		return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
 	}
 
-	if time.Now().Sub(r.Challenge.Now) > 5 * time.Minute {
-		return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unauthorized"))
+	if time.Now().Sub(r.Challenge.Now) > 5*time.Minute {
+		s.logger.Error("Unauthorized access.  Old token [%v] for member [%v]", r.Challenge.Now, mem.Id)
+		return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
 	}
 
 	if err := verify(r.Challenge, shard.Pub, r.Sig); err != nil {
-		return micro.NewErrorResponse(errors.Wrapf(RpcError, "Bad signature"))
+		s.logger.Error("Unauthorized access.")
+		return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unverified signature"))
 	}
 
 	token, err := newAuth(mem.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
@@ -85,7 +98,7 @@ func (s *rpcServer) TokenBySignature(r rpcTokenBySignature) micro.Response {
 	return micro.NewStandardResponse(rpcTokenResponse{token})
 }
 
-func (s *rpcServer) Authenticate(t Token, now time.Time) error {
+func (s *rpcServer) authenticateToken(t Token, now time.Time) error {
 	if t.Expired(now) {
 		return errors.Wrapf(TokenExpiredError, "Expired token [created=%v,expired=%v,now=%v]", t.Created, t.Expires, now)
 	}
@@ -96,7 +109,7 @@ func (s *rpcServer) Authenticate(t Token, now time.Time) error {
 }
 
 func (s *rpcServer) MemberByLookup(r rpcMemberByLookup) micro.Response {
-	if err := s.Authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -134,14 +147,22 @@ type rpcTokenBySignature struct {
 	Exp       time.Duration
 }
 
-type rpcRegister struct {
-	Mem    Membership
-	Access AccessShard
+type rpcRegisterRequest struct {
+	Mem        Membership
+	Access     AccessShard
+	Expiration time.Duration
+}
+
+type rpcRegisterResponse struct {
+	Mem    Member
+	Access AccessCode
+	Token  Token
 }
 
 // Register all the gob types.
 func init() {
-	gob.Register(rpcRegister{})
+	gob.Register(rpcRegisterRequest{})
+	gob.Register(rpcRegisterResponse{})
 	gob.Register(rpcTokenBySignature{})
 	gob.Register(rpcTokenResponse{})
 	gob.Register(rpcMemberByLookup{})

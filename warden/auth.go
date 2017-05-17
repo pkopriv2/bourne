@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -26,6 +27,10 @@ func newSigChallenge(rand io.Reader, signer Signer, hash Hash) (sigChallenge, Si
 	now := sigChallenge{time.Now()}
 	sig, err := now.Sign(rand, signer, hash)
 	return now, sig, errors.WithStack(err)
+}
+
+func newSigLookup(key PublicKey) []byte {
+	return stash.String("SIG:/").ChildString(key.Id())
 }
 
 func (a sigChallenge) Format() ([]byte, error) {

@@ -1,15 +1,17 @@
 package warden
 
 import (
+	"io"
 	"time"
 
 	uuid "github.com/satori/go.uuid"
 )
 
 type Transport interface {
+	io.Closer
 
 	// Registers a new subscriber.
-	Register(cancel <-chan struct{}, subscriber Membership, auth AccessShard) error
+	Register(cancel <-chan struct{}, m Membership, a AccessShard, ttl time.Duration) (Member, AccessCode, Token, error)
 
 	// Loads public key by subscriber
 	TokenBySignature(cancel <-chan struct{}, lookup []byte, challenge sigChallenge, sig Signature, ttl time.Duration) (Token, error)
@@ -45,8 +47,8 @@ type Transport interface {
 	TrustById(cancel <-chan struct{}, t Token, id uuid.UUID) (Trust, bool, error)
 
 	// Loads the trust by subscriber
-	TrustsBySubscriber(cancel <-chan struct{}, t Token, id uuid.UUID, beg, end int) ([]Trust, error)
+	TrustsByMember(cancel <-chan struct{}, t Token, id uuid.UUID, opts PagingOptions) ([]Trust, error)
 
 	// Registers a newly created domain.
-	RegisterTrust(cancel <-chan struct{}, t Token, trust Trust) error
+	TrustRegister(cancel <-chan struct{}, t Token, trust Trust) error
 }

@@ -10,6 +10,20 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+func dial(ctx common.Context, addr string, timeout time.Duration) (*rpcClient, error) {
+	conn, err := net.NewTcpNetwork().Dial(timeout, addr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	cl, err := micro.NewClient(ctx, conn, micro.Gob)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return newClient(cl), nil
+}
+
 type rpcClient struct {
 	raw micro.Client
 }
@@ -41,9 +55,18 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (r *rpcClient) Register(cancel <-chan struct{}, mem Membership, shard AccessShard) error {
-	raw, err := r.raw.Send(micro.NewRequest(rpcRegister{mem, shard}))
-	return errors.WithStack(common.Or(err, raw.Error()))
+func (r *rpcClient) Register(cancel <-chan struct{}, mem Membership, shard AccessShard, ttl time.Duration) (Member, AccessCode, Token, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterRequest{mem, shard, ttl}))
+	if err != nil || ! raw.Ok {
+		return Member{}, AccessCode{}, Token{}, errors.WithStack(common.Or(err, raw.Error()))
+	}
+
+	resp, ok := raw.Body.(rpcRegisterResponse)
+	if !ok {
+		return Member{}, AccessCode{}, Token{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	return resp.Mem, resp.Access, resp.Token, nil
 }
 
 func (r *rpcClient) TokenBySignature(cancel <-chan struct{}, lookup []byte, challenge sigChallenge, sig Signature, ttl time.Duration) (Token, error) {
@@ -110,11 +133,11 @@ func (r *rpcClient) TrustById(cancel <-chan struct{}, a Token, id uuid.UUID) (Tr
 	panic("not implemented")
 }
 
-func (r *rpcClient) TrustsBySubscriber(cancel <-chan struct{}, a Token, id uuid.UUID, beg int, end int) ([]Trust, error) {
+func (r *rpcClient) TrustsByMember(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Trust, error) {
 	panic("not implemented")
 }
 
-func (r *rpcClient) RegisterTrust(cancel <-chan struct{}, a Token, dom Trust) error {
+func (r *rpcClient) TrustRegister(cancel <-chan struct{}, a Token, dom Trust) error {
 	panic("not implemented")
 }
 
