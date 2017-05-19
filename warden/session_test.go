@@ -46,9 +46,13 @@ func TestSession(t *testing.T) {
 		return
 	}
 
+	timer := ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
 	cl, e := s.Client(micro.Gob)
 	assert.Nil(t, e)
 
+	addr := cl.Remote().String()
 
 	t.Run("Subscribe", func(t *testing.T) {
 		owner, err := GenRsaKey(rand.Reader, 1024)
@@ -57,21 +61,26 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		login := func(pad KeyPad) error {
+		session, err := Subscribe(ctx, addr, func(pad KeyPad) error {
 			return pad.BySignature(owner)
-		}
-
-		session, err := Subscribe(ctx, cl.Remote().String(), login, func(o *SubscribeOptions) {
-			o.TokenExpiration = 2 * time.Second
 		})
+		assert.Nil(t, err)
 
-		if err != nil {
-			ctx.Logger().Error("Session: %v", err)
-			t.FailNow()
-			return
-		}
+		trust, err := session.NewSecureTrust(timer.Closed(), "test")
+		assert.Nil(t, err)
+		assert.NotNil(t, trust)
 
-		ctx.Logger().Info("KEY: %v", session.MyKey().Id())
-		time.Sleep(60 * time.Second)
+		mySecret, err := session.mySecret()
+		assert.Nil(t, err)
+		assert.NotNil(t, mySecret)
+
+		trustSecret, err := trust.deriveSecret(mySecret)
+		assert.Nil(t, err)
+		assert.NotNil(t, trustSecret)
+
+		trustSigningKey, err := trust.unlockSigningKey(trustSecret)
+		assert.Nil(t, err)
+		assert.NotNil(t, trustSigningKey)
+
 	})
 }

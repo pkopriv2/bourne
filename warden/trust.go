@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"io"
 	"time"
 
 	"github.com/pkg/errors"
@@ -16,15 +17,32 @@ const (
 	InviteKey
 )
 
+// Only used for storage
+type TrustCore struct {
+	Id         uuid.UUID
+	Name       string
+	Opts       TrustOptions
+	PubShard   SignedShard
+	SigningKey SignedKeyPair
+}
+
+func (t TrustCore) withCode(code TrustCode, cert SignedCertificate) Trust {
+	return Trust{t.Id, t.Name, t.Opts, t.SigningKey, t.PubShard, cert, code.Shard}
+}
+
+// Only used for storage
+type TrustCode struct {
+	MemberId uuid.UUID
+	TrustId  uuid.UUID
+	Shard    SignedEncryptedShard
+}
+
 // General trust options.
 type TrustOptions struct {
 	Secret SecretOptions
 
-	// ecryption key options
-	EncryptionKey CipherKeyOptions
-
 	// Invitation options
-	InvitationKey CipherKeyOptions
+	InvitationKey KeyExchangeOptions
 
 	// signature options
 	SigningHash Hash
@@ -34,7 +52,7 @@ type TrustOptions struct {
 }
 
 func buildTrustOptions(fns ...func(*TrustOptions)) TrustOptions {
-	ret := TrustOptions{buildSecretOptions(), buildCipherKeyOpts(), buildCipherKeyOpts(), SHA256, buildKeyPairOptions()}
+	ret := TrustOptions{buildSecretOptions(), buildKeyExchangeOpts(), SHA256, buildKeyPairOptions()}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -53,124 +71,113 @@ type Trust struct {
 	Opts TrustOptions
 
 	// the signing key pair.
-	signingKey SignedKeyPair
+	trustSigningKey SignedKeyPair
 
 	// the public portion of the shared secret
-	pubShard SignedShard
+	trustShard SignedShard
 
 	// the certificate affirming the caller's relationship with the trust
-	myCert SignedCertificate
+	trusteeCert SignedCertificate
 
 	// the private shard portion of the shared secret. (may only be unlocked by owner)
-	myShard SignedEncryptedShard
+	trusteeShard SignedEncryptedShard
 }
 
 // generates a trust, but has no server-side effects.
-func newTrust(s *Session, name string, fns ...func(s *TrustOptions)) (Trust, error) {
+func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Signer, name string, fns ...func(s *TrustOptions)) (Trust, error) {
 	opts := buildTrustOptions(fns...)
 
-	mySecret, err := s.mySecret()
+	trustSigningKey, err := opts.SigningKey.Algorithm.Gen(rand, opts.SigningKey.Strength)
 	if err != nil {
 		return Trust{}, errors.Wrapf(err,
-			"Error extracting session signing key [%v]", s.MyId())
-	}
-	defer mySecret.Destroy()
-
-	myEncryptionSeed, err := mySecret.Hash(opts.Secret.SecretHash)
-	if err != nil {
-		return Trust{}, errors.Wrapf(err,
-			"Error extracting session signing key [%v]", s.MyId())
-	}
-	defer mySecret.Destroy()
-
-	mySigningKey, err := s.mySigningKey(mySecret)
-	if err != nil {
-		return Trust{}, errors.Wrapf(err,
-			"Error extracting session signing key [%v]", s.MyId())
-	}
-	defer mySigningKey.Destroy()
-
-	trustSigningKey, err := opts.SigningKey.Algorithm.Gen(s.rand, opts.SigningKey.Strength)
-	if err != nil {
-		return Trust{}, errors.Wrapf(err,
-			"Error generating  key [%v]: %v", opts.SigningKey.Algorithm, opts.SigningKey.Strength)
+			"Error generating key [%v]: %v", opts.SigningKey.Algorithm, opts.SigningKey.Strength)
 	}
 	defer trustSigningKey.Destroy()
 
-	secret, err := genSecret(s.rand, opts.Secret)
+	// generate the core trust secret
+	trustSecret, err := genSecret(rand, opts.Secret)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
-	defer secret.Destroy()
+	defer trustSecret.Destroy()
 
-	pubShard, err := secret.Shard(s.rand)
+	// generate the core trust encryption key (all shared items encrypted with this)
+	trustEncryptionKey, err := trustSecret.Hash(opts.Secret.SecretHash)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
-	defer pubShard.Destroy()
+	defer cryptoBytes(trustEncryptionKey).Destroy()
 
-	myShard, err := secret.Shard(s.rand)
+	// generate the public shard of the trust's secret
+	trustShard, err := trustSecret.Shard(rand)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	// generate the member's shard of the trust's secret
+	myShard, err := trustSecret.Shard(rand)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 	defer myShard.Destroy()
 
-	pubShardSig, err := signShard(s.rand, mySigningKey, pubShard)
+	// generate the encryption key from the secret. (all shared items encrypted with this as seed)
+	myEncryptionKey, err := mySecret.Hash(opts.Secret.SecretHash)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 
-	myShardEnc, err := encryptShard(s.rand, mySigningKey, myShard, myEncryptionSeed)
+	trustSignedShard, err := signShard(rand, mySigningKey, trustShard)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 
-	signingKey, err := encryptKey(s.rand, mySigningKey, trustSigningKey, myEncryptionSeed, opts.SigningKey)
+	myEncryptedShard, err := encryptShard(rand, mySigningKey, myShard, myEncryptionKey)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 
-	cert := newCertificate(uuid.NewV1(), s.MyId(), s.MyId(), Creator, OneHundredYears)
+	trustEncryptedKey, err := encryptKey(rand, mySigningKey, trustSigningKey, trustEncryptionKey, opts.SigningKey)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
 
-	signedCert, err := signCertificate(
-		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, opts.SigningHash)
+	myCert := newCertificate(uuid.NewV1(), myId, myId, Creator, OneHundredYears)
+
+	mySignedCert, err := signCertificate(
+		rand, myCert, trustSigningKey, mySigningKey, mySigningKey, opts.SigningHash)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 
 	return Trust{
-		Id:         cert.Trust,
-		Name:       name,
-		signingKey: signingKey,
-		myCert:     signedCert,
-		Opts:       opts,
-		pubShard:   pubShardSig,
-		myShard:    myShardEnc,
+		Id:              myCert.Trust,
+		Name:            name,
+		Opts:            opts,
+		trustSigningKey: trustEncryptedKey,
+		trustShard:      trustSignedShard,
+		trusteeCert:     mySignedCert,
+		trusteeShard:    myEncryptedShard,
 	}, nil
 }
 
 // Extracts the  oracle curve.  Requires *Encrypt* level trust
-func (d Trust) unlockSecret(s *Session) (Secret, error) {
-	if err := Encrypt.verify(d.myCert.Level); err != nil {
+func (d Trust) deriveSecret(mySecret Secret) (Secret, error) {
+	if err := Encrypt.verify(d.trusteeCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	mySecret, err := s.mySecret()
+	myEncryptionKey, err := mySecret.Hash(d.Opts.Secret.SecretHash)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	mySecretKey, err := s.myEncryptionSeed(mySecret)
+	myShard, err := d.trusteeShard.Decrypt(myEncryptionKey)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	myShard, err := d.myShard.Decrypt(mySecretKey)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	secret, err := d.pubShard.Derive(myShard)
+	secret, err := d.trustShard.Derive(myShard)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -178,43 +185,51 @@ func (d Trust) unlockSecret(s *Session) (Secret, error) {
 	return secret, nil
 }
 
-func (d Trust) unlockEncryptionSeed(secret Secret) ([]byte, error) {
-	key, err := secret.Hash(d.Opts.Secret.SecretHash)
+func (d Trust) core() TrustCore {
+	return TrustCore{d.Id, d.Name, d.Opts, d.trustShard, d.trustSigningKey}
+}
+
+func (d Trust) trusteeCode() TrustCode {
+	return TrustCode{d.trusteeCert.Trustee, d.Id, d.trusteeShard}
+}
+
+func (t Trust) unlockEncryptionSeed(secret Secret) ([]byte, error) {
+	key, err := secret.Hash(t.Opts.Secret.SecretHash)
 	return key, errors.WithStack(err)
 }
 
-func (d Trust) unlockSigningKey(cancel <-chan struct{}, s *Session, secret Secret) (PrivateKey, error) {
-	if err := Sign.verify(d.myCert.Level); err != nil {
+func (t Trust) unlockSigningKey(secret Secret) (PrivateKey, error) {
+	if err := Sign.verify(t.trusteeCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	key, err := d.unlockEncryptionSeed(secret)
+	key, err := t.unlockEncryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	priv, err := d.signingKey.Decrypt(key)
+	priv, err := t.trustSigningKey.Decrypt(key)
 	return priv, errors.WithStack(err)
 }
 
-func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, error) {
-	secret, err := d.unlockSecret(s)
+func (t Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, error) {
+	mySecret, err := s.mySecret()
 	if err != nil {
 		return Trust{}, errors.Wrap(err, "Error deriving trust secret.")
 	}
-	defer secret.Destroy()
+	defer mySecret.Destroy()
 
-	trustSigningKey, err := d.unlockSigningKey(cancel, s, secret)
+	trustSecret, err := t.deriveSecret(mySecret)
+	if err != nil {
+		return Trust{}, errors.Wrap(err, "Error deriving trust secret.")
+	}
+	defer trustSecret.Destroy()
+
+	trustSigningKey, err := t.unlockSigningKey(trustSecret)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 	defer trustSigningKey.Destroy()
-
-	mySecret, err := s.mySecret()
-	if err != nil {
-		return Trust{}, errors.Wrapf(err, "Error extracting session signing key [%v]", s.MyId())
-	}
-	defer mySecret.Destroy()
 
 	myEncryptionSeed, err := s.myEncryptionSeed(mySecret)
 	if err != nil {
@@ -228,15 +243,15 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 	}
 	defer mySigningKey.Destroy()
 
-	cert := newCertificate(d.Id, s.MyId(), s.MyId(), d.myCert.Level, d.myCert.Duration())
+	cert := newCertificate(t.Id, s.MyId(), s.MyId(), t.trusteeCert.Level, t.trusteeCert.Duration())
 
 	myCert, err := signCertificate(
-		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, d.Opts.SigningHash)
+		s.rand, cert, trustSigningKey, mySigningKey, mySigningKey, t.Opts.SigningHash)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
 
-	myShard, err := secret.Shard(s.rand)
+	myShard, err := trustSecret.Shard(s.rand)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
@@ -253,22 +268,22 @@ func (d Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 	}
 
 	if err := s.net.CertRegister(cancel, token, myCert, myShardEnc); err != nil {
-		return Trust{}, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), d.Id)
+		return Trust{}, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), t.Id)
 	}
 
 	return Trust{
-		Id:         d.Id,
-		Name:       d.Name,
-		Opts:       d.Opts,
-		signingKey: d.signingKey,
-		pubShard:   d.pubShard,
-		myShard:    myShardEnc,
+		Id:              t.Id,
+		Name:            t.Name,
+		Opts:            t.Opts,
+		trustSigningKey: t.trustSigningKey,
+		trustShard:      t.trustShard,
+		trusteeShard:    myShardEnc,
 	}, nil
 }
 
 // Loads all the trust certificates that have been issued by this .
 func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	if err := Verify.verify(t.myCert.Level); err != nil {
+	if err := Verify.verify(t.trusteeCert.Level); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
@@ -282,7 +297,7 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 
 // Revokes all issued certificates by this  for the given subscriber.
 func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uuid.UUID) error {
-	if err := Revoke.verify(t.myCert.Level); err != nil {
+	if err := Revoke.verify(t.trusteeCert.Level); err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -291,8 +306,8 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uui
 		return errors.WithStack(err)
 	}
 
-	if err := s.net.CertRevoke(cancel, token, t.myCert.Id); err != nil {
-		return errors.Wrapf(err, "Unable to revoke certificate [%v] for subscriber [%v]", t.myCert.Id, trustee)
+	if err := s.net.CertRevoke(cancel, token, t.trusteeCert.Id); err != nil {
+		return errors.Wrapf(err, "Unable to revoke certificate [%v] for subscriber [%v]", t.trusteeCert.Id, trustee)
 	}
 
 	return nil
@@ -300,8 +315,8 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uui
 
 // Issues an invitation to the given key.
 func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, trusteeKey PublicKey, fns ...func(*InvitationOptions)) (Invitation, error) {
-	if err := Invite.verify(t.myCert.Level); err != nil {
-		return Invitation{}, newLevelOfTrustError(Invite, t.myCert.Level)
+	if err := Invite.verify(t.trusteeCert.Level); err != nil {
+		return Invitation{}, newLevelOfTrustError(Invite, t.trusteeCert.Level)
 	}
 
 	opts := buildInvitationOptions(fns...)
@@ -312,27 +327,27 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, t
 	}
 	defer mySecret.Destroy()
 
-	secret, err := t.unlockSecret(s)
-	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Unable to unlock  oracle [%v]", t.Id)
-	}
-	defer secret.Destroy()
-
-	ringKey, err := t.unlockSigningKey(cancel, s, secret)
-	if err != nil {
-		return Invitation{}, errors.Wrapf(err, "Erro retrieving signing key [%v]", t.Id)
-	}
-	defer ringKey.Destroy()
-
-	issuerKey, err := s.mySigningKey(mySecret)
+	mySigningKey, err := s.mySigningKey(mySecret)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error retrieving my signing key [%v]", s.MyId())
 	}
-	defer issuerKey.Destroy()
+	defer mySigningKey.Destroy()
+
+	trustSecret, err := t.deriveSecret(mySecret)
+	if err != nil {
+		return Invitation{}, errors.Wrapf(err, "Unable to unlock  oracle [%v]", t.Id)
+	}
+	defer trustSecret.Destroy()
+
+	trustSigningKey, err := t.unlockSigningKey(trustSecret)
+	if err != nil {
+		return Invitation{}, errors.Wrapf(err, "Erro retrieving signing key [%v]", t.Id)
+	}
+	defer trustSigningKey.Destroy()
 
 	cert := newCertificate(t.Id, s.MyId(), trusteeId, opts.Lvl, opts.Exp)
 
-	inv, err := createInvitation(s.rand, secret, cert, ringKey, issuerKey, trusteeKey, t.Opts)
+	inv, err := createInvitation(s.rand, trustSecret, cert, trustSigningKey, mySigningKey, trusteeKey, t.Opts)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trusteeId, t.Id)
 	}

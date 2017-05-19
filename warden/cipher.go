@@ -14,14 +14,13 @@ var (
 	CipherKeyError     = errors.New("Warden:CipherKey")
 )
 
-type CipherKeyOptions struct {
+type KeyExchangeOptions struct {
 	Cipher SymmetricCipher
 	Hash   Hash
-	Iter   int
 }
 
-func buildCipherKeyOpts(fns ...func(*CipherKeyOptions)) CipherKeyOptions {
-	ret := CipherKeyOptions{Aes256Gcm, SHA256, 1024}
+func buildKeyExchangeOpts(fns ...func(*KeyExchangeOptions)) KeyExchangeOptions {
+	ret := KeyExchangeOptions{Aes256Gcm, SHA256}
 	for _, fn := range fns {
 		fn(&ret)
 	}

@@ -18,35 +18,25 @@ type storage interface {
 	// of a subscriber are guaranteed to be static throughout its lifetime.
 	//
 	// Returns an error if the subscriber already exists.
-	SaveMember(sub Membership, auth AccessShard) (Member, AccessCode, error)
+	SaveMember(Member, MemberCode) error
 
 	// Member
-	LoadMemberByLookup(lookup []byte) (Member, AccessCode, bool, error)
+	LoadMemberByLookup([]byte) (Member, MemberCode, bool, error)
 
 	// Loads the subscriber, returning true if it existed.
-	LoadMemberById(id uuid.UUID) (Member, bool, error)
+	LoadMemberById(uuid.UUID) (Member, bool, error)
 
-	// // Loads the subscriber, returning true if it existed.
-	// LoadMemberByKey(key string) (Member, bool, error)
+	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
+	SaveTrust(TrustCore, TrustCode, SignedCertificate) error
 
-	// // Stores an auxiliary encrypted key pair.
-	// SaveAuxKey(sub,alias string, pair SignedKeyPair) error
-	//
-	// // Loads an auxiliary key
-	// LoadAuxKey(id string) (SignedKeyPair, error)
-	//
-	// // Loads an auxiliary key.
-	// LoadAuxKeyId(sub,key string) (string, error)
+	// Loads the given trust.
+	LoadTrustCore(uuid.UUID) (TrustCore, bool, error)
 
-	// // // Loads a specific version of an auxillary key.
-	// LoadLatestMemberAuxKey(sub, name string) (int, bool, error)
+	// Loads the given trust.
+	LoadTrustCode(trustId, memberId uuid.UUID) (TrustCode, bool, error)
 
-	// SaveMemberAuth(subscriber, method string, auth SignedOracleKey) error
-	// LoadMemberAuth(subscriber, method string) (StoredAuthenticator, bool, error)
-
-	// LoadTrust(id string) (storedTrust, bool, error)
-	// SaveTrust(dom Trust) error
-	// LoadCertificate(id uuid.UUID) (SignedCertificate, error)
+	// Loads the certificate
+	LoadCertificate(uuid.UUID) (SignedCertificate, bool, error)
 }
 
 func EnsureMember(store storage, id uuid.UUID) (Member, error) {

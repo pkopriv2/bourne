@@ -6,6 +6,7 @@ import (
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,31 +28,28 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
-	owner, err := GenRsaKey(rand.Reader, 1024)
-	if err != nil {
-		t.FailNow()
-		return
-	}
-
 	t.Run("SaveMember", func(t *testing.T) {
+		owner, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			t.FailNow()
+			return
+		}
+
 		login := func(pad KeyPad) error {
 			return pad.BySignature(owner)
 		}
 
 		creds, e := enterCreds(login)
 
-		sub, auth, e := newMember(rand.Reader, creds)
+		mem, code, e := newMember(rand.Reader, creds)
 		assert.Nil(t, e)
-
-		mem, ac, e := store.SaveMember(sub, auth)
-		assert.Nil(t, e)
-		assert.Equal(t, mem.Id, ac.MemberId)
+		assert.Nil(t, store.SaveMember(mem, code))
 
 		m, o, e := store.LoadMemberById(mem.Id)
 		assert.Nil(t, e)
 		assert.True(t, o)
 
-		a, o, e := store.LoadAccessCode(auth.Lookup())
+		a, o, e := store.LoadMemberCode(code.Lookup())
 		assert.Nil(t, e)
 		assert.True(t, o)
 		assert.Equal(t, mem.Id, a.MemberId)
@@ -59,53 +57,93 @@ func TestStorage(t *testing.T) {
 		now, e := m.secret(a, login)
 		assert.Nil(t, e)
 
-		was, e := mem.secret(auth, login)
+		was, e := mem.secret(code, login)
 		assert.Nil(t, e)
 		assert.Equal(t, was, now)
 	})
 
-	// t.Run("LoadSubscriber_NoExist", func(t *testing.T) {
-	// _, o, e := store.LoadSubscriber("noexist")
-	// assert.Nil(t, e)
-	// assert.False(t, o)
-	// })
-	//
-	// t.Run("EnsureSubscriber_NoExist", func(t *testing.T) {
-	// _, e := EnsureSubscriber(store, "noexist")
-	// assert.NotNil(t, e)
-	// })
-	//
-	// t.Run("StoreSubscriber_Exists", func(t *testing.T) {
-	// priv, e := GenRsaKey(rand.Reader, 1024)
-	// assert.Nil(t, e)
-	//
-	// sub, key, e := NewSubscriber(rand.Reader, priv)
-	// assert.Nil(t, e)
-	// assert.Nil(t, store.SaveSubscriber(sub, key))
-	// assert.NotNil(t, store.SaveSubscriber(sub, key))
-	// })
-	//
-	// t.Run("StoreSubscriber", func(t *testing.T) {
-	// priv, e := GenRsaKey(rand.Reader, 1024)
-	// assert.Nil(t, e)
-	//
-	// sub, key, e := NewSubscriber(rand.Reader, priv)
-	// assert.Nil(t, e)
-	// assert.Nil(t, store.SaveSubscriber(sub, key))
-	//
-	// actSub, o, e := store.LoadSubscriber(sub.Id())
-	// assert.Nil(t, e)
-	// assert.True(t, o)
-	// assert.Equal(t, sub, actSub.Subscriber)
-	//
-	// actSub, e = EnsureSubscriber(store, sub.Id())
-	// assert.Nil(t, e)
-	// assert.True(t, o)
-	// assert.Equal(t, sub, actSub.Subscriber)
-	//
-	// actAuth, o, e := store.LoadSubscriberAuth(sub.Id(), DefaultAuthMethod)
-	// assert.Nil(t, e)
-	// assert.True(t, o)
-	// assert.Equal(t, key, actAuth.SignedOracleKey)
-	// })
+	t.Run("LoadMemberById_NoExist", func(t *testing.T) {
+		_, o, e := store.LoadMemberById(uuid.UUID{})
+		assert.Nil(t, e)
+		assert.False(t, o)
+	})
+
+	t.Run("LoadMemberByLookup_NoExist", func(t *testing.T) {
+		_, _, o, e := store.LoadMemberByLookup([]byte{})
+		assert.Nil(t, e)
+		assert.False(t, o)
+	})
+
+	t.Run("SaveMember_AlreadyExists", func(t *testing.T) {
+		owner, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			t.FailNow()
+			return
+		}
+
+		login := func(pad KeyPad) error {
+			return pad.BySignature(owner)
+		}
+
+		creds, e := enterCreds(login)
+
+		mem, code, e := newMember(rand.Reader, creds)
+		assert.Nil(t, e)
+		assert.Nil(t, store.SaveMember(mem, code))
+		assert.NotNil(t, store.SaveMember(mem, code))
+	})
+
+	t.Run("SaveTrust", func(t *testing.T) {
+		memberKey, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			t.FailNow()
+			return
+		}
+
+		login := func(pad KeyPad) error {
+			return pad.BySignature(memberKey)
+		}
+
+		creds, e := enterCreds(login)
+
+		mem, code, e := newMember(rand.Reader, creds)
+		assert.Nil(t, e)
+		assert.Nil(t, store.SaveMember(mem, code))
+
+		memSecret, e := mem.secret(code, login)
+		assert.Nil(t, e)
+
+		memSigningKey, e := mem.signingKey(memSecret)
+		assert.Nil(t, e)
+
+		trust, e := newTrust(rand.Reader, mem.Id, memSecret, memSigningKey, "test")
+		assert.Nil(t, e)
+		assert.NotNil(t, trust)
+		assert.Nil(t, store.SaveTrust(trust.core(), trust.trusteeCode(), trust.trusteeCert))
+
+		actCore, o, e := store.LoadTrustCore(trust.Id)
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.NotNil(t, actCore)
+
+		actCode, o, e := store.LoadTrustCode(trust.Id, mem.Id)
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.NotNil(t, actCode)
+
+		actCert, o, e := store.LoadCertificate(trust.trusteeCert.Id)
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.NotNil(t, actCert)
+
+		actTrust := actCore.withCode(actCode, actCert)
+
+		trustSecret, e := trust.deriveSecret(memSecret)
+		assert.Nil(t, e)
+
+		actTrustSecret, e := actTrust.deriveSecret(memSecret)
+		assert.Nil(t, e)
+		assert.Equal(t, trustSecret, actTrustSecret)
+	})
+
 }

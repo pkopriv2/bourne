@@ -20,7 +20,7 @@ type SessionOptions struct {
 }
 
 func buildSessionOptions(fns ...func(*SessionOptions)) SessionOptions {
-	ret := SessionOptions{30 * time.Second, 5 * time.Minute, SHA256}
+	ret := SessionOptions{30 * time.Second, 30 * time.Second, SHA256}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -46,7 +46,7 @@ type Session struct {
 	mem Member
 
 	// the access shard used for this session
-	code AccessCode
+	code MemberCode
 
 	// the transport mechanism. (expected to be secure).
 	net Transport
@@ -61,7 +61,7 @@ type Session struct {
 	opts SessionOptions
 }
 
-func newSession(ctx common.Context, m Member, a AccessCode, t Token, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
+func newSession(ctx common.Context, m Member, a MemberCode, t Token, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
 	var err error
 
 	ctx = ctx.Sub("Session: %v", m.Id.String()[:8])
@@ -104,8 +104,6 @@ func (s *Session) token(cancel <-chan struct{}) (Token, error) {
 }
 
 func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
-	s.logger.Info("Renewing session token [%v]", s.mem.Id)
-
 	creds, err := enterCreds(s.login)
 	if err != nil {
 		return Token{}, errors.WithStack(err)
@@ -121,6 +119,8 @@ func (s *Session) start(t Token) {
 		timeout := 1 * time.Second
 		for {
 			if token == nil {
+				s.logger.Info("Renewing session token [%v]", s.mem.Id)
+
 				t, err := s.auth(s.ctx.Control().Closed())
 				if err != nil {
 					if timeout < 64*time.Second {
@@ -232,7 +232,7 @@ func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
+func (s *Session) LoadTrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Trust{}, false, errors.WithStack(err)
@@ -245,14 +245,14 @@ func (s *Session) TrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, 
 // Loads the trust with the given signing key.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) TrustByKey(cancel <-chan struct{}, key string) (Trust, bool, error) {
+func (s *Session) LoadTrustByKey(cancel <-chan struct{}, key string) (Trust, bool, error) {
 	return Trust{}, false, nil
 }
 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) InvitationById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
+func (s *Session) LoadInvitationById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Invitation{}, false, errors.WithStack(err)
@@ -264,15 +264,49 @@ func (s *Session) InvitationById(cancel <-chan struct{}, id uuid.UUID) (Invitati
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
+func (s *Session) NewSecureTrust(cancel <-chan struct{}, name string, fns ...func(t *TrustOptions)) (Trust, error) {
+	token, err := s.token(cancel)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	mySecret, err := s.mySecret()
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	mySigningKey, err := s.mySigningKey(mySecret)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	trust, err := newTrust(s.rand, s.MyId(), mySecret, mySigningKey, name, fns...)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	if err := s.net.TrustRegister(cancel, token, trust); err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	return trust, nil
+}
+
+// Accepts the invitation.  The invitation must be valid and must be addressed
+// to the owner of the session, or the session owner must be acting as a proxy.
+func (s *Session) Invite(cancel <-chan struct{}, t Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error) {
+	return Invitation{}, nil
+}
+
+// Accepts the invitation.  The invitation must be valid and must be addressed
+// to the owner of the session, or the session owner must be acting as a proxy.
 func (s *Session) AcceptTrust(cancel <-chan struct{}, i Invitation) error {
-	err := i.acceptInvitation(cancel, s)
-	return errors.WithStack(err)
+	return errors.WithStack(i.acceptInvitation(cancel, s))
 }
 
 // Revokes trust from the given subscriber for the given trust.
 func (s *Session) RevokeTrust(cancel <-chan struct{}, t Trust, sub uuid.UUID) error {
-	err := t.revokeCertificate(cancel, s, sub)
-	return errors.WithStack(err)
+	return errors.WithStack(t.revokeCertificate(cancel, s, sub))
 }
 
 // Renew's the session owner's certificate with the trust.

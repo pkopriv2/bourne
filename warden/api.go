@@ -55,13 +55,49 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 
 // Subscribe options
 type SubscribeOptions struct {
-	MemberOptions
 	SessionOptions
+
+	SecretAlgorithm SecretAlgorithm
+	SecretStrength  int
+
+	SigningKeyAlg      KeyAlgorithm
+	SigningKeyStrength int
+
+	InviteKeyAlg      KeyAlgorithm
+	InviteKeyStrength int
+
 	Deps *Dependencies
 }
 
+func (s *SubscribeOptions) memberOptions() func(o *MemberOptions) {
+	return func(o *MemberOptions) {
+		o.SecretOptions(func(o *SecretOptions) {
+			o.ShardAlg = s.SecretAlgorithm
+			o.ShardStrength = s.SecretStrength
+		})
+
+		o.SigningOptions(func(o *KeyPairOptions) {
+			o.Algorithm = s.SigningKeyAlg
+			o.Strength = s.SigningKeyStrength
+		})
+
+		o.InviteOptions(func(o *KeyPairOptions) {
+			o.Algorithm = s.InviteKeyAlg
+			o.Strength = s.InviteKeyStrength
+		})
+	}
+}
+
 func buildSubscribeOptions(fns ...func(*SubscribeOptions)) SubscribeOptions {
-	ret := SubscribeOptions{MemberOptions: buildMemberOptions(), SessionOptions: buildSessionOptions(), Deps: nil}
+	ret := SubscribeOptions{
+		SessionOptions:     buildSessionOptions(),
+		SecretAlgorithm:    Shamir,
+		SecretStrength:     32,
+		SigningKeyAlg:      Rsa,
+		SigningKeyStrength: 2048,
+		InviteKeyAlg:       Rsa,
+		InviteKeyStrength:  2048,
+	}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -108,7 +144,6 @@ func buildDependencies(ctx common.Context, addr string, timeout time.Duration, f
 		if err != nil {
 			return Dependencies{}, errors.WithStack(err)
 		}
-
 		ret.Net = newClient(cl)
 	}
 
@@ -134,12 +169,12 @@ func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ..
 	timer := ctx.Timer(opts.NetTimeout)
 	defer timer.Closed()
 
-	membership, shard, err := newMember(opts.Deps.Rand, creds)
+	member, code, err := newMember(opts.Deps.Rand, creds, opts.memberOptions())
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	member, code, token, err := opts.Deps.Net.Register(timer.Closed(), membership, shard, opts.SessionOptions.TokenExpiration)
+	token, err := opts.Deps.Net.Register(timer.Closed(), member, code, opts.SessionOptions.TokenExpiration)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -148,13 +183,12 @@ func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ..
 	return session, errors.WithStack(err)
 }
 
-// Loads a subscription
+// Connects
 func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*ConnectOptions)) (*Session, error) {
 	creds, err := enterCreds(login)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
 
 	opts := buildConnectOptions(fns...)
 	if opts.Deps == nil {
@@ -173,15 +207,13 @@ func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...f
 		return nil, errors.WithStack(err)
 	}
 
-	lookup := newSigLookup(creds.Signer.Public())
-
-	mem, ac, o, err := opts.Deps.Net.MemberByLookup(timer.Closed(), token, lookup)
+	mem, ac, o, err := opts.Deps.Net.MemberByLookup(timer.Closed(), token, newSigLookup(creds.Signer.Public()))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	if !o {
-		return nil, errors.Wrapf(InvariantError, "No such member [%v]", lookup)
+		return nil, errors.Wrapf(UnauthorizedError, "No such member.")
 	}
 
 	session, err := newSession(ctx, mem, ac, token, login, opts.SessionOptions, *opts.Deps)

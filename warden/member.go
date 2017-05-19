@@ -37,29 +37,96 @@ func buildMemberOptions(fns ...func(*MemberOptions)) MemberOptions {
 	return ret
 }
 
-type Member struct {
-	Membership
-	Id uuid.UUID
-}
-
-type AccessCode struct {
-	AccessShard
+type MemberCode struct {
+	MemberShard
 	MemberId uuid.UUID
 }
 
-type AccessShard interface {
+type MemberShard interface {
 	Lookup() []byte // must be globally unique.
 	Derive(pub Shard, pad *oneTimePad) (Secret, error)
 }
 
-type Membership struct {
+type Member struct {
+	Id         uuid.UUID
 	Pub        SignedShard
-	SigningKey SignedKeyPair
+	SigningKey SignedKeyPair // Signed by creator key or self signed
 	InviteKey  SignedKeyPair
 	Opts       MemberOptions
 }
 
-func (s Membership) secret(auth AccessShard, login func(KeyPad) error) (Secret, error) {
+func newMember(rand io.Reader, pad *oneTimePad, fns ...func(*MemberOptions)) (Member, MemberCode, error) {
+	opts := buildMemberOptions(fns...)
+
+	// generate the user's secret.
+	secret, err := genSecret(rand, opts.Secret)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+	defer secret.Destroy()
+
+	secretKey, err := secret.Hash(opts.Secret.SecretHash)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+	defer cryptoBytes(secretKey).Destroy()
+
+	rawShard, err := secret.Shard(rand)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+
+	rawSigningKey, err := opts.SigningKey.Algorithm.Gen(rand, opts.SigningKey.Strength)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+	defer rawSigningKey.Destroy()
+
+	rawInviteKey, err := opts.InviteKey.Algorithm.Gen(rand, opts.InviteKey.Strength)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+	defer rawInviteKey.Destroy()
+
+	// for now, just self sign.
+	encSigningKey, err := encryptKey(rand, rawSigningKey, rawSigningKey, secretKey, opts.SigningKey)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+
+	encInviteKey, err := encryptKey(rand, rawSigningKey, rawInviteKey, secretKey, opts.InviteKey)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+
+	sigPubShard, err := signShard(rand, rawSigningKey, rawShard)
+	if err != nil {
+		return Member{}, MemberCode{}, errors.WithStack(err)
+	}
+
+	var auth MemberShard
+	if pad.Signer != nil {
+		auth, err = newSignatureShard(rand, secret, pad, opts)
+		if err != nil {
+			return Member{}, MemberCode{}, errors.WithStack(err)
+		}
+	}
+
+	if auth == nil {
+		return Member{}, MemberCode{}, errors.Wrap(UnsupportedLoginError, "Must provide at least one login method")
+	}
+
+	id := uuid.NewV1()
+	return Member{
+		Id:         id,
+		Pub:        sigPubShard,
+		SigningKey: encSigningKey,
+		InviteKey:  encInviteKey,
+		Opts:       opts,
+	}, MemberCode{auth, id}, nil
+}
+
+func (s Member) secret(auth MemberShard, login func(KeyPad) error) (Secret, error) {
 	creds, err := enterCreds(login)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -69,12 +136,12 @@ func (s Membership) secret(auth AccessShard, login func(KeyPad) error) (Secret, 
 	return secret, errors.WithStack(err)
 }
 
-func (s Membership) encryptionSeed(secret Secret) ([]byte, error) {
+func (s Member) encryptionSeed(secret Secret) ([]byte, error) {
 	key, err := secret.Hash(s.Opts.SignatureHash)
 	return key, errors.WithStack(err)
 }
 
-func (s Membership) signingKey(secret Secret) (PrivateKey, error) {
+func (s Member) signingKey(secret Secret) (PrivateKey, error) {
 	key, err := s.encryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -84,7 +151,7 @@ func (s Membership) signingKey(secret Secret) (PrivateKey, error) {
 	return signingKey, errors.WithStack(err)
 }
 
-func (s Membership) invitationKey(secret Secret) (PrivateKey, error) {
+func (s Member) invitationKey(secret Secret) (PrivateKey, error) {
 	key, err := s.encryptionSeed(secret)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -92,74 +159,6 @@ func (s Membership) invitationKey(secret Secret) (PrivateKey, error) {
 
 	inviteKey, err := s.InviteKey.Decrypt(key)
 	return inviteKey, errors.WithStack(err)
-}
-
-func newMember(rand io.Reader, pad *oneTimePad, fns ...func(*MemberOptions)) (Membership, AccessShard, error) {
-	opts := buildMemberOptions(fns...)
-
-	// generate the user's secret.
-	secret, err := genSecret(rand, opts.Secret)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-	defer secret.Destroy()
-
-	secretKey, err := secret.Hash(opts.Secret.SecretHash)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-	defer cryptoBytes(secretKey).Destroy()
-
-	rawShard, err := secret.Shard(rand)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-
-	rawSigningKey, err := opts.SigningKey.Algorithm.Gen(rand, opts.SigningKey.Strength)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-	defer rawSigningKey.Destroy()
-
-	rawInviteKey, err := opts.InviteKey.Algorithm.Gen(rand, opts.InviteKey.Strength)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-	defer rawInviteKey.Destroy()
-
-	// for now, just self sign.
-	encSigningKey, err := encryptKey(rand, rawSigningKey, rawSigningKey, secretKey, opts.SigningKey)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-
-	encInviteKey, err := encryptKey(rand, rawSigningKey, rawInviteKey, secretKey, opts.InviteKey)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-
-	sigPubShard, err := signShard(rand, rawSigningKey, rawShard)
-	if err != nil {
-		return Membership{}, nil, errors.WithStack(err)
-	}
-
-	var auth AccessShard
-	if pad.Signer != nil {
-		auth, err = newSignatureShard(rand, secret, pad, opts)
-		if err != nil {
-			return Membership{}, nil, errors.WithStack(err)
-		}
-	}
-
-	if auth == nil {
-		return Membership{}, nil, errors.Wrap(UnsupportedLoginError, "Must provide at least one login method")
-	}
-
-	return Membership{
-		Pub:        sigPubShard,
-		SigningKey: encSigningKey,
-		InviteKey:  encInviteKey,
-		Opts:       opts}, auth, nil
 }
 
 // Authenticator implementations.

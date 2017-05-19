@@ -55,27 +55,13 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (r *rpcClient) Register(cancel <-chan struct{}, mem Membership, shard AccessShard, ttl time.Duration) (Member, AccessCode, Token, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterRequest{mem, shard, ttl}))
-	if err != nil || ! raw.Ok {
-		return Member{}, AccessCode{}, Token{}, errors.WithStack(common.Or(err, raw.Error()))
-	}
-
-	resp, ok := raw.Body.(rpcRegisterResponse)
-	if !ok {
-		return Member{}, AccessCode{}, Token{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
-	}
-
-	return resp.Mem, resp.Access, resp.Token, nil
-}
-
-func (r *rpcClient) TokenBySignature(cancel <-chan struct{}, lookup []byte, challenge sigChallenge, sig Signature, ttl time.Duration) (Token, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcTokenBySignature{lookup, challenge, sig, ttl}))
+func (r *rpcClient) Register(cancel <-chan struct{}, mem Member, code MemberCode, ttl time.Duration) (Token, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{mem, code, ttl}))
 	if err != nil || !raw.Ok {
 		return Token{}, errors.WithStack(common.Or(err, raw.Error()))
 	}
 
-	resp, ok := raw.Body.(rpcTokenResponse)
+	resp, ok := raw.Body.(rpcToken)
 	if !ok {
 		return Token{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
 	}
@@ -83,15 +69,29 @@ func (r *rpcClient) TokenBySignature(cancel <-chan struct{}, lookup []byte, chal
 	return resp.Token, nil
 }
 
-func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token Token, lookup []byte) (Member, AccessCode, bool, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcMemberByLookup{token, lookup}))
+func (r *rpcClient) TokenBySignature(cancel <-chan struct{}, lookup []byte, challenge sigChallenge, sig Signature, ttl time.Duration) (Token, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcTokenBySignatureReq{lookup, challenge, sig, ttl}))
 	if err != nil || !raw.Ok {
-		return Member{}, AccessCode{}, false, errors.WithStack(common.Or(err, raw.Error()))
+		return Token{}, errors.WithStack(common.Or(err, raw.Error()))
+	}
+
+	resp, ok := raw.Body.(rpcToken)
+	if !ok {
+		return Token{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	return resp.Token, nil
+}
+
+func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token Token, lookup []byte) (Member, MemberCode, bool, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcMemberByLookupReq{token, lookup}))
+	if err != nil || !raw.Ok {
+		return Member{}, MemberCode{}, false, errors.WithStack(common.Or(err, raw.Error()))
 	}
 
 	resp, ok := raw.Body.(rpcMemberResponse)
 	if !ok {
-		return Member{}, AccessCode{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return Member{}, MemberCode{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
 	}
 
 	return resp.Mem, resp.Access, resp.Found, nil
@@ -137,8 +137,9 @@ func (r *rpcClient) TrustsByMember(cancel <-chan struct{}, a Token, id uuid.UUID
 	panic("not implemented")
 }
 
-func (r *rpcClient) TrustRegister(cancel <-chan struct{}, a Token, dom Trust) error {
-	panic("not implemented")
+func (r *rpcClient) TrustRegister(cancel <-chan struct{}, a Token, trust Trust) error {
+	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterTrustReq{a, trust.core(), trust.trusteeCode(), trust.trusteeCert}))
+	return errors.WithStack(common.Or(err, raw.Error()))
 }
 
 // type rpcClientPool struct {
