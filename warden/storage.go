@@ -37,12 +37,23 @@ type storage interface {
 
 	// Loads the certificate
 	LoadCertificate(uuid.UUID) (SignedCertificate, bool, error)
+
+	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
+	SaveInvitation(Invitation) error
 }
 
 func EnsureMember(store storage, id uuid.UUID) (Member, error) {
 	s, o, e := store.LoadMemberById(id)
 	if e != nil || !o {
 		return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No member [%v]", id))
+	}
+	return s, nil
+}
+
+func EnsureTrust(store storage, id uuid.UUID) (TrustCore, error) {
+	s, o, e := store.LoadTrustCore(id)
+	if e != nil || !o {
+		return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No trust [%v]", id))
 	}
 	return s, nil
 }

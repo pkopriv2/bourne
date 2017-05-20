@@ -43,7 +43,7 @@ type Session struct {
 	login func(KeyPad) error
 
 	// the session's subscriber info
-	mem Member
+	member Member
 
 	// the access shard used for this session
 	code MemberCode
@@ -75,7 +75,7 @@ func newSession(ctx common.Context, m Member, a MemberCode, t Token, l func(KeyP
 		ctx:    ctx,
 		logger: ctx.Logger(),
 		login:  l,
-		mem:    m,
+		member: m,
 		code:   a,
 		net:    d.Net,
 		rand:   d.Rand,
@@ -103,6 +103,7 @@ func (s *Session) token(cancel <-chan struct{}) (Token, error) {
 	}
 }
 
+// Returns a *new* authentication token.  This forces a call to the server.
 func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
 	creds, err := enterCreds(s.login)
 	if err != nil {
@@ -113,13 +114,14 @@ func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
 	return token, errors.WithStack(err)
 }
 
+// Starts the session.  Currently, this amounts to just renewing tokens.
 func (s *Session) start(t Token) {
 	token := &t
 	go func() {
 		timeout := 1 * time.Second
 		for {
 			if token == nil {
-				s.logger.Info("Renewing session token [%v]", s.mem.Id)
+				s.logger.Info("Renewing session token [%v]", s.member.Id)
 
 				t, err := s.auth(s.ctx.Control().Closed())
 				if err != nil {
@@ -148,7 +150,7 @@ func (s *Session) start(t Token) {
 
 // Returns the session owner's secret.  This should be destroyed promptly after use.
 func (s *Session) mySecret() (Secret, error) {
-	secret, err := s.mem.secret(s.code, s.login)
+	secret, err := s.member.secret(s.code, s.login)
 	return secret, errors.WithStack(err)
 }
 
@@ -164,19 +166,19 @@ func (s *Session) mySecret() (Secret, error) {
 // community.  The leak extends as far as the trust extends.  No other users are at risk
 // because of a leaked seed or token.
 func (s *Session) myEncryptionSeed(secret Secret) ([]byte, error) {
-	seed, err := s.mem.encryptionSeed(secret)
+	seed, err := s.member.encryptionSeed(secret)
 	return seed, errors.WithStack(err)
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
 func (s *Session) mySigningKey(secret Secret) (PrivateKey, error) {
-	key, err := s.mem.signingKey(secret)
+	key, err := s.member.signingKey(secret)
 	return key, errors.WithStack(err)
 }
 
 // Returns the invitation key associated with this session. Should be promptly destroyed.
 func (s *Session) myInvitationKey(secret Secret) (PrivateKey, error) {
-	key, err := s.mem.invitationKey(secret)
+	key, err := s.member.invitationKey(secret)
 	return key, errors.WithStack(err)
 }
 
@@ -188,12 +190,12 @@ func (s *Session) Destroy() {
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
 func (s *Session) MyId() uuid.UUID {
-	return s.mem.Id
+	return s.member.Id
 }
 
 // Returns the session owner's public signing key.  This key and its id may be shared freely.
 func (s *Session) MyKey() PublicKey {
-	return s.mem.SigningKey.Pub
+	return s.member.SigningKey.Pub
 }
 
 // Lists the session owner's currently pending invitations.
@@ -203,7 +205,7 @@ func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptio
 		return nil, errors.WithStack(err)
 	}
 
-	invites, err := s.net.InvitationsBySubscriber(cancel, token, s.MyId(), buildPagingOptions(fns...))
+	invites, err := s.net.InvitationsByMember(cancel, token, s.MyId(), buildPagingOptions(fns...))
 	return invites, errors.WithStack(err)
 }
 
@@ -214,7 +216,7 @@ func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOpti
 		return nil, errors.WithStack(err)
 	}
 
-	certs, err := s.net.CertsBySubscriber(cancel, token, s.MyId(), buildPagingOptions(fns...))
+	certs, err := s.net.CertsByMember(cancel, token, s.MyId(), buildPagingOptions(fns...))
 	return certs, errors.WithStack(err)
 }
 
@@ -294,8 +296,9 @@ func (s *Session) NewSecureTrust(cancel <-chan struct{}, name string, fns ...fun
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) Invite(cancel <-chan struct{}, t Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error) {
-	return Invitation{}, nil
+func (s *Session) InviteMember(cancel <-chan struct{}, t Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error) {
+	inv, err := t.invite(cancel, s, memberId, opts...)
+	return inv, errors.WithStack(err)
 }
 
 // Accepts the invitation.  The invitation must be valid and must be addressed

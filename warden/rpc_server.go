@@ -9,6 +9,7 @@ import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/micro"
 	"github.com/pkopriv2/bourne/net"
+	uuid "github.com/satori/go.uuid"
 )
 
 // Server endpoints
@@ -42,8 +43,12 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 			return s.TokenBySignature(body)
 		case rpcMemberByLookupReq:
 			return s.MemberByLookup(body)
+		case rpcMemberKeyByIdReq:
+			return s.MemberKeyById(body)
 		case rpcRegisterTrustReq:
 			return s.RegisterTrust(body)
+		case rpcRegisterInviteReq:
+			return s.RegisterInvitation(body)
 		}
 	}
 }
@@ -128,12 +133,40 @@ func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
 	return micro.NewStandardResponse(rpcMemberResponse{true, mem, ac})
 }
 
+func (s *rpcServer) MemberKeyById(r rpcMemberKeyByIdReq) micro.Response {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	mem, o, e := s.storage.LoadMemberById(r.Id)
+	if e != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
+	}
+
+	if !o {
+		return micro.NewStandardResponse(rpcMemberResponse{Found: false})
+	}
+
+	return micro.NewStandardResponse(rpcMemberKeyResponse{true, mem.SigningKey.Pub})
+}
+
 func (s *rpcServer) RegisterTrust(r rpcRegisterTrustReq) micro.Response {
 	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	if e := s.storage.SaveTrust(r.Core, r.Code, r.Cert); e != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
+	}
+	return micro.NewEmptyResponse()
+}
+
+func (s *rpcServer) RegisterInvitation(r rpcRegisterInviteReq) micro.Response {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if e := s.storage.SaveInvitation(r.Invite); e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 	return micro.NewEmptyResponse()
@@ -146,6 +179,16 @@ type rpcToken struct {
 type rpcMemberByLookupReq struct {
 	Token  Token
 	Lookup []byte
+}
+
+type rpcMemberKeyByIdReq struct {
+	Token Token
+	Id    uuid.UUID
+}
+
+type rpcMemberKeyResponse struct {
+	Found bool
+	Key   PublicKey
 }
 
 type rpcMemberResponse struct {
@@ -174,12 +217,25 @@ type rpcRegisterTrustReq struct {
 	Cert  SignedCertificate
 }
 
+type rpcTrustByIdReq struct {
+	Token Token
+	Id    uuid.UUID
+}
+
+type rpcRegisterInviteReq struct {
+	Token  Token
+	Invite Invitation
+}
+
 // Register all the gob types.
 func init() {
 	gob.Register(rpcRegisterMemberReq{})
-	gob.Register(rpcRegisterTrustReq{})
 	gob.Register(rpcTokenBySignatureReq{})
 	gob.Register(rpcToken{})
 	gob.Register(rpcMemberByLookupReq{})
 	gob.Register(rpcMemberResponse{})
+	gob.Register(rpcMemberKeyByIdReq{})
+	gob.Register(rpcMemberKeyResponse{})
+	gob.Register(rpcRegisterTrustReq{})
+	gob.Register(rpcRegisterInviteReq{})
 }

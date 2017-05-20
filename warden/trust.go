@@ -26,7 +26,7 @@ type TrustCore struct {
 	SigningKey SignedKeyPair
 }
 
-func (t TrustCore) withCode(code TrustCode, cert SignedCertificate) Trust {
+func (t TrustCore) asTrust(code TrustCode, cert SignedCertificate) Trust {
 	return Trust{t.Id, t.Name, t.Opts, t.SigningKey, t.PubShard, cert, code.Shard}
 }
 
@@ -314,12 +314,26 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uui
 }
 
 // Issues an invitation to the given key.
-func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, trusteeKey PublicKey, fns ...func(*InvitationOptions)) (Invitation, error) {
+func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, fns ...func(*InvitationOptions)) (Invitation, error) {
 	if err := Invite.verify(t.trusteeCert.Level); err != nil {
 		return Invitation{}, newLevelOfTrustError(Invite, t.trusteeCert.Level)
 	}
 
 	opts := buildInvitationOptions(fns...)
+
+	token, err := s.token(cancel)
+	if err != nil {
+		return Invitation{}, errors.WithStack(err)
+	}
+
+	trusteeKey, o, err := s.net.MemberKeyById(cancel, token, trusteeId)
+	if err != nil {
+		return Invitation{}, errors.WithStack(err)
+	}
+
+	if !o {
+		return Invitation{}, errors.Wrapf(UnknownMemberError, "No such member [%v]", trusteeId)
+	}
 
 	mySecret, err := s.mySecret()
 	if err != nil {
@@ -352,7 +366,7 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, t
 		return Invitation{}, errors.Wrapf(err, "Error generating invitation to trustee [%v] for  [%v]", trusteeId, t.Id)
 	}
 
-	token, err := s.token(cancel)
+	token, err = s.token(cancel)
 	if err != nil {
 		return Invitation{}, errors.WithStack(err)
 	}

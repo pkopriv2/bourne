@@ -65,6 +65,20 @@ func TestSession(t *testing.T) {
 			return pad.BySignature(owner)
 		})
 		assert.Nil(t, err)
+		assert.NotNil(t, session.MyKey())
+	})
+
+	t.Run("NewTrust", func(t *testing.T) {
+		owner, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			t.FailNow()
+			return
+		}
+
+		session, err := Subscribe(ctx, addr, func(pad KeyPad) error {
+			return pad.BySignature(owner)
+		})
+		assert.Nil(t, err)
 
 		trust, err := session.NewSecureTrust(timer.Closed(), "test")
 		assert.Nil(t, err)
@@ -81,6 +95,28 @@ func TestSession(t *testing.T) {
 		trustSigningKey, err := trust.unlockSigningKey(trustSecret)
 		assert.Nil(t, err)
 		assert.NotNil(t, trustSigningKey)
+	})
+
+
+	t.Run("Invite", func(t *testing.T) {
+		owner, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			t.FailNow()
+			return
+		}
+
+		session, err := Subscribe(ctx, addr, func(pad KeyPad) error {
+			return pad.BySignature(owner)
+		})
+		assert.Nil(t, err)
+
+		trust, err := session.NewSecureTrust(timer.Closed(), "test")
+		assert.Nil(t, err)
+		assert.NotNil(t, trust)
+
+		inv, err := session.InviteMember(timer.Closed(), trust, session.MyId())
+		assert.Nil(t, err)
+		assert.NotNil(t, inv)
 
 	})
 }

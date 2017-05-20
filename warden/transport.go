@@ -16,14 +16,17 @@ type Transport interface {
 	// Loads public key by subscriber
 	TokenBySignature(cancel <-chan struct{}, lookup []byte, challenge sigChallenge, sig Signature, ttl time.Duration) (Token, error)
 
-	// // Returns the subscriber of the given key.
+	// Returns the subscriber of the given key.
 	MemberByLookup(cancel <-chan struct{}, t Token, lookup []byte) (Member, MemberCode, bool, error)
+
+	// Returns the subscriber of the given key.
+	MemberKeyById(cancel <-chan struct{}, t Token, id uuid.UUID) (PublicKey, bool, error)
 
 	// Loads invitations by subscriber and dom
 	InvitationById(cancel <-chan struct{}, t Token, id uuid.UUID) (Invitation, bool, error)
 
 	// Loads invitations by subscriber
-	InvitationsBySubscriber(cancel <-chan struct{}, t Token, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
+	InvitationsByMember(cancel <-chan struct{}, t Token, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
 
 	// Registers an invitation with the trust service.
 	InvitationRegister(cancel <-chan struct{}, t Token, i Invitation) error
@@ -32,7 +35,7 @@ type Transport interface {
 	InvitationRevoke(cancel <-chan struct{}, t Token, id uuid.UUID) error
 
 	// Loads active certificates by subscriber
-	CertsBySubscriber(cancel <-chan struct{}, t Token, id uuid.UUID, opts PagingOptions) ([]Certificate, error)
+	CertsByMember(cancel <-chan struct{}, t Token, id uuid.UUID, opts PagingOptions) ([]Certificate, error)
 
 	// Loads active certs by domain.
 	CertsByTrust(cancel <-chan struct{}, t Token, id uuid.UUID, opt PagingOptions) ([]Certificate, error)

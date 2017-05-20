@@ -30,12 +30,13 @@ import (
 
 // Common errors
 var (
-	RpcError          = errors.New("Warden:RpcError")
-	TokenExpiredError = errors.New("Warden:TokenExpired")
-	TokenInvalidError = errors.New("Warden:TokenInvalid")
-	UnauthorizedError = errors.New("Warden:Unauthorized")
-	InvariantError    = errors.New("Warden:InvariantError")
-	TrustError        = errors.New("Warden:TrustError")
+	RpcError           = errors.New("Warden:RpcError")
+	TokenExpiredError  = errors.New("Warden:TokenExpired")
+	TokenInvalidError  = errors.New("Warden:TokenInvalid")
+	UnauthorizedError  = errors.New("Warden:Unauthorized")
+	InvariantError     = errors.New("Warden:InvariantError")
+	TrustError         = errors.New("Warden:TrustError")
+	UnknownMemberError = errors.New("Warden:UnknownMember")
 )
 
 // The paging options

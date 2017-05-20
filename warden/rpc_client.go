@@ -97,23 +97,38 @@ func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token Token, lookup [
 	return resp.Mem, resp.Access, resp.Found, nil
 }
 
+func (r *rpcClient) MemberKeyById(cancel <-chan struct{}, token Token, id uuid.UUID) (PublicKey, bool, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcMemberKeyByIdReq{token, id}))
+	if err != nil || !raw.Ok {
+		return nil, false, errors.WithStack(common.Or(err, raw.Error()))
+	}
+
+	resp, ok := raw.Body.(rpcMemberKeyResponse)
+	if !ok {
+		return nil, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	return resp.Key, resp.Found, nil
+}
+
 func (r *rpcClient) InvitationById(cancel <-chan struct{}, a Token, id uuid.UUID) (Invitation, bool, error) {
 	panic("not implemented")
 }
 
-func (r *rpcClient) InvitationsBySubscriber(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Invitation, error) {
+func (r *rpcClient) InvitationsByMember(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Invitation, error) {
 	panic("not implemented")
 }
 
 func (r *rpcClient) InvitationRegister(cancel <-chan struct{}, a Token, i Invitation) error {
-	panic("not implemented")
+	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterInviteReq{a, i}))
+	return errors.WithStack(common.Or(err, raw.Error()))
 }
 
 func (r *rpcClient) InvitationRevoke(cancel <-chan struct{}, a Token, id uuid.UUID) error {
 	panic("not implemented")
 }
 
-func (r *rpcClient) CertsBySubscriber(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Certificate, error) {
+func (r *rpcClient) CertsByMember(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Certificate, error) {
 	panic("not implemented")
 }
 

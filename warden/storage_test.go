@@ -136,7 +136,7 @@ func TestStorage(t *testing.T) {
 		assert.True(t, o)
 		assert.NotNil(t, actCert)
 
-		actTrust := actCore.withCode(actCode, actCert)
+		actTrust := actCore.asTrust(actCode, actCert)
 
 		trustSecret, e := trust.deriveSecret(memSecret)
 		assert.Nil(t, e)
