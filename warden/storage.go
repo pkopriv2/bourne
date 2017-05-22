@@ -38,8 +38,17 @@ type storage interface {
 	// Loads the certificate
 	LoadCertificate(uuid.UUID) (SignedCertificate, bool, error)
 
+	// Loads the certificate
+	LoadCertificateByMemberAndTrust(memberId, trustId uuid.UUID) (SignedCertificate, bool, error)
+
 	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
 	SaveInvitation(Invitation) error
+
+	// Loads the invitation.
+	LoadInvitationById(uuid.UUID) (Invitation, bool, error)
+
+	// Saves the certificate
+	SaveCertificate(s SignedCertificate) error
 }
 
 func EnsureMember(store storage, id uuid.UUID) (Member, error) {

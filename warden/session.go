@@ -71,6 +71,10 @@ func newSession(ctx common.Context, m Member, a MemberCode, t Token, l func(KeyP
 		}
 	}()
 
+	ctx.Control().Defer(func(error) {
+		d.Net.Close()
+	})
+
 	session := &Session{
 		ctx:    ctx,
 		logger: ctx.Logger(),
@@ -266,7 +270,7 @@ func (s *Session) LoadInvitationById(cancel <-chan struct{}, id uuid.UUID) (Invi
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) NewSecureTrust(cancel <-chan struct{}, name string, fns ...func(t *TrustOptions)) (Trust, error) {
+func (s *Session) NewTrust(cancel <-chan struct{}, name string, fns ...func(t *TrustOptions)) (Trust, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
@@ -303,17 +307,17 @@ func (s *Session) InviteMember(cancel <-chan struct{}, t Trust, memberId uuid.UU
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) AcceptTrust(cancel <-chan struct{}, i Invitation) error {
-	return errors.WithStack(i.acceptInvitation(cancel, s))
+func (s *Session) AcceptInvitation(cancel <-chan struct{}, i Invitation) error {
+	return errors.WithStack(i.accept(cancel, s))
 }
 
 // Revokes trust from the given subscriber for the given trust.
-func (s *Session) RevokeTrust(cancel <-chan struct{}, t Trust, sub uuid.UUID) error {
-	return errors.WithStack(t.revokeCertificate(cancel, s, sub))
+func (s *Session) RevokeCertificate(cancel <-chan struct{}, t Trust, memberId uuid.UUID) error {
+	return errors.WithStack(t.revokeCertificate(cancel, s, memberId))
 }
 
 // Renew's the session owner's certificate with the trust.
-func (s *Session) RenewTrust(cancel <-chan struct{}, t Trust) (Trust, error) {
+func (s *Session) RenewCertificate(cancel <-chan struct{}, t Trust) (Trust, error) {
 	trust, err := t.renewCertificate(cancel, s)
 	return trust, errors.WithStack(err)
 }

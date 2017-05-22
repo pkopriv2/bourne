@@ -37,6 +37,7 @@ var (
 	InvariantError     = errors.New("Warden:InvariantError")
 	TrustError         = errors.New("Warden:TrustError")
 	UnknownMemberError = errors.New("Warden:UnknownMember")
+	UnknownTrustError  = errors.New("Warden:UnknownTrust")
 )
 
 // The paging options

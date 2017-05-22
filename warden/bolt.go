@@ -11,7 +11,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// FIXME: Gob encoding is likely NOT deterministic.  Must move to deterministic encoding for signing
+// TODO:
+//   * Build more robust certificate checking.
 
 // The maximum number of items returned as part of any "list" style operation
 const MaxPageSize = 1024
@@ -148,7 +149,15 @@ func (b *boltStorage) LoadCertificate(id uuid.UUID) (c SignedCertificate, o bool
 	return
 }
 
-func (b *boltStorage) LoadInvitation(id uuid.UUID) (i Invitation, o bool, e error) {
+func (b *boltStorage) LoadCertificateByMemberAndTrust(memberId, trustId uuid.UUID) (c SignedCertificate, o bool, e error) {
+	e = b.Bolt().View(func(tx *bolt.Tx) error {
+		c, o, e = boltLoadCertByMemberAndTrust(tx, memberId, trustId)
+		return e
+	})
+	return
+}
+
+func (b *boltStorage) LoadInvitationById(id uuid.UUID) (i Invitation, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		i, o, e = boltLoadInviteById(tx, id)
 		return e
@@ -165,6 +174,8 @@ func (b *boltStorage) LoadTrustCode(trustId, memberId uuid.UUID) (d TrustCode, o
 }
 
 func (b *boltStorage) SaveTrust(core TrustCore, code TrustCode, cert SignedCertificate) error {
+	// FIXME: This isn't transactionally safe.  A member may be deleted after 'ensure'
+	// but before storing the trust.  However, if member's can't be deleted, it's okay.
 	issuer, err := EnsureMember(b, cert.Issuer)
 	if err != nil {
 		return errors.WithStack(err)
@@ -193,7 +204,13 @@ func (b *boltStorage) SaveTrust(core TrustCore, code TrustCode, cert SignedCerti
 	})
 }
 
+// func (b *boltStorage) LoadInvitationById(id uuid.UUID) (Invitaton, bool, error) {
+//
+// }
+
 func (b *boltStorage) SaveInvitation(inv Invitation) error {
+	// FIXME: This isn't transactionally safe.  A member may be deleted after 'ensure'
+	// but before storing the invitation.
 	_, err := EnsureMember(b, inv.Cert.Trustee)
 	if err != nil {
 		return errors.WithStack(err)
@@ -204,7 +221,7 @@ func (b *boltStorage) SaveInvitation(inv Invitation) error {
 		return errors.WithStack(err)
 	}
 
-	trust, err := EnsureTrust(b, inv.Cert.Trustee)
+	trust, err := EnsureTrust(b, inv.Cert.Trust)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -219,6 +236,33 @@ func (b *boltStorage) SaveInvitation(inv Invitation) error {
 
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
 		return errors.WithStack(boltStoreInvite(tx, inv))
+	})
+}
+
+func (b *boltStorage) SaveCertificate(cert SignedCertificate) error {
+	// FIXME: This isn't transactionally safe.  A member may be deleted after 'ensure'
+	// but before storing the invitation.
+	trustee, err := EnsureMember(b, cert.Trustee)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	issuer, err := EnsureMember(b, cert.Issuer)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	trust, err := EnsureTrust(b, cert.Trust)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := cert.Verify(trust.SigningKey.Pub, issuer.SigningKey.Pub, trustee.SigningKey.Pub); err != nil {
+		return errors.Wrapf(err, "Invalid certificate [%v]", cert)
+	}
+
+	return b.Bolt().Update(func(tx *bolt.Tx) error {
+		return errors.WithStack(boltStoreCert(tx, cert))
 	})
 }
 
@@ -342,7 +386,7 @@ func boltStoreCert(tx *bolt.Tx, c SignedCertificate) error {
 		return errors.Wrapf(err, "Error writing cert [%v]", c.Id)
 	}
 
-	// update subcriber index
+	// update member index
 	if err := boltUpdateIndex(
 		tx.Bucket(memberCertBucket), stash.UUID(c.Trustee), c.Id); err != nil {
 		return errors.Wrapf(err, "Error writing cert index [%v]", c.Id)
@@ -354,10 +398,8 @@ func boltStoreCert(tx *bolt.Tx, c SignedCertificate) error {
 		return errors.Wrapf(err, "Error writing cert index [%v]", c.Id)
 	}
 
-	// update latest index
-	if err := boltUpdateIndex(
-		tx.Bucket(certLatestBucket), stash.UUID(c.Trust).ChildUUID(c.Trustee), c.Id); err != nil {
-		return errors.WithStack(err)
+	if err := tx.Bucket(certLatestBucket).Put(stash.UUID(c.Trustee).ChildUUID(c.Trust), stash.UUID(c.Id)); err != nil {
+		return errors.Wrapf(err, "Error writing cert active index [%v]", c.Id)
 	}
 
 	return nil
@@ -379,27 +421,27 @@ func boltLoadInviteIdsByMember(tx *bolt.Tx, member string, beg int, end int) ([]
 	return boltScanIndex(tx.Bucket(memberInviteBucket), stash.String(member), beg, end)
 }
 
-func boltLoadCertIdByMemberAndTrust(tx *bolt.Tx, dom, sub string) (i uuid.UUID, o bool, e error) {
-	raw := tx.Bucket(certLatestBucket).Get(stash.String(dom).ChildString(sub))
+func boltLoadCertIdByMemberAndTrust(tx *bolt.Tx, memberId, trustId uuid.UUID) (i uuid.UUID, o bool, e error) {
+	raw := tx.Bucket(certLatestBucket).Get(stash.UUID(memberId).ChildUUID(trustId))
 	if raw == nil {
 		return
 	}
 
 	i, e = stash.ParseUUID(raw)
-	return i, e == nil, nil
+	return i, e == nil, e
 }
 
-func boltUpdateActiveIndex(bucket *bolt.Bucket, root []byte, id uuid.UUID) error {
-	return errors.WithStack(bucket.Put(root, stash.UUID(id)))
-}
+// func boltUpdateActiveIndex(bucket *bolt.Bucket, root []byte, id uuid.UUID) error {
+// return errors.WithStack(bucket.Put(root, stash.UUID(id)))
+// }
 
-// func boltLoadCertByMemberAndTrust(tx *bolt.Tx, mem, dom uuid.UUID) (SignedCertificate, bool, error) {
-// id, ok, err := boltLoadCertIdByMemberAndTrust(tx, sub, dom)
-// if err != nil || !ok {
-// return SignedCertificate{}, false, err
-// }
-// return boltLoadCertById(tx, id)
-// }
+func boltLoadCertByMemberAndTrust(tx *bolt.Tx, memberId, trustId uuid.UUID) (SignedCertificate, bool, error) {
+	id, ok, err := boltLoadCertIdByMemberAndTrust(tx, memberId, trustId)
+	if err != nil || !ok {
+		return SignedCertificate{}, false, errors.WithStack(err)
+	}
+	return boltLoadCertById(tx, id)
+}
 
 // func boltLoadCertsByTrust(tx *bolt.Tx, dom string, beg, end int) ([]SignedCertificate, error) {
 // ids, err := boltLoadCertIdsByTrust(tx, dom, beg, end)
@@ -425,7 +467,7 @@ func boltStoreInvite(tx *bolt.Tx, i Invitation) error {
 		return errors.WithStack(err)
 	}
 
-	// update member index: sub:/id:
+	// update member index: (memberId -> )
 	if err := boltUpdateIndex(
 		tx.Bucket(memberInviteBucket), stash.UUID(i.Cert.Trustee), i.Id); err != nil {
 		return errors.WithStack(err)

@@ -144,6 +144,11 @@ func TestStorage(t *testing.T) {
 		actTrustSecret, e := actTrust.deriveSecret(memSecret)
 		assert.Nil(t, e)
 		assert.Equal(t, trustSecret, actTrustSecret)
+
+		actCert2, o, e := store.LoadCertificateByMemberAndTrust(mem.Id, trust.Id)
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.Equal(t, actCert, actCert2)
 	})
 
 }

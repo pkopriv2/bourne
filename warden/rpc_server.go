@@ -3,6 +3,7 @@ package warden
 import (
 	"encoding/gob"
 	"io"
+	"reflect"
 	"time"
 
 	"github.com/pkg/errors"
@@ -36,24 +37,34 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 
 		switch body := req.Body.(type) {
 		default:
-			panic(errors.New("Unreachable"))
+			return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unknown request type: %v", reflect.TypeOf(body)))
 		case rpcRegisterMemberReq:
 			return s.RegisterMember(body)
 		case rpcTokenBySignatureReq:
 			return s.TokenBySignature(body)
 		case rpcMemberByLookupReq:
 			return s.MemberByLookup(body)
-		case rpcMemberKeyByIdReq:
-			return s.MemberKeyById(body)
+		case rpcMemberSigningKeyByIdReq:
+			return s.MemberSigningKeyById(body)
+		case rpcMemberInviteKeyByIdReq:
+			return s.MemberInviteKeyById(body)
 		case rpcRegisterTrustReq:
 			return s.RegisterTrust(body)
-		case rpcRegisterInviteReq:
-			return s.RegisterInvitation(body)
+		case rpcInviteRegisterReq:
+			return s.InvitationRegister(body)
+		case rpcInviteByIdReq:
+			return s.InvitationById(body)
+		case rpcCertRegisterReq:
+			return s.CertRegister(body)
+		case rpcTrustByIdReq:
+			return s.TrustById(body)
 		}
 	}
 }
 
 func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
+	s.logger.Debug("Registering new member: %v", r.Mem.Id)
+
 	if e := s.storage.SaveMember(r.Mem, r.Access); e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
@@ -133,7 +144,7 @@ func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
 	return micro.NewStandardResponse(rpcMemberResponse{true, mem, ac})
 }
 
-func (s *rpcServer) MemberKeyById(r rpcMemberKeyByIdReq) micro.Response {
+func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Response {
 	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -150,6 +161,23 @@ func (s *rpcServer) MemberKeyById(r rpcMemberKeyByIdReq) micro.Response {
 	return micro.NewStandardResponse(rpcMemberKeyResponse{true, mem.SigningKey.Pub})
 }
 
+func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Response {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	mem, o, e := s.storage.LoadMemberById(r.Id)
+	if e != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
+	}
+
+	if !o {
+		return micro.NewStandardResponse(rpcMemberResponse{Found: false})
+	}
+
+	return micro.NewStandardResponse(rpcMemberKeyResponse{true, mem.InviteKey.Pub})
+}
+
 func (s *rpcServer) RegisterTrust(r rpcRegisterTrustReq) micro.Response {
 	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
@@ -161,12 +189,67 @@ func (s *rpcServer) RegisterTrust(r rpcRegisterTrustReq) micro.Response {
 	return micro.NewEmptyResponse()
 }
 
-func (s *rpcServer) RegisterInvitation(r rpcRegisterInviteReq) micro.Response {
+func (s *rpcServer) TrustById(r rpcTrustByIdReq) micro.Response {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	core, ok, err := s.storage.LoadTrustCore(r.Id)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if !ok {
+		return micro.NewStandardResponse(rpcTrustResponse{Found: false})
+	}
+
+	cert, ok, err := s.storage.LoadCertificateByMemberAndTrust(r.Token.MemberId, r.Id)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if !ok {
+		return micro.NewStandardResponse(rpcTrustResponse{Found: true, Core: core.publicCore()})
+	}
+
+	code, _, err := s.storage.LoadTrustCode(core.Id, r.Token.MemberId)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	return micro.NewStandardResponse(rpcTrustResponse{Found: true, Core: core, Code: code, Cert: cert})
+}
+
+func (s *rpcServer) InvitationRegister(r rpcInviteRegisterReq) micro.Response {
 	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	if e := s.storage.SaveInvitation(r.Invite); e != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
+	}
+	return micro.NewEmptyResponse()
+}
+
+func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	inv, ok, err := s.storage.LoadInvitationById(r.Id)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	return micro.NewStandardResponse(rpcInviteResponse{Found: ok, Inv: inv})
+}
+
+func (s *rpcServer) CertRegister(r rpcCertRegisterReq) micro.Response {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if e := s.storage.SaveCertificate(r.Cert); e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 	return micro.NewEmptyResponse()
@@ -181,7 +264,12 @@ type rpcMemberByLookupReq struct {
 	Lookup []byte
 }
 
-type rpcMemberKeyByIdReq struct {
+type rpcMemberSigningKeyByIdReq struct {
+	Token Token
+	Id    uuid.UUID
+}
+
+type rpcMemberInviteKeyByIdReq struct {
 	Token Token
 	Id    uuid.UUID
 }
@@ -222,9 +310,32 @@ type rpcTrustByIdReq struct {
 	Id    uuid.UUID
 }
 
-type rpcRegisterInviteReq struct {
+type rpcTrustResponse struct {
+	Found bool
+	Core  TrustCore
+	Code  TrustCode
+	Cert  SignedCertificate
+}
+
+type rpcInviteRegisterReq struct {
 	Token  Token
 	Invite Invitation
+}
+
+type rpcInviteByIdReq struct {
+	Token Token
+	Id    uuid.UUID
+}
+
+type rpcInviteResponse struct {
+	Found bool
+	Inv   Invitation
+}
+
+type rpcCertRegisterReq struct {
+	Token Token
+	Cert  SignedCertificate
+	Code  TrustCode
 }
 
 // Register all the gob types.
@@ -232,10 +343,21 @@ func init() {
 	gob.Register(rpcRegisterMemberReq{})
 	gob.Register(rpcTokenBySignatureReq{})
 	gob.Register(rpcToken{})
+
 	gob.Register(rpcMemberByLookupReq{})
 	gob.Register(rpcMemberResponse{})
-	gob.Register(rpcMemberKeyByIdReq{})
+	gob.Register(rpcMemberSigningKeyByIdReq{})
+	gob.Register(rpcMemberInviteKeyByIdReq{})
 	gob.Register(rpcMemberKeyResponse{})
+
 	gob.Register(rpcRegisterTrustReq{})
-	gob.Register(rpcRegisterInviteReq{})
+
+	gob.Register(rpcTrustByIdReq{})
+	gob.Register(rpcTrustResponse{})
+
+	gob.Register(rpcInviteRegisterReq{})
+	gob.Register(rpcInviteByIdReq{})
+	gob.Register(rpcInviteResponse{})
+
+	gob.Register(rpcCertRegisterReq{})
 }

@@ -19,8 +19,11 @@ type Transport interface {
 	// Returns the subscriber of the given key.
 	MemberByLookup(cancel <-chan struct{}, t Token, lookup []byte) (Member, MemberCode, bool, error)
 
-	// Returns the subscriber of the given key.
-	MemberKeyById(cancel <-chan struct{}, t Token, id uuid.UUID) (PublicKey, bool, error)
+	// Returns the signing key of the given member
+	MemberSigningKeyById(cancel <-chan struct{}, t Token, id uuid.UUID) (PublicKey, bool, error)
+
+	// Returns the invite key of the given member
+	MemberInviteKeyById(cancel <-chan struct{}, t Token, id uuid.UUID) (PublicKey, bool, error)
 
 	// Loads invitations by subscriber and dom
 	InvitationById(cancel <-chan struct{}, t Token, id uuid.UUID) (Invitation, bool, error)
@@ -41,7 +44,7 @@ type Transport interface {
 	CertsByTrust(cancel <-chan struct{}, t Token, id uuid.UUID, opt PagingOptions) ([]Certificate, error)
 
 	// Registers a certificate (and corresponding oracle key).
-	CertRegister(cancel <-chan struct{}, t Token, c SignedCertificate, k SignedEncryptedShard) error
+	CertRegister(cancel <-chan struct{}, t Token, c SignedCertificate, k TrustCode) error
 
 	// Revokes a certificate.
 	CertRevoke(cancel <-chan struct{}, t Token, id uuid.UUID) error

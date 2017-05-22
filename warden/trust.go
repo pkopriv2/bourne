@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -28,6 +29,10 @@ type TrustCore struct {
 
 func (t TrustCore) asTrust(code TrustCode, cert SignedCertificate) Trust {
 	return Trust{t.Id, t.Name, t.Opts, t.SigningKey, t.PubShard, cert, code.Shard}
+}
+
+func (t TrustCore) publicCore() TrustCore {
+	return TrustCore{t.Id, t.Name, t.Opts, t.PubShard, SignedKeyPair{}}
 }
 
 // Only used for storage
@@ -161,6 +166,11 @@ func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Sign
 	}, nil
 }
 
+// String form of the trust.
+func (d Trust) String() string {
+	return fmt.Sprintf("Trust(id=%v,name=%v): %v", d.Id, d.Name, d.trusteeCert)
+}
+
 // Extracts the  oracle curve.  Requires *Encrypt* level trust
 func (d Trust) deriveSecret(mySecret Secret) (Secret, error) {
 	if err := Encrypt.verify(d.trusteeCert.Level); err != nil {
@@ -262,29 +272,29 @@ func (t Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 		return Trust{}, errors.WithStack(err)
 	}
 
-	token, err := s.token(cancel)
-	if err != nil {
-		return Trust{}, errors.WithStack(err)
-	}
-
-	if err := s.net.CertRegister(cancel, token, myCert, myShardEnc); err != nil {
-		return Trust{}, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), t.Id)
-	}
-
-	return Trust{
+	trust := Trust{
 		Id:              t.Id,
 		Name:            t.Name,
 		Opts:            t.Opts,
 		trustSigningKey: t.trustSigningKey,
 		trustShard:      t.trustShard,
+		trusteeCert:     myCert,
 		trusteeShard:    myShardEnc,
-	}, nil
+	}
+
+	token, err := s.token(cancel)
+	if err != nil {
+		return Trust{}, errors.WithStack(err)
+	}
+
+	err = s.net.CertRegister(cancel, token, myCert, trust.trusteeCode())
+	return trust, errors.Wrapf(err, "Error renewing subscriber [%v] cert to trust [%v]", s.MyId(), t.Id)
 }
 
 // Loads all the trust certificates that have been issued by this .
 func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
 	if err := Verify.verify(t.trusteeCert.Level); err != nil {
-		return nil, errors.WithStack(err)
+		return nil, newLevelOfTrustError(Verify, t.trusteeCert.Level)
 	}
 
 	token, err := s.token(cancel)
@@ -292,13 +302,14 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 		return nil, errors.WithStack(err)
 	}
 
-	return s.net.CertsByTrust(cancel, token, t.Id, buildPagingOptions(fns...))
+	list, err := s.net.CertsByTrust(cancel, token, t.Id, buildPagingOptions(fns...))
+	return list, errors.WithStack(err)
 }
 
 // Revokes all issued certificates by this  for the given subscriber.
 func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uuid.UUID) error {
 	if err := Revoke.verify(t.trusteeCert.Level); err != nil {
-		return errors.WithStack(err)
+		return newLevelOfTrustError(Invite, t.trusteeCert.Level)
 	}
 
 	token, err := s.token(cancel)
@@ -306,11 +317,8 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trustee uui
 		return errors.WithStack(err)
 	}
 
-	if err := s.net.CertRevoke(cancel, token, t.trusteeCert.Id); err != nil {
-		return errors.Wrapf(err, "Unable to revoke certificate [%v] for subscriber [%v]", t.trusteeCert.Id, trustee)
-	}
-
-	return nil
+	return errors.Wrapf(s.net.CertRevoke(cancel, token, t.trusteeCert.Id),
+		"Unable to revoke certificate [%v] for subscriber [%v]", t.trusteeCert.Id, trustee)
 }
 
 // Issues an invitation to the given key.
@@ -326,14 +334,19 @@ func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, f
 		return Invitation{}, errors.WithStack(err)
 	}
 
-	trusteeKey, o, err := s.net.MemberKeyById(cancel, token, trusteeId)
+	s.logger.Debug("Loading member key [%v]", trusteeId)
+
+	trusteeKey, o, err := s.net.MemberInviteKeyById(cancel, token, trusteeId)
 	if err != nil {
 		return Invitation{}, errors.WithStack(err)
 	}
 
 	if !o {
+		s.logger.Error("Error loading member key.  No such member [%v]", trusteeId, trusteeKey.Id())
 		return Invitation{}, errors.Wrapf(UnknownMemberError, "No such member [%v]", trusteeId)
 	}
+
+	s.logger.Debug("Loaded member key [%v] : [%v]", trusteeId, trusteeKey.Id())
 
 	mySecret, err := s.mySecret()
 	if err != nil {

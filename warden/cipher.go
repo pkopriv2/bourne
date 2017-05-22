@@ -128,28 +128,28 @@ func (c CipherText) String() string {
 	return fmt.Sprintf("CipherText(alg=%v,nonce=%v,data=%v)", c.Cipher, c.Nonce, cryptoBytes(c.Data))
 }
 
-type keyExchange struct {
+type KeyExchange struct {
 	KeyAlg    KeyAlgorithm
 	KeyCipher SymmetricCipher
 	KeyHash   Hash
 	KeyBytes  cryptoBytes
 }
 
-func generateKeyExchange(rand io.Reader, pub PublicKey, cipher SymmetricCipher, hash Hash) (keyExchange, []byte, error) {
+func generateKeyExchange(rand io.Reader, pub PublicKey, cipher SymmetricCipher, hash Hash) (KeyExchange, []byte, error) {
 	rawCipherKey, err := initRandomSymmetricKey(rand, cipher)
 	if err != nil {
-		return keyExchange{}, nil, errors.WithStack(err)
+		return KeyExchange{}, nil, errors.WithStack(err)
 	}
 
 	encCipherKey, err := pub.Encrypt(rand, hash, rawCipherKey)
 	if err != nil {
-		return keyExchange{}, nil, errors.WithStack(err)
+		return KeyExchange{}, nil, errors.WithStack(err)
 	}
 
-	return keyExchange{pub.Algorithm(), cipher, hash, encCipherKey}, rawCipherKey, nil
+	return KeyExchange{pub.Algorithm(), cipher, hash, encCipherKey}, rawCipherKey, nil
 }
 
-func (k keyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
+func (k KeyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
 	key, err := priv.Decrypt(rand, k.KeyHash, k.KeyBytes)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -157,7 +157,7 @@ func (k keyExchange) Decrypt(rand io.Reader, priv PrivateKey) ([]byte, error) {
 	return key, nil
 }
 
-func (c keyExchange) String() string {
+func (c KeyExchange) String() string {
 	return fmt.Sprintf("AsymmetricCipherText(alg=%v,key=%v,val=%v)", c.KeyAlg, c.KeyHash, c.KeyBytes)
 }
 

@@ -34,8 +34,8 @@ type Invitation struct {
 	IssuerSig Signature
 
 	// The embedded secret information
-	key keyExchange
-	msg CipherText
+	MsgKey  KeyExchange
+	MsgData CipherText
 }
 
 func (i Invitation) String() string {
@@ -90,16 +90,26 @@ func createInvitation(rand io.Reader,
 }
 
 // Accepts an invitation and returns an oracle key that can be registered.
-func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
+func (i Invitation) accept(cancel <-chan struct{}, s *Session) error {
 	token, err := s.token(cancel)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
+	if i.Cert.Trustee != s.MyId() {
+		return errors.Wrapf(UnauthorizedError, "Invitation bound for other recipient: %v", i.Cert.Trustee)
+	}
+
 	trust, ok, err := s.net.TrustById(cancel, token, i.Cert.Trust)
-	if err != nil || !ok {
+	if err != nil {
 		return errors.WithStack(err)
 	}
+
+	if !ok {
+		return errors.Wrapf(UnknownTrustError, "No such trust [%v]", i.Cert.Trust)
+	}
+
+	s.logger.Debug("Successfully loaded trust: %v", trust.Id)
 
 	mySecret, err := s.mySecret()
 	if err != nil {
@@ -107,7 +117,7 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 	}
 	defer mySecret.Destroy()
 
-	mySecretKey, err := s.myEncryptionSeed(mySecret)
+	myEncryptionSeed, err := s.myEncryptionSeed(mySecret)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -122,18 +132,20 @@ func (i Invitation) acceptInvitation(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	myShard, err := i.accept(s.rand, mySigningKey, myInviteKey, trust.trustShard, mySecretKey)
+	myShard, err := i.generateMemberShard(s.rand, mySigningKey, myInviteKey, trust.trustShard, myEncryptionSeed)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	mySig, err := sign(s.rand, i.Cert, mySigningKey, trust.Opts.SigningHash)
+	myCertSig, err := sign(s.rand, i.Cert, mySigningKey, trust.Opts.SigningHash)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, mySig}
-	return errors.WithStack(s.net.CertRegister(cancel, token, cert, myShard))
+	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, myCertSig}
+	s.logger.Debug("Generated certificate: %v", cert)
+
+	return errors.WithStack(s.net.CertRegister(cancel, token, cert, TrustCode{i.Cert.Trustee, i.Cert.Trust, myShard}))
 }
 
 // Verifies an invitation's signatures are valid.
@@ -145,7 +157,7 @@ func (i Invitation) verify(trustKey, issuerKey PublicKey) error {
 }
 
 // Accepts an invitation and returns an oracle key that can be registered.
-func (i Invitation) accept(rand io.Reader, signer Signer, key PrivateKey, pub Shard, pass []byte) (SignedEncryptedShard, error) {
+func (i Invitation) generateMemberShard(rand io.Reader, signer Signer, key PrivateKey, pub Shard, pass []byte) (SignedEncryptedShard, error) {
 	tmp, err := i.extractShard(rand, key, pub.Opts().ShardAlg)
 	if err != nil {
 		return SignedEncryptedShard{}, errors.Wrapf(err, "Unable to extract curve point from invitation [%v]", i)
@@ -173,12 +185,12 @@ func (i Invitation) accept(rand io.Reader, signer Signer, key PrivateKey, pub Sh
 
 // Verifies that the signature matches the certificate contents.
 func (c Invitation) extractShard(rand io.Reader, priv PrivateKey, alg SecretAlgorithm) (Shard, error) {
-	cipherKey, err := c.key.Decrypt(rand, priv)
+	cipherKey, err := c.MsgKey.Decrypt(rand, priv)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error extracting cipher key from invitation: %v", c.Id)
 	}
 
-	raw, err := c.msg.Decrypt(cipherKey)
+	raw, err := c.MsgData.Decrypt(cipherKey)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error decrypting message from invitation: %v", c.Id)
 	}
