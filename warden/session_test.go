@@ -114,7 +114,10 @@ func TestSession(t *testing.T) {
 
 		trust, err := session.NewTrust(timer.Closed(), "test")
 		assert.Nil(t, err)
-		assert.NotNil(t, trust)
+
+		trust, o, err := session.LoadTrustById(timer.Closed(), trust.Id)
+		assert.Nil(t, err)
+		assert.True(t, o)
 
 		mySecret, err := session.mySecret()
 		assert.Nil(t, err)
@@ -149,7 +152,7 @@ func TestSession(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotNil(t, trust)
 
-		inv1, err := session1.InviteMember(timer.Closed(), trust, session2.MyId())
+		inv1, err := session1.Invite(timer.Closed(), trust, session2.MyId())
 		assert.Nil(t, err)
 		assert.NotNil(t, inv1)
 
@@ -179,14 +182,14 @@ func TestSession(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotNil(t, trust1)
 
-		inv, err := session1.InviteMember(timer.Closed(), trust1, session2.MyId())
+		inv112, err := session1.Invite(timer.Closed(), trust1, session2.MyId())
 		assert.Nil(t, err)
-		assert.Nil(t, session2.AcceptInvitation(timer.Closed(), inv))
+		assert.Nil(t, session2.Accept(timer.Closed(), inv112))
 
 		trust2, o, err := session2.LoadTrustById(timer.Closed(), trust1.Id)
 		assert.Nil(t, err)
 		assert.True(t, o)
-		assert.Equal(t, Encrypt, trust2.trusteeCert.Level)
+		assert.Equal(t, Manager, trust2.trusteeCert.Level)
 	})
 
 	t.Run("Revoke", func(t *testing.T) {
@@ -205,17 +208,20 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		trust1, err := session1.NewTrust(timer.Closed(), "test")
+		trust11, err := session1.NewTrust(timer.Closed(), "test")
 		assert.Nil(t, err)
-		assert.NotNil(t, trust1)
+		assert.NotNil(t, trust11)
 
-		inv, err := session1.InviteMember(timer.Closed(), trust1, session2.MyId())
+		inv112, err := session1.Invite(timer.Closed(), trust11, session2.MyId())
 		assert.Nil(t, err)
-		assert.Nil(t, session2.AcceptInvitation(timer.Closed(), inv))
+		assert.Nil(t, session2.Accept(timer.Closed(), inv112))
 
-		trust2, o, err := session2.LoadTrustById(timer.Closed(), trust1.Id)
+		_, o, err := session2.LoadTrustById(timer.Closed(), trust11.Id)
 		assert.Nil(t, err)
 		assert.True(t, o)
-		assert.Equal(t, Encrypt, trust2.trusteeCert.Level)
+		assert.Nil(t, session1.Revoke(timer.Closed(), trust11, session2.MyId()))
+
+		trust21, o, err := session2.LoadTrustById(timer.Closed(), trust11.Id)
+		assert.Equal(t, None,  trust21.trusteeCert.Level)
 	})
 }

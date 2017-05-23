@@ -14,7 +14,7 @@ var (
 
 type storage interface {
 
-	// Stores the subscriber and the default authenticator.  These elements
+	// Stores the subscriber and the default member code.  These elements
 	// of a subscriber are guaranteed to be static throughout its lifetime.
 	//
 	// Returns an error if the subscriber already exists.
@@ -39,7 +39,7 @@ type storage interface {
 	LoadCertificate(uuid.UUID) (SignedCertificate, bool, error)
 
 	// Loads the certificate
-	LoadCertificateByMemberAndTrust(memberId, trustId uuid.UUID) (SignedCertificate, bool, error)
+	LoadActiveCertificate(memberId, trustId uuid.UUID) (SignedCertificate, bool, error)
 
 	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
 	SaveInvitation(Invitation) error
@@ -48,7 +48,10 @@ type storage interface {
 	LoadInvitationById(uuid.UUID) (Invitation, bool, error)
 
 	// Saves the certificate
-	SaveCertificate(s SignedCertificate) error
+	SaveCertificate(s SignedCertificate, code TrustCode) error
+
+	// Revokes the certificate
+	RevokeCertificate(trusteeId, trustId uuid.UUID) error
 }
 
 func EnsureMember(store storage, id uuid.UUID) (Member, error) {
@@ -66,19 +69,3 @@ func EnsureTrust(store storage, id uuid.UUID) (TrustCore, error) {
 	}
 	return s, nil
 }
-
-// func EnsureMemberAuth(store Storage, id, method string) (StoredAuthenticator, error) {
-// s, o, e := store.LoadMemberAuth(id, method)
-// if e != nil || !o {
-// return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No subscriber auth [%v,%v]", id, method))
-// }
-// return s, nil
-// }
-
-// func ensureTrust(store storage, id string) (storedTrust, error) {
-// d, o, e := store.LoadTrust(id)
-// if e != nil || !o {
-// return d, common.Or(e, errors.Wrapf(StorageInvariantError, "Trust not found [%v]", id))
-// }
-// return d, nil
-// }

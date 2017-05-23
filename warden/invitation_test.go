@@ -16,7 +16,7 @@ func TestInvitation(t *testing.T) {
 	line, err := genSecret(rand.Reader, buildSecretOptions())
 	// assert.Nil(t, err)
 
-	cert := newCertificate(uuid.NewV1(), uuid.NewV1(), uuid.NewV1(), Creator, OneHundredYears)
+	cert := newCertificate(uuid.NewV1(), uuid.NewV1(), uuid.NewV1(), Grantor, OneHundredYears)
 
 	inv, err := createInvitation(rand.Reader, line, cert, domainKey, issuerKey, trusteeKey.Public(), buildTrustOptions())
 	assert.Nil(t, err)

@@ -15,7 +15,7 @@ type InvitationOptions struct {
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
-	def := InvitationOptions{Encrypt, 365 * 24 * time.Hour}
+	def := InvitationOptions{Manager, 365 * 24 * time.Hour}
 	for _, fn := range opts {
 		fn(&def)
 	}
@@ -58,13 +58,13 @@ func createInvitation(rand io.Reader,
 	trustSig, err := sign(rand, cert, ringKey, opts.SigningHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
+			err, "Error signing certificate with key [%v]: %v", cert.TrustId, cert)
 	}
 
 	issuerSig, err := sign(rand, cert, issuerKey, opts.SigningHash)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Error signing certificate with key [%v]: %v", cert.Trust, cert)
+			err, "Error signing certificate with key [%v]: %v", cert.TrustId, cert)
 	}
 
 	asymKey, cipherKey, err := generateKeyExchange(rand, trusteeKey, opts.InvitationKey.Cipher, opts.InvitationKey.Hash)
@@ -83,7 +83,7 @@ func createInvitation(rand io.Reader,
 	ct, err := opts.InvitationKey.Cipher.encrypt(rand, cipherKey, msg)
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
-			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.Trustee, cert.Trust)
+			err, "Unable to generate invitation for trustee [%v] to join [%v]", cert.TrusteeId, cert.TrustId)
 	}
 
 	return Invitation{uuid.NewV1(), cert, trustSig, issuerSig, asymKey, ct}, nil
@@ -96,17 +96,17 @@ func (i Invitation) accept(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	if i.Cert.Trustee != s.MyId() {
-		return errors.Wrapf(UnauthorizedError, "Invitation bound for other recipient: %v", i.Cert.Trustee)
+	if i.Cert.TrusteeId != s.MyId() {
+		return errors.Wrapf(UnauthorizedError, "Invitation bound for other recipient: %v", i.Cert.TrusteeId)
 	}
 
-	trust, ok, err := s.net.TrustById(cancel, token, i.Cert.Trust)
+	trust, ok, err := s.net.TrustById(cancel, token, i.Cert.TrustId)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	if !ok {
-		return errors.Wrapf(UnknownTrustError, "No such trust [%v]", i.Cert.Trust)
+		return errors.Wrapf(UnknownTrustError, "No such trust [%v]", i.Cert.TrustId)
 	}
 
 	s.logger.Debug("Successfully loaded trust: %v", trust.Id)
@@ -145,7 +145,7 @@ func (i Invitation) accept(cancel <-chan struct{}, s *Session) error {
 	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, myCertSig}
 	s.logger.Debug("Generated certificate: %v", cert)
 
-	return errors.WithStack(s.net.CertRegister(cancel, token, cert, TrustCode{i.Cert.Trustee, i.Cert.Trust, myShard}))
+	return errors.WithStack(s.net.CertRegister(cancel, token, cert, TrustCode{i.Cert.TrusteeId, i.Cert.TrustId, myShard}))
 }
 
 // Verifies an invitation's signatures are valid.
@@ -166,19 +166,19 @@ func (i Invitation) generateMemberShard(rand io.Reader, signer Signer, key Priva
 
 	secret, err := pub.Derive(tmp)
 	if err != nil {
-		return SignedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.TrustId)
 	}
 	defer secret.Destroy()
 
 	new, err := secret.Shard(rand)
 	if err != nil {
-		return SignedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.Trust)
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Err obtaining deriving secret [%v]", i.Cert.TrustId)
 	}
 	defer new.Destroy()
 
 	enc, err := encryptShard(rand, signer, new, pass)
 	if err != nil {
-		return SignedEncryptedShard{}, errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.Trust)
+		return SignedEncryptedShard{}, errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.TrustId)
 	}
 	return enc, nil
 }

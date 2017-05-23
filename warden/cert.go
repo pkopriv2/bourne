@@ -11,48 +11,55 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// Trust levels dictate the terms for what actions a user can take on a domain.
+// The level of trust establishes the terms by which different actors
+// have agreed to act with respect to a shared resource.  Enforcing this
+// becomes the job of a third party.
+//
+// To affirm that consumers have indeed established a relationship, a
+// trusted third party is expected to enforce the distribution of the
+// shared resource based on the terms of their agreement.
 type LevelOfTrust int
 
 const (
-	Verify LevelOfTrust = iota + 10
-	Encrypt
-	Sign
-	Invite
-	Revoke
-	Publish
-	Destroy
-	Creator
+	None LevelOfTrust = iota
+
+	// A beneficiary is someone who receives the benefits of a trust.
+	// In more realistic terms, a beneficiary can view the data within
+	// a trust but cannot update it.
+	Beneficiary
+
+	// A manager has been entrusted to act on behalf of the trust - which
+	// means that a manager can both view and update the repository data.
+	// However, managers cannot invite others to manage in the trust.
+	Manager
+
+	// A director is a manager that may also appoint and remove any members
+	// at will.
+	Director
+
+	// The grantor is the owner of the trust.  The grantor can appoint
+	// or remove members at will and is the only member than may destroy
+	// a trust.  Grantors may also choose to transfer their grantor status
+	// to other members.
+	Grantor
 )
 
-// FIXME: Horrible...horrible...horribler
-func (l LevelOfTrust) verify(o LevelOfTrust) error {
-	if l > o {
-		return newLevelOfTrustError(l, o)
-	}
-	return nil
+func (l LevelOfTrust) MetBy(o LevelOfTrust) bool {
+	return o >= l
 }
 
 func (l LevelOfTrust) String() string {
 	switch l {
 	default:
 		return "Unknown"
-	case Verify:
-		return "Verify"
-	case Encrypt:
-		return "Encryption"
-	case Sign:
-		return "Sign"
-	case Invite:
-		return "Invite"
-	case Revoke:
-		return "Revoke"
-	case Publish:
-		return "Publish"
-	case Destroy:
-		return "Destroy"
-	case Creator:
-		return "Creator"
+	case Beneficiary:
+		return "Beneficiary"
+	case Manager:
+		return "Manager"
+	case Director:
+		return "Director"
+	case Grantor:
+		return "Grantor"
 	}
 }
 
@@ -60,21 +67,41 @@ func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
 	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
 }
 
+// A SignedCertificate is a proof that a specific level of trust has been
+// established by one party (the trustee), acting on behalf of a shared
+// resource (i.e. the trust).  A valid certificate proves the following
+// assertions:
+//
+//  * The issuer did indeed create the certificate.
+//  * The issuer was in possession of the trust signing key.
+//  * The trustee accepted the terms of the certificate.
+//
+// The creation of a signed certificate happens in three stages:
+//  1. The issuance of the certificate.
+//  2. The signature of the certificate by the trustee.
+//  3. the registration of the certificate with the 3rd-party
+//
 type SignedCertificate struct {
 	Certificate
 
-	TrustSig   Signature
-	IssuerSig  Signature
-	TrusteeSig Signature
+	// The issuer of the certificate.
+	IssuerSignature Signature
+
+	// The shared signing key signature of the certificate.
+	TrustSignature Signature
+
+	// The recipient of the certificate.
+	TrusteeSignature Signature
 }
 
+// Signs the certificate.
 func signCertificate(rand io.Reader, c Certificate, trust, issuer, trustee Signer, h Hash) (SignedCertificate, error) {
-	trustSig, err := sign(rand, c, trust, h)
+	issuerSig, err := sign(rand, c, issuer, h)
 	if err != nil {
 		return SignedCertificate{}, errors.WithStack(err)
 	}
 
-	issuerSig, err := sign(rand, c, issuer, h)
+	trustSig, err := sign(rand, c, trust, h)
 	if err != nil {
 		return SignedCertificate{}, errors.WithStack(err)
 	}
@@ -84,26 +111,26 @@ func signCertificate(rand io.Reader, c Certificate, trust, issuer, trustee Signe
 		return SignedCertificate{}, errors.WithStack(err)
 	}
 
-	return SignedCertificate{c, trustSig, issuerSig, trusteeSig}, nil
+	return SignedCertificate{c, issuerSig, trustSig, trusteeSig}, nil
 }
 
-func (s SignedCertificate) Verify(trust, issuer, trustee PublicKey) error {
-	if err := verify(s.Certificate, trust, s.TrustSig); err != nil {
+func (s SignedCertificate) Verify(issuer, trust, trustee PublicKey) error {
+	if err := verify(s.Certificate, issuer, s.IssuerSignature); err != nil {
 		return errors.WithStack(err)
 	}
-	if err := verify(s.Certificate, issuer, s.IssuerSig); err != nil {
+	if err := verify(s.Certificate, trust, s.TrustSignature); err != nil {
 		return errors.WithStack(err)
 	}
-	return errors.WithStack(verify(s.Certificate, trustee, s.TrusteeSig))
+	return errors.WithStack(verify(s.Certificate, trustee, s.TrusteeSignature))
 }
 
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
 	Fmt       int
 	Id        uuid.UUID
-	Trust     uuid.UUID
-	Issuer    uuid.UUID
-	Trustee   uuid.UUID
+	TrustId   uuid.UUID
+	IssuerId  uuid.UUID
+	TrusteeId uuid.UUID
 	Level     LevelOfTrust
 	IssuedAt  time.Time
 	ExpiresAt time.Time
@@ -112,6 +139,17 @@ type Certificate struct {
 func newCertificate(domain, issuer, trustee uuid.UUID, lvl LevelOfTrust, ttl time.Duration) Certificate {
 	now := time.Now()
 	return Certificate{0, uuid.NewV1(), domain, issuer, trustee, lvl, now, now.Add(ttl)}
+}
+
+// Returns a flag indicating whether the cert has been expired.
+func (c Certificate) Expired(now time.Time, skew time.Duration) bool {
+	return c.IssuedAt.After(now) || c.ExpiresAt.Before(now)
+}
+
+// Returns a boolean indicating whether the level of trust within the certificate
+// meets or exceeds the given level of trust.
+func (c Certificate) Meets(lvl LevelOfTrust) bool {
+	return lvl.MetBy(c.Level)
 }
 
 // Returns the ttl of the certificate ()
@@ -136,5 +174,5 @@ func (c Certificate) Format() ([]byte, error) {
 // Returns a consistent string representation of a certificate
 func (c Certificate) String() string {
 	return fmt.Sprintf("Cert(trust=%v,issuer=%v,trustee=%v,lvl=%v): %v",
-		c.Trust, c.Issuer, c.Trustee, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
+		c.TrustId, c.IssuerId, c.TrusteeId, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
 }

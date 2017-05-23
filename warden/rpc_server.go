@@ -56,8 +56,10 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 			return s.InvitationById(body)
 		case rpcCertRegisterReq:
 			return s.CertRegister(body)
+		case rpcCertRevokeReq:
+			return s.CertRevoke(body)
 		case rpcTrustByIdReq:
-			return s.TrustById(body)
+			return s.LoadTrustById(body)
 		}
 	}
 }
@@ -117,7 +119,7 @@ func (s *rpcServer) TokenBySignature(r rpcTokenBySignatureReq) micro.Response {
 	return micro.NewStandardResponse(rpcToken{token})
 }
 
-func (s *rpcServer) authenticateToken(t Token, now time.Time) error {
+func (s *rpcServer) authenticate(t Token, now time.Time) error {
 	if t.Expired(now) {
 		return errors.Wrapf(TokenExpiredError, "Expired token [created=%v,expired=%v,now=%v]", t.Created, t.Expires, now)
 	}
@@ -127,11 +129,25 @@ func (s *rpcServer) authenticateToken(t Token, now time.Time) error {
 	return nil
 }
 
+func (s *rpcServer) authorize(memberId, trustId uuid.UUID, lvl LevelOfTrust, now time.Time) (SignedCertificate, error) {
+	cert, ok, err := s.storage.LoadActiveCertificate(memberId, trustId)
+	if err != nil {
+		return SignedCertificate{}, errors.WithStack(err)
+	}
+
+	if !ok || !cert.Meets(lvl) || cert.Expired(now, 5*time.Minute) {
+		return SignedCertificate{}, errors.WithStack(UnauthorizedError)
+	}
+
+	return cert, nil
+}
+
 func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+	if err := s.authenticate(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
+	// authorize the owner of the token to view the member.
 	mem, ac, o, e := s.storage.LoadMemberByLookup(r.Lookup)
 	if e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
@@ -145,7 +161,7 @@ func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
 }
 
 func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+	if err := s.authenticate(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -153,7 +169,6 @@ func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Res
 	if e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
-
 	if !o {
 		return micro.NewStandardResponse(rpcMemberResponse{Found: false})
 	}
@@ -162,7 +177,7 @@ func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Res
 }
 
 func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+	if err := s.authenticate(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -170,7 +185,6 @@ func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Respo
 	if e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
-
 	if !o {
 		return micro.NewStandardResponse(rpcMemberResponse{Found: false})
 	}
@@ -179,21 +193,24 @@ func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Respo
 }
 
 func (s *rpcServer) RegisterTrust(r rpcRegisterTrustReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+	if err := s.authenticate(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	if e := s.storage.SaveTrust(r.Core, r.Code, r.Cert); e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
+
 	return micro.NewEmptyResponse()
 }
 
-func (s *rpcServer) TrustById(r rpcTrustByIdReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+func (s *rpcServer) LoadTrustById(r rpcTrustByIdReq) micro.Response {
+	now := time.Now()
+	if err := s.authenticate(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
+	// validate that the trust exists
 	core, ok, err := s.storage.LoadTrustCore(r.Id)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
@@ -203,7 +220,8 @@ func (s *rpcServer) TrustById(r rpcTrustByIdReq) micro.Response {
 		return micro.NewStandardResponse(rpcTrustResponse{Found: false})
 	}
 
-	cert, ok, err := s.storage.LoadCertificateByMemberAndTrust(r.Token.MemberId, r.Id)
+	// validate that the user has a valid trust code
+	code, ok, err := s.storage.LoadTrustCode(core.Id, r.Token.MemberId)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -212,8 +230,10 @@ func (s *rpcServer) TrustById(r rpcTrustByIdReq) micro.Response {
 		return micro.NewStandardResponse(rpcTrustResponse{Found: true, Core: core.publicCore()})
 	}
 
-	code, _, err := s.storage.LoadTrustCode(core.Id, r.Token.MemberId)
+	// ensure the user of the token has been authorized to view the trust
+	cert, err := s.authorize(r.Token.MemberId, r.Id, Beneficiary, now)
 	if err != nil {
+		s.logger.Error("Unauthorized attempt by member [%v] to load trust [%v]: %v", r.Token.MemberId, r.Id, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -221,18 +241,26 @@ func (s *rpcServer) TrustById(r rpcTrustByIdReq) micro.Response {
 }
 
 func (s *rpcServer) InvitationRegister(r rpcInviteRegisterReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+	now := time.Now()
+	if err := s.authenticate(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if e := s.storage.SaveInvitation(r.Invite); e != nil {
-		return micro.NewErrorResponse(errors.WithStack(e))
+	if cert, err := s.authorize(r.Invite.Cert.IssuerId, r.Invite.Cert.TrustId, Director, now); err != nil {
+		s.logger.Error("Unauthorized attempt by member [%v] to register invitation [%v]: %v", r.Token.MemberId, r.Invite.Id, cert)
+		return micro.NewErrorResponse(errors.WithStack(err))
 	}
+
+	if err := s.storage.SaveInvitation(r.Invite); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
 	return micro.NewEmptyResponse()
 }
 
 func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+	now := time.Now()
+	if err := s.authenticate(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -241,18 +269,40 @@ func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
+	if cert, err := s.authorize(r.Token.MemberId, inv.Cert.TrustId, Manager, now); err != nil {
+		s.logger.Error("Unauthorized attempt by member [%v] to view invitation [%v]: %v", r.Token.MemberId, r.Id, cert)
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
 	return micro.NewStandardResponse(rpcInviteResponse{Found: ok, Inv: inv})
 }
 
 func (s *rpcServer) CertRegister(r rpcCertRegisterReq) micro.Response {
-	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+	if err := s.authenticate(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if e := s.storage.SaveCertificate(r.Cert); e != nil {
-		return micro.NewErrorResponse(errors.WithStack(e))
+	s.logger.Error("Register certificate: %v", r.Cert)
+	if err := s.storage.SaveCertificate(r.Cert, r.Code); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
 	}
+
 	return micro.NewEmptyResponse()
+}
+
+func (s *rpcServer) CertRevoke(r rpcCertRevokeReq) micro.Response {
+	now := time.Now()
+	if err := s.authenticate(r.Token, now); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if cert, err := s.authorize(r.Token.MemberId, r.TrustId, Director, now); err != nil {
+		s.logger.Error("Unauthorized attempt by member [%v] to revoke certificate from member [%v]: %v", r.Token.MemberId, r.TrusteeId, cert)
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	return micro.NewErrorResponse(errors.WithStack(
+			s.storage.RevokeCertificate(r.TrusteeId, r.TrustId)))
 }
 
 type rpcToken struct {
@@ -338,6 +388,12 @@ type rpcCertRegisterReq struct {
 	Code  TrustCode
 }
 
+type rpcCertRevokeReq struct {
+	Token     Token
+	TrusteeId uuid.UUID
+	TrustId   uuid.UUID
+}
+
 // Register all the gob types.
 func init() {
 	gob.Register(rpcRegisterMemberReq{})
@@ -360,4 +416,5 @@ func init() {
 	gob.Register(rpcInviteResponse{})
 
 	gob.Register(rpcCertRegisterReq{})
+	gob.Register(rpcCertRevokeReq{})
 }

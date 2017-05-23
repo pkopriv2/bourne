@@ -300,24 +300,30 @@ func (s *Session) NewTrust(cancel <-chan struct{}, name string, fns ...func(t *T
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) InviteMember(cancel <-chan struct{}, t Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error) {
+func (s *Session) Invite(cancel <-chan struct{}, t Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error) {
 	inv, err := t.invite(cancel, s, memberId, opts...)
 	return inv, errors.WithStack(err)
 }
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) AcceptInvitation(cancel <-chan struct{}, i Invitation) error {
+func (s *Session) Accept(cancel <-chan struct{}, i Invitation) error {
 	return errors.WithStack(i.accept(cancel, s))
 }
 
 // Revokes trust from the given subscriber for the given trust.
-func (s *Session) RevokeCertificate(cancel <-chan struct{}, t Trust, memberId uuid.UUID) error {
+func (s *Session) Revoke(cancel <-chan struct{}, t Trust, memberId uuid.UUID) error {
 	return errors.WithStack(t.revokeCertificate(cancel, s, memberId))
 }
 
 // Renew's the session owner's certificate with the trust.
-func (s *Session) RenewCertificate(cancel <-chan struct{}, t Trust) (Trust, error) {
+func (s *Session) Renew(cancel <-chan struct{}, t Trust) (Trust, error) {
 	trust, err := t.renewCertificate(cancel, s)
 	return trust, errors.WithStack(err)
+}
+
+// Transfer will issue an invitation in the name of the recipient
+func (s *Session) Transfer(cancel <-chan struct{}, t Trust, recipientId uuid.UUID) error {
+	return nil
+	// return errors.WithStack(t.revokeCertificate(cancel, s, memberId))
 }

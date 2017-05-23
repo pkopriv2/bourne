@@ -165,8 +165,9 @@ func (r *rpcClient) CertRegister(cancel <-chan struct{}, a Token, c SignedCertif
 	return errors.WithStack(common.Or(err, raw.Error()))
 }
 
-func (r *rpcClient) CertRevoke(cancel <-chan struct{}, a Token, id uuid.UUID) error {
-	panic("not implemented")
+func (r *rpcClient) CertRevoke(cancel <-chan struct{}, token Token, trusteeId, trustId uuid.UUID) error {
+	raw, err := r.raw.Send(micro.NewRequest(rpcCertRevokeReq{token, trusteeId, trustId}))
+	return errors.WithStack(common.Or(err, raw.Error()))
 }
 
 func (r *rpcClient) TrustById(cancel <-chan struct{}, token Token, id uuid.UUID) (Trust, bool, error) {

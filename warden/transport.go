@@ -47,7 +47,7 @@ type Transport interface {
 	CertRegister(cancel <-chan struct{}, t Token, c SignedCertificate, k TrustCode) error
 
 	// Revokes a certificate.
-	CertRevoke(cancel <-chan struct{}, t Token, id uuid.UUID) error
+	CertRevoke(cancel <-chan struct{}, t Token, trusteeId, trustId uuid.UUID) error
 
 	// Loads the domain by id
 	TrustById(cancel <-chan struct{}, t Token, id uuid.UUID) (Trust, bool, error)
