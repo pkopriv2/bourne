@@ -115,7 +115,7 @@ func TestSession(t *testing.T) {
 		trust1, err := session.NewTrust(timer.Closed(), "test")
 		assert.Nil(t, err)
 
-		trust2, o, err := session.LoadTrustById(timer.Closed(), trust1.Id)
+		trust2, o, err := session.LoadTrust(timer.Closed(), trust1.Id)
 		assert.Nil(t, err)
 		assert.True(t, o)
 		assert.Equal(t, trust1.trusteeCert, trust2.trusteeCert)
@@ -223,7 +223,7 @@ func TestSession(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, session2.Accept(timer.Closed(), invite))
 
-		trust2, o, err := session2.LoadTrustById(timer.Closed(), trust1.Id)
+		trust2, o, err := session2.LoadTrust(timer.Closed(), trust1.Id)
 		assert.Nil(t, err)
 		assert.True(t, o)
 		assert.Equal(t, Manager, trust2.trusteeCert.Level)

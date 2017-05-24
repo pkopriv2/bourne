@@ -225,7 +225,7 @@ func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) LoadTrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
+func (s *Session) LoadTrust(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Trust{}, false, errors.WithStack(err)
@@ -238,7 +238,7 @@ func (s *Session) LoadTrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bo
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) LoadInvitationById(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
+func (s *Session) LoadInvitation(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Invitation{}, false, errors.WithStack(err)
