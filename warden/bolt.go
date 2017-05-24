@@ -167,6 +167,14 @@ func (b *boltStorage) LoadInvitationById(id uuid.UUID) (i Invitation, o bool, e 
 	return
 }
 
+func (b *boltStorage) LoadInvitationsByMember(id uuid.UUID, beg,end int) (i []Invitation, e error) {
+	e = b.Bolt().View(func(tx *bolt.Tx) error {
+		i, e = boltLoadInvitesByMember(tx, id, beg, end)
+		return errors.WithStack(e)
+	})
+	return
+}
+
 func (b *boltStorage) RevokeCertificate(memberId, trustId uuid.UUID) (e error) {
 	e = b.Bolt().Update(func(tx *bolt.Tx) error {
 		e = boltRevokeCert(tx, memberId, trustId)
@@ -445,7 +453,7 @@ func boltLoadCertIdsByMember(tx *bolt.Tx, id uuid.UUID, beg int, end int) ([]uui
 	return boltScanIndex(tx.Bucket(memberCertBucket), stash.UUID(id), beg, end)
 }
 
-func loadBoltInviteIdsByTrust(tx *bolt.Tx, id uuid.UUID, beg int, end int) ([]uuid.UUID, error) {
+func boltLoadInviteIdsByTrust(tx *bolt.Tx, id uuid.UUID, beg int, end int) ([]uuid.UUID, error) {
 	return boltScanIndex(tx.Bucket(trustInviteBucket), stash.UUID(id), beg, end)
 }
 
@@ -471,15 +479,6 @@ func boltLoadCertByMemberAndTrust(tx *bolt.Tx, memberId, trustId uuid.UUID) (Sig
 	return boltLoadCertById(tx, id)
 }
 
-func boltLoadCertsByTrust(tx *bolt.Tx, id uuid.UUID, beg, end int) ([]SignedCertificate, error) {
-	ids, err := boltLoadCertIdsByTrust(tx, id, beg, end)
-	if err != nil {
-		return nil, err
-	}
-	return boltLoadCertsByIds(tx, ids)
-}
-
-//
 func boltStoreInvite(tx *bolt.Tx, i Invitation) error {
 	if err := boltEnsureEmpty(tx.Bucket(inviteBucket), stash.UUID(i.Id)); err != nil {
 		return errors.Wrapf(err, "Invite already exists [%v]", i.Id)
@@ -549,30 +548,38 @@ func boltLoadInvitesByIds(tx *bolt.Tx, ids []uuid.UUID) ([]Invitation, error) {
 	return invites, nil
 }
 
-// func boltLoadInvitesByTrust(tx *bolt.Tx, trustId uuid.UUID, beg, end int) ([]Invitation, error) {
-// ids, err := boltLoadCertIdsByTrust(tx, dom, beg, end)
-// if err != nil {
-// return nil, err
-// }
-// return boltLoadInvitesByIds(tx, ids)
-// }
+func boltLoadInvitesByTrust(tx *bolt.Tx, trustId uuid.UUID, beg, end int) ([]Invitation, error) {
+	ids, err := boltLoadInviteIdsByTrust(tx, trustId, beg, end)
+	if err != nil {
+		return nil, err
+	}
+	return boltLoadInvitesByIds(tx, ids)
+}
 
-// func boltLoadCertsByMember(tx *bolt.Tx, dom string, beg, end int) ([]SignedCertificate, error) {
-// ids, err := boltLoadCertIdsByMember(tx, dom, beg, end)
-// if err != nil {
-// return nil, err
-// }
-// return boltLoadCertsByIds(tx, ids)
-// }
-//
-// func boltLoadInvitesByMember(tx *bolt.Tx, dom string, beg, end int) ([]Invitation, error) {
-// ids, err := boltLoadCertIdsByMember(tx, dom, beg, end)
-// if err != nil {
-// return nil, err
-// }
-// return boltLoadInvitesByIds(tx, ids)
-// }
-//
+func boltLoadInvitesByMember(tx *bolt.Tx, memberId uuid.UUID, beg, end int) ([]Invitation, error) {
+	ids, err := boltLoadInviteIdsByMember(tx, memberId, beg, end)
+	if err != nil {
+		return nil, err
+	}
+	return boltLoadInvitesByIds(tx, ids)
+}
+
+func boltLoadCertsByTrust(tx *bolt.Tx, trustId uuid.UUID, beg, end int) ([]SignedCertificate, error) {
+	ids, err := boltLoadCertIdsByTrust(tx, trustId, beg, end)
+	if err != nil {
+		return nil, err
+	}
+	return boltLoadCertsByIds(tx, ids)
+}
+
+func boltLoadCertsByMember(tx *bolt.Tx, memberId uuid.UUID, beg, end int) ([]SignedCertificate, error) {
+	ids, err := boltLoadCertIdsByMember(tx, memberId, beg, end)
+	if err != nil {
+		return nil, err
+	}
+	return boltLoadCertsByIds(tx, ids)
+}
+
 func boltUpdateIndex(bucket *bolt.Bucket, root []byte, id uuid.UUID) error {
 	return errors.WithStack(bucket.Put(stash.Key(root).ChildUUID(id), stash.UUID(id)))
 }

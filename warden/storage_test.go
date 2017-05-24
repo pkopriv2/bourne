@@ -150,5 +150,4 @@ func TestStorage(t *testing.T) {
 		assert.True(t, o)
 		assert.Equal(t, actCert, actCert2)
 	})
-
 }

@@ -231,8 +231,8 @@ func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) 
 		return nil, errors.WithStack(err)
 	}
 
-	opts := buildPagingOptions(fns...)
-	return s.net.TrustsByMember(cancel, token, s.MyId(), opts)
+	trusts, err := s.net.TrustsByMember(cancel, token, s.MyId(), buildPagingOptions(fns...))
+	return trusts, errors.WithStack(err)
 }
 
 // Loads the trust with the given id.  The trust will be returned only

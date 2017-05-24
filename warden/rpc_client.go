@@ -139,8 +139,18 @@ func (r *rpcClient) InvitationById(cancel <-chan struct{}, token Token, id uuid.
 	return resp.Inv, resp.Found, nil
 }
 
-func (r *rpcClient) InvitationsByMember(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Invitation, error) {
-	panic("not implemented")
+func (r *rpcClient) InvitationsByMember(cancel <-chan struct{}, token Token, id uuid.UUID, opts PagingOptions) ([]Invitation, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcInvitesByMemberReq{token, id, opts}))
+	if err != nil || !raw.Ok {
+		return nil, errors.WithStack(common.Or(err, raw.Error()))
+	}
+
+	resp, ok := raw.Body.(rpcInvitesResponse)
+	if !ok {
+		return nil, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	return resp.Invites, nil
 }
 
 func (r *rpcClient) InvitationRegister(cancel <-chan struct{}, a Token, i Invitation) error {
@@ -189,7 +199,7 @@ func (r *rpcClient) TrustsByMember(cancel <-chan struct{}, a Token, id uuid.UUID
 }
 
 func (r *rpcClient) TrustRegister(cancel <-chan struct{}, a Token, trust Trust) error {
-	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterTrustReq{a, trust.core(), trust.trusteeCode(), trust.trusteeCert}))
+	raw, err := r.raw.Send(micro.NewRequest(rpcTrustRegisterReq{a, trust.core(), trust.trusteeCode(), trust.trusteeCert}))
 	return errors.WithStack(common.Or(err, raw.Error()))
 }
 

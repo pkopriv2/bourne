@@ -156,6 +156,14 @@ func TestSession(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotNil(t, inv1)
 
+		invites1, err := session1.MyInvitations(timer.Closed())
+		assert.Nil(t, err)
+		assert.Empty(t, invites1)
+
+		invites2, err := session2.MyInvitations(timer.Closed())
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(invites2))
+
 		inv2, ok, err := session1.LoadInvitationById(timer.Closed(), inv1.Id)
 		assert.Nil(t, err)
 		assert.True(t, ok)

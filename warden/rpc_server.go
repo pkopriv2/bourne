@@ -48,18 +48,20 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 			return s.MemberSigningKeyById(body)
 		case rpcMemberInviteKeyByIdReq:
 			return s.MemberInviteKeyById(body)
-		case rpcRegisterTrustReq:
+		case rpcTrustRegisterReq:
 			return s.RegisterTrust(body)
+		case rpcTrustByIdReq:
+			return s.LoadTrustById(body)
 		case rpcInviteRegisterReq:
 			return s.InvitationRegister(body)
 		case rpcInviteByIdReq:
 			return s.InvitationById(body)
+		case rpcInvitesByMemberReq:
+			return s.InvitationsByMember(body)
 		case rpcCertRegisterReq:
 			return s.CertRegister(body)
 		case rpcCertRevokeReq:
 			return s.CertRevoke(body)
-		case rpcTrustByIdReq:
-			return s.LoadTrustById(body)
 		}
 	}
 }
@@ -129,7 +131,7 @@ func (s *rpcServer) authenticate(t Token, now time.Time) error {
 	return nil
 }
 
-func (s *rpcServer) authorize(memberId, trustId uuid.UUID, lvl LevelOfTrust, now time.Time) (SignedCertificate, error) {
+func (s *rpcServer) authorizeTrustUse(memberId, trustId uuid.UUID, lvl LevelOfTrust, now time.Time) (SignedCertificate, error) {
 	cert, ok, err := s.storage.LoadActiveCertificate(memberId, trustId)
 	if err != nil {
 		return SignedCertificate{}, errors.WithStack(err)
@@ -140,6 +142,13 @@ func (s *rpcServer) authorize(memberId, trustId uuid.UUID, lvl LevelOfTrust, now
 	}
 
 	return cert, nil
+}
+
+func (s *rpcServer) authorizeMemberUse(memberId, by uuid.UUID) error {
+	if memberId != by {
+		return errors.WithStack(UnauthorizedError)
+	}
+	return nil
 }
 
 func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
@@ -155,6 +164,10 @@ func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
 
 	if !o {
 		return micro.NewStandardResponse(rpcMemberResponse{Found: false})
+	}
+
+	if err := s.authorizeMemberUse(r.Token.MemberId, mem.Id); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 
 	return micro.NewStandardResponse(rpcMemberResponse{true, mem, ac})
@@ -192,7 +205,7 @@ func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Respo
 	return micro.NewStandardResponse(rpcMemberKeyResponse{true, mem.InviteKey.Pub})
 }
 
-func (s *rpcServer) RegisterTrust(r rpcRegisterTrustReq) micro.Response {
+func (s *rpcServer) RegisterTrust(r rpcTrustRegisterReq) micro.Response {
 	if err := s.authenticate(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -231,7 +244,7 @@ func (s *rpcServer) LoadTrustById(r rpcTrustByIdReq) micro.Response {
 	}
 
 	// ensure the user of the token has been authorized to view the trust
-	cert, err := s.authorize(r.Token.MemberId, r.Id, Beneficiary, now)
+	cert, err := s.authorizeTrustUse(r.Token.MemberId, r.Id, Beneficiary, now)
 	if err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to load trust [%v]: %v", r.Token.MemberId, r.Id, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
@@ -246,7 +259,7 @@ func (s *rpcServer) InvitationRegister(r rpcInviteRegisterReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if cert, err := s.authorize(r.Invite.Cert.IssuerId, r.Invite.Cert.TrustId, Director, now); err != nil {
+	if cert, err := s.authorizeTrustUse(r.Invite.Cert.IssuerId, r.Invite.Cert.TrustId, Director, now); err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to register invitation [%v]: %v", r.Token.MemberId, r.Invite.Id, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -269,12 +282,30 @@ func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if cert, err := s.authorize(r.Token.MemberId, inv.Cert.TrustId, Manager, now); err != nil {
+	if cert, err := s.authorizeTrustUse(r.Token.MemberId, inv.Cert.TrustId, Manager, now); err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to view invitation [%v]: %v", r.Token.MemberId, r.Id, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	return micro.NewStandardResponse(rpcInviteResponse{Found: ok, Inv: inv})
+}
+
+func (s *rpcServer) InvitationsByMember(r rpcInvitesByMemberReq) micro.Response {
+	if err := s.authenticate(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if err := s.authorizeMemberUse(r.Token.MemberId, r.MemberId); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	s.logger.Debug("Loading member invitations: %v", r.MemberId)
+	invs, err := s.storage.LoadInvitationsByMember(r.MemberId, r.Opts.Beg, r.Opts.End)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	return micro.NewStandardResponse(rpcInvitesResponse{invs})
 }
 
 func (s *rpcServer) CertRegister(r rpcCertRegisterReq) micro.Response {
@@ -296,13 +327,13 @@ func (s *rpcServer) CertRevoke(r rpcCertRevokeReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if cert, err := s.authorize(r.Token.MemberId, r.TrustId, Director, now); err != nil {
+	if cert, err := s.authorizeTrustUse(r.Token.MemberId, r.TrustId, Director, now); err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to revoke certificate from member [%v]: %v", r.Token.MemberId, r.TrusteeId, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	return micro.NewErrorResponse(errors.WithStack(
-			s.storage.RevokeCertificate(r.TrusteeId, r.TrustId)))
+		s.storage.RevokeCertificate(r.TrusteeId, r.TrustId)))
 }
 
 type rpcToken struct {
@@ -348,7 +379,7 @@ type rpcRegisterMemberReq struct {
 	Expiration time.Duration
 }
 
-type rpcRegisterTrustReq struct {
+type rpcTrustRegisterReq struct {
 	Token Token
 	Core  TrustCore
 	Code  TrustCode
@@ -377,9 +408,25 @@ type rpcInviteByIdReq struct {
 	Id    uuid.UUID
 }
 
+type rpcInvitesByMemberReq struct {
+	Token    Token
+	MemberId uuid.UUID
+	Opts     PagingOptions
+}
+
+type rpcInvitesByTrustReq struct {
+	Token   Token
+	TrustId uuid.UUID
+	Opts    PagingOptions
+}
+
 type rpcInviteResponse struct {
 	Found bool
 	Inv   Invitation
+}
+
+type rpcInvitesResponse struct {
+	Invites []Invitation
 }
 
 type rpcCertRegisterReq struct {
@@ -388,10 +435,26 @@ type rpcCertRegisterReq struct {
 	Code  TrustCode
 }
 
+type rpcCertByMemberReq struct {
+	Token    Token
+	MemberId uuid.UUID
+	Opts     PagingOptions
+}
+
+type rpcCertByTrustReq struct {
+	Token   Token
+	TrustId uuid.UUID
+	Opts    PagingOptions
+}
+
 type rpcCertRevokeReq struct {
 	Token     Token
 	TrusteeId uuid.UUID
 	TrustId   uuid.UUID
+}
+
+type rpcCertsResponse struct {
+	Certs []SignedCertificate
 }
 
 // Register all the gob types.
@@ -406,15 +469,20 @@ func init() {
 	gob.Register(rpcMemberInviteKeyByIdReq{})
 	gob.Register(rpcMemberKeyResponse{})
 
-	gob.Register(rpcRegisterTrustReq{})
+	gob.Register(rpcTrustRegisterReq{})
 
 	gob.Register(rpcTrustByIdReq{})
 	gob.Register(rpcTrustResponse{})
 
 	gob.Register(rpcInviteRegisterReq{})
 	gob.Register(rpcInviteByIdReq{})
+	gob.Register(rpcInvitesByMemberReq{})
+	gob.Register(rpcInvitesByTrustReq{})
 	gob.Register(rpcInviteResponse{})
+	gob.Register(rpcInvitesResponse{})
 
 	gob.Register(rpcCertRegisterReq{})
 	gob.Register(rpcCertRevokeReq{})
+	gob.Register(rpcCertByTrustReq{})
+	gob.Register(rpcCertByMemberReq{})
 }

@@ -47,6 +47,9 @@ type storage interface {
 	// Loads the invitation.
 	LoadInvitationById(uuid.UUID) (Invitation, bool, error)
 
+	// Loads the invitation.
+	LoadInvitationsByMember(uuid.UUID, int,int) ([]Invitation, error)
+
 	// Saves the certificate
 	SaveCertificate(s SignedCertificate, code TrustCode) error
 
