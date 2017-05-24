@@ -101,7 +101,7 @@ func NewRequest(meta scribe.Message, body scribe.Message) Request {
 		body = scribe.EmptyMessage
 	}
 
-	return &request{meta, body}
+	return request{meta, body}
 }
 
 func NewEmptyRequest(meta scribe.Message) Request {
@@ -117,7 +117,7 @@ func NewResponse(err error, body scribe.Message) Response {
 		body = scribe.EmptyMessage
 	}
 
-	return &response{err, body}
+	return response{err, body}
 }
 
 func NewEmptyResponse() Response {
@@ -180,20 +180,20 @@ type request struct {
 	body scribe.Message
 }
 
-func (r *request) Meta() scribe.Reader {
+func (r request) Meta() scribe.Reader {
 	return r.meta
 }
 
-func (r *request) Body() scribe.Reader {
+func (r request) Body() scribe.Reader {
 	return r.body
 }
 
-func (r *request) Write(w scribe.Writer) {
+func (r request) Write(w scribe.Writer) {
 	w.WriteMessage("meta", r.meta)
 	w.WriteMessage("body", r.body)
 }
 
-func (r *request) String() string {
+func (r request) String() string {
 	return fmt.Sprintf("Meta: %v :: Body: %v", r.meta, r.body)
 }
 
@@ -202,22 +202,22 @@ type response struct {
 	body scribe.Message
 }
 
-func (r *response) Error() error {
+func (r response) Error() error {
 	return r.err
 }
 
-func (r *response) Body() scribe.Reader {
+func (r response) Body() scribe.Reader {
 	return r.body
 }
 
-func (r *response) Write(w scribe.Writer) {
+func (r response) Write(w scribe.Writer) {
 	w.WriteMessage("body", r.body)
 	if r.err != nil {
 		w.WriteString("error", r.err.Error())
 	}
 }
 
-func (r *response) String() string {
+func (r response) String() string {
 	return fmt.Sprintf("Err: %v :: Body: %v", r.err, r.body)
 }
 

@@ -54,11 +54,22 @@ type Request struct {
 // invoking the handler.
 type Response struct {
 
-	// Whether or not an error occurred.
-	Error error
+	//
+	Ok bool
+
+	// the error string of the response.  (Set if ! Ok)
+	Err string
 
 	// The body of the message.  Possibly nil
 	Body interface{}
+}
+
+func (r Response) Error() error {
+	if r.Ok {
+		return nil
+	}
+
+	return errors.New(r.Err)
 }
 
 // A universal wrapper over the gob/json encoders.  Messages can be encoded
@@ -98,7 +109,14 @@ func NewRequest(body interface{}) Request {
 }
 
 func NewResponse(err error, body interface{}) Response {
-	return Response{err, body}
+	ok := err == nil
+
+	var str string
+	if !ok {
+		str = err.Error()
+	}
+
+	return Response{ok, str, body}
 }
 
 func NewEmptyResponse() Response {
@@ -160,6 +178,7 @@ func (s *client) Send(req Request) (res Response, err error) {
 }
 
 func (s *client) send(req Request) error {
+	// s.logger.Info("Writing encoding: %v", s.enc)
 	if err := writeEncoding(s.conn, s.enc); err != nil {
 		return errors.WithStack(err)
 	}
@@ -191,7 +210,7 @@ func (s *client) recv() (resp Response, err error) {
 // Server implementation
 func NewServer(ctx common.Context, listener net.Listener, handler Handler, workers int) (Server, error) {
 	ctx = ctx.Sub("Server(%v)", listener.Addr().String())
-	ctx.Logger().Info("Starting")
+	ctx.Logger().Info("Starting server: %v", workers)
 
 	ctrl := ctx.Control()
 	ctrl.Defer(func(error) {
@@ -254,8 +273,7 @@ func (s *server) start() {
 				return
 			}
 
-			err = s.pool.Submit(s.newWorker(conn))
-			if err != nil {
+			if err := s.pool.Submit(s.newWorker(conn)); err != nil {
 				s.killConnection(conn, err)
 				continue
 			}
@@ -277,14 +295,13 @@ func (s *server) newWorker(conn net.Connection) func() {
 			if err != nil {
 				return
 			}
-			s.logger.Debug("Determined encoding for request [%v]: %v", enc, conn.Remote())
+			// s.logger.Debug("Determined encoding for request [%v]: %v", enc, conn.Remote())
 
 			var encoder Encoder
 			var decoder Decoder
 			switch enc {
 			default:
-				encoder = json.NewEncoder(conn)
-				s.send(encoder, Response{Error: errors.WithMessage(UnknownEncodingError, "Unknown encoding")})
+				s.send(json.NewEncoder(conn), NewErrorResponse(errors.WithMessage(UnknownEncodingError, "Unknown encoding")))
 				return // TODO: respond with error!
 			case Json:
 				decoder = json.NewDecoder(conn)

@@ -86,7 +86,7 @@ func TestClientServer_SingleRequest(t *testing.T) {
 	defer ctx.Close()
 
 	server := NewTestServer(ctx, func(r Request) Response {
-		return Response{Body: r.Body}
+		return NewStandardResponse(r.Body)
 	})
 	defer server.Close()
 
@@ -96,7 +96,7 @@ func TestClientServer_SingleRequest(t *testing.T) {
 	resp, err := client.Send(Request{1})
 
 	assert.Nil(t, err)
-	assert.Nil(t, resp.Error)
+	assert.Nil(t, resp.Error())
 	assert.Equal(t, 1, resp.Body)
 }
 
@@ -107,7 +107,7 @@ func TestClientServer_MultiRequest(t *testing.T) {
 	called := concurrent.NewAtomicCounter()
 	server := NewTestServer(ctx, func(r Request) Response {
 		called.Inc()
-		return Response{}
+		return NewEmptyResponse()
 	})
 	defer server.Close()
 
@@ -117,7 +117,7 @@ func TestClientServer_MultiRequest(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		resp, err := client.Send(Request{nil})
 		assert.Nil(t, err)
-		assert.Nil(t, resp.Error)
+		assert.Nil(t, resp.Error())
 	}
 
 	assert.Equal(t, uint64(10), called.Get())

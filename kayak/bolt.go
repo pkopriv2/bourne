@@ -685,7 +685,7 @@ func (b *boltSnapshot) Scan(start int, end int) (batch []Event, err error) {
 		var cur int
 		end = common.Min(end, b.Size()-1)
 		cur = start
-		for k, v := cursor.Seek(b.Key().ChildInt(start).Raw()); v != nil; k, v = cursor.Next() {
+		for k, v := cursor.Seek(b.Key().ChildInt(start)); v != nil; k, v = cursor.Next() {
 			if cur > end {
 				return nil
 			}
