@@ -54,7 +54,7 @@ func encryptKey(rand io.Reader, creator Signer, priv PrivateKey, pass []byte, op
 	return raw.Sign(rand, creator, opts.Hash)
 }
 
-func (p KeyPair) Format() ([]byte, error) {
+func (p KeyPair) SigningFormat() ([]byte, error) {
 	return p.Pub.format(), nil
 }
 

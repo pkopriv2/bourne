@@ -268,14 +268,14 @@ func (s Signature) String() string {
 	return fmt.Sprintf("Signature(hash=%v): %v", s.Hash, cryptoBytes(s.Data))
 }
 
-// A formatter just formats a particular object.  Used to produce consistent digital signatures.
-type Formatter interface {
-	Format() ([]byte, error)
+// A a signable object is one that has a consistent format for signing and verifying.
+type Signable interface {
+	SigningFormat() ([]byte, error)
 }
 
 // Signs the object with the signer and hash
-func sign(rand io.Reader, obj Formatter, signer Signer, hash Hash) (Signature, error) {
-	fmt, err := obj.Format()
+func sign(rand io.Reader, obj Signable, signer Signer, hash Hash) (Signature, error) {
+	fmt, err := obj.SigningFormat()
 	if err != nil {
 		return Signature{}, errors.WithStack(err)
 	}
@@ -288,8 +288,8 @@ func sign(rand io.Reader, obj Formatter, signer Signer, hash Hash) (Signature, e
 }
 
 // Verifies the object with the signer and hash
-func verify(obj Formatter, key PublicKey, sig Signature) error {
-	fmt, err := obj.Format()
+func verify(obj Signable, key PublicKey, sig Signature) error {
+	fmt, err := obj.SigningFormat()
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -297,8 +297,8 @@ func verify(obj Formatter, key PublicKey, sig Signature) error {
 }
 
 // Decrypts the object with the key.
-func decrypt(obj Decrypter, key Formatter) ([]byte, error) {
-	fmt, err := key.Format()
+func decrypt(obj Decrypter, key Signable) ([]byte, error) {
+	fmt, err := key.SigningFormat()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

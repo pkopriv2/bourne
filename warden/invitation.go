@@ -74,7 +74,7 @@ func createInvitation(rand io.Reader,
 	}
 	defer cryptoBytes(cipherKey).Destroy()
 
-	msg, err := shard.Format()
+	msg, err := shard.SigningFormat()
 	if err != nil {
 		return Invitation{}, errors.Wrapf(
 			err, "Error generating bytes for shards.")

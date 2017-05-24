@@ -51,15 +51,17 @@ func (l LevelOfTrust) MetBy(o LevelOfTrust) bool {
 func (l LevelOfTrust) String() string {
 	switch l {
 	default:
-		return "Unknown"
+		return "unknown"
+	case None:
+		return "none"
 	case Beneficiary:
-		return "Beneficiary"
+		return "beneficiary"
 	case Manager:
-		return "Manager"
+		return "manager"
 	case Director:
-		return "Director"
+		return "director"
 	case Grantor:
-		return "Grantor"
+		return "grantor"
 	}
 }
 
@@ -163,7 +165,7 @@ func (c Certificate) Verify(key PublicKey, sig Signature) error {
 }
 
 // Returns a consistent byte representation of a certificate.  Used for signing.
-func (c Certificate) Format() ([]byte, error) {
+func (c Certificate) SigningFormat() ([]byte, error) {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(&c); err != nil {
 		return nil, err
@@ -173,6 +175,10 @@ func (c Certificate) Format() ([]byte, error) {
 
 // Returns a consistent string representation of a certificate
 func (c Certificate) String() string {
-	return fmt.Sprintf("Cert(trust=%v,issuer=%v,trustee=%v,lvl=%v): %v",
-		c.TrustId, c.IssuerId, c.TrusteeId, c.Level, c.ExpiresAt.Sub(c.IssuedAt))
+	return fmt.Sprintf("Cert(id=%v,trustId=%v,issuerId=%v,trusteeId=%v,lvl=%v): %v",
+		formatUUID(c.Id), formatUUID(c.TrustId), formatUUID(c.IssuerId), formatUUID(c.TrusteeId), c.Level, c.ExpiresAt.Sub(c.IssuedAt))
+}
+
+func formatUUID(id uuid.UUID) string {
+	return fmt.Sprintf("%v", id.String()[:8])
 }

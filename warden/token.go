@@ -33,7 +33,7 @@ func newSigLookup(key PublicKey) []byte {
 	return stash.String("SIG:/").ChildString(key.Id())
 }
 
-func (a sigChallenge) Format() ([]byte, error) {
+func (a sigChallenge) SigningFormat() ([]byte, error) {
 	fmt, err := gobBytes(a.Now)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -64,7 +64,7 @@ func (s Auth) Expired(now time.Time) bool {
 	return s.Created.After(now) || s.Expires.Before(now)
 }
 
-func (s Auth) Format() ([]byte, error) {
+func (s Auth) SigningFormat() ([]byte, error) {
 	fmt, err := gobBytes(s)
 	return fmt, errors.WithStack(err)
 }

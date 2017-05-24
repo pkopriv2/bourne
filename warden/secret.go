@@ -79,7 +79,7 @@ type Secret interface {
 }
 
 type Shard interface {
-	Formatter
+	Signable
 
 	Opts() SecretOptions
 	Derive(Shard) (Secret, error)
@@ -100,7 +100,7 @@ func genSecret(rand io.Reader, opts SecretOptions) (Secret, error) {
 func signShard(rand io.Reader, signer Signer, shard Shard) (SignedShard, error) {
 	opts := shard.Opts()
 
-	fmt, err := shard.Format()
+	fmt, err := shard.SigningFormat()
 	if err != nil {
 		return SignedShard{}, errors.WithStack(err)
 	}
@@ -117,7 +117,7 @@ func signShard(rand io.Reader, signer Signer, shard Shard) (SignedShard, error) 
 func encryptShard(rand io.Reader, signer Signer, shard Shard, pass []byte) (SignedEncryptedShard, error) {
 	opts := shard.Opts()
 
-	fmt, err := shard.Format()
+	fmt, err := shard.SigningFormat()
 	if err != nil {
 		return SignedEncryptedShard{}, errors.WithStack(err)
 	}

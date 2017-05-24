@@ -82,7 +82,7 @@ func (s *shamirShard) Derive(raw Shard) (Secret, error) {
 	return &shamirSecret{line, s.Opts()}, nil
 }
 
-func (s *shamirShard) Format() ([]byte, error) {
+func (s *shamirShard) SigningFormat() ([]byte, error) {
 	return gobBytes(s)
 }
 
@@ -168,10 +168,9 @@ func (l line) String() string {
 	return fmt.Sprintf("Line(m=%v,y-intercept=%v)", l.Slope, l.Intercept)
 }
 
-
 // consistent byte representation of line
 func (l line) Hash(hash Hash) ([]byte, error) {
-	raw, err :=  gobBytes(l)
+	raw, err := gobBytes(l)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

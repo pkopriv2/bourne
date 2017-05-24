@@ -18,28 +18,22 @@ type storage interface {
 	// of a subscriber are guaranteed to be static throughout its lifetime.
 	//
 	// Returns an error if the subscriber already exists.
-	SaveMember(Member, MemberCode) error
+	SaveMember(MemberCore, MemberCode) error
 
-	// Member
-	LoadMemberByLookup([]byte) (Member, MemberCode, bool, error)
+	// Loads a member by a code lookup.
+	LoadMemberByLookup([]byte) (MemberCore, MemberCode, bool, error)
 
 	// Loads the subscriber, returning true if it existed.
-	LoadMemberById(uuid.UUID) (Member, bool, error)
+	LoadMemberById(uuid.UUID) (MemberCore, bool, error)
 
 	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
 	SaveTrust(TrustCore, TrustCode, SignedCertificate) error
 
 	// Loads the given trust.
-	LoadTrustCore(uuid.UUID) (TrustCore, bool, error)
+	LoadTrustCore(trustId uuid.UUID) (TrustCore, bool, error)
 
 	// Loads the given trust.
 	LoadTrustCode(trustId, memberId uuid.UUID) (TrustCode, bool, error)
-
-	// Loads the certificate
-	LoadCertificate(uuid.UUID) (SignedCertificate, bool, error)
-
-	// Loads the certificate
-	LoadActiveCertificate(memberId, trustId uuid.UUID) (SignedCertificate, bool, error)
 
 	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
 	SaveInvitation(Invitation) error
@@ -48,16 +42,25 @@ type storage interface {
 	LoadInvitationById(uuid.UUID) (Invitation, bool, error)
 
 	// Loads the invitation.
-	LoadInvitationsByMember(uuid.UUID, int,int) ([]Invitation, error)
+	LoadInvitationsByMember(uuid.UUID, int, int) ([]Invitation, error)
 
 	// Saves the certificate
 	SaveCertificate(s SignedCertificate, code TrustCode) error
+
+	// Loads the certificate
+	LoadCertificateById(uuid.UUID) (SignedCertificate, bool, error)
+
+	// Loads the certificate
+	LoadCertificateByMemberAndTrust(memberId, trustId uuid.UUID) (SignedCertificate, bool, error)
+
+	// Loads the certificates for the given member.
+	LoadCertificatesByMember(id uuid.UUID, opts PagingOptions) ([]SignedCertificate, error)
 
 	// Revokes the certificate
 	RevokeCertificate(trusteeId, trustId uuid.UUID) error
 }
 
-func EnsureMember(store storage, id uuid.UUID) (Member, error) {
+func EnsureMember(store storage, id uuid.UUID) (MemberCore, error) {
 	s, o, e := store.LoadMemberById(id)
 	if e != nil || !o {
 		return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No member [%v]", id))

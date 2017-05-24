@@ -29,13 +29,12 @@ func init() {
 
 // Bolt info
 var (
-	keyPubBucket     = []byte("warden.keys.public")
-	keyPairBucket    = []byte("warden.keys.pair")
-	keyOwnerBucket   = []byte("warden.keys.owner")
-	certBucket       = []byte("warden.certs")
-	certLatestBucket = []byte("warden.certs.latest")
-	certMemberBucket = []byte("warden.certs.member")
-
+	keyPubBucket       = []byte("warden.keys.public")
+	keyPairBucket      = []byte("warden.keys.pair")
+	keyOwnerBucket     = []byte("warden.keys.owner")
+	certBucket         = []byte("warden.certs")
+	certLatestBucket   = []byte("warden.certs.latest")
+	certMemberBucket   = []byte("warden.certs.member")
 	inviteBucket       = []byte("warden.invites")
 	memberBucket       = []byte("warden.members")
 	memberCodeBucket   = []byte("warden.member.auth")
@@ -93,7 +92,7 @@ func (b *boltStorage) Bolt() *bolt.DB {
 	return (*bolt.DB)(b)
 }
 
-func (b *boltStorage) SaveMember(mem Member, code MemberCode) error {
+func (b *boltStorage) SaveMember(mem MemberCore, code MemberCode) error {
 	if mem.Id != code.MemberId {
 		return errors.Wrapf(StorageInvariantError, "Access code not for member.")
 	}
@@ -106,7 +105,7 @@ func (b *boltStorage) SaveMember(mem Member, code MemberCode) error {
 	})
 }
 
-func (b *boltStorage) LoadMemberById(id uuid.UUID) (m Member, o bool, e error) {
+func (b *boltStorage) LoadMemberById(id uuid.UUID) (m MemberCore, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		m, o, e = boltLoadMember(tx, id)
 		return errors.WithStack(e)
@@ -122,15 +121,15 @@ func (b *boltStorage) LoadMemberCode(lookup []byte) (s MemberCode, o bool, e err
 	return
 }
 
-func (b *boltStorage) LoadMemberByLookup(lookup []byte) (m Member, s MemberCode, o bool, e error) {
+func (b *boltStorage) LoadMemberByLookup(lookup []byte) (m MemberCore, s MemberCode, o bool, e error) {
 	s, o, e = b.LoadMemberCode(lookup)
 	if e != nil || !o {
-		return Member{}, MemberCode{}, false, errors.WithStack(e)
+		return MemberCore{}, MemberCode{}, false, errors.WithStack(e)
 	}
 
 	m, o, e = b.LoadMemberById(s.MemberId)
 	if e != nil || !o {
-		return Member{}, MemberCode{}, false, errors.WithStack(e)
+		return MemberCore{}, MemberCode{}, false, errors.WithStack(e)
 	}
 	return
 }
@@ -143,7 +142,7 @@ func (b *boltStorage) LoadTrustCore(id uuid.UUID) (d TrustCore, o bool, e error)
 	return
 }
 
-func (b *boltStorage) LoadCertificate(id uuid.UUID) (c SignedCertificate, o bool, e error) {
+func (b *boltStorage) LoadCertificateById(id uuid.UUID) (c SignedCertificate, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		c, o, e = boltLoadCertById(tx, id)
 		return errors.WithStack(e)
@@ -151,9 +150,17 @@ func (b *boltStorage) LoadCertificate(id uuid.UUID) (c SignedCertificate, o bool
 	return
 }
 
-func (b *boltStorage) LoadActiveCertificate(memberId, trustId uuid.UUID) (c SignedCertificate, o bool, e error) {
+func (b *boltStorage) LoadCertificateByMemberAndTrust(memberId, trustId uuid.UUID) (c SignedCertificate, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		c, o, e = boltLoadCertByMemberAndTrust(tx, memberId, trustId)
+		return errors.WithStack(e)
+	})
+	return
+}
+
+func (b *boltStorage) LoadCertificatesByMember(id uuid.UUID, opts PagingOptions) (c []SignedCertificate, e error) {
+	e = b.Bolt().View(func(tx *bolt.Tx) error {
+		c, e = boltLoadCertsByMember(tx, id, opts.Beg, opts.End)
 		return errors.WithStack(e)
 	})
 	return
@@ -167,7 +174,7 @@ func (b *boltStorage) LoadInvitationById(id uuid.UUID) (i Invitation, o bool, e 
 	return
 }
 
-func (b *boltStorage) LoadInvitationsByMember(id uuid.UUID, beg,end int) (i []Invitation, e error) {
+func (b *boltStorage) LoadInvitationsByMember(id uuid.UUID, beg, end int) (i []Invitation, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		i, e = boltLoadInvitesByMember(tx, id, beg, end)
 		return errors.WithStack(e)
@@ -184,8 +191,6 @@ func (b *boltStorage) RevokeCertificate(memberId, trustId uuid.UUID) (e error) {
 }
 
 func (b *boltStorage) LoadTrustCode(trustId, memberId uuid.UUID) (d TrustCode, o bool, e error) {
-	// FIXME: This isn't transactionally safe.  A member may be deleted after 'ensure'
-	// but before storing the trust.  However, if member's can't be deleted, it's okay.
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		d, o, e = boltLoadTrustCode(tx, trustId, memberId)
 		return errors.WithStack(e)
@@ -194,8 +199,7 @@ func (b *boltStorage) LoadTrustCode(trustId, memberId uuid.UUID) (d TrustCode, o
 }
 
 func (b *boltStorage) SaveTrust(core TrustCore, code TrustCode, cert SignedCertificate) error {
-	// FIXME: This isn't transactionally safe.  A member may be deleted after 'ensure'
-	// but before storing the trust.  However, if member's can't be deleted, it's okay.
+	// FIXME: Move to rpc_server.go (Assuming transactional problems don't arise)
 	issuer, err := EnsureMember(b, cert.IssuerId)
 	if err != nil {
 		return errors.WithStack(err)
@@ -225,8 +229,7 @@ func (b *boltStorage) SaveTrust(core TrustCore, code TrustCode, cert SignedCerti
 }
 
 func (b *boltStorage) SaveInvitation(inv Invitation) error {
-	// FIXME: This isn't transactionally safe.  A member may be deleted after 'ensure'
-	// but before storing the invitation.
+	// FIXME: Move to rpc_server.go (Assuming transactional problems don't arise)
 	_, err := EnsureMember(b, inv.Cert.TrusteeId)
 	if err != nil {
 		return errors.WithStack(err)
@@ -256,8 +259,7 @@ func (b *boltStorage) SaveInvitation(inv Invitation) error {
 }
 
 func (b *boltStorage) SaveCertificate(cert SignedCertificate, code TrustCode) error {
-	// FIXME: This isn't transactionally safe.  A member may be deleted after 'ensure'
-	// but before storing the certificate.
+	// FIXME: Move to rpc_server.go (Assuming transactional problems don't arise)
 	if code.MemberId != cert.TrusteeId || code.TrustId != cert.TrustId {
 		return errors.Wrapf(StorageInvariantError, "Inconsistent data")
 	}
@@ -289,7 +291,7 @@ func (b *boltStorage) SaveCertificate(cert SignedCertificate, code TrustCode) er
 	})
 }
 
-func boltStoreMember(tx *bolt.Tx, m Member) error {
+func boltStoreMember(tx *bolt.Tx, m MemberCore) error {
 	if err := boltEnsureEmpty(tx.Bucket(memberBucket), stash.UUID(m.Id)); err != nil {
 		return errors.Wrapf(err, "Member already exists [%v]", m.Id)
 	}
@@ -307,7 +309,7 @@ func boltStoreMember(tx *bolt.Tx, m Member) error {
 	return nil
 }
 
-func boltLoadMember(tx *bolt.Tx, id uuid.UUID) (s Member, o bool, e error) {
+func boltLoadMember(tx *bolt.Tx, id uuid.UUID) (s MemberCore, o bool, e error) {
 	o, e = parseGobBytes(tx.Bucket(memberBucket).Get(stash.UUID(id)), &s)
 	return
 }

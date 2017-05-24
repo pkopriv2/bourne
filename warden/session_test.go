@@ -56,7 +56,7 @@ func TestSession(t *testing.T) {
 	addr := cl.Remote().String()
 
 	subscribe := func(ctx common.Context) (PrivateKey, *Session, error) {
-		owner, err := GenRsaKey(rand.Reader, 1024)
+		owner, err := GenRsaKey(rand.Reader, 2048)
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
@@ -112,24 +112,31 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		trust, err := session.NewTrust(timer.Closed(), "test")
+		trust1, err := session.NewTrust(timer.Closed(), "test")
 		assert.Nil(t, err)
 
-		trust, o, err := session.LoadTrustById(timer.Closed(), trust.Id)
+		trust2, o, err := session.LoadTrustById(timer.Closed(), trust1.Id)
 		assert.Nil(t, err)
 		assert.True(t, o)
+		assert.Equal(t, trust1.trusteeCert, trust2.trusteeCert)
+		assert.Equal(t, trust1.trusteeShard, trust2.trusteeShard)
 
 		mySecret, err := session.mySecret()
 		assert.Nil(t, err)
-		assert.NotNil(t, mySecret)
 
-		trustSecret, err := trust.deriveSecret(mySecret)
+		trust1Secret, err := trust1.deriveSecret(mySecret)
 		assert.Nil(t, err)
-		assert.NotNil(t, trustSecret)
 
-		trustSigningKey, err := trust.unlockSigningKey(trustSecret)
+		trust2Secret, err := trust2.deriveSecret(mySecret)
 		assert.Nil(t, err)
-		assert.NotNil(t, trustSigningKey)
+
+		trust1SigningKey, err := trust1.unlockSigningKey(trust1Secret)
+		assert.Nil(t, err)
+		assert.NotNil(t, trust1SigningKey)
+
+		trust2SigningKey, err := trust2.unlockSigningKey(trust2Secret)
+		assert.Nil(t, err)
+		assert.NotNil(t, trust2SigningKey)
 	})
 
 	t.Run("Invite", func(t *testing.T) {
@@ -148,13 +155,11 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		trust, err := session1.NewTrust(timer.Closed(), "invite")
+		trust1, err := session1.NewTrust(timer.Closed(), "invite")
 		assert.Nil(t, err)
-		assert.NotNil(t, trust)
 
-		inv1, err := session1.Invite(timer.Closed(), trust, session2.MyId())
+		inv1, err := session1.Invite(timer.Closed(), trust1, session2.MyId())
 		assert.Nil(t, err)
-		assert.NotNil(t, inv1)
 
 		invites1, err := session1.MyInvitations(timer.Closed())
 		assert.Nil(t, err)
@@ -163,11 +168,25 @@ func TestSession(t *testing.T) {
 		invites2, err := session2.MyInvitations(timer.Closed())
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(invites2))
+		assert.Equal(t, inv1.String(), invites2[0].String())
 
-		inv2, ok, err := session1.LoadInvitationById(timer.Closed(), inv1.Id)
+		certs1, err := session1.MyCertificates(timer.Closed())
 		assert.Nil(t, err)
-		assert.True(t, ok)
-		assert.Equal(t, inv1, inv2)
+		assert.Equal(t, 1, len(certs1))
+		assert.Equal(t, trust1.trusteeCert, certs1[0])
+
+		certs2, err := session2.MyCertificates(timer.Closed())
+		assert.Nil(t, err)
+		assert.Empty(t, len(certs2))
+
+		trusts1, err := session1.MyTrusts(timer.Closed())
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(trusts1))
+		assert.Equal(t, trust1.String(), trusts1[0].String())
+
+		trusts2, err := session2.MyTrusts(timer.Closed())
+		assert.Nil(t, err)
+		assert.Empty(t, len(trusts2))
 	})
 
 	t.Run("InviteAndAccept", func(t *testing.T) {
@@ -190,14 +209,24 @@ func TestSession(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotNil(t, trust1)
 
-		inv112, err := session1.Invite(timer.Closed(), trust1, session2.MyId())
+		invite, err := session1.Invite(timer.Closed(), trust1, session2.MyId())
 		assert.Nil(t, err)
-		assert.Nil(t, session2.Accept(timer.Closed(), inv112))
+		assert.Nil(t, session2.Accept(timer.Closed(), invite))
 
 		trust2, o, err := session2.LoadTrustById(timer.Closed(), trust1.Id)
 		assert.Nil(t, err)
 		assert.True(t, o)
 		assert.Equal(t, Manager, trust2.trusteeCert.Level)
+
+		trusts1, err := session1.MyTrusts(timer.Closed())
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(trusts1))
+		assert.Equal(t, trust1.String(), trusts1[0].String())
+
+		trusts2, err := session2.MyTrusts(timer.Closed())
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(trusts2))
+		assert.Equal(t, trust2.String(), trusts2[0].String())
 	})
 
 	t.Run("Revoke", func(t *testing.T) {
@@ -216,20 +245,22 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		trust11, err := session1.NewTrust(timer.Closed(), "test")
+		trust1, err := session1.NewTrust(timer.Closed(), "test")
 		assert.Nil(t, err)
-		assert.NotNil(t, trust11)
 
-		inv112, err := session1.Invite(timer.Closed(), trust11, session2.MyId())
+
+		invite, err := session1.Invite(timer.Closed(), trust1, session2.MyId())
 		assert.Nil(t, err)
-		assert.Nil(t, session2.Accept(timer.Closed(), inv112))
+		assert.Nil(t, session2.Accept(timer.Closed(), invite))
+		assert.Nil(t, session1.Revoke(timer.Closed(), trust1, session2.MyId()))
 
-		_, o, err := session2.LoadTrustById(timer.Closed(), trust11.Id)
+		trusts1, err := session1.MyTrusts(timer.Closed())
 		assert.Nil(t, err)
-		assert.True(t, o)
-		assert.Nil(t, session1.Revoke(timer.Closed(), trust11, session2.MyId()))
+		assert.Equal(t, 1, len(trusts1))
+		assert.Equal(t, trust1.String(), trusts1[0].String())
 
-		trust21, o, err := session2.LoadTrustById(timer.Closed(), trust11.Id)
-		assert.Equal(t, None,  trust21.trusteeCert.Level)
+		trusts2, err := session2.MyTrusts(timer.Closed())
+		assert.Nil(t, err)
+		assert.Empty(t, len(trusts2))
 	})
 }

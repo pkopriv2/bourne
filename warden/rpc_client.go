@@ -55,7 +55,7 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (r *rpcClient) Register(cancel <-chan struct{}, mem Member, code MemberCode, ttl time.Duration) (Token, error) {
+func (r *rpcClient) Register(cancel <-chan struct{}, mem MemberCore, code MemberCode, ttl time.Duration) (Token, error) {
 	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{mem, code, ttl}))
 	if err != nil || !raw.Ok {
 		return Token{}, errors.WithStack(common.Or(err, raw.Error()))
@@ -83,15 +83,15 @@ func (r *rpcClient) TokenBySignature(cancel <-chan struct{}, lookup []byte, chal
 	return resp.Token, nil
 }
 
-func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token Token, lookup []byte) (Member, MemberCode, bool, error) {
+func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token Token, lookup []byte) (MemberCore, MemberCode, bool, error) {
 	raw, err := r.raw.Send(micro.NewRequest(rpcMemberByLookupReq{token, lookup}))
 	if err != nil || !raw.Ok {
-		return Member{}, MemberCode{}, false, errors.WithStack(common.Or(err, raw.Error()))
+		return MemberCore{}, MemberCode{}, false, errors.WithStack(common.Or(err, raw.Error()))
 	}
 
 	resp, ok := raw.Body.(rpcMemberResponse)
 	if !ok {
-		return Member{}, MemberCode{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return MemberCore{}, MemberCode{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
 	}
 
 	return resp.Mem, resp.Access, resp.Found, nil
@@ -162,12 +162,32 @@ func (r *rpcClient) InvitationRevoke(cancel <-chan struct{}, a Token, id uuid.UU
 	panic("not implemented")
 }
 
-func (r *rpcClient) CertsByMember(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Certificate, error) {
-	panic("not implemented")
+func (r *rpcClient) CertsByMember(cancel <-chan struct{}, token Token, id uuid.UUID, opts PagingOptions) ([]SignedCertificate, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcCertsByMemberReq{token, id, opts}))
+	if err != nil || !raw.Ok {
+		return nil, errors.WithStack(common.Or(err, raw.Error()))
+	}
+
+	resp, ok := raw.Body.(rpcCertsResponse)
+	if !ok {
+		return nil, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	return resp.Certs, nil
 }
 
-func (r *rpcClient) CertsByTrust(cancel <-chan struct{}, a Token, id uuid.UUID, opt PagingOptions) ([]Certificate, error) {
-	panic("not implemented")
+func (r *rpcClient) CertsByTrust(cancel <-chan struct{}, token Token, id uuid.UUID, opts PagingOptions) ([]SignedCertificate, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcCertsByTrustReq{token, id, opts}))
+	if err != nil || !raw.Ok {
+		return nil, errors.WithStack(common.Or(err, raw.Error()))
+	}
+
+	resp, ok := raw.Body.(rpcCertsResponse)
+	if !ok {
+		return nil, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	return resp.Certs, nil
 }
 
 func (r *rpcClient) CertRegister(cancel <-chan struct{}, a Token, c SignedCertificate, k TrustCode) error {
@@ -191,58 +211,29 @@ func (r *rpcClient) TrustById(cancel <-chan struct{}, token Token, id uuid.UUID)
 		return Trust{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
 	}
 
-	return resp.Core.asTrust(resp.Code, resp.Cert), resp.Found, nil
+	return resp.Core.privateTrust(resp.Code, resp.Cert), resp.Found, nil
 }
 
-func (r *rpcClient) TrustsByMember(cancel <-chan struct{}, a Token, id uuid.UUID, opts PagingOptions) ([]Trust, error) {
-	panic("not implemented")
+func (r *rpcClient) TrustsByMember(cancel <-chan struct{}, token Token, memberId uuid.UUID, opts PagingOptions) ([]Trust, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcTrustsByMemberReq{token, memberId, opts}))
+	if err != nil || !raw.Ok {
+		return nil, errors.WithStack(common.Or(err, raw.Error()))
+	}
+
+	resp, ok := raw.Body.(rpcTrustsResponse)
+	if !ok {
+		return nil, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	trusts := make([]Trust, 0, len(resp.Trusts))
+	for _, t := range resp.Trusts {
+		trusts = append(trusts, t.Core.privateTrust(t.Code, t.Cert))
+	}
+
+	return trusts, nil
 }
 
 func (r *rpcClient) TrustRegister(cancel <-chan struct{}, a Token, trust Trust) error {
 	raw, err := r.raw.Send(micro.NewRequest(rpcTrustRegisterReq{a, trust.core(), trust.trusteeCode(), trust.trusteeCert}))
 	return errors.WithStack(common.Or(err, raw.Error()))
 }
-
-// type rpcClientPool struct {
-// ctx common.Context
-// raw common.ObjectPool
-// }
-//
-// func newRpcClientPool(ctx common.Context, network net.Network, peer Peer, size int) *rpcClientPool {
-// return &rpcClientPool{ctx, common.NewObjectPool(ctx.Control(), size, newRpcClientConstructor(ctx, network, peer))}
-// }
-//
-// func (c *rpcClientPool) Close() error {
-// return c.raw.Close()
-// }
-//
-// func (c *rpcClientPool) Max() int {
-// return c.raw.Max()
-// }
-//
-// func (c *rpcClientPool) TakeTimeout(dur time.Duration) *rpcClient {
-// raw := c.raw.TakeTimeout(dur)
-// if raw == nil {
-// return nil
-// }
-//
-// return raw.(*rpcClient)
-// }
-//
-// func (c *rpcClientPool) Return(cl *rpcClient) {
-// c.raw.Return(cl)
-// }
-//
-// func (c *rpcClientPool) Fail(cl *rpcClient) {
-// c.raw.Fail(cl)
-// }
-//
-// func newRpcClientConstructor(ctx common.Context, network net.Network, peer Peer) func() (io.Closer, error) {
-// return func() (io.Closer, error) {
-// if cl, err := peer.Client(ctx, network, 30*time.Second); cl != nil && err == nil {
-// return cl, err
-// }
-//
-// return nil, nil
-// }
-// }

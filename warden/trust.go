@@ -11,13 +11,6 @@ import (
 
 const OneHundredYears = 100 * 365 * 24 * time.Hour
 
-type KeyType int
-
-const (
-	SigningKey KeyType = iota
-	InviteKey
-)
-
 // General trust options.
 type TrustOptions struct {
 	Secret SecretOptions
@@ -43,13 +36,12 @@ func buildTrustOptions(fns ...func(*TrustOptions)) TrustOptions {
 // A trust is a repository of data that has been entrusted to one or
 // many individuals.  For all intents and purposes, they behave very much
 // like a legal trust: someone wishes to outsource the management of a
-// resource, but only wishes to do so with legally binding terms.  Failure
-// to act according to the terms of the agreement means that the owner of a
+// resource, but only wishes to do so with legally binding terms.
 //
 // A digital trust behaves very similarily, except, the terms are enforced
 // through the use of knowledge partitioning and a trusted 3rd party.  Only
 // valid members may rederive the trust's shared secret, while the trusted
-// 3rd party enforces the agreements of the trust.
+// 3rd party enforces the distribution and visibility of the trust.
 //
 type Trust struct {
 	Id uuid.UUID
@@ -153,12 +145,17 @@ func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Sign
 
 // String form of the trust.
 func (d Trust) String() string {
-	return fmt.Sprintf("Trust(id=%v,name=%v): %v", d.Id, d.Name, d.trusteeCert)
+	key := "<none>"
+	if Beneficiary.MetBy(d.trusteeCert.Level) {
+		key = d.trustSigningKey.Pub.Id()
+	}
+
+	return fmt.Sprintf("Trust(id=%v, key=%v): %v", formatUUID(d.Id), key, d.trusteeCert)
 }
 
 // Extracts the  oracle curve.  Requires *Encrypt* level trust
 func (d Trust) deriveSecret(mySecret Secret) (Secret, error) {
-	if ! Beneficiary.MetBy(d.trusteeCert.Level) {
+	if !Beneficiary.MetBy(d.trusteeCert.Level) {
 		return nil, errors.WithStack(UnauthorizedError)
 	}
 
@@ -189,12 +186,16 @@ func (d Trust) trusteeCode() TrustCode {
 }
 
 func (t Trust) unlockEncryptionSeed(secret Secret) ([]byte, error) {
+	if !Beneficiary.MetBy(t.trusteeCert.Level) {
+		return nil, errors.WithStack(UnauthorizedError)
+	}
+
 	key, err := secret.Hash(t.Opts.Secret.SecretHash)
 	return key, errors.WithStack(err)
 }
 
 func (t Trust) unlockSigningKey(secret Secret) (PrivateKey, error) {
-	if ! Manager.MetBy(t.trusteeCert.Level) {
+	if !Manager.MetBy(t.trusteeCert.Level) {
 		return nil, errors.WithStack(UnauthorizedError)
 	}
 
@@ -277,8 +278,8 @@ func (t Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 }
 
 // Loads all the trust certificates that have been issued by this .
-func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]Certificate, error) {
-	if ! Manager.MetBy(t.trusteeCert.Level) {
+func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
+	if !Manager.MetBy(t.trusteeCert.Level) {
 		return nil, errors.WithStack(UnauthorizedError)
 	}
 
@@ -293,7 +294,7 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s Session, fns ...func(*
 
 // Revokes all issued certificates by this  for the given subscriber.
 func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID) error {
-	if ! Director.MetBy(t.trusteeCert.Level) {
+	if !Director.MetBy(t.trusteeCert.Level) {
 		return errors.WithStack(UnauthorizedError)
 	}
 
@@ -307,7 +308,7 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *Session, trusteeId u
 
 // Issues an invitation to the given key.
 func (t Trust) invite(cancel <-chan struct{}, s *Session, trusteeId uuid.UUID, fns ...func(*InvitationOptions)) (Invitation, error) {
-	if ! Director.MetBy(t.trusteeCert.Level) {
+	if !Director.MetBy(t.trusteeCert.Level) {
 		return Invitation{}, errors.WithStack(UnauthorizedError)
 	}
 
@@ -384,12 +385,16 @@ type TrustCore struct {
 	SigningKey SignedKeyPair
 }
 
-func (t TrustCore) asTrust(code TrustCode, cert SignedCertificate) Trust {
+func (t TrustCore) privateTrust(code TrustCode, cert SignedCertificate) Trust {
 	return Trust{t.Id, t.Name, t.Opts, t.SigningKey, t.PubShard, cert, code.Shard}
 }
 
 func (t TrustCore) publicCore() TrustCore {
-	return TrustCore{t.Id, t.Name, t.Opts, t.PubShard, SignedKeyPair{}}
+	return TrustCore{t.Id, t.Name, t.Opts, t.PubShard, SignedKeyPair{KeyPair: KeyPair{Pub: t.SigningKey.Pub}}}
+}
+
+func (t TrustCore) String() string {
+	return fmt.Sprintf("Core(trustId=%v) : %v", formatUUID(t.Id), t.SigningKey.Pub.Id())
 }
 
 // Only used for storage
@@ -397,4 +402,8 @@ type TrustCode struct {
 	MemberId uuid.UUID
 	TrustId  uuid.UUID
 	Shard    SignedEncryptedShard
+}
+
+func (t TrustCode) String() string {
+	return fmt.Sprintf("Code(memberId=%v, trustId=%v) : %v", formatUUID(t.MemberId), formatUUID(t.TrustId), t.Shard.Sig)
 }

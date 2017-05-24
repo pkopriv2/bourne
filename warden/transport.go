@@ -11,13 +11,13 @@ type Transport interface {
 	io.Closer
 
 	// Registers a new subscriber.
-	Register(cancel <-chan struct{}, m Member, a MemberCode, ttl time.Duration) (Token, error)
+	Register(cancel <-chan struct{}, m MemberCore, a MemberCode, ttl time.Duration) (Token, error)
 
 	// Loads public key by subscriber
 	TokenBySignature(cancel <-chan struct{}, lookup []byte, challenge sigChallenge, sig Signature, ttl time.Duration) (Token, error)
 
 	// Returns the subscriber of the given key.
-	MemberByLookup(cancel <-chan struct{}, t Token, lookup []byte) (Member, MemberCode, bool, error)
+	MemberByLookup(cancel <-chan struct{}, t Token, lookup []byte) (MemberCore, MemberCode, bool, error)
 
 	// Returns the signing key of the given member
 	MemberSigningKeyById(cancel <-chan struct{}, t Token, id uuid.UUID) (PublicKey, bool, error)
@@ -38,10 +38,10 @@ type Transport interface {
 	InvitationRevoke(cancel <-chan struct{}, t Token, id uuid.UUID) error
 
 	// Loads active certificates by subscriber
-	CertsByMember(cancel <-chan struct{}, t Token, id uuid.UUID, opts PagingOptions) ([]Certificate, error)
+	CertsByMember(cancel <-chan struct{}, t Token, id uuid.UUID, opts PagingOptions) ([]SignedCertificate, error)
 
 	// Loads active certs by domain.
-	CertsByTrust(cancel <-chan struct{}, t Token, id uuid.UUID, opt PagingOptions) ([]Certificate, error)
+	CertsByTrust(cancel <-chan struct{}, t Token, id uuid.UUID, opt PagingOptions) ([]SignedCertificate, error)
 
 	// Registers a certificate (and corresponding oracle key).
 	CertRegister(cancel <-chan struct{}, t Token, c SignedCertificate, k TrustCode) error

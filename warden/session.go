@@ -33,6 +33,7 @@ func buildSessionOptions(fns ...func(*SessionOptions)) SessionOptions {
 // on its own - therefore it is safe to maintain the session in memory, without
 // fear of leaking any critical details.
 type Session struct {
+
 	// the core context
 	ctx common.Context
 
@@ -42,8 +43,8 @@ type Session struct {
 	// the login credentials
 	login func(KeyPad) error
 
-	// the session's subscriber info
-	member Member
+	// the session's owners membership info=
+	member MemberCore
 
 	// the access shard used for this session
 	code MemberCode
@@ -61,10 +62,10 @@ type Session struct {
 	opts SessionOptions
 }
 
-func newSession(ctx common.Context, m Member, a MemberCode, t Token, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
+func newSession(ctx common.Context, m MemberCore, a MemberCode, t Token, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
 	var err error
 
-	ctx = ctx.Sub("Session: %v", m.Id.String()[:8])
+	ctx = ctx.Sub("Session(memberId=%v)", m.Id.String()[:8])
 	defer func() {
 		if err != nil {
 			ctx.Close()
@@ -152,6 +153,18 @@ func (s *Session) start(t Token) {
 	}()
 }
 
+// Returns the subscriber id associated with this session.  This uniquely identifies
+// an account to the world.  This may be shared over other (possibly unsecure) channels
+// in order to share with other users.
+func (s *Session) MyId() uuid.UUID {
+	return s.member.Id
+}
+
+// Returns the session owner's public signing key.  This key and its id may be shared freely.
+func (s *Session) MyKey() PublicKey {
+	return s.member.SigningKey.Pub
+}
+
 // Returns the session owner's secret.  This should be destroyed promptly after use.
 func (s *Session) mySecret() (Secret, error) {
 	secret, err := s.member.secret(s.code, s.login)
@@ -159,16 +172,6 @@ func (s *Session) mySecret() (Secret, error) {
 }
 
 // Returns the personal encryption seed of this subscription.
-//
-// In order for a attacker to penetrate further, he would need both the seed and a valid
-// token. The token would give him temporary access to the subscription, but
-// once the token expired, he could not login again.  Higher security environments
-// could tune down the ttl of a session token to limit exposure.
-//
-// It should be noted that even in the event of a compromised seed + token,
-// the system itself is never in danger because the risk has been spread over the
-// community.  The leak extends as far as the trust extends.  No other users are at risk
-// because of a leaked seed or token.
 func (s *Session) myEncryptionSeed(secret Secret) ([]byte, error) {
 	seed, err := s.member.encryptionSeed(secret)
 	return seed, errors.WithStack(err)
@@ -186,22 +189,6 @@ func (s *Session) myInvitationKey(secret Secret) (PrivateKey, error) {
 	return key, errors.WithStack(err)
 }
 
-// Destroys the session's memory - zeroing out any sensitive info
-func (s *Session) Destroy() {
-}
-
-// Returns the subscriber id associated with this session.  This uniquely identifies
-// an account to the world.  This may be shared over other (possibly unsecure) channels
-// in order to share with other users.
-func (s *Session) MyId() uuid.UUID {
-	return s.member.Id
-}
-
-// Returns the session owner's public signing key.  This key and its id may be shared freely.
-func (s *Session) MyKey() PublicKey {
-	return s.member.SigningKey.Pub
-}
-
 // Lists the session owner's currently pending invitations.
 func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
 	token, err := s.token(cancel)
@@ -214,7 +201,7 @@ func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptio
 }
 
 // Lists the session owner's currently active certificates.
-func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Certificate, error) {
+func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -246,13 +233,6 @@ func (s *Session) LoadTrustById(cancel <-chan struct{}, id uuid.UUID) (Trust, bo
 
 	trust, ok, err := s.net.TrustById(cancel, token, id)
 	return trust, ok, errors.WithStack(err)
-}
-
-// Loads the trust with the given signing key.  The trust will be returned only
-// if your public key has been invited to manage the trust and the invitation
-// has been accepted.
-func (s *Session) LoadTrustByKey(cancel <-chan struct{}, key string) (Trust, bool, error) {
-	return Trust{}, false, nil
 }
 
 // Loads the trust with the given id.  The trust will be returned only
@@ -316,14 +296,22 @@ func (s *Session) Revoke(cancel <-chan struct{}, t Trust, memberId uuid.UUID) er
 	return errors.WithStack(t.revokeCertificate(cancel, s, memberId))
 }
 
-// Renew's the session owner's certificate with the trust.
+// Renew's the session owner's certificate with the trust.  Only members with Member of
+// greater trust level may reissue a certificate.
 func (s *Session) Renew(cancel <-chan struct{}, t Trust) (Trust, error) {
 	trust, err := t.renewCertificate(cancel, s)
 	return trust, errors.WithStack(err)
 }
 
-// Transfer will issue an invitation in the name of the recipient
+// Transfer will issue an invitation to the recipient with Grantor level trust and revoke
+// the session owner's certificate
 func (s *Session) Transfer(cancel <-chan struct{}, t Trust, recipientId uuid.UUID) error {
-	return nil
-	// return errors.WithStack(t.revokeCertificate(cancel, s, memberId))
+	_, err := s.Invite(cancel, t, recipientId, func(o *InvitationOptions) {
+		o.Lvl = Grantor
+		o.Exp = OneHundredYears
+	})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(s.Revoke(cancel, t, s.MyId()))
 }
