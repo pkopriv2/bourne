@@ -121,6 +121,16 @@ func TestSession(t *testing.T) {
 		assert.Equal(t, trust1.trusteeCert, trust2.trusteeCert)
 		assert.Equal(t, trust1.trusteeShard, trust2.trusteeShard)
 
+		certs, err := session.MyCertificates(timer.Closed())
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(certs))
+		assert.Equal(t, trust1.trusteeCert, certs[0])
+
+		certs, err = session.LoadCertificates(timer.Closed(), trust1)
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(certs))
+		assert.Equal(t, trust1.trusteeCert, certs[0])
+
 		mySecret, err := session.mySecret()
 		assert.Nil(t, err)
 
@@ -227,6 +237,16 @@ func TestSession(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(trusts2))
 		assert.Equal(t, trust2.String(), trusts2[0].String())
+
+		certs1, err := session1.LoadCertificates(timer.Closed(), trust1)
+		assert.Nil(t, err)
+		assert.Equal(t, 2, len(certs1))
+		assert.Equal(t, trust1.trusteeCert, certs1[0])
+
+		certs2, err := session2.LoadCertificates(timer.Closed(), trust1)
+		assert.Nil(t, err)
+		assert.Equal(t, 2, len(certs2))
+		assert.Equal(t, trust1.trusteeCert, certs2[0])
 	})
 
 	t.Run("Revoke", func(t *testing.T) {
@@ -247,7 +267,6 @@ func TestSession(t *testing.T) {
 
 		trust1, err := session1.NewTrust(timer.Closed(), "test")
 		assert.Nil(t, err)
-
 
 		invite, err := session1.Invite(timer.Closed(), trust1, session2.MyId())
 		assert.Nil(t, err)

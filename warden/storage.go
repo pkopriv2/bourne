@@ -56,6 +56,9 @@ type storage interface {
 	// Loads the certificates for the given member.
 	LoadCertificatesByMember(id uuid.UUID, opts PagingOptions) ([]SignedCertificate, error)
 
+	// Loads the certificates for the given trust.
+	LoadCertificatesByTrust(id uuid.UUID, opts PagingOptions) ([]SignedCertificate, error)
+
 	// Revokes the certificate
 	RevokeCertificate(trusteeId, trustId uuid.UUID) error
 }

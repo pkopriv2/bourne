@@ -10,7 +10,6 @@ import (
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/micro"
 	"github.com/pkopriv2/bourne/net"
-	uuid "github.com/satori/go.uuid"
 )
 
 // FIXMES:
@@ -59,14 +58,12 @@ func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
 type SubscribeOptions struct {
 	SessionOptions
 
-	SecretAlgorithm SecretAlgorithm
-	SecretStrength  int
-
+	SecretAlgorithm    SecretAlgorithm
+	SecretStrength     int
 	SigningKeyAlg      KeyAlgorithm
 	SigningKeyStrength int
-
-	InviteKeyAlg      KeyAlgorithm
-	InviteKeyStrength int
+	InviteKeyAlg       KeyAlgorithm
+	InviteKeyStrength  int
 
 	Deps *Dependencies
 }
@@ -344,20 +341,4 @@ type PrivateKey interface {
 	Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error)
 	format() []byte
 	Destroy()
-}
-
-type Document struct {
-	Id       uuid.UUID
-	Name     string
-	Ver      int
-	Created  time.Time
-	Contents []byte
-}
-
-func (d Document) Bytes() error {
-	return nil
-}
-
-func (d Document) Sign(key PrivateKey, hash Hash) (Signature, error) {
-	return Signature{}, nil
 }

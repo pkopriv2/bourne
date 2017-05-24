@@ -248,6 +248,19 @@ func (s *Session) LoadInvitationById(cancel <-chan struct{}, id uuid.UUID) (Invi
 	return trust, ok, errors.WithStack(err)
 }
 
+// Loads the trust with the given id.  The trust will be returned only
+// if your public key has been invited to manage the trust and the invitation
+// has been accepted.
+func (s *Session) LoadCertificates(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
+	token, err := s.token(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	certs, err := s.net.CertsByTrust(cancel, token, t.Id, buildPagingOptions(fns...))
+	return certs, errors.WithStack(err)
+}
+
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
 func (s *Session) NewTrust(cancel <-chan struct{}, name string, fns ...func(t *TrustOptions)) (Trust, error) {

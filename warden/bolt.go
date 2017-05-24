@@ -166,6 +166,14 @@ func (b *boltStorage) LoadCertificatesByMember(id uuid.UUID, opts PagingOptions)
 	return
 }
 
+func (b *boltStorage) LoadCertificatesByTrust(id uuid.UUID, opts PagingOptions) (c []SignedCertificate, e error) {
+	e = b.Bolt().View(func(tx *bolt.Tx) error {
+		c, e = boltLoadCertsByTrust(tx, id, opts.Beg, opts.End)
+		return errors.WithStack(e)
+	})
+	return
+}
+
 func (b *boltStorage) LoadInvitationById(id uuid.UUID) (i Invitation, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		i, o, e = boltLoadInviteById(tx, id)

@@ -66,6 +66,8 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 			return s.CertRevoke(body)
 		case rpcCertsByMemberReq:
 			return s.CertificatesByMember(body)
+		case rpcCertsByTrustReq:
+			return s.CertificatesByTrust(body)
 		}
 	}
 }
@@ -334,6 +336,24 @@ func (s *rpcServer) CertificatesByMember(r rpcCertsByMemberReq) micro.Response {
 
 	s.logger.Debug("Loading member certificates: %v", r.MemberId)
 	certs, err := s.storage.LoadCertificatesByMember(r.MemberId, r.Opts)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+	return micro.NewStandardResponse(rpcCertsResponse{certs})
+}
+
+func (s *rpcServer) CertificatesByTrust(r rpcCertsByTrustReq) micro.Response {
+	now := time.Now()
+	if err := s.authenticate(r.Token, now); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if _, err := s.authorizeTrustUse(r.Token.MemberId, r.TrustId, Manager, now); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	s.logger.Debug("Loading trust certificates: %v", r.TrustId)
+	certs, err := s.storage.LoadCertificatesByTrust(r.TrustId, r.Opts)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
