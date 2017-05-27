@@ -55,7 +55,7 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (r *rpcClient) Register(cancel <-chan struct{}, mem MemberCore, code MemberShard, auth []byte, ttl time.Duration) (SignedToken, error) {
+func (r *rpcClient) Register(cancel <-chan struct{}, mem memberCore, code memberShard, auth []byte, ttl time.Duration) (SignedToken, error) {
 	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{mem, code, auth, ttl}))
 	if err != nil || !raw.Ok {
 		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
@@ -83,15 +83,15 @@ func (r *rpcClient) Authenticate(cancel <-chan struct{}, lookup []byte, auth []b
 	return resp.Token, nil
 }
 
-func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token SignedToken, lookup []byte) (MemberCore, MemberShard, bool, error) {
+func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token SignedToken, lookup []byte) (memberCore, memberShard, bool, error) {
 	raw, err := r.raw.Send(micro.NewRequest(rpcMemberByLookupReq{token, lookup}))
 	if err != nil || !raw.Ok {
-		return MemberCore{}, MemberShard{}, false, errors.WithStack(common.Or(err, raw.Error()))
+		return memberCore{}, memberShard{}, false, errors.WithStack(common.Or(err, raw.Error()))
 	}
 
 	resp, ok := raw.Body.(rpcMemberResponse)
 	if !ok {
-		return MemberCore{}, MemberShard{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return memberCore{}, memberShard{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
 	}
 
 	return resp.Mem, resp.Access, resp.Found, nil

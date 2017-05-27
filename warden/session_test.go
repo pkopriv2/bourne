@@ -1,171 +1,276 @@
 package warden
 
-import "testing"
+import (
+	"crypto/rand"
+	"testing"
+	"time"
+
+	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/micro"
+	"github.com/pkopriv2/bourne/net"
+	"github.com/pkopriv2/bourne/stash"
+	"github.com/stretchr/testify/assert"
+)
 
 func TestSession(t *testing.T) {
-	/*  ctx := common.NewEmptyContext() */
-	// defer ctx.Close()
-	//
-	// db, err := stash.OpenTransient(ctx)
-	// if err != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// store, e := newBoltStorage(db)
-	// if e != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// serverKey, e := GenRsaKey(rand.Reader, 1024)
-	// if e != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// l, e := net.NewTcpNetwork().Listen(30*time.Second, ":0")
-	// if e != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// s, e := newServer(ctx, store, l, rand.Reader, serverKey, 5)
-	// if e != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// timer := ctx.Timer(30 * time.Second)
-	// defer timer.Close()
-	//
-	// cl, e := s.Client(micro.Gob)
-	// assert.Nil(t, e)
-	//
-	// addr := cl.Remote().String()
-	//
-	// subscribe := func(ctx common.Context) (PrivateKey, *Session, error) {
-	// owner, err := GenRsaKey(rand.Reader, 1024)
-	// if err != nil {
-	// return nil, nil, errors.WithStack(err)
-	// }
-	//
-	// session, err := Subscribe(ctx, addr, func(pad KeyPad) error {
-	// return pad.BySignature(owner)
-	// })
-	// if err != nil {
-	// return nil, nil, errors.WithStack(err)
-	// }
-	//
-	// ctx.Control().Defer(func(error) {
-	// session.Close()
-	// })
-	//
-	// return owner, session, nil
-	// }
-	//
-	// connect := func(ctx common.Context, signer Signer) (*Session, error) {
-	// session, err := Connect(ctx, addr, func(pad KeyPad) error {
-	// return pad.BySignature(signer)
-	// })
-	// if err != nil {
-	// return nil, errors.WithStack(err)
-	// }
-	//
-	// ctx.Control().Defer(func(error) {
-	// session.Close()
-	// })
-	//
-	// return session, nil
-	// }
-	//
-	// t.Run("SubscribeBySignature", func(t *testing.T) {
-	// ctx := common.NewEmptyContext()
-	// defer ctx.Close()
-	//
-	// key, session1, err := subscribe(ctx)
-	// assert.Nil(t, err)
-	//
-	// session2, err := connect(ctx, key)
-	// assert.Nil(t, err)
-	// assert.Equal(t, session1.MyKey().Id(), session2.MyKey().Id())
-	// })
-	//
-	// t.Run("SubscribeByPassword", func(t *testing.T) {
-	// ctx := common.NewEmptyContext()
-	// defer ctx.Close()
-	//
-	// session1, err := Subscribe(ctx, addr, func(pad KeyPad) error {
-	// return pad.ByPassword([]byte("user"), []byte("pass"))
-	// })
-	// assert.Nil(t, err)
-	//
-	// ctx.Control().Defer(func(error) {
-	// session1.Close()
-	// })
-	//
-	// session2, err := Connect(ctx, addr, func(pad KeyPad) error {
-	// return pad.ByPassword([]byte("user"), []byte("pass"))
-	// })
-	// assert.Nil(t, err)
-	// assert.NotNil(t, session2)
-	//
-	// // ctx.Control().Defer(func(error) {
-	// // session2.Close()
-	// // })
-	//
-	// // session2, err := connect(ctx, key)
-	// // assert.Nil(t, err)
-	// // assert.Equal(t, session1.MyKey().Id(), session2.MyKey().Id())
-	// })
-	//
-	// t.Run("NewTrust", func(t *testing.T) {
-	// ctx := common.NewEmptyContext()
-	// defer ctx.Close()
-	//
-	// _, session, err := subscribe(ctx)
-	// if err != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// trust1, err := session.NewTrust(timer.Closed(), "test")
-	// assert.Nil(t, err)
-	//
-	// trust2, o, err := session.LoadTrust(timer.Closed(), trust1.Id)
-	// assert.Nil(t, err)
-	// assert.True(t, o)
-	// assert.Equal(t, trust1.trusteeCert, trust2.trusteeCert)
-	// assert.Equal(t, trust1.trusteeShard, trust2.trusteeShard)
-	//
-	// certs, err := session.MyCertificates(timer.Closed())
-	// assert.Nil(t, err)
-	// assert.Equal(t, 1, len(certs))
-	// assert.Equal(t, trust1.trusteeCert, certs[0])
-	//
-	// certs, err = session.LoadCertificates(timer.Closed(), trust1)
-	// assert.Nil(t, err)
-	// assert.Equal(t, 1, len(certs))
-	// assert.Equal(t, trust1.trusteeCert, certs[0])
-	//
-	// mySecret, err := session.mySecret()
-	// assert.Nil(t, err)
-	//
-	// trust1Secret, err := trust1.deriveSecret(mySecret)
-	// assert.Nil(t, err)
-	//
-	// trust2Secret, err := trust2.deriveSecret(mySecret)
-	// assert.Nil(t, err)
-	//
-	// trust1SigningKey, err := trust1.unlockSigningKey(trust1Secret)
-	// assert.Nil(t, err)
-	// assert.NotNil(t, trust1SigningKey)
-	//
-	// trust2SigningKey, err := trust2.unlockSigningKey(trust2Secret)
-	// assert.Nil(t, err)
-	// assert.NotNil(t, trust2SigningKey)
-	// })
-	//
+	ctx := common.NewEmptyContext()
+	defer ctx.Close()
+
+	db, err := stash.OpenTransient(ctx)
+	if err != nil {
+		t.FailNow()
+		return
+	}
+
+	store, e := newBoltStorage(db)
+	if e != nil {
+		t.FailNow()
+		return
+	}
+
+	serverKey, e := GenRsaKey(rand.Reader, 1024)
+	if e != nil {
+		t.FailNow()
+		return
+	}
+
+	l, e := net.NewTcpNetwork().Listen(30*time.Second, ":0")
+	if e != nil {
+		t.FailNow()
+		return
+	}
+
+	s, e := newServer(ctx, store, l, rand.Reader, serverKey, 5)
+	if e != nil {
+		t.FailNow()
+		return
+	}
+
+	timer := ctx.Timer(30 * time.Second)
+	defer timer.Close()
+
+	cl, e := s.Client(micro.Gob)
+	assert.Nil(t, e)
+
+	addr := cl.Remote().String()
+
+	subscribe := func(ctx common.Context) (PrivateKey, *Session, error) {
+		owner, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			return nil, nil, errors.WithStack(err)
+		}
+
+		session, err := Subscribe(ctx, addr, func(pad KeyPad) error {
+			return pad.BySignature(owner)
+		})
+		if err != nil {
+			return nil, nil, errors.WithStack(err)
+		}
+
+		ctx.Control().Defer(func(error) {
+			session.Close()
+		})
+
+		return owner, session, nil
+	}
+
+	connect := func(ctx common.Context, signer Signer) (*Session, error) {
+		session, err := Connect(ctx, addr, func(pad KeyPad) error {
+			return pad.BySignature(signer)
+		})
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		ctx.Control().Defer(func(error) {
+			session.Close()
+		})
+
+		return session, nil
+	}
+
+	t.Run("BySignature", func(t *testing.T) {
+		ctx := common.NewEmptyContext()
+		defer ctx.Close()
+
+		key, session, err := subscribe(ctx)
+		if !assert.Nil(t, err) {
+			return
+		}
+
+		t.Run("Connect", func(t *testing.T) {
+			sub, err := connect(ctx, key)
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			assert.Equal(t, session.MyId(), sub.MyId())
+		})
+
+		t.Run("ConnectBadKey", func(t *testing.T) {
+			_, err := connect(ctx, serverKey)
+			assert.NotNil(t, err)
+		})
+
+		t.Run("Secret", func(t *testing.T) {
+			secret, err := session.mySecret()
+			assert.Nil(t, err)
+			assert.NotNil(t, secret)
+		})
+
+		t.Run("SigningKey", func(t *testing.T) {
+			secret, err := session.mySecret()
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			key, err := session.mySigningKey(secret)
+			assert.Nil(t, err)
+			assert.NotNil(t, key)
+		})
+
+		t.Run("InviteKey", func(t *testing.T) {
+			secret, err := session.mySecret()
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			key, err := session.myInvitationKey(secret)
+			assert.Nil(t, err)
+			assert.NotNil(t, key)
+		})
+	})
+
+	t.Run("ByPassword", func(t *testing.T) {
+		ctx := common.NewEmptyContext()
+		defer ctx.Close()
+
+		session, err := Subscribe(ctx, addr, func(pad KeyPad) error {
+			return pad.ByPassword("user", "pass")
+		})
+		if !assert.Nil(t, err) {
+			return
+		}
+
+		t.Run("Connect", func(t *testing.T) {
+			sub, err := Connect(ctx, addr, func(pad KeyPad) error {
+				return pad.ByPassword("user", "pass")
+			})
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			assert.Equal(t, session.MyId(), sub.MyId())
+		})
+
+		t.Run("ConnectBadUser", func(t *testing.T) {
+			_, err := Connect(ctx, addr, func(pad KeyPad) error {
+				return pad.ByPassword("bad", "pass")
+			})
+			assert.NotNil(t, err)
+		})
+
+		t.Run("ConnectBadPass", func(t *testing.T) {
+			_, err := Connect(ctx, addr, func(pad KeyPad) error {
+				return pad.ByPassword("user", "bad")
+			})
+			assert.NotNil(t, err)
+		})
+
+		t.Run("Secret", func(t *testing.T) {
+			secret, err := session.mySecret()
+			assert.Nil(t, err)
+			assert.NotNil(t, secret)
+		})
+
+		t.Run("SigningKey", func(t *testing.T) {
+			secret, err := session.mySecret()
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			key, err := session.mySigningKey(secret)
+			assert.Nil(t, err)
+			assert.NotNil(t, key)
+		})
+
+		t.Run("InviteKey", func(t *testing.T) {
+			secret, err := session.mySecret()
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			key, err := session.myInvitationKey(secret)
+			assert.Nil(t, err)
+			assert.NotNil(t, key)
+		})
+	})
+
+	t.Run("NewTrust", func(t *testing.T) {
+		ctx := common.NewEmptyContext()
+		defer ctx.Close()
+
+		_, session, err := subscribe(ctx)
+		if !assert.Nil(t, err) {
+			return
+		}
+
+		trust, err := session.NewTrust(timer.Closed(), "test")
+		if !assert.Nil(t, err) {
+			return
+		}
+
+		mySecret, err := session.mySecret()
+		if !assert.Nil(t, err) {
+			return
+		}
+
+		secret, err := trust.deriveSecret(mySecret)
+		if !assert.Nil(t, err) {
+			return
+		}
+
+		t.Run("LoadTrust", func(t *testing.T) {
+			loaded, found, err := session.LoadTrust(timer.Closed(), trust.Id)
+			if !assert.Nil(t, err) || !assert.NotNil(t, loaded) {
+				return
+			}
+
+			assert.True(t, found)
+			assert.Equal(t, trust.trusteeCert, loaded.trusteeCert)
+			assert.Equal(t, trust.trusteeShard, loaded.trusteeShard)
+
+			loadedSecret, err := trust.deriveSecret(mySecret)
+			if ! assert.Nil(t, err) {
+				return
+			}
+
+			assert.Equal(t, secret, loadedSecret)
+		})
+
+		t.Run("LoadCertificates", func(t *testing.T) {
+			certs, err := session.LoadCertificates(timer.Closed(), trust)
+			if ! assert.Nil(t, err) {
+				return
+			}
+
+			assert.Equal(t, 1, len(certs))
+			assert.Equal(t, trust.trusteeCert, certs[0])
+		})
+
+		t.Run("MyCertificates", func(t *testing.T) {
+			certs, err := session.MyCertificates(timer.Closed())
+			if ! assert.Nil(t, err) {
+				return
+			}
+
+			assert.Equal(t, 1, len(certs))
+			assert.Equal(t, trust.trusteeCert, certs[0])
+		})
+
+	})
+
 	// t.Run("Invite", func(t *testing.T) {
 	// ctx := common.NewEmptyContext()
 	// defer ctx.Close()
@@ -298,5 +403,5 @@ func TestSession(t *testing.T) {
 	// trusts2, err := session2.MyTrusts(timer.Closed())
 	// assert.Nil(t, err)
 	// assert.Empty(t, len(trusts2))
-	/* }) */
+	// })
 }

@@ -18,13 +18,13 @@ type storage interface {
 	// of a subscriber are guaranteed to be static throughout its lifetime.
 	//
 	// Returns an error if the subscriber already exists.
-	SaveMember(MemberCore, MemberAuth) error
+	SaveMember(memberCore, memberAuth) error
 
 	// Loads a member by a code lookup.
-	LoadMemberByLookup([]byte) (MemberCore, MemberAuth, bool, error)
+	LoadMemberByLookup([]byte) (memberCore, memberAuth, bool, error)
 
 	// Loads the subscriber, returning true if it existed.
-	LoadMemberById(uuid.UUID) (MemberCore, bool, error)
+	LoadMemberById(uuid.UUID) (memberCore, bool, error)
 
 	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
 	SaveTrust(TrustCore, TrustCode, SignedCertificate) error
@@ -63,7 +63,7 @@ type storage interface {
 	RevokeCertificate(trusteeId, trustId uuid.UUID) error
 }
 
-func EnsureMember(store storage, id uuid.UUID) (MemberCore, error) {
+func EnsureMember(store storage, id uuid.UUID) (memberCore, error) {
 	s, o, e := store.LoadMemberById(id)
 	if e != nil || !o {
 		return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No member [%v]", id))

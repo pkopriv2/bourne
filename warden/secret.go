@@ -24,14 +24,14 @@ import (
 type SecretAlgorithm int
 
 const (
-	Shamir SecretAlgorithm = iota
+	ShamirAlpha SecretAlgorithm = iota
 )
 
 func (s SecretAlgorithm) Parse(raw []byte) (ret Shard, err error) {
 	switch s {
 	default:
 		return nil, errors.Wrapf(TrustError, "Unknown sharding algorithm [%v]", s)
-	case Shamir:
+	case ShamirAlpha:
 		return parseShamirShard(raw)
 	}
 }
@@ -40,7 +40,7 @@ func (s SecretAlgorithm) RandomSecret(rand io.Reader, opts SecretOptions) (Secre
 	switch s {
 	default:
 		return nil, errors.Wrapf(TrustError, "Unknown sharding algorithm [%v]", s)
-	case Shamir:
+	case ShamirAlpha:
 		return generateShamirSecret(rand, opts)
 	}
 }
@@ -60,7 +60,7 @@ type SecretOptions struct {
 }
 
 func defaultSecretOptions() SecretOptions {
-	return SecretOptions{Shamir, 32, SHA256, Aes256Gcm, SHA256, 1024, 32}
+	return SecretOptions{ShamirAlpha, 32, SHA256, Aes256Gcm, SHA256, 1024, 32}
 }
 
 func buildSecretOptions(fns ...func(*SecretOptions)) SecretOptions {

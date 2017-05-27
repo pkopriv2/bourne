@@ -23,7 +23,7 @@ func TestMember(t *testing.T) {
 
 	t.Run("NewMember_WithSigner", func(t *testing.T) {
 		login := func(pad KeyPad) error {
-			return pad.BySignature(owner, SHA256)
+			return pad.BySignature(owner)
 		}
 
 		creds, e := extractCreds(login)
@@ -32,7 +32,7 @@ func TestMember(t *testing.T) {
 		sub, auth, e := newMember(rand.Reader, creds)
 		assert.Nil(t, e)
 
-		secret, e := sub.secret(rand.Reader, auth, login)
+		secret, e := sub.secret(auth, login)
 		assert.Nil(t, e)
 
 		_, e = sub.encryptionSeed(secret)
@@ -47,17 +47,16 @@ func TestMember(t *testing.T) {
 
 	t.Run("NewMember_WithPassword", func(t *testing.T) {
 		login := func(pad KeyPad) error {
-			return pad.ByPassword([]byte("user"), []byte("pass"))
+			return pad.ByPassword("user", "pass")
 		}
 
 		creds, e := extractCreds(login)
 		assert.Nil(t, e)
 
-
 		sub, auth, e := newMember(rand.Reader, creds)
 		assert.Nil(t, e)
 
-		secret, e := sub.secret(rand.Reader, auth, login)
+		secret, e := sub.secret(auth, login)
 		assert.Nil(t, e)
 
 		_, e = sub.encryptionSeed(secret)

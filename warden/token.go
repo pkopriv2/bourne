@@ -24,7 +24,7 @@ type Token struct {
 	Expires  time.Time
 }
 
-func newAuth(memberId uuid.UUID, ttl time.Duration) Token {
+func newToken(memberId uuid.UUID, ttl time.Duration) Token {
 	now := time.Now()
 	return Token{memberId, time.Now(), now.Add(ttl)}
 }

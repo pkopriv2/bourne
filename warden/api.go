@@ -69,8 +69,8 @@ type SubscribeOptions struct {
 	Deps *Dependencies
 }
 
-func (s *SubscribeOptions) memberOptions() func(o *MemberOptions) {
-	return func(o *MemberOptions) {
+func (s *SubscribeOptions) memberOptions() func(o *memberOptions) {
+	return func(o *memberOptions) {
 		o.SecretOptions(func(o *SecretOptions) {
 			o.ShardAlg = s.SecretAlgorithm
 			o.ShardStrength = s.SecretStrength
@@ -91,7 +91,7 @@ func (s *SubscribeOptions) memberOptions() func(o *MemberOptions) {
 func buildSubscribeOptions(fns ...func(*SubscribeOptions)) SubscribeOptions {
 	ret := SubscribeOptions{
 		SessionOptions:     buildSessionOptions(),
-		SecretAlgorithm:    Shamir,
+		SecretAlgorithm:    ShamirAlpha,
 		SecretStrength:     32,
 		SigningKeyAlg:      Rsa,
 		SigningKeyStrength: 2048,

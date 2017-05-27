@@ -40,6 +40,8 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 			return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unknown request type: %v", reflect.TypeOf(body)))
 		case rpcRegisterMemberReq:
 			return s.RegisterMember(body)
+		case rpcAuthReq:
+			return s.Authenticate(body)
 		case rpcMemberByLookupReq:
 			return s.MemberByLookup(body)
 		case rpcMemberSigningKeyByIdReq:
@@ -70,39 +72,10 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 	}
 }
 
-func (s *rpcServer) newMemberAuth(id uuid.UUID, shard MemberShard, args []byte) (MemberAuth, error) {
-	var raw []byte
-	switch shard.Proto {
-	default:
-		return MemberAuth{}, errors.Wrapf(AuthError, "Unsupported protocol [%v]", shard.Proto)
-	case PassV1:
-		impl, err := newV1PassAuth(s.rand, 32, 1024, SHA256, args)
-		if err != nil {
-			return MemberAuth{}, errors.WithStack(err)
-		}
-
-		raw, err = gobBytes(impl)
-		if err != nil {
-			return MemberAuth{}, errors.WithStack(err)
-		}
-	case SignV1:
-		impl, err := newSignAuth(args)
-		if err != nil {
-			return MemberAuth{}, errors.WithStack(err)
-		}
-
-		raw, err = gobBytes(impl)
-		if err != nil {
-			return MemberAuth{}, errors.WithStack(err)
-		}
-	}
-	return MemberAuth{id, shard, raw}, nil
-}
-
 func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 	s.logger.Debug("Registering new member: %v", r.Core.Id)
 
-	auth, err := s.newMemberAuth(r.Core.Id, r.Shard, r.Auth)
+	auth, err := newMemberAuth(s.rand, r.Core.Id, r.Shard, r.Auth)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -111,7 +84,7 @@ func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newAuth(r.Core.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
+	token, err := newToken(r.Core.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -119,48 +92,31 @@ func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 	return micro.NewStandardResponse(rpcToken{token})
 }
 
-// func (s *rpcServer) TokenBySignature(r rpcTokenBySignatureReq) micro.Response {
-// return micro.NewEmptyResponse()
-// // member, code, o, e := s.storage.LoadMemberByLookup(r.Lookup)
-// // if e != nil {
-// // return micro.NewErrorResponse(errors.WithStack(e))
-// // }
-// //
-// // s.logger.Error("Generating a token by signature for member [%v]", member.Id)
-// // if !o {
-// // s.logger.Error("No member found by signature [%v]", cryptoBytes(r.Lookup).Hex())
-// // return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
-// // }
-// //
-// // shard, ok := code.MemberShard.(SignatureShard)
-// // if !ok {
-// // s.logger.Error("Unexpected request type", r.Lookup)
-// // return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unexpected request [%v]", r))
-// // }
-// // if r.Sig.Key != shard.Pub.Id() {
-// // s.logger.Error("Unauthorized access attempt: %v", r.Lookup)
-// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
-// // }
-// //
-// // if time.Now().Sub(r.Challenge.Now) > 5*time.Minute {
-// // s.logger.Error("Unauthorized access.  Old token [%v] for member [%v]", r.Challenge.Now, member.Id)
-// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
-// // }
-// //
-// // if err := verify(r.Challenge, shard.Pub, r.Sig); err != nil {
-// // s.logger.Error("Unauthorized access.")
-// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unverified signature"))
-// // }
-// //
-// // token, err := newAuth(member.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
-// // if err != nil {
-// // return micro.NewErrorResponse(errors.WithStack(err))
-// // }
-// //
-// // return micro.NewStandardResponse(rpcToken{token})
-// }
+func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
+	core, auth, o, e := s.storage.LoadMemberByLookup(r.Lookup)
+	if e != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
+	}
 
-func (s *rpcServer) authenticate(t SignedToken, now time.Time) error {
+	s.logger.Error("Generating a token by signature for member [%v]", core.Id)
+	if !o {
+		s.logger.Error("No member found by lookup [%v]", cryptoBytes(r.Lookup).Base64())
+		return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
+	}
+
+	if err := auth.authenticate(r.Args); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	token, err := newToken(core.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	return micro.NewStandardResponse(rpcToken{token})
+}
+
+func (s *rpcServer) authenticateToken(t SignedToken, now time.Time) error {
 	if t.Expired(now) {
 		return errors.Wrapf(TokenExpiredError, "Expired token [created=%v,expired=%v,now=%v]", t.Created, t.Expires, now)
 	}
@@ -191,7 +147,7 @@ func (s *rpcServer) authorizeMemberUse(memberId, by uuid.UUID) error {
 }
 
 func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -211,7 +167,7 @@ func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
 }
 
 func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -227,7 +183,7 @@ func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Res
 }
 
 func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -243,7 +199,7 @@ func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Respo
 }
 
 func (s *rpcServer) RegisterTrust(r rpcTrustRegisterReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -256,7 +212,7 @@ func (s *rpcServer) RegisterTrust(r rpcTrustRegisterReq) micro.Response {
 
 func (s *rpcServer) LoadTrustById(r rpcTrustByIdReq) micro.Response {
 	now := time.Now()
-	if err := s.authenticate(r.Token, now); err != nil {
+	if err := s.authenticateToken(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -292,7 +248,7 @@ func (s *rpcServer) LoadTrustById(r rpcTrustByIdReq) micro.Response {
 
 func (s *rpcServer) InvitationRegister(r rpcInviteRegisterReq) micro.Response {
 	now := time.Now()
-	if err := s.authenticate(r.Token, now); err != nil {
+	if err := s.authenticateToken(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -310,7 +266,7 @@ func (s *rpcServer) InvitationRegister(r rpcInviteRegisterReq) micro.Response {
 
 func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
 	now := time.Now()
-	if err := s.authenticate(r.Token, now); err != nil {
+	if err := s.authenticateToken(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -328,7 +284,7 @@ func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
 }
 
 func (s *rpcServer) InvitationsByMember(r rpcInvitesByMemberReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -346,7 +302,7 @@ func (s *rpcServer) InvitationsByMember(r rpcInvitesByMemberReq) micro.Response 
 }
 
 func (s *rpcServer) CertRegister(r rpcCertRegisterReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -359,7 +315,7 @@ func (s *rpcServer) CertRegister(r rpcCertRegisterReq) micro.Response {
 }
 
 func (s *rpcServer) CertificatesByMember(r rpcCertsByMemberReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -377,7 +333,7 @@ func (s *rpcServer) CertificatesByMember(r rpcCertsByMemberReq) micro.Response {
 
 func (s *rpcServer) CertificatesByTrust(r rpcCertsByTrustReq) micro.Response {
 	now := time.Now()
-	if err := s.authenticate(r.Token, now); err != nil {
+	if err := s.authenticateToken(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -395,7 +351,7 @@ func (s *rpcServer) CertificatesByTrust(r rpcCertsByTrustReq) micro.Response {
 
 func (s *rpcServer) CertRevoke(r rpcCertRevokeReq) micro.Response {
 	now := time.Now()
-	if err := s.authenticate(r.Token, now); err != nil {
+	if err := s.authenticateToken(r.Token, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -409,7 +365,7 @@ func (s *rpcServer) CertRevoke(r rpcCertRevokeReq) micro.Response {
 }
 
 func (s *rpcServer) TrustsByMember(r rpcTrustsByMemberReq) micro.Response {
-	if err := s.authenticate(r.Token, time.Now()); err != nil {
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -494,8 +450,8 @@ type rpcMemberKeyResponse struct {
 
 type rpcMemberResponse struct {
 	Found  bool
-	Mem    MemberCore
-	Access MemberShard
+	Mem    memberCore
+	Access memberShard
 }
 
 type rpcAuthReq struct {
@@ -505,8 +461,8 @@ type rpcAuthReq struct {
 }
 
 type rpcRegisterMemberReq struct {
-	Core       MemberCore
-	Shard      MemberShard
+	Core       memberCore
+	Shard      memberShard
 	Auth       []byte
 	Expiration time.Duration
 }

@@ -44,10 +44,10 @@ type Session struct {
 	login func(KeyPad) error
 
 	// the session's owners membership info=
-	member MemberCore
+	core memberCore
 
 	// the access shard used for this session
-	code MemberShard
+	shard memberShard
 
 	// the transport mechanism. (expected to be secure).
 	net Transport
@@ -62,7 +62,7 @@ type Session struct {
 	opts SessionOptions
 }
 
-func newSession(ctx common.Context, m MemberCore, a MemberShard, t SignedToken, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
+func newSession(ctx common.Context, m memberCore, a memberShard, t SignedToken, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
 	var err error
 
 	ctx = ctx.Sub("Session(memberId=%v)", m.Id.String()[:8])
@@ -80,8 +80,8 @@ func newSession(ctx common.Context, m MemberCore, a MemberShard, t SignedToken, 
 		ctx:    ctx,
 		logger: ctx.Logger(),
 		login:  l,
-		member: m,
-		code:   a,
+		core:   m,
+		shard:  a,
 		net:    d.Net,
 		rand:   d.Rand,
 		tokens: make(chan SignedToken),
@@ -131,7 +131,7 @@ func (s *Session) start(t SignedToken) {
 		timeout := 1 * time.Second
 		for {
 			if token == nil {
-				s.logger.Info("Renewing session token [%v]", s.member.Id)
+				s.logger.Info("Renewing session token [%v]", s.core.Id)
 
 				t, err := s.auth(s.ctx.Control().Closed())
 				if err != nil {
@@ -162,38 +162,41 @@ func (s *Session) start(t SignedToken) {
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
 func (s *Session) MyId() uuid.UUID {
-	return s.member.Id
+	return s.core.Id
 }
 
 // Returns the session owner's public signing key.  This key and its id may be shared freely.
 func (s *Session) MyKey() PublicKey {
-	return s.member.SigningKey.Pub
+	return s.core.SigningKey.Pub
 }
 
 // Returns the session owner's secret.  This should be destroyed promptly after use.
 func (s *Session) mySecret() (Secret, error) {
-	return nil, nil
-	// secret, err := s.member.secret(s.code, s.login)
-	// return secret, errors.WithStack(err)
+	secret, err := s.core.secret(s.shard, s.login)
+	return secret, errors.WithStack(err)
 }
 
 // Returns the personal encryption seed of this subscription.
 func (s *Session) myEncryptionSeed(secret Secret) ([]byte, error) {
-	seed, err := s.member.encryptionSeed(secret)
+	seed, err := s.core.encryptionSeed(secret)
 	return seed, errors.WithStack(err)
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
 func (s *Session) mySigningKey(secret Secret) (PrivateKey, error) {
-	key, err := s.member.signingKey(secret)
+	key, err := s.core.signingKey(secret)
 	return key, errors.WithStack(err)
 }
 
 // Returns the invitation key associated with this session. Should be promptly destroyed.
 func (s *Session) myInvitationKey(secret Secret) (PrivateKey, error) {
-	key, err := s.member.invitationKey(secret)
+	key, err := s.core.invitationKey(secret)
 	return key, errors.WithStack(err)
 }
+
+// // Returns the invitation key associated with this session. Should be promptly destroyed.
+// func (s *Session) AddSigner(signer Signer) (PrivateKey, error) {
+// }
 
 // Lists the session owner's currently pending invitations.
 func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {

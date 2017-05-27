@@ -1,59 +1,85 @@
 package warden
 
-import "testing"
+import (
+	"crypto/rand"
+	"testing"
+
+	"github.com/pkopriv2/bourne/common"
+	"github.com/pkopriv2/bourne/stash"
+	"github.com/stretchr/testify/assert"
+)
 
 func TestStorage(t *testing.T) {
-	// db, err := stash.OpenTransient(common.NewEmptyContext())
-	// if err != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// store, err := newBoltStorage(db)
-	// if err != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// if err := initBoltBuckets(db); err != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// t.Run("SaveMember", func(t *testing.T) {
-	// owner, err := GenRsaKey(rand.Reader, 1024)
-	// if err != nil {
-	// t.FailNow()
-	// return
-	// }
-	//
-	// login := func(pad KeyPad) error {
-	// return pad.BySignature(owner)
-	// }
-	//
-	// creds, e := enterCreds(login)
-	//
-	// mem, code, e := newMember(rand.Reader, creds)
-	// assert.Nil(t, e)
-	// assert.Nil(t, store.SaveMember(mem, code))
-	//
-	// m, o, e := store.LoadMemberById(mem.Id)
-	// assert.Nil(t, e)
-	// assert.True(t, o)
-	//
-	// a, o, e := store.LoadMemberCode(code.Lookup())
-	// assert.Nil(t, e)
-	// assert.True(t, o)
-	// assert.Equal(t, mem.Id, a.MemberId)
-	//
-	// now, e := m.secret(a, login)
-	// assert.Nil(t, e)
-	//
-	// was, e := mem.secret(code, login)
-	// assert.Nil(t, e)
-	// assert.Equal(t, was, now)
-	// })
-	//
+	db, err := stash.OpenTransient(common.NewEmptyContext())
+	if err != nil {
+		t.FailNow()
+		return
+	}
+
+	store, err := newBoltStorage(db)
+	if err != nil {
+		t.FailNow()
+		return
+	}
+
+	if err := initBoltBuckets(db); err != nil {
+		t.FailNow()
+		return
+	}
+
+	t.Run("SaveMember", func(t *testing.T) {
+		owner, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			t.FailNow()
+			return
+		}
+
+		login := func(pad KeyPad) error {
+			return pad.BySignature(owner)
+		}
+
+		creds, e := extractCreds(login)
+		assert.Nil(t, e)
+
+		mem, code, e := newMember(rand.Reader, creds)
+		assert.Nil(t, e)
+
+		args, e := creds.Auth(rand.Reader)
+		assert.Nil(t, e)
+
+		auth, err := newMemberAuth(rand.Reader, mem.Id, code, args)
+		assert.Nil(t, store.SaveMember(mem, auth))
+
+		m, o, e := store.LoadMemberById(mem.Id)
+		assert.Nil(t, e)
+		assert.True(t, o)
+
+		a, o, e := store.LoadMemberAuth(creds.Lookup())
+		assert.Nil(t, e)
+		assert.True(t, o)
+		assert.Equal(t, mem.Id, a.MemberId)
+
+		now, e := m.secret(a.Shard, login)
+		assert.Nil(t, e)
+
+		was, e := mem.secret(code, login)
+		assert.Nil(t, e)
+		assert.Equal(t, was, now)
+
+		owner2, err := GenRsaKey(rand.Reader, 1024)
+		if err != nil {
+			t.FailNow()
+			return
+		}
+
+		login2 := func(pad KeyPad) error {
+			return pad.BySignature(owner2)
+		}
+
+		_, e = mem.secret(code, login2)
+		assert.NotNil(t, e)
+	})
+
 	// t.Run("LoadMemberById_NoExist", func(t *testing.T) {
 	// _, o, e := store.LoadMemberById(uuid.UUID{})
 	// assert.Nil(t, e)
@@ -84,7 +110,7 @@ func TestStorage(t *testing.T) {
 	// assert.Nil(t, store.SaveMember(mem, code))
 	// assert.NotNil(t, store.SaveMember(mem, code))
 	// })
-	//
+
 	// t.Run("SaveTrust", func(t *testing.T) {
 	// memberKey, err := GenRsaKey(rand.Reader, 1024)
 	// if err != nil {

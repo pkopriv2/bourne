@@ -82,7 +82,7 @@ func (b *boltStorage) Bolt() *bolt.DB {
 	return (*bolt.DB)(b)
 }
 
-func (b *boltStorage) SaveMember(core MemberCore, auth MemberAuth) error {
+func (b *boltStorage) SaveMember(core memberCore, auth memberAuth) error {
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
 		if err := boltStoreMember(tx, core); err != nil {
 			return errors.WithStack(err)
@@ -91,7 +91,7 @@ func (b *boltStorage) SaveMember(core MemberCore, auth MemberAuth) error {
 	})
 }
 
-func (b *boltStorage) LoadMemberById(id uuid.UUID) (m MemberCore, o bool, e error) {
+func (b *boltStorage) LoadMemberById(id uuid.UUID) (m memberCore, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		m, o, e = boltLoadMember(tx, id)
 		return errors.WithStack(e)
@@ -99,7 +99,7 @@ func (b *boltStorage) LoadMemberById(id uuid.UUID) (m MemberCore, o bool, e erro
 	return
 }
 
-func (b *boltStorage) LoadMemberAuth(lookup []byte) (s MemberAuth, o bool, e error) {
+func (b *boltStorage) LoadMemberAuth(lookup []byte) (s memberAuth, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		s, o, e = boltLoadMemberShard(tx, lookup)
 		return e
@@ -107,15 +107,15 @@ func (b *boltStorage) LoadMemberAuth(lookup []byte) (s MemberAuth, o bool, e err
 	return
 }
 
-func (b *boltStorage) LoadMemberByLookup(lookup []byte) (m MemberCore, s MemberAuth, o bool, e error) {
+func (b *boltStorage) LoadMemberByLookup(lookup []byte) (m memberCore, s memberAuth, o bool, e error) {
 	s, o, e = b.LoadMemberAuth(lookup)
 	if e != nil || !o {
-		return MemberCore{}, MemberAuth{}, false, errors.WithStack(e)
+		return memberCore{}, memberAuth{}, false, errors.WithStack(e)
 	}
 
 	m, o, e = b.LoadMemberById(s.MemberId)
 	if e != nil || !o {
-		return MemberCore{}, MemberAuth{}, false, errors.WithStack(e)
+		return memberCore{}, memberAuth{}, false, errors.WithStack(e)
 	}
 	return
 }
@@ -285,7 +285,7 @@ func (b *boltStorage) SaveCertificate(cert SignedCertificate, code TrustCode) er
 	})
 }
 
-func boltStoreMember(tx *bolt.Tx, m MemberCore) error {
+func boltStoreMember(tx *bolt.Tx, m memberCore) error {
 	if err := boltEnsureEmpty(tx.Bucket(memberBucket), stash.UUID(m.Id)); err != nil {
 		return errors.Wrapf(err, "Member already exists [%v]", m.Id)
 	}
@@ -303,12 +303,12 @@ func boltStoreMember(tx *bolt.Tx, m MemberCore) error {
 	return nil
 }
 
-func boltLoadMember(tx *bolt.Tx, id uuid.UUID) (s MemberCore, o bool, e error) {
+func boltLoadMember(tx *bolt.Tx, id uuid.UUID) (s memberCore, o bool, e error) {
 	o, e = parseGobBytes(tx.Bucket(memberBucket).Get(stash.UUID(id)), &s)
 	return
 }
 
-func boltStoreMemberAuth(tx *bolt.Tx, a MemberAuth) error {
+func boltStoreMemberAuth(tx *bolt.Tx, a memberAuth) error {
 	if err := boltEnsureEmpty(tx.Bucket(memberCodeBucket), a.Shard.Id); err != nil {
 		return errors.Wrap(err, "Access code for lookup already exists.")
 	}
@@ -323,7 +323,7 @@ func boltStoreMemberAuth(tx *bolt.Tx, a MemberAuth) error {
 	return nil
 }
 
-func boltLoadMemberShard(tx *bolt.Tx, lookup []byte) (k MemberAuth, o bool, e error) {
+func boltLoadMemberShard(tx *bolt.Tx, lookup []byte) (k memberAuth, o bool, e error) {
 	o, e = parseGobBytes(
 		tx.Bucket(memberCodeBucket).Get(lookup), &k)
 	return
