@@ -8,23 +8,34 @@ import "github.com/pkg/errors"
 // Future: Accept alternative login methods (e.g. pins, passwords, multi-factor, etc...)
 
 type KeyPad interface {
-	BySignature(Signer) error
+	BySignature(Signer, Hash) error
+	ByPassword(user []byte, pass []byte) error
 }
 
 // A one time keypad.  Destroyed after first use.
 type oneTimePad struct {
-	Signer Signer
+	Creds credential
 }
 
-func (c *oneTimePad) BySignature(s Signer) error {
-	c.Signer = s
+func (c *oneTimePad) BySignature(s Signer, h Hash) error {
+	c.Creds = &signCreds{s, h}
 	return nil
 }
 
-func enterCreds(fn func(KeyPad) error) (*oneTimePad, error) {
+func (c *oneTimePad) ByPassword(user []byte, pass []byte) error {
+	preHash, err := cryptoBytes(pass).Hash(SHA256)
+	if err != nil {
+		return errors.Wrapf(err, "Error pre-hashing user password [%v]", string(user))
+	}
+
+	c.Creds = &passCreds{user, preHash}
+	return nil
+}
+
+func enterCreds(fn func(KeyPad) error) (credential, error) {
 	pad := &oneTimePad{}
 	if err := fn(pad); err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return pad, nil
+	return pad.Creds, nil
 }

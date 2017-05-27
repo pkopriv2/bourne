@@ -9,6 +9,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+// Register all the gob types.
+func init() {
+	gob.Register(&rsaPublicKey{})
+}
+
 func GenRsaKey(rand io.Reader, bits int) (*rsaPrivateKey, error) {
 	key, err := rsa.GenerateKey(rand, bits)
 	if err != nil {

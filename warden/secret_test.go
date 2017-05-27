@@ -21,7 +21,7 @@ func TestOracle(t *testing.T) {
 	assert.Nil(t, e)
 
 	t.Run("GenerateAndUnlock", func(t *testing.T) {
-		k, e := encryptShard(rand.Reader, priv, shard, []byte("pass"))
+		k, e := encryptAndSignShard(rand.Reader, priv, shard, []byte("pass"))
 		assert.Nil(t, e)
 
 		sh, e := k.Decrypt([]byte("pass"))

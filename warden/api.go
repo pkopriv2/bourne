@@ -34,6 +34,7 @@ var (
 	TokenInvalidError  = errors.New("Warden:TokenInvalid")
 	UnauthorizedError  = errors.New("Warden:Unauthorized")
 	InvariantError     = errors.New("Warden:InvariantError")
+	AuthError          = errors.New("Warden:AuthError")
 	TrustError         = errors.New("Warden:TrustError")
 	UnknownMemberError = errors.New("Warden:UnknownMember")
 	UnknownTrustError  = errors.New("Warden:UnknownTrust")
@@ -151,10 +152,6 @@ func buildDependencies(ctx common.Context, addr string, timeout time.Duration, f
 
 // Registers a new subscription with the trust service.
 func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*SubscribeOptions)) (*Session, error) {
-	creds, err := enterCreds(login)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
 
 	opts := buildSubscribeOptions(fns...)
 	if opts.Deps == nil {
@@ -163,6 +160,11 @@ func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ..
 			return nil, errors.WithStack(err)
 		}
 		opts.Deps = &deps
+	}
+
+	creds, err := enterCreds(login)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
 
 	timer := ctx.Timer(opts.NetTimeout)
@@ -184,11 +186,6 @@ func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ..
 
 // Connects
 func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*ConnectOptions)) (*Session, error) {
-	creds, err := enterCreds(login)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
 	opts := buildConnectOptions(fns...)
 	if opts.Deps == nil {
 		deps, err := buildDependencies(ctx, addr, opts.SessionOptions.NetTimeout)
@@ -198,42 +195,30 @@ func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...f
 		opts.Deps = &deps
 	}
 
+	creds, err := enterCreds(login)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	timer := ctx.Timer(opts.SessionOptions.NetTimeout)
 	defer timer.Closed()
 
-	token, err := auth(timer.Closed(), opts.Deps.Rand, opts.Deps.Net, creds, opts.SessionOptions)
+	token, err := opts.Deps.Net.Authenticate(timer.Closed(), opts.Deps.Rand, creds, opts.TokenExpiration)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	mem, ac, o, err := opts.Deps.Net.MemberByLookup(timer.Closed(), token, newSigLookup(creds.Signer.Public()))
+	core, code, found, err := opts.Deps.Net.MemberByLookup(timer.Closed(), token, creds.Lookup())
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	if !o {
+	if !found {
 		return nil, errors.Wrapf(UnauthorizedError, "No such member.")
 	}
 
-	session, err := newSession(ctx, mem, ac, token, login, opts.SessionOptions, *opts.Deps)
+	session, err := newSession(ctx, core, code, token, login, opts.SessionOptions, *opts.Deps)
 	return session, errors.WithStack(err)
-}
-
-func authBySignature(cancel <-chan struct{}, rand io.Reader, net Transport, signer Signer, opts SessionOptions) (Token, error) {
-	ch, sig, err := newSigChallenge(rand, signer, opts.TokenHash)
-	if err != nil {
-		return Token{}, errors.WithStack(err)
-	}
-
-	token, err := net.TokenBySignature(cancel, newSigLookup(signer.Public()), ch, sig, opts.TokenExpiration)
-	return token, errors.WithStack(err)
-}
-
-func auth(cancel <-chan struct{}, rand io.Reader, net Transport, creds *oneTimePad, opts SessionOptions) (Token, error) {
-	if creds.Signer != nil {
-		return authBySignature(cancel, rand, net, creds.Signer, opts)
-	}
-	return Token{}, errors.Wrap(InvariantError, "Invalid login type")
 }
 
 // A signer contains the knowledge necessary to digitally sign messages.

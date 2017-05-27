@@ -47,7 +47,7 @@ type Session struct {
 	member MemberCore
 
 	// the access shard used for this session
-	code MemberCode
+	code MemberShard
 
 	// the transport mechanism. (expected to be secure).
 	net Transport
@@ -56,13 +56,13 @@ type Session struct {
 	rand io.Reader
 
 	// the token pool.
-	tokens chan Token
+	tokens chan SignedToken
 
 	// session options
 	opts SessionOptions
 }
 
-func newSession(ctx common.Context, m MemberCore, a MemberCode, t Token, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
+func newSession(ctx common.Context, m MemberCore, a MemberShard, t SignedToken, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
 	var err error
 
 	ctx = ctx.Sub("Session(memberId=%v)", m.Id.String()[:8])
@@ -84,7 +84,7 @@ func newSession(ctx common.Context, m MemberCore, a MemberCode, t Token, l func(
 		code:   a,
 		net:    d.Net,
 		rand:   d.Rand,
-		tokens: make(chan Token),
+		tokens: make(chan SignedToken),
 		opts:   s,
 	}
 	session.start(t)
@@ -97,30 +97,30 @@ func (s *Session) Close() error {
 }
 
 // Returns an authentication token.
-func (s *Session) token(cancel <-chan struct{}) (Token, error) {
+func (s *Session) token(cancel <-chan struct{}) (SignedToken, error) {
 	select {
 	case <-s.ctx.Control().Closed():
-		return Token{}, errors.WithStack(common.ClosedError)
+		return SignedToken{}, errors.WithStack(common.ClosedError)
 	case <-cancel:
-		return Token{}, errors.WithStack(common.CanceledError)
+		return SignedToken{}, errors.WithStack(common.CanceledError)
 	case t := <-s.tokens:
 		return t, nil
 	}
 }
 
 // Returns a *new* authentication token.  This forces a call to the server.
-func (s *Session) auth(cancel <-chan struct{}) (Token, error) {
+func (s *Session) auth(cancel <-chan struct{}) (SignedToken, error) {
 	creds, err := enterCreds(s.login)
 	if err != nil {
-		return Token{}, errors.WithStack(err)
+		return SignedToken{}, errors.WithStack(err)
 	}
 
-	token, err := auth(cancel, s.rand, s.net, creds, s.opts)
+	token, err := s.net.Authenticate(cancel, s.rand, creds, s.opts.TokenExpiration)
 	return token, errors.WithStack(err)
 }
 
 // Starts the session.  Currently, this amounts to just renewing tokens.
-func (s *Session) start(t Token) {
+func (s *Session) start(t SignedToken) {
 	token := &t
 	go func() {
 		timeout := 1 * time.Second
@@ -167,8 +167,9 @@ func (s *Session) MyKey() PublicKey {
 
 // Returns the session owner's secret.  This should be destroyed promptly after use.
 func (s *Session) mySecret() (Secret, error) {
-	secret, err := s.member.secret(s.code, s.login)
-	return secret, errors.WithStack(err)
+	return nil, nil
+	// secret, err := s.member.secret(s.code, s.login)
+	// return secret, errors.WithStack(err)
 }
 
 // Returns the personal encryption seed of this subscription.
@@ -320,7 +321,7 @@ func (s *Session) Renew(cancel <-chan struct{}, t Trust) (Trust, error) {
 // the session owner's certificate
 func (s *Session) Transfer(cancel <-chan struct{}, t Trust, recipientId uuid.UUID) error {
 	_, err := s.Invite(cancel, t, recipientId, func(o *InvitationOptions) {
-		o.Lvl = Grantor
+		o.Lvl = Owner
 		o.Exp = OneHundredYears
 	})
 	if err != nil {

@@ -114,34 +114,40 @@ func signShard(rand io.Reader, signer Signer, shard Shard) (SignedShard, error) 
 }
 
 // Encrypts and signs the shard.
-func encryptShard(rand io.Reader, signer Signer, shard Shard, pass []byte) (SignedEncryptedShard, error) {
+func encryptShard(rand io.Reader, shard Shard, pass []byte) (EncryptedShard, error) {
 	opts := shard.Opts()
 
 	fmt, err := shard.SigningFormat()
 	if err != nil {
-		return SignedEncryptedShard{}, errors.WithStack(err)
+		return EncryptedShard{}, errors.WithStack(err)
 	}
 
 	salt, err := genRandomBytes(rand, opts.ShardSalt)
 	if err != nil {
-		return SignedEncryptedShard{}, errors.Wrapf(err, "Error generating salt of strength [%v]")
+		return EncryptedShard{}, errors.Wrapf(err, "Error generating salt of strength [%v]")
 	}
 
 	key := cryptoBytes(pass).Pbkdf2(salt, opts.ShardIter, opts.ShardCipher.KeySize(), opts.ShardHash.standard())
 
 	ct, err := symmetricEncrypt(rand, opts.ShardCipher, key, fmt)
 	if err != nil {
-		return SignedEncryptedShard{}, errors.WithStack(err)
+		return EncryptedShard{}, errors.WithStack(err)
 	}
 
-	raw := EncryptedShard{opts.ShardAlg, ct, opts.ShardHash, salt, opts.ShardIter}
+	return EncryptedShard{opts.ShardAlg, ct, opts.ShardHash, salt, opts.ShardIter}, nil
+}
 
-	ret, err := raw.Sign(rand, signer, opts.ShardHash)
+// Encrypts and signs the shard.
+func encryptAndSignShard(rand io.Reader, signer Signer, shard Shard, pass []byte) (SignedEncryptedShard, error) {
+	opts := shard.Opts()
+
+	enc, err := encryptShard(rand, shard, pass)
 	if err != nil {
 		return SignedEncryptedShard{}, errors.WithStack(err)
 	}
 
-	return ret, nil
+	ret, err := enc.Sign(rand, signer, opts.ShardHash)
+	return ret, errors.WithStack(err)
 }
 
 // A signed oracle.  (Used to prove legitimacy of an oracle)

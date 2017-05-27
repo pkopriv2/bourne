@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"bytes"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,11 +12,19 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
-
-// Zeroes the input array of bytes
+// Zeroest the input array of bytes
 func destroyBytes(buf []byte) {
 	cryptoBytes(buf).Destroy()
 }
+
+func hashN(bytes []byte, h Hash, n int) (ret cryptoBytes, err error) {
+	ret = bytes
+	for i := 0; i<n; i++ {
+		ret, err = ret.Hash(h)
+	}
+	return
+}
+
 // Useful cryptographic binary functions.
 type cryptoBytes []byte
 
@@ -24,6 +33,11 @@ func (b cryptoBytes) Destroy() {
 	for i := 0; i < len(b); i++ {
 		b[i] = 0
 	}
+}
+
+// Zeroes the underlying byte array.  (Useful for deleting secret information)
+func (b cryptoBytes) Equals(other cryptoBytes) bool {
+	return bytes.Equal(b, other)
 }
 
 // Returns the length of the underlying array
@@ -47,6 +61,7 @@ func (b cryptoBytes) Pem(header string) string {
 	return string(pem.EncodeToMemory(blk))
 }
 
+// Returns a hex representation of the array
 func (b cryptoBytes) Hex() string {
 	return hex.EncodeToString(b)
 }
@@ -62,7 +77,7 @@ func (b cryptoBytes) String() string {
 	}
 }
 
-// Returns a new byte array for use as a cipher key
+// Returns the hash of the byte array.
 func (b cryptoBytes) Hash(h Hash) (cryptoBytes, error) {
 	return h.Hash(b)
 }

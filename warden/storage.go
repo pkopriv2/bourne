@@ -18,10 +18,10 @@ type storage interface {
 	// of a subscriber are guaranteed to be static throughout its lifetime.
 	//
 	// Returns an error if the subscriber already exists.
-	SaveMember(MemberCore, MemberCode) error
+	SaveMember(MemberCore, MemberShard, []byte) error
 
 	// Loads a member by a code lookup.
-	LoadMemberByLookup([]byte) (MemberCore, MemberCode, bool, error)
+	LoadMemberByLookup([]byte) (MemberCore, MemberAuth, bool, error)
 
 	// Loads the subscriber, returning true if it existed.
 	LoadMemberById(uuid.UUID) (MemberCore, bool, error)

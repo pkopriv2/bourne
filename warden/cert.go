@@ -37,11 +37,10 @@ const (
 	// at will.
 	Director
 
-	// The grantor is the owner of the trust.  The grantor can appoint
-	// or remove members at will and is the only member than may destroy
-	// a trust.  Grantors may also choose to transfer their grantor status
-	// to other members.
-	Grantor
+	// The owner controls the trust.  The owner can appoint or remove members
+	// at will and is the only member than may destroy a trust.  Grantors may
+	// also choose to transfer their owner status to other members.
+	Owner
 )
 
 func (l LevelOfTrust) MetBy(o LevelOfTrust) bool {
@@ -60,8 +59,8 @@ func (l LevelOfTrust) String() string {
 		return "manager"
 	case Director:
 		return "director"
-	case Grantor:
-		return "grantor"
+	case Owner:
+		return "owner"
 	}
 }
 

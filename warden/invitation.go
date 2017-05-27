@@ -176,7 +176,7 @@ func (i Invitation) generateMemberShard(rand io.Reader, signer Signer, key Priva
 	}
 	defer new.Destroy()
 
-	enc, err := encryptShard(rand, signer, new, pass)
+	enc, err := encryptAndSignShard(rand, signer, new, pass)
 	if err != nil {
 		return SignedEncryptedShard{}, errors.Wrapf(err, "Unable to generate new oracle key for trust [%v]", i.Cert.TrustId)
 	}

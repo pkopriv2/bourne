@@ -10,6 +10,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+// Register all the gob types.
+func init() {
+	gob.Register(&shamirShard{})
+}
+
 // FIXME: This IS NOT shamir's algorithm - but should be enough to get going.
 type shamirSecret struct {
 	line line

@@ -114,7 +114,7 @@ func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Sign
 		return Trust{}, errors.WithStack(err)
 	}
 
-	myEncryptedShard, err := encryptShard(rand, mySigningKey, myShard, myEncryptionKey)
+	myEncryptedShard, err := encryptAndSignShard(rand, mySigningKey, myShard, myEncryptionKey)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
@@ -124,7 +124,7 @@ func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Sign
 		return Trust{}, errors.WithStack(err)
 	}
 
-	myCert := newCertificate(uuid.NewV1(), myId, myId, Grantor, OneHundredYears)
+	myCert := newCertificate(uuid.NewV1(), myId, myId, Owner, OneHundredYears)
 
 	mySignedCert, err := signCertificate(
 		rand, myCert, trustSigningKey, mySigningKey, mySigningKey, opts.SigningHash)
@@ -253,7 +253,7 @@ func (t Trust) renewCertificate(cancel <-chan struct{}, s *Session) (Trust, erro
 	}
 	defer myShard.Destroy()
 
-	myShardEnc, err := encryptShard(s.rand, mySigningKey, myShard, myEncryptionSeed)
+	myShardEnc, err := encryptAndSignShard(s.rand, mySigningKey, myShard, myEncryptionSeed)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
