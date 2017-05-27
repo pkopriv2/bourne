@@ -11,10 +11,10 @@ type Transport interface {
 	io.Closer
 
 	// Registers a new subscriber.
-	Register(cancel <-chan struct{}, m MemberCore, c MemberShard, tokenTTL time.Duration) (SignedToken, error)
+	Register(cancel <-chan struct{}, core MemberCore, shard MemberShard, auth []byte, tokenTTL time.Duration) (SignedToken, error)
 
 	// Loads public key by subscriber
-	Authenticate(cancel <-chan struct{}, rand io.Reader, creds credential, ttl time.Duration) (SignedToken, error)
+	Authenticate(cancel <-chan struct{}, lookup []byte, auth []byte, ttl time.Duration) (SignedToken, error)
 
 	// Returns the subscriber of the given key.
 	MemberByLookup(cancel <-chan struct{}, t SignedToken, lookup []byte) (MemberCore, MemberShard, bool, error)

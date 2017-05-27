@@ -1,7 +1,6 @@
 package warden
 
 import (
-	"io"
 	"time"
 
 	"github.com/pkg/errors"
@@ -56,28 +55,22 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (r *rpcClient) Register(cancel <-chan struct{}, mem MemberCore, code MemberShard, ttl time.Duration) (SignedToken, error) {
-	// raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{mem, code, ttl}))
-	// if err != nil || !raw.Ok {
-	// return Token{}, errors.WithStack(common.Or(err, raw.Error()))
-	// }
-	//
-	// resp, ok := raw.Body.(rpcToken)
-	// if !ok {
-	// return Token{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
-	// }
-	//
-	// return resp.Token, nil
-	return SignedToken{}, nil
-}
-
-func (r *rpcClient) Authenticate(cancel <-chan struct{}, rand io.Reader, creds credential, ttl time.Duration) (SignedToken, error) {
-	args, err := creds.Auth(rand)
-	if err != nil {
-		return SignedToken{}, errors.WithStack(err)
+func (r *rpcClient) Register(cancel <-chan struct{}, mem MemberCore, code MemberShard, auth []byte, ttl time.Duration) (SignedToken, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{mem, code, auth, ttl}))
+	if err != nil || !raw.Ok {
+		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
 	}
 
-	raw, err := r.raw.Send(micro.NewRequest(rpcAuthReq{creds.Lookup(), args, ttl}))
+	resp, ok := raw.Body.(rpcToken)
+	if !ok {
+		return SignedToken{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	}
+
+	return resp.Token, nil
+}
+
+func (r *rpcClient) Authenticate(cancel <-chan struct{}, lookup []byte, auth []byte, ttl time.Duration) (SignedToken, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcAuthReq{lookup, auth, ttl}))
 	if err != nil || !raw.Ok {
 		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
 	}

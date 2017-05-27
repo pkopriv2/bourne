@@ -70,61 +70,94 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 	}
 }
 
+func (s *rpcServer) newMemberAuth(id uuid.UUID, shard MemberShard, args []byte) (MemberAuth, error) {
+	var raw []byte
+	switch shard.Proto {
+	default:
+		return MemberAuth{}, errors.Wrapf(AuthError, "Unsupported protocol [%v]", shard.Proto)
+	case PassV1:
+		impl, err := newV1PassAuth(s.rand, 32, 1024, SHA256, args)
+		if err != nil {
+			return MemberAuth{}, errors.WithStack(err)
+		}
+
+		raw, err = gobBytes(impl)
+		if err != nil {
+			return MemberAuth{}, errors.WithStack(err)
+		}
+	case SignV1:
+		impl, err := newSignAuth(args)
+		if err != nil {
+			return MemberAuth{}, errors.WithStack(err)
+		}
+
+		raw, err = gobBytes(impl)
+		if err != nil {
+			return MemberAuth{}, errors.WithStack(err)
+		}
+	}
+	return MemberAuth{id, shard, raw}, nil
+}
+
 func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
-	s.logger.Debug("Registering new member: %v", r.Mem.Id)
+	s.logger.Debug("Registering new member: %v", r.Core.Id)
 
-	return micro.NewEmptyResponse()
-	// if e := s.storage.SaveMember(r.Mem, r.Code); e != nil {
-	// return micro.NewErrorResponse(errors.WithStack(e))
-	// }
+	auth, err := s.newMemberAuth(r.Core.Id, r.Shard, r.Auth)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
 
-	// token, err := newAuth(r.Mem.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
-	// if err != nil {
-	// return micro.NewErrorResponse(errors.WithStack(err))
-	// }
+	if err := s.storage.SaveMember(r.Core, auth); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
 
-	// return micro.NewStandardResponse(rpcToken{token})
+	token, err := newAuth(r.Core.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
+	if err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	return micro.NewStandardResponse(rpcToken{token})
 }
 
 // func (s *rpcServer) TokenBySignature(r rpcTokenBySignatureReq) micro.Response {
-	// return micro.NewEmptyResponse()
-	// // member, code, o, e := s.storage.LoadMemberByLookup(r.Lookup)
-	// // if e != nil {
-	// // return micro.NewErrorResponse(errors.WithStack(e))
-	// // }
-	// //
-	// // s.logger.Error("Generating a token by signature for member [%v]", member.Id)
-	// // if !o {
-	// // s.logger.Error("No member found by signature [%v]", cryptoBytes(r.Lookup).Hex())
-	// // return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
-	// // }
-	// //
-	// // shard, ok := code.MemberShard.(SignatureShard)
-	// // if !ok {
-	// // s.logger.Error("Unexpected request type", r.Lookup)
-	// // return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unexpected request [%v]", r))
-	// // }
-	// // if r.Sig.Key != shard.Pub.Id() {
-	// // s.logger.Error("Unauthorized access attempt: %v", r.Lookup)
-	// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
-	// // }
-	// //
-	// // if time.Now().Sub(r.Challenge.Now) > 5*time.Minute {
-	// // s.logger.Error("Unauthorized access.  Old token [%v] for member [%v]", r.Challenge.Now, member.Id)
-	// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
-	// // }
-	// //
-	// // if err := verify(r.Challenge, shard.Pub, r.Sig); err != nil {
-	// // s.logger.Error("Unauthorized access.")
-	// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unverified signature"))
-	// // }
-	// //
-	// // token, err := newAuth(member.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
-	// // if err != nil {
-	// // return micro.NewErrorResponse(errors.WithStack(err))
-	// // }
-	// //
-	// // return micro.NewStandardResponse(rpcToken{token})
+// return micro.NewEmptyResponse()
+// // member, code, o, e := s.storage.LoadMemberByLookup(r.Lookup)
+// // if e != nil {
+// // return micro.NewErrorResponse(errors.WithStack(e))
+// // }
+// //
+// // s.logger.Error("Generating a token by signature for member [%v]", member.Id)
+// // if !o {
+// // s.logger.Error("No member found by signature [%v]", cryptoBytes(r.Lookup).Hex())
+// // return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
+// // }
+// //
+// // shard, ok := code.MemberShard.(SignatureShard)
+// // if !ok {
+// // s.logger.Error("Unexpected request type", r.Lookup)
+// // return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unexpected request [%v]", r))
+// // }
+// // if r.Sig.Key != shard.Pub.Id() {
+// // s.logger.Error("Unauthorized access attempt: %v", r.Lookup)
+// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
+// // }
+// //
+// // if time.Now().Sub(r.Challenge.Now) > 5*time.Minute {
+// // s.logger.Error("Unauthorized access.  Old token [%v] for member [%v]", r.Challenge.Now, member.Id)
+// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unauthorized"))
+// // }
+// //
+// // if err := verify(r.Challenge, shard.Pub, r.Sig); err != nil {
+// // s.logger.Error("Unauthorized access.")
+// // return micro.NewErrorResponse(errors.Wrapf(UnauthorizedError, "Unverified signature"))
+// // }
+// //
+// // token, err := newAuth(member.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
+// // if err != nil {
+// // return micro.NewErrorResponse(errors.WithStack(err))
+// // }
+// //
+// // return micro.NewStandardResponse(rpcToken{token})
 // }
 
 func (s *rpcServer) authenticate(t SignedToken, now time.Time) error {
@@ -466,14 +499,15 @@ type rpcMemberResponse struct {
 }
 
 type rpcAuthReq struct {
-	AuthId    []byte
-	AuthArgs  []byte
-	Exp       time.Duration
+	Lookup []byte
+	Args   []byte
+	Exp    time.Duration
 }
 
 type rpcRegisterMemberReq struct {
-	Mem        MemberCore
-	Code       MemberShard
+	Core       MemberCore
+	Shard      MemberShard
+	Auth       []byte
 	Expiration time.Duration
 }
 

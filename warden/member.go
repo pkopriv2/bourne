@@ -6,6 +6,7 @@ import (
 	"math/rand"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -52,17 +53,40 @@ func buildMemberOptions(fns ...func(*MemberOptions)) MemberOptions {
 // A MemberShard is an encrypted shard that may be unlocked with the
 // use of a matching credential + some generic arguments
 type MemberShard struct {
-	Id   []byte
-	Raw  SignedEncryptedShard
-	Args []byte
-	Type authProtocol
+	Id    []byte
+	Proto authProtocol
+	Raw   SignedEncryptedShard
+	Args  []byte // optional
 }
 
 // Storage Only.
 type MemberAuth struct {
 	MemberId uuid.UUID
 	Shard    MemberShard
-	Args     []byte
+	Raw      []byte
+}
+
+func (m MemberAuth) authenticate(args []byte) error {
+	var impl authenticator
+	switch m.Shard.Proto {
+	default:
+		return errors.Wrapf(AuthError, "Unsupported auth protocol [%v]", m.Shard.Proto)
+	case PassV1:
+		var auth passV1Auth
+		if _, err := parseGobBytes(m.Raw, &auth); err != nil {
+			return errors.WithStack(err)
+		}
+		impl = &auth
+	case SignV1:
+		var auth signV1Auth
+		if _, err := parseGobBytes(m.Raw, &auth); err != nil {
+			return errors.WithStack(err)
+		}
+		impl = &auth
+		return nil
+	}
+
+	return errors.WithStack(impl.Authenticate(args))
 }
 
 // A MemberCore contains all the membership details of a particular user.
@@ -74,8 +98,12 @@ type MemberCore struct {
 	Opts       MemberOptions
 }
 
+// Generates a new member.  Rand and creds must not be nil!
 func newMember(rand io.Reader, creds credential, fns ...func(*MemberOptions)) (MemberCore, MemberShard, error) {
 	opts := buildMemberOptions(fns...)
+	if rand == nil || creds == nil {
+		return MemberCore{}, MemberShard{}, errors.WithStack(common.ArgError)
+	}
 
 	// generate the user's secret.
 	secret, err := genSecret(rand, opts.Secret)
@@ -147,7 +175,7 @@ func newMember(rand io.Reader, creds credential, fns ...func(*MemberOptions)) (M
 }
 
 func (s MemberCore) secret(rand io.Reader, shard MemberShard, login func(KeyPad) error) (Secret, error) {
-	creds, err := enterCreds(login)
+	creds, err := extractCreds(login)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

@@ -82,13 +82,12 @@ func (b *boltStorage) Bolt() *bolt.DB {
 	return (*bolt.DB)(b)
 }
 
-func (b *boltStorage) SaveMember(core MemberCore, code MemberShard, lookup []byte) error {
-
+func (b *boltStorage) SaveMember(core MemberCore, auth MemberAuth) error {
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
 		if err := boltStoreMember(tx, core); err != nil {
 			return errors.WithStack(err)
 		}
-		return errors.WithStack(boltStoreMemberShard(tx, code, lookup))
+		return errors.WithStack(boltStoreMemberAuth(tx, auth))
 	})
 }
 
@@ -309,8 +308,8 @@ func boltLoadMember(tx *bolt.Tx, id uuid.UUID) (s MemberCore, o bool, e error) {
 	return
 }
 
-func boltStoreMemberShard(tx *bolt.Tx, a MemberShard, lookup []byte) error {
-	if err := boltEnsureEmpty(tx.Bucket(memberCodeBucket), lookup); err != nil {
+func boltStoreMemberAuth(tx *bolt.Tx, a MemberAuth) error {
+	if err := boltEnsureEmpty(tx.Bucket(memberCodeBucket), a.Shard.Id); err != nil {
 		return errors.Wrap(err, "Access code for lookup already exists.")
 	}
 
@@ -318,7 +317,7 @@ func boltStoreMemberShard(tx *bolt.Tx, a MemberShard, lookup []byte) error {
 	if err != nil {
 		return errors.Wrapf(err, "Error encoding access code [%v]", a)
 	}
-	if err := tx.Bucket(memberCodeBucket).Put(lookup, raw); err != nil {
+	if err := tx.Bucket(memberCodeBucket).Put(a.Shard.Id, raw); err != nil {
 		return errors.Wrapf(err, "Error encoding access code [%v]", a)
 	}
 	return nil

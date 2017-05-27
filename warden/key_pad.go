@@ -18,7 +18,7 @@ type oneTimePad struct {
 }
 
 func (c *oneTimePad) BySignature(s Signer, h Hash) error {
-	c.Creds = &signCreds{s, h}
+	c.Creds = &signV1Creds{s, h}
 	return nil
 }
 
@@ -28,14 +28,19 @@ func (c *oneTimePad) ByPassword(user []byte, pass []byte) error {
 		return errors.Wrapf(err, "Error pre-hashing user password [%v]", string(user))
 	}
 
-	c.Creds = &passCreds{user, preHash}
+	c.Creds = &passV1Creds{user, preHash}
 	return nil
 }
 
-func enterCreds(fn func(KeyPad) error) (credential, error) {
+func extractCreds(fn func(KeyPad) error) (credential, error) {
 	pad := &oneTimePad{}
 	if err := fn(pad); err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	if pad.Creds == nil {
+		return nil, errors.Wrap(AuthError, "No credentials entered.")
+	}
+
 	return pad.Creds, nil
 }

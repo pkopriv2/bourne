@@ -162,7 +162,12 @@ func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ..
 		opts.Deps = &deps
 	}
 
-	creds, err := enterCreds(login)
+	creds, err := extractCreds(login)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	auth, err := creds.Auth(opts.Deps.Rand)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -175,7 +180,7 @@ func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ..
 		return nil, errors.WithStack(err)
 	}
 
-	token, err := opts.Deps.Net.Register(timer.Closed(), member, code, opts.SessionOptions.TokenExpiration)
+	token, err := opts.Deps.Net.Register(timer.Closed(), member, code, auth, opts.SessionOptions.TokenExpiration)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -195,7 +200,12 @@ func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...f
 		opts.Deps = &deps
 	}
 
-	creds, err := enterCreds(login)
+	creds, err := extractCreds(login)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	auth, err := creds.Auth(opts.Deps.Rand)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -203,7 +213,7 @@ func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...f
 	timer := ctx.Timer(opts.SessionOptions.NetTimeout)
 	defer timer.Closed()
 
-	token, err := opts.Deps.Net.Authenticate(timer.Closed(), opts.Deps.Rand, creds, opts.TokenExpiration)
+	token, err := opts.Deps.Net.Authenticate(timer.Closed(), creds.Lookup(), auth, opts.TokenExpiration)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
