@@ -6,10 +6,11 @@ import (
 )
 
 var (
-	ClosedError    = errors.New("Common:ClosedError")
-	TimeoutError   = errors.New("Common:TimeoutError")
-	ExpiredError   = errors.New("Common:ExpiredError")
-	CanceledError  = errors.New("Common:CanceledError")
+	ArgError      = errors.New("Common:ArgError")
+	ClosedError   = errors.New("Common:ClosedError")
+	TimeoutError  = errors.New("Common:TimeoutError")
+	ExpiredError  = errors.New("Common:ExpiredError")
+	CanceledError = errors.New("Common:CanceledError")
 )
 
 // FIXME: Remove this! this is broken
@@ -30,7 +31,7 @@ func Or(l error, r error) error {
 	}
 }
 
-func Extract(err error, match ... error) error {
+func Extract(err error, match ...error) error {
 	if err == nil {
 		return nil
 	}
