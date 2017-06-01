@@ -8,7 +8,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// the strength is an att
+// Strength is a single argument which describes the security
+// requirements of the
 type Strength int
 
 const (
@@ -16,6 +17,15 @@ const (
 	Strong
 	Stronger
 	Strongest
+)
+
+// Role maps the capabilities
+type Role int
+
+const (
+	Basic Role = iota
+	Issuer
+	Admin
 )
 
 type memberOptions struct {
@@ -118,6 +128,7 @@ func (m memberAuth) authenticate(args []byte) error {
 type memberCore struct {
 	Id         uuid.UUID
 	SubId      uuid.UUID
+	Role       Role
 	Pub        SignedShard
 	SigningKey SignedKeyPair
 	InviteKey  SignedKeyPair

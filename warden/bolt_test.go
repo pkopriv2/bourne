@@ -35,7 +35,7 @@ func TestStorage(t *testing.T) {
 		}
 
 		login := func() credential {
-			return newSigningCred(lookupByKey(owner.Public().Id()), owner)
+			return newSigningCred(lookupByKey(owner.Public()), owner)
 		}
 
 		creds, e := extractCreds(login)
@@ -85,7 +85,7 @@ func TestStorage(t *testing.T) {
 		}
 
 		login2 := func() credential {
-			return newSigningCred(lookupByKey(owner2.Public().Id()), owner2)
+			return newSigningCred(lookupByKey(owner2.Public()), owner2)
 		}
 
 		_, e = mem.secret(code, login2)

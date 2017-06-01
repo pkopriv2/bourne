@@ -11,3 +11,7 @@ type registrar struct {
 func (r *registrar) ByEmail(email string) KeyPad {
 	return &keyPad{r.ctx, r.opts, lookupByEmail(email), true, r.token}
 }
+
+func (r *registrar) ByKey(key PublicKey) KeyPad {
+	return &keyPad{r.ctx, r.opts, lookupByKey(key), true, r.token}
+}

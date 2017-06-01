@@ -6,8 +6,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-func lookupByKey(key string) []byte {
-	return stash.String("Key://").ChildString(key)
+func lookupByKey(key PublicKey) []byte {
+	return stash.String("Key://").ChildString(key.Id())
 }
 
 func lookupByEmail(email string) []byte {
@@ -23,7 +23,7 @@ type directory struct {
 	opts SessionOptions
 }
 
-func (d directory) LookupByKey(key string) KeyPad {
+func (d directory) LookupByKey(key PublicKey) KeyPad {
 	return keyPad{d.ctx, d.opts, lookupByKey(key), false, SignedToken{}}
 }
 

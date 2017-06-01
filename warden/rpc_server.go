@@ -75,17 +75,24 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 	s.logger.Debug("Registering new member: %v", r.Core.Id)
 
+	// if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		// return micro.NewErrorResponse(errors.WithStack(err))
+	// }
+//
 	auth, err := newMemberAuth(s.rand, r.Core.Id, r.Shard, r.Auth)
 	if err != nil {
+		s.logger.Error("Error: :%+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	if err := s.storage.SaveMember(r.Core, auth); err != nil {
+		s.logger.Error("Error: :%+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newToken(r.Core.SubId, r.Core.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
+	token, err := newToken(r.Core.SubId, r.Core.Id, r.Expiration, nil).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
+		s.logger.Error("Error: :%+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -98,7 +105,7 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 
-	s.logger.Error("Generating a token by signature for member [%v]", core.Id)
+	s.logger.Error("Generating a token for member [%v]", core.Id)
 	if !o {
 		s.logger.Error("No member found by lookup [%v]", cryptoBytes(r.Lookup).Base64())
 		return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
@@ -108,7 +115,7 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newToken(core.SubId, core.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
+	token, err := newToken(core.SubId, core.Id, r.Exp, nil).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}

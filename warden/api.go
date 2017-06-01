@@ -120,13 +120,17 @@ type Registrar interface {
 	// Registers an account under an email address. (Email really is a terrible mechanism
 	// for handling registration, but I don't think we can tackle that....)
 	ByEmail(email string) KeyPad
+
+	// Registers an account using a public key as the primary lookup mechanism.  An alternative
+	// lookup (e.g. email may be registered later, but is not required).
+	ByKey(key PublicKey) KeyPad
 }
 
 // Membership lookup
 type Directory interface {
 
 	// Lookup a member account by public key
-	LookupByKey(key string) KeyPad
+	LookupByKey(key PublicKey) KeyPad
 
 	// Lookup a member account by email
 	LookupByEmail(email string) KeyPad
@@ -143,6 +147,7 @@ type KeyPad interface {
 }
 
 type Session interface {
+	io.Closer
 
 	// Returns the subscriber id associated with this session.  This uniquely identifies
 	// an account to the world.  This may be shared over other (possibly unsecure) channels
@@ -180,7 +185,9 @@ type Session interface {
 	LoadTrust(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error)
 
 	// Invites a member to join the trust.
+	// FIXME: Replace with below!
 	Invite(cancel <-chan struct{}, trust Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error)
+	// Invite(cancel <-chan struct{}, trust Trust, memberId uuid.UUID, lvl LevelOfTrust, strength Strength) (Invitation, error)
 
 	// Accepts the invitation.  The invitation must be valid and must be addressed
 	// to the owner of the session, or the session owner must be acting as a proxy.

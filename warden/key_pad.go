@@ -38,7 +38,7 @@ func (a keyPad) BySignature(signer Signer, strength ...Strength) (s Session, e e
 	if a.reg {
 		s, e = a.register(a.token, login)
 	} else {
-		s, e = a.auth(login)
+		s, e = a.authenticate(login)
 	}
 	return s, errors.WithStack(e)
 }
@@ -52,7 +52,7 @@ func (a keyPad) ByPassphrase(phrase string) (s Session, e error) {
 	if a.reg {
 		s, e = a.register(a.token, creds)
 	} else {
-		s, e = a.auth(creds)
+		s, e = a.authenticate(creds)
 	}
 	return s, errors.WithStack(e)
 }
@@ -83,7 +83,7 @@ func (a keyPad) register(token SignedToken, login func() credential) (Session, e
 	return session, errors.WithStack(err)
 }
 
-func (a keyPad) auth(login func() credential) (Session, error) {
+func (a keyPad) authenticate(login func() credential) (Session, error) {
 	creds := login()
 	defer creds.Destroy()
 
@@ -96,11 +96,13 @@ func (a keyPad) auth(login func() credential) (Session, error) {
 	defer timer.Closed()
 
 	token, err := a.opts.deps.Net.Authenticate(timer.Closed(), creds.Lookup(), auth, a.opts.TokenTtl)
+	a.ctx.Logger().Info("AUTHENTICATED: %v", token)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	core, code, found, err := a.opts.deps.Net.MemberByLookup(timer.Closed(), token, creds.Lookup())
+	a.ctx.Logger().Info("LOOKUP: %v", err)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

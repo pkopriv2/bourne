@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -26,9 +27,13 @@ type Token struct {
 	Args     Signable
 }
 
-func newToken(memberId, subId uuid.UUID, ttl time.Duration) Token {
+func newToken(memberId, subId uuid.UUID, ttl time.Duration, args Signable) Token {
 	now := time.Now()
-	return Token{memberId, subId, time.Now(), now.Add(ttl), nil}
+	return Token{memberId, subId, time.Now(), now.Add(ttl), args}
+}
+
+func (s Token) String() string {
+	return fmt.Sprintf("Token(m=%v,s=%v): %v", formatUUID(s.MemberId), formatUUID(s.SubId), s.Created)
 }
 
 func (s Token) Expired(now time.Time) bool {
@@ -36,9 +41,13 @@ func (s Token) Expired(now time.Time) bool {
 }
 
 func (s Token) SigningFormat() ([]byte, error) {
-	bodyFmt, err := s.Args.SigningFormat()
-	if err != nil {
-		return nil, errors.WithStack(err)
+	var bodyFmt []byte
+	var err error
+	if s.Args != nil {
+		bodyFmt, err = s.Args.SigningFormat()
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	fmt, err := gobBytes(tokenFmt{s.MemberId, s.SubId, s.Created, s.Expires, bodyFmt})

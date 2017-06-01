@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"reflect"
 	"time"
 
 	"github.com/pkg/errors"
@@ -63,7 +64,7 @@ func (r *rpcClient) Register(cancel <-chan struct{}, token SignedToken, mem memb
 
 	resp, ok := raw.Body.(rpcToken)
 	if !ok {
-		return SignedToken{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return SignedToken{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", reflect.TypeOf(raw.Body))
 	}
 
 	return resp.Token, nil
@@ -77,7 +78,7 @@ func (r *rpcClient) Authenticate(cancel <-chan struct{}, lookup []byte, auth []b
 
 	resp, ok := raw.Body.(rpcToken)
 	if !ok {
-		return SignedToken{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return SignedToken{}, errors.Wrapf(RpcError, "Unexpected response type [%v]", reflect.ValueOf(raw.Body))
 	}
 
 	return resp.Token, nil
@@ -91,7 +92,7 @@ func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token SignedToken, lo
 
 	resp, ok := raw.Body.(rpcMemberResponse)
 	if !ok {
-		return memberCore{}, memberShard{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return memberCore{}, memberShard{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", reflect.TypeOf(raw.Body))
 	}
 
 	return resp.Mem, resp.Access, resp.Found, nil
@@ -105,7 +106,7 @@ func (r *rpcClient) MemberSigningKeyById(cancel <-chan struct{}, token SignedTok
 
 	resp, ok := raw.Body.(rpcMemberKeyResponse)
 	if !ok {
-		return nil, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return nil, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", reflect.TypeOf(raw.Body))
 	}
 
 	return resp.Key, resp.Found, nil
@@ -119,7 +120,7 @@ func (r *rpcClient) MemberInviteKeyById(cancel <-chan struct{}, token SignedToke
 
 	resp, ok := raw.Body.(rpcMemberKeyResponse)
 	if !ok {
-		return nil, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return nil, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", reflect.TypeOf(raw.Body))
 	}
 
 	return resp.Key, resp.Found, nil
@@ -133,7 +134,7 @@ func (r *rpcClient) InvitationById(cancel <-chan struct{}, token SignedToken, id
 
 	resp, ok := raw.Body.(rpcInviteResponse)
 	if !ok {
-		return Invitation{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+		return Invitation{}, false, errors.Wrapf(RpcError, "Unexpected response type [%v]", reflect.TypeOf(raw.Body))
 	}
 
 	return resp.Inv, resp.Found, nil
