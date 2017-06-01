@@ -38,7 +38,7 @@ const (
 	Director
 
 	// The owner controls the trust.  The owner can appoint or remove members
-	// at will and is the only member than may destroy a trust.  Grantors may
+	// at will and is the only member than may destroy a trust.  Owners may
 	// also choose to transfer their owner status to other members.
 	Owner
 )

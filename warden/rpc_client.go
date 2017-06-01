@@ -55,8 +55,8 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (r *rpcClient) Register(cancel <-chan struct{}, mem memberCore, code memberShard, auth []byte, ttl time.Duration) (SignedToken, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{mem, code, auth, ttl}))
+func (r *rpcClient) Register(cancel <-chan struct{}, token SignedToken, mem memberCore, code memberShard, auth []byte, ttl time.Duration) (SignedToken, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{token, mem, code, auth, ttl}))
 	if err != nil || !raw.Ok {
 		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
 	}
@@ -153,6 +153,21 @@ func (r *rpcClient) InvitationsByMember(cancel <-chan struct{}, token SignedToke
 	return resp.Invites, nil
 }
 
+func (r *rpcClient) InvitationsByTrust(cancel <-chan struct{}, token SignedToken, id uuid.UUID, opts PagingOptions) ([]Invitation, error) {
+	return nil, nil
+	// raw, err := r.raw.Send(micro.NewRequest(rpcInvitesByMemberReq{token, id, opts}))
+	// if err != nil || !raw.Ok {
+	// return nil, errors.WithStack(common.Or(err, raw.Error()))
+	// }
+	//
+	// resp, ok := raw.Body.(rpcInvitesResponse)
+	// if !ok {
+	// return nil, errors.Wrapf(RpcError, "Unexpected response type [%v]", raw)
+	// }
+	//
+	// return resp.Invites, nil
+}
+
 func (r *rpcClient) InvitationRegister(cancel <-chan struct{}, a SignedToken, i Invitation) error {
 	raw, err := r.raw.Send(micro.NewRequest(rpcInviteRegisterReq{a, i}))
 	return errors.WithStack(common.Or(err, raw.Error()))
@@ -190,7 +205,7 @@ func (r *rpcClient) CertsByTrust(cancel <-chan struct{}, token SignedToken, id u
 	return resp.Certs, nil
 }
 
-func (r *rpcClient) CertRegister(cancel <-chan struct{}, a SignedToken, c SignedCertificate, k TrustCode) error {
+func (r *rpcClient) CertRegister(cancel <-chan struct{}, a SignedToken, c SignedCertificate, k trustCode) error {
 	raw, err := r.raw.Send(micro.NewRequest(rpcCertRegisterReq{a, c, k}))
 	return errors.WithStack(common.Or(err, raw.Error()))
 }

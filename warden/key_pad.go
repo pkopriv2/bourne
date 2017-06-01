@@ -1,64 +1,114 @@
 package warden
 
 import (
-	"time"
-
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/common"
 )
 
-// A key pad gives access to the various authentication methods and will
-// be used during the registration process.
-//
-// Future: Accept alternative login methods (e.g. pins, passwords, multi-factor, etc...)
-
-type SignatureOptions struct {
-	Hash Hash
-	Skew time.Duration
+type keyPad struct {
+	ctx   common.Context
+	opts  SessionOptions
+	acct  []byte
+	reg   bool
+	token SignedToken
 }
 
-func buildSignatureOptions(fns ...func(*SignatureOptions)) SignatureOptions {
-	ret := SignatureOptions{SHA256, 5 * time.Minute}
-	for _, fn := range fns {
-		fn(&ret)
+func (a keyPad) signingCreds(signer Signer, strength ...Strength) func() credential {
+	return func() credential {
+		return newSigningCred(a.acct, signer, strength...)
 	}
-	return ret
 }
 
-type KeyPad interface {
-	BySignature(signer Signer, opts ... func(*SignatureOptions)) error
-	ByPassword(user string, pass string) error
-}
-
-// A one time keypad.  Destroyed after first use.
-type oneTimePad struct {
-	Creds credential
-}
-
-func (c *oneTimePad) BySignature(s Signer, fns...func(*SignatureOptions)) error {
-	opts := buildSignatureOptions(fns...)
-	c.Creds = &signCred{s, opts.Hash, opts.Skew}
-	return nil
-}
-
-func (c *oneTimePad) ByPassword(user string, pass string) error {
-	preHash, err := cryptoBytes([]byte(pass)).Hash(SHA256)
+func (a keyPad) passphraseCreds(pass string) (func() credential, error) {
+	// hash and immediately destroy the pass phrase
+	hash, err := SHA256.Hash([]byte(pass))
 	if err != nil {
-		return errors.Wrapf(err, "Error pre-hashing user password [%v]", string(user))
+		return nil, errors.WithStack(err)
 	}
+	cryptoBytes([]byte(pass)).Destroy()
 
-	c.Creds = &passCred{[]byte(user), preHash}
-	return nil
+	return func() credential {
+		return newPassCred(a.acct, hash)
+	}, nil
 }
 
-func extractCreds(fn func(KeyPad) error) (credential, error) {
-	pad := &oneTimePad{}
-	if err := fn(pad); err != nil {
+func (a keyPad) BySignature(signer Signer, strength ...Strength) (s Session, e error) {
+	login := a.signingCreds(signer, strength...)
+
+	if a.reg {
+		s, e = a.register(a.token, login)
+	} else {
+		s, e = a.auth(login)
+	}
+	return s, errors.WithStack(e)
+}
+
+func (a keyPad) ByPassphrase(phrase string) (s Session, e error) {
+	creds, e := a.passphraseCreds(phrase)
+	if e != nil {
+		return nil, errors.WithStack(e)
+	}
+
+	if a.reg {
+		s, e = a.register(a.token, creds)
+	} else {
+		s, e = a.auth(creds)
+	}
+	return s, errors.WithStack(e)
+}
+
+func (a keyPad) register(token SignedToken, login func() credential) (Session, error) {
+	creds := login()
+	defer creds.Destroy()
+
+	core, shard, err := newMember(a.opts.deps.Rand, token.MemberId, token.SubId, creds)
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	if pad.Creds == nil {
-		return nil, errors.Wrap(AuthError, "No credentials entered.")
+	auth, err := creds.Auth(a.opts.deps.Rand)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
 
-	return pad.Creds, nil
+	timer := a.ctx.Timer(a.opts.Timeout)
+	defer timer.Closed()
+
+	token, err = a.opts.deps.Net.Register(timer.Closed(), token, core, shard, auth, a.opts.TokenTtl)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	session, err := newSession(a.ctx, core, shard, token, login, a.opts, *a.opts.deps)
+	return session, errors.WithStack(err)
+}
+
+func (a keyPad) auth(login func() credential) (Session, error) {
+	creds := login()
+	defer creds.Destroy()
+
+	auth, err := creds.Auth(a.opts.deps.Rand)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	timer := a.ctx.Timer(a.opts.Timeout)
+	defer timer.Closed()
+
+	token, err := a.opts.deps.Net.Authenticate(timer.Closed(), creds.Lookup(), auth, a.opts.TokenTtl)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	core, code, found, err := a.opts.deps.Net.MemberByLookup(timer.Closed(), token, creds.Lookup())
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if !found {
+		return nil, errors.Wrapf(UnauthorizedError, "No such member.")
+	}
+
+	session, err := newSession(a.ctx, core, code, token, login, a.opts, *a.opts.deps)
+	return session, errors.WithStack(err)
 }

@@ -9,18 +9,15 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-var (
-	UnsupportedLoginError = errors.New("Warden:UnsupportedLogin")
-)
-
 type SessionOptions struct {
-	NetTimeout      time.Duration
-	TokenExpiration time.Duration
-	TokenHash       Hash
+	Timeout   time.Duration
+	TokenTtl  time.Duration
+	TokenHash Hash
+	deps      *Dependencies
 }
 
 func buildSessionOptions(fns ...func(*SessionOptions)) SessionOptions {
-	ret := SessionOptions{30 * time.Second, 30 * time.Second, SHA256}
+	ret := SessionOptions{30 * time.Second, 30 * time.Second, SHA256, nil}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -32,7 +29,7 @@ func buildSessionOptions(fns ...func(*SessionOptions)) SessionOptions {
 // authentication credentials.  The hash is NOT enough to rederive any secrets
 // on its own - therefore it is safe to maintain the session in memory, without
 // fear of leaking any critical details.
-type Session struct {
+type session struct {
 
 	// the core context
 	ctx common.Context
@@ -40,8 +37,8 @@ type Session struct {
 	// the core logger
 	logger common.Logger
 
-	// the login credentials
-	login func(KeyPad) error
+	// the login credentials closure.  Destroyed immediately after use.
+	login func() credential
 
 	// the session's owners membership info=
 	core memberCore
@@ -62,7 +59,7 @@ type Session struct {
 	opts SessionOptions
 }
 
-func newSession(ctx common.Context, m memberCore, a memberShard, t SignedToken, l func(KeyPad) error, s SessionOptions, d Dependencies) (*Session, error) {
+func newSession(ctx common.Context, m memberCore, a memberShard, t SignedToken, l func() credential, s SessionOptions, d Dependencies) (*session, error) {
 	var err error
 
 	ctx = ctx.Sub("Session(memberId=%v)", m.Id.String()[:8])
@@ -76,7 +73,7 @@ func newSession(ctx common.Context, m memberCore, a memberShard, t SignedToken, 
 		d.Net.Close()
 	})
 
-	session := &Session{
+	ret := &session{
 		ctx:    ctx,
 		logger: ctx.Logger(),
 		login:  l,
@@ -87,17 +84,17 @@ func newSession(ctx common.Context, m memberCore, a memberShard, t SignedToken, 
 		tokens: make(chan SignedToken),
 		opts:   s,
 	}
-	session.start(t)
-	return session, nil
+	ret.start(t)
+	return ret, nil
 }
 
 // Closes the session
-func (s *Session) Close() error {
+func (s *session) Close() error {
 	return s.ctx.Close()
 }
 
-// Returns an authentication token.
-func (s *Session) token(cancel <-chan struct{}) (SignedToken, error) {
+// Returns a signed authentication token.
+func (s *session) token(cancel <-chan struct{}) (SignedToken, error) {
 	select {
 	case <-s.ctx.Control().Closed():
 		return SignedToken{}, errors.WithStack(common.ClosedError)
@@ -108,24 +105,21 @@ func (s *Session) token(cancel <-chan struct{}) (SignedToken, error) {
 	}
 }
 
-// Returns a *new* authentication token.  This forces a call to the server.
-func (s *Session) auth(cancel <-chan struct{}) (SignedToken, error) {
-	creds, err := extractCreds(s.login)
-	if err != nil {
-		return SignedToken{}, errors.WithStack(err)
-	}
+// Returns a *new* signed authentication token.  This forces a call to the server.
+func (s *session) auth(cancel <-chan struct{}) (SignedToken, error) {
+	creds := s.login()
 
 	auth, err := creds.Auth(s.rand)
 	if err != nil {
 		return SignedToken{}, errors.WithStack(err)
 	}
 
-	token, err := s.net.Authenticate(cancel, creds.Lookup(), auth, s.opts.TokenExpiration)
+	token, err := s.net.Authenticate(cancel, creds.Lookup(), auth, s.opts.TokenTtl)
 	return token, errors.WithStack(err)
 }
 
 // Starts the session.  Currently, this amounts to just renewing tokens.
-func (s *Session) start(t SignedToken) {
+func (s *session) start(t SignedToken) {
 	token := &t
 	go func() {
 		timeout := 1 * time.Second
@@ -146,7 +140,8 @@ func (s *Session) start(t SignedToken) {
 				token = &t
 			}
 
-			timer := time.NewTimer(s.opts.TokenExpiration / 2)
+			// FIXME: should be based on current token expiration!
+			timer := time.NewTimer(s.opts.TokenTtl / 2)
 			select {
 			case <-timer.C:
 				token = nil
@@ -161,45 +156,41 @@ func (s *Session) start(t SignedToken) {
 // Returns the subscriber id associated with this session.  This uniquely identifies
 // an account to the world.  This may be shared over other (possibly unsecure) channels
 // in order to share with other users.
-func (s *Session) MyId() uuid.UUID {
+func (s *session) MyId() uuid.UUID {
 	return s.core.Id
 }
 
 // Returns the session owner's public signing key.  This key and its id may be shared freely.
-func (s *Session) MyKey() PublicKey {
+func (s *session) MyKey() PublicKey {
 	return s.core.SigningKey.Pub
 }
 
 // Returns the session owner's secret.  This should be destroyed promptly after use.
-func (s *Session) mySecret() (Secret, error) {
+func (s *session) mySecret() (Secret, error) {
 	secret, err := s.core.secret(s.shard, s.login)
 	return secret, errors.WithStack(err)
 }
 
 // Returns the personal encryption seed of this subscription.
-func (s *Session) myEncryptionSeed(secret Secret) ([]byte, error) {
+func (s *session) myEncryptionSeed(secret Secret) ([]byte, error) {
 	seed, err := s.core.encryptionSeed(secret)
 	return seed, errors.WithStack(err)
 }
 
 // Returns the signing key associated with this session. Should be promptly destroyed.
-func (s *Session) mySigningKey(secret Secret) (PrivateKey, error) {
+func (s *session) mySigningKey(secret Secret) (PrivateKey, error) {
 	key, err := s.core.signingKey(secret)
 	return key, errors.WithStack(err)
 }
 
 // Returns the invitation key associated with this session. Should be promptly destroyed.
-func (s *Session) myInvitationKey(secret Secret) (PrivateKey, error) {
+func (s *session) myInvitationKey(secret Secret) (PrivateKey, error) {
 	key, err := s.core.invitationKey(secret)
 	return key, errors.WithStack(err)
 }
 
-// // Returns the invitation key associated with this session. Should be promptly destroyed.
-// func (s *Session) AddSigner(signer Signer) (PrivateKey, error) {
-// }
-
 // Lists the session owner's currently pending invitations.
-func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
+func (s *session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -210,7 +201,7 @@ func (s *Session) MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptio
 }
 
 // Lists the session owner's currently active certificates.
-func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
+func (s *session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -221,7 +212,7 @@ func (s *Session) MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOpti
 }
 
 // Keys that have been in some way trusted by the owner of the session.
-func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
+func (s *session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -234,7 +225,7 @@ func (s *Session) MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) LoadTrust(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
+func (s *session) LoadTrust(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Trust{}, false, errors.WithStack(err)
@@ -247,7 +238,7 @@ func (s *Session) LoadTrust(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, 
 // Loads the trust with the given id.  The trust will be returned only
 // if your public key has been invited to manage the trust and the invitation
 // has been accepted.
-func (s *Session) LoadInvitation(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
+func (s *session) LoadInvitation(cancel <-chan struct{}, id uuid.UUID) (Invitation, bool, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Invitation{}, false, errors.WithStack(err)
@@ -257,10 +248,8 @@ func (s *Session) LoadInvitation(cancel <-chan struct{}, id uuid.UUID) (Invitati
 	return trust, ok, errors.WithStack(err)
 }
 
-// Loads the trust with the given id.  The trust will be returned only
-// if your public key has been invited to manage the trust and the invitation
-// has been accepted.
-func (s *Session) LoadCertificates(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
+// Loads the certificates for the given trust.
+func (s *session) LoadCertificatesByTrust(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -270,9 +259,19 @@ func (s *Session) LoadCertificates(cancel <-chan struct{}, t Trust, fns ...func(
 	return certs, errors.WithStack(err)
 }
 
-// Accepts the invitation.  The invitation must be valid and must be addressed
-// to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) NewTrust(cancel <-chan struct{}, name string, fns ...func(t *TrustOptions)) (Trust, error) {
+// Loads the invitations for the given trust.
+func (s *session) LoadInvitationsByTrust(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]Invitation, error) {
+	token, err := s.token(cancel)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	invites, err := s.net.InvitationsByTrust(cancel, token, t.Id, buildPagingOptions(fns...))
+	return invites, errors.WithStack(err)
+}
+
+// Generates a new trust.
+func (s *session) NewTrust(cancel <-chan struct{}, strength Strength) (Trust, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
@@ -288,7 +287,7 @@ func (s *Session) NewTrust(cancel <-chan struct{}, name string, fns ...func(t *T
 		return Trust{}, errors.WithStack(err)
 	}
 
-	trust, err := newTrust(s.rand, s.MyId(), mySecret, mySigningKey, name, fns...)
+	trust, err := newTrust(s.rand, s.MyId(), mySecret, mySigningKey)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}
@@ -302,32 +301,32 @@ func (s *Session) NewTrust(cancel <-chan struct{}, name string, fns ...func(t *T
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) Invite(cancel <-chan struct{}, t Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error) {
+func (s *session) Invite(cancel <-chan struct{}, t Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error) {
 	inv, err := t.invite(cancel, s, memberId, opts...)
 	return inv, errors.WithStack(err)
 }
 
 // Accepts the invitation.  The invitation must be valid and must be addressed
 // to the owner of the session, or the session owner must be acting as a proxy.
-func (s *Session) Accept(cancel <-chan struct{}, i Invitation) error {
+func (s *session) Accept(cancel <-chan struct{}, i Invitation) error {
 	return errors.WithStack(i.accept(cancel, s))
 }
 
 // Revokes trust from the given subscriber for the given trust.
-func (s *Session) Revoke(cancel <-chan struct{}, t Trust, memberId uuid.UUID) error {
+func (s *session) Revoke(cancel <-chan struct{}, t Trust, memberId uuid.UUID) error {
 	return errors.WithStack(t.revokeCertificate(cancel, s, memberId))
 }
 
 // Renew's the session owner's certificate with the trust.  Only members with Member of
 // greater trust level may reissue a certificate.
-func (s *Session) Renew(cancel <-chan struct{}, t Trust) (Trust, error) {
+func (s *session) Renew(cancel <-chan struct{}, t Trust) (Trust, error) {
 	trust, err := t.renewCertificate(cancel, s)
 	return trust, errors.WithStack(err)
 }
 
 // Transfer will issue an invitation to the recipient with Grantor level trust and revoke
 // the session owner's certificate
-func (s *Session) Transfer(cancel <-chan struct{}, t Trust, recipientId uuid.UUID) error {
+func (s *session) Transfer(cancel <-chan struct{}, t Trust, recipientId uuid.UUID) error {
 	_, err := s.Invite(cancel, t, recipientId, func(o *InvitationOptions) {
 		o.Lvl = Owner
 		o.Exp = OneHundredYears

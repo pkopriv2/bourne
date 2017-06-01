@@ -36,7 +36,7 @@ func (s SecretAlgorithm) Parse(raw []byte) (ret Shard, err error) {
 	}
 }
 
-func (s SecretAlgorithm) RandomSecret(rand io.Reader, opts SecretOptions) (Secret, error) {
+func (s SecretAlgorithm) RandomSecret(rand io.Reader, opts secretOptions) (Secret, error) {
 	switch s {
 	default:
 		return nil, errors.Wrapf(TrustError, "Unknown sharding algorithm [%v]", s)
@@ -46,7 +46,7 @@ func (s SecretAlgorithm) RandomSecret(rand io.Reader, opts SecretOptions) (Secre
 }
 
 // Options for generating a shared secret.
-type SecretOptions struct {
+type secretOptions struct {
 	ShardAlg      SecretAlgorithm
 	ShardStrength int
 
@@ -59,11 +59,11 @@ type SecretOptions struct {
 	ShardSalt   int
 }
 
-func defaultSecretOptions() SecretOptions {
-	return SecretOptions{ShamirAlpha, 32, SHA256, Aes256Gcm, SHA256, 1024, 32}
+func defaultSecretOptions() secretOptions {
+	return secretOptions{ShamirAlpha, 32, SHA256, Aes256Gcm, SHA256, 1024, 32}
 }
 
-func buildSecretOptions(fns ...func(*SecretOptions)) SecretOptions {
+func buildSecretOptions(fns ...func(*secretOptions)) secretOptions {
 	ret := defaultSecretOptions()
 	for _, fn := range fns {
 		fn(&ret)
@@ -73,7 +73,7 @@ func buildSecretOptions(fns ...func(*SecretOptions)) SecretOptions {
 
 type Secret interface {
 	Hash(Hash) ([]byte, error)
-	Opts() SecretOptions
+	Opts() secretOptions
 	Shard(rand io.Reader) (Shard, error)
 	Destroy()
 }
@@ -81,19 +81,16 @@ type Secret interface {
 type Shard interface {
 	Signable
 
-	Opts() SecretOptions
+	Opts() secretOptions
 	Derive(Shard) (Secret, error)
 	Destroy()
 }
 
 // Generates a new random oracle + the curve that generated the oracle.  The returned curve
 // may be used to generate oracle keys.
-func genSecret(rand io.Reader, opts SecretOptions) (Secret, error) {
+func genSecret(rand io.Reader, opts secretOptions) (Secret, error) {
 	secret, err := opts.ShardAlg.RandomSecret(rand, opts)
-	if err != nil {
-		return nil, errors.Wrap(err, "Error generating random secret")
-	}
-	return secret, nil
+	return secret, errors.Wrap(err, "Error generating random secret")
 }
 
 // Signs the shard, returning a signed shard.

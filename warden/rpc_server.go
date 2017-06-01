@@ -84,7 +84,7 @@ func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newToken(r.Core.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
+	token, err := newToken(r.Core.SubId, r.Core.Id, r.Expiration).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -108,7 +108,7 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newToken(core.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
+	token, err := newToken(core.SubId, core.Id, r.Exp).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -383,7 +383,7 @@ func (s *rpcServer) TrustsByMember(r rpcTrustsByMemberReq) micro.Response {
 		certs[c.TrustId] = c
 	}
 
-	codes := make(map[uuid.UUID]TrustCode)
+	codes := make(map[uuid.UUID]trustCode)
 	for _, c := range tmp {
 		code, o, err := s.storage.LoadTrustCode(c.TrustId, c.TrusteeId)
 		if err != nil {
@@ -397,7 +397,7 @@ func (s *rpcServer) TrustsByMember(r rpcTrustsByMemberReq) micro.Response {
 		codes[c.TrustId] = code
 	}
 
-	cores := make(map[uuid.UUID]TrustCore)
+	cores := make(map[uuid.UUID]trustCore)
 	for _, c := range tmp {
 		core, o, err := s.storage.LoadTrustCore(c.TrustId)
 		if err != nil {
@@ -461,6 +461,7 @@ type rpcAuthReq struct {
 }
 
 type rpcRegisterMemberReq struct {
+	Token      SignedToken
 	Core       memberCore
 	Shard      memberShard
 	Auth       []byte
@@ -469,8 +470,8 @@ type rpcRegisterMemberReq struct {
 
 type rpcTrustRegisterReq struct {
 	Token SignedToken
-	Core  TrustCore
-	Code  TrustCode
+	Core  trustCore
+	Code  trustCode
 	Cert  SignedCertificate
 }
 
@@ -481,8 +482,8 @@ type rpcTrustByIdReq struct {
 
 type rpcTrustResponse struct {
 	Found bool
-	Core  TrustCore
-	Code  TrustCode
+	Core  trustCore
+	Code  trustCode
 	Cert  SignedCertificate
 }
 
@@ -520,7 +521,7 @@ type rpcInvitesResponse struct {
 type rpcCertRegisterReq struct {
 	Token SignedToken
 	Cert  SignedCertificate
-	Code  TrustCode
+	Code  trustCode
 }
 
 type rpcCertsByMemberReq struct {

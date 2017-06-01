@@ -27,13 +27,13 @@ type storage interface {
 	LoadMemberById(uuid.UUID) (memberCore, bool, error)
 
 	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
-	SaveTrust(TrustCore, TrustCode, SignedCertificate) error
+	SaveTrust(trustCore, trustCode, SignedCertificate) error
 
 	// Loads the given trust.
-	LoadTrustCore(trustId uuid.UUID) (TrustCore, bool, error)
+	LoadTrustCore(trustId uuid.UUID) (trustCore, bool, error)
 
 	// Loads the given trust.
-	LoadTrustCode(trustId, memberId uuid.UUID) (TrustCode, bool, error)
+	LoadTrustCode(trustId, memberId uuid.UUID) (trustCode, bool, error)
 
 	// Saves the trust, and the issuer's code + cert.  Must all be done in same transaction
 	SaveInvitation(Invitation) error
@@ -45,7 +45,7 @@ type storage interface {
 	LoadInvitationsByMember(uuid.UUID, int, int) ([]Invitation, error)
 
 	// Saves the certificate
-	SaveCertificate(s SignedCertificate, code TrustCode) error
+	SaveCertificate(s SignedCertificate, code trustCode) error
 
 	// Loads the certificate
 	LoadCertificateById(uuid.UUID) (SignedCertificate, bool, error)
@@ -71,7 +71,7 @@ func EnsureMember(store storage, id uuid.UUID) (memberCore, error) {
 	return s, nil
 }
 
-func EnsureTrust(store storage, id uuid.UUID) (TrustCore, error) {
+func EnsureTrust(store storage, id uuid.UUID) (trustCore, error) {
 	s, o, e := store.LoadTrustCore(id)
 	if e != nil || !o {
 		return s, common.Or(e, errors.Wrapf(StorageInvariantError, "No trust [%v]", id))

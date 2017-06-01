@@ -22,20 +22,23 @@ func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions 
 	return def
 }
 
+type InvitationRequest struct {
+	TrustId     uuid.UUID
+	RicipientId uuid.UUID
+	// Msg string
+}
+
 // An invitation is a cryptographically secured message asking the recipient to share in the
 // management of a trust. The invitation may only be accepted by the intended recipient.
 // These technically can be shared publicly, but exposure should be limited (typically only the
 // trust system needs to know).
 type Invitation struct {
-	Id uuid.UUID
-
+	Id        uuid.UUID
 	Cert      Certificate
 	TrustSig  Signature
 	IssuerSig Signature
-
-	// The embedded secret information
-	MsgKey  KeyExchange
-	MsgData CipherText
+	MsgKey    KeyExchange
+	MsgData   CipherText
 }
 
 func (i Invitation) String() string {
@@ -48,7 +51,7 @@ func createInvitation(rand io.Reader,
 	ringKey Signer,
 	issuerKey Signer,
 	trusteeKey PublicKey,
-	opts TrustOptions) (Invitation, error) {
+	opts trustOptions) (Invitation, error) {
 
 	shard, err := secret.Shard(rand)
 	if err != nil {
@@ -90,7 +93,7 @@ func createInvitation(rand io.Reader,
 }
 
 // Accepts an invitation and returns an oracle key that can be registered.
-func (i Invitation) accept(cancel <-chan struct{}, s *Session) error {
+func (i Invitation) accept(cancel <-chan struct{}, s *session) error {
 	token, err := s.token(cancel)
 	if err != nil {
 		return errors.WithStack(err)
@@ -137,7 +140,7 @@ func (i Invitation) accept(cancel <-chan struct{}, s *Session) error {
 		return errors.WithStack(err)
 	}
 
-	myCertSig, err := sign(s.rand, i.Cert, mySigningKey, trust.Opts.SigningHash)
+	myCertSig, err := sign(s.rand, i.Cert, mySigningKey, trust.opts.SigningHash)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -145,7 +148,7 @@ func (i Invitation) accept(cancel <-chan struct{}, s *Session) error {
 	cert := SignedCertificate{i.Cert, i.TrustSig, i.IssuerSig, myCertSig}
 	s.logger.Debug("Generated certificate: %v", cert)
 
-	return errors.WithStack(s.net.CertRegister(cancel, token, cert, TrustCode{i.Cert.TrusteeId, i.Cert.TrustId, myShard}))
+	return errors.WithStack(s.net.CertRegister(cancel, token, cert, trustCode{i.Cert.TrusteeId, i.Cert.TrustId, myShard}))
 }
 
 // Verifies an invitation's signatures are valid.

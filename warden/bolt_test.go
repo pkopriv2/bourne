@@ -6,6 +6,7 @@ import (
 
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/stash"
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,27 +29,39 @@ func TestStorage(t *testing.T) {
 	}
 
 	t.Run("SaveMember", func(t *testing.T) {
-		owner, err := GenRsaKey(rand.Reader, 1024)
-		if err != nil {
-			t.FailNow()
+		owner, e := GenRsaKey(rand.Reader, 1024)
+		if !assert.Nil(t, e) {
 			return
 		}
 
-		login := func(pad KeyPad) error {
-			return pad.BySignature(owner)
+		login := func() credential {
+			return newSigningCred(lookupByKey(owner.Public().Id()), owner)
 		}
 
 		creds, e := extractCreds(login)
-		assert.Nil(t, e)
+		if !assert.Nil(t, e) {
+			return
+		}
+		defer creds.Destroy()
 
-		mem, code, e := newMember(rand.Reader, creds)
-		assert.Nil(t, e)
+		mem, code, e := newMember(rand.Reader, uuid.NewV1(), uuid.NewV1(), creds)
+		if !assert.Nil(t, e) {
+			return
+		}
 
 		args, e := creds.Auth(rand.Reader)
-		assert.Nil(t, e)
+		if !assert.Nil(t, e) {
+			return
+		}
 
-		auth, err := newMemberAuth(rand.Reader, mem.Id, code, args)
-		assert.Nil(t, store.SaveMember(mem, auth))
+		auth, e := newMemberAuth(rand.Reader, mem.Id, code, args)
+		if !assert.Nil(t, e) {
+			return
+		}
+
+		if !assert.Nil(t, store.SaveMember(mem, auth)) {
+			return
+		}
 
 		m, o, e := store.LoadMemberById(mem.Id)
 		assert.Nil(t, e)
@@ -67,13 +80,12 @@ func TestStorage(t *testing.T) {
 		assert.Equal(t, was, now)
 
 		owner2, err := GenRsaKey(rand.Reader, 1024)
-		if err != nil {
-			t.FailNow()
+		if !assert.Nil(t, err) {
 			return
 		}
 
-		login2 := func(pad KeyPad) error {
-			return pad.BySignature(owner2)
+		login2 := func() credential {
+			return newSigningCred(lookupByKey(owner2.Public().Id()), owner2)
 		}
 
 		_, e = mem.secret(code, login2)

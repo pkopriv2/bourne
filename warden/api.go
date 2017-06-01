@@ -1,15 +1,12 @@
 package warden
 
 import (
-	"crypto/rand"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
-	"github.com/pkopriv2/bourne/micro"
-	"github.com/pkopriv2/bourne/net"
+	uuid "github.com/satori/go.uuid"
 )
 
 // FIXMES:
@@ -40,197 +37,6 @@ var (
 	UnknownTrustError  = errors.New("Warden:UnknownTrust")
 )
 
-// The paging options
-type PagingOptions struct {
-	Beg int
-	End int
-}
-
-// Constructs paging options.
-func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
-	opts := PagingOptions{0, 256}
-	for _, fn := range fns {
-		fn(&opts)
-	}
-	return opts
-}
-
-// Subscribe options
-type SubscribeOptions struct {
-	SessionOptions
-
-	SecretAlgorithm    SecretAlgorithm
-	SecretStrength     int
-	SigningKeyAlg      KeyAlgorithm
-	SigningKeyStrength int
-	InviteKeyAlg       KeyAlgorithm
-	InviteKeyStrength  int
-
-	Deps *Dependencies
-}
-
-func (s *SubscribeOptions) memberOptions() func(o *memberOptions) {
-	return func(o *memberOptions) {
-		o.SecretOptions(func(o *SecretOptions) {
-			o.ShardAlg = s.SecretAlgorithm
-			o.ShardStrength = s.SecretStrength
-		})
-
-		o.SigningOptions(func(o *KeyPairOptions) {
-			o.Algorithm = s.SigningKeyAlg
-			o.Strength = s.SigningKeyStrength
-		})
-
-		o.InviteOptions(func(o *KeyPairOptions) {
-			o.Algorithm = s.InviteKeyAlg
-			o.Strength = s.InviteKeyStrength
-		})
-	}
-}
-
-func buildSubscribeOptions(fns ...func(*SubscribeOptions)) SubscribeOptions {
-	ret := SubscribeOptions{
-		SessionOptions:     buildSessionOptions(),
-		SecretAlgorithm:    ShamirAlpha,
-		SecretStrength:     32,
-		SigningKeyAlg:      Rsa,
-		SigningKeyStrength: 2048,
-		InviteKeyAlg:       Rsa,
-		InviteKeyStrength:  2048,
-	}
-	for _, fn := range fns {
-		fn(&ret)
-	}
-	return ret
-}
-
-// Connection options.
-type ConnectOptions struct {
-	SessionOptions
-	Deps *Dependencies
-}
-
-func buildConnectOptions(fns ...func(*ConnectOptions)) ConnectOptions {
-	ret := ConnectOptions{SessionOptions: buildSessionOptions()}
-	for _, fn := range fns {
-		fn(&ret)
-	}
-	return ret
-}
-
-// Core dependencies
-type Dependencies struct {
-	Net  Transport
-	Rand io.Reader
-}
-
-func buildDependencies(ctx common.Context, addr string, timeout time.Duration, fns ...func(*Dependencies)) (Dependencies, error) {
-	ret := Dependencies{}
-	for _, fn := range fns {
-		fn(&ret)
-	}
-
-	if ret.Rand == nil {
-		ret.Rand = rand.Reader
-	}
-
-	if ret.Net == nil {
-		conn, err := net.NewTcpNetwork().Dial(timeout, addr)
-		if err != nil {
-			return Dependencies{}, errors.WithStack(err)
-		}
-
-		cl, err := micro.NewClient(ctx, conn, micro.Gob)
-		if err != nil {
-			return Dependencies{}, errors.WithStack(err)
-		}
-		ret.Net = newClient(cl)
-	}
-
-	return ret, nil
-}
-
-// Registers a new subscription with the trust service.
-func Subscribe(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*SubscribeOptions)) (*Session, error) {
-
-	opts := buildSubscribeOptions(fns...)
-	if opts.Deps == nil {
-		deps, err := buildDependencies(ctx, addr, opts.SessionOptions.NetTimeout)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		opts.Deps = &deps
-	}
-
-	creds, err := extractCreds(login)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	auth, err := creds.Auth(opts.Deps.Rand)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	timer := ctx.Timer(opts.NetTimeout)
-	defer timer.Closed()
-
-	member, code, err := newMember(opts.Deps.Rand, creds, opts.memberOptions())
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	token, err := opts.Deps.Net.Register(timer.Closed(), member, code, auth, opts.SessionOptions.TokenExpiration)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	session, err := newSession(ctx, member, code, token, login, opts.SessionOptions, *opts.Deps)
-	return session, errors.WithStack(err)
-}
-
-// Connects
-func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...func(*ConnectOptions)) (*Session, error) {
-	opts := buildConnectOptions(fns...)
-	if opts.Deps == nil {
-		deps, err := buildDependencies(ctx, addr, opts.SessionOptions.NetTimeout)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		opts.Deps = &deps
-	}
-
-	creds, err := extractCreds(login)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	auth, err := creds.Auth(opts.Deps.Rand)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	timer := ctx.Timer(opts.SessionOptions.NetTimeout)
-	defer timer.Closed()
-
-	token, err := opts.Deps.Net.Authenticate(timer.Closed(), creds.Lookup(), auth, opts.TokenExpiration)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	core, code, found, err := opts.Deps.Net.MemberByLookup(timer.Closed(), token, creds.Lookup())
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	if !found {
-		return nil, errors.Wrapf(UnauthorizedError, "No such member.")
-	}
-
-	session, err := newSession(ctx, core, code, token, login, opts.SessionOptions, *opts.Deps)
-	return session, errors.WithStack(err)
-}
-
 // A signer contains the knowledge necessary to digitally sign messages.
 //
 // For high-security environments, only a signer is required to authenticate with the
@@ -240,6 +46,13 @@ func Connect(ctx common.Context, addr string, login func(KeyPad) error, fns ...f
 type Signer interface {
 	Public() PublicKey
 	Sign(rand io.Reader, hash Hash, msg []byte) (Signature, error)
+}
+
+// A a signable object is one that has a consistent format for signing and verifying.
+//
+// FIXME: Warden currently relies heavily on formats which should be language independent.
+type Signable interface {
+	SigningFormat() ([]byte, error)
 }
 
 // A signature is a cryptographically secure structure that may be used to both prove
@@ -258,44 +71,6 @@ func (s Signature) Verify(key PublicKey, msg []byte) error {
 // Returns a simple string rep of the signature.
 func (s Signature) String() string {
 	return fmt.Sprintf("Signature(hash=%v): %v", s.Hash, cryptoBytes(s.Data))
-}
-
-// A a signable object is one that has a consistent format for signing and verifying.
-type Signable interface {
-	SigningFormat() ([]byte, error)
-}
-
-// Signs the object with the signer and hash
-func sign(rand io.Reader, obj Signable, signer Signer, hash Hash) (Signature, error) {
-	fmt, err := obj.SigningFormat()
-	if err != nil {
-		return Signature{}, errors.WithStack(err)
-	}
-
-	sig, err := signer.Sign(rand, hash, fmt)
-	if err != nil {
-		return Signature{}, errors.WithStack(err)
-	}
-	return sig, nil
-}
-
-// Verifies the object with the signer and hash
-func verify(obj Signable, key PublicKey, sig Signature) error {
-	fmt, err := obj.SigningFormat()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return errors.WithStack(key.Verify(sig.Hash, fmt, sig.Data))
-}
-
-// Decrypts the object with the key.
-func decrypt(obj Decrypter, key Signable) ([]byte, error) {
-	fmt, err := key.SigningFormat()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	ret, err := obj.Decrypt(fmt)
-	return ret, errors.WithStack(err)
 }
 
 // A decrypter decrypts itself with the given key
@@ -332,8 +107,165 @@ type PublicKey interface {
 //
 type PrivateKey interface {
 	Signer
+	Destroyer
+
 	Algorithm() KeyAlgorithm
 	Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error)
 	format() []byte
-	Destroy()
+}
+
+// Membership lookup
+type Registrar interface {
+
+	// Registers an account under an email address. (Email really is a terrible mechanism
+	// for handling registration, but I don't think we can tackle that....)
+	ByEmail(email string) KeyPad
+}
+
+// Membership lookup
+type Directory interface {
+
+	// Lookup a member account by public key
+	LookupByKey(key string) KeyPad
+
+	// Lookup a member account by email
+	LookupByEmail(email string) KeyPad
+}
+
+// Key pad allows a user to register and
+type KeyPad interface {
+
+	// Performs a signature based login/registration.
+	BySignature(signer Signer, strength ...Strength) (Session, error)
+
+	// Performs a password based login/registration.
+	ByPassphrase(phrase string) (Session, error)
+}
+
+type Session interface {
+
+	// Returns the subscriber id associated with this session.  This uniquely identifies
+	// an account to the world.  This may be shared over other (possibly unsecure) channels
+	// in order to share with other users.
+	MyId() uuid.UUID
+
+	// Returns the session owner's public signing key.  This key and its id may be shared freely.
+	MyKey() PublicKey
+
+	// Returns the session owner's unaccepted invitations.
+	MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error)
+
+	// Lists the session owner's currently active trust certificates.
+	MyCertificates(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]SignedCertificate, error)
+
+	// Trusts that have been created by the session owner.
+	MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error)
+
+	// Adds a login key.
+	// RotateSigner(cancel <-chan struct{}, old Signer, new Signer)
+
+	// // Adds a passphrase
+	// RotatePassphrase(cancel <-chan struct{}, old, new string)
+
+	// Loads the certificates for the given trust.
+	LoadCertificatesByTrust(cancel <-chan struct{}, trust Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error)
+
+	// Loads the invitations for the given trust.
+	LoadInvitationsByTrust(cancel <-chan struct{}, trust Trust, fns ...func(*PagingOptions)) ([]Invitation, error)
+
+	// Generates a new trust.
+	NewTrust(cancel <-chan struct{}, strength Strength) (Trust, error)
+
+	// Loads a trust by id.
+	LoadTrust(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error)
+
+	// Invites a member to join the trust.
+	Invite(cancel <-chan struct{}, trust Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error)
+
+	// Accepts the invitation.  The invitation must be valid and must be addressed
+	// to the owner of the session, or the session owner must be acting as a proxy.
+	Accept(cancel <-chan struct{}, invitationId Invitation) error
+
+	// Revokes trust from the given subscriber for the given trust.
+	Revoke(cancel <-chan struct{}, trust Trust, memberId uuid.UUID) error
+
+	// Renew's the session owner's certificate with the trust.  Only members with Member of
+	// greater trust level may reissue a certificate.
+	Renew(cancel <-chan struct{}, trust Trust) (Trust, error)
+}
+
+// Registers a new subscription with the trust service.
+func Register(ctx common.Context, addr string, token SignedToken, fns ...func(*SessionOptions)) (Registrar, error) {
+	opts := buildSessionOptions(fns...)
+	if opts.deps == nil {
+		deps, err := buildDependencies(ctx, addr, opts.Timeout)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		opts.deps = &deps
+	}
+
+	return &registrar{ctx, opts, token}, nil
+}
+
+// Registers a new subscription with the trust service.
+func Connect(ctx common.Context, addr string, fns ...func(*SessionOptions)) (Directory, error) {
+	opts := buildSessionOptions(fns...)
+	if opts.deps == nil {
+		deps, err := buildDependencies(ctx, addr, opts.Timeout)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		opts.deps = &deps
+	}
+
+	return &directory{ctx, opts}, nil
+}
+
+// The paging options
+type PagingOptions struct {
+	Beg int
+	End int
+}
+
+// Constructs paging options.
+func buildPagingOptions(fns ...func(p *PagingOptions)) PagingOptions {
+	opts := PagingOptions{0, 256}
+	for _, fn := range fns {
+		fn(&opts)
+	}
+	return opts
+}
+
+// Signs the object with the signer and hash
+func sign(rand io.Reader, obj Signable, signer Signer, hash Hash) (Signature, error) {
+	fmt, err := obj.SigningFormat()
+	if err != nil {
+		return Signature{}, errors.WithStack(err)
+	}
+
+	sig, err := signer.Sign(rand, hash, fmt)
+	if err != nil {
+		return Signature{}, errors.WithStack(err)
+	}
+	return sig, nil
+}
+
+// Verifies the object with the signer and hash
+func verify(obj Signable, key PublicKey, sig Signature) error {
+	fmt, err := obj.SigningFormat()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(key.Verify(sig.Hash, fmt, sig.Data))
+}
+
+// Decrypts the object with the key.
+func decrypt(obj Decrypter, key Signable) ([]byte, error) {
+	fmt, err := key.SigningFormat()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	ret, err := obj.Decrypt(fmt)
+	return ret, errors.WithStack(err)
 }

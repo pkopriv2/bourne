@@ -120,7 +120,7 @@ func (b *boltStorage) LoadMemberByLookup(lookup []byte) (m memberCore, s memberA
 	return
 }
 
-func (b *boltStorage) LoadTrustCore(id uuid.UUID) (d TrustCore, o bool, e error) {
+func (b *boltStorage) LoadTrustCore(id uuid.UUID) (d trustCore, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		d, o, e = boltLoadTrust(tx, id)
 		return errors.WithStack(e)
@@ -184,7 +184,7 @@ func (b *boltStorage) RevokeCertificate(memberId, trustId uuid.UUID) (e error) {
 	return
 }
 
-func (b *boltStorage) LoadTrustCode(trustId, memberId uuid.UUID) (d TrustCode, o bool, e error) {
+func (b *boltStorage) LoadTrustCode(trustId, memberId uuid.UUID) (d trustCode, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		d, o, e = boltLoadTrustCode(tx, trustId, memberId)
 		return errors.WithStack(e)
@@ -192,7 +192,7 @@ func (b *boltStorage) LoadTrustCode(trustId, memberId uuid.UUID) (d TrustCode, o
 	return
 }
 
-func (b *boltStorage) SaveTrust(core TrustCore, code TrustCode, cert SignedCertificate) error {
+func (b *boltStorage) SaveTrust(core trustCore, code trustCode, cert SignedCertificate) error {
 	// FIXME: Move to rpc_server.go (Assuming transactional problems don't arise)
 	issuer, err := EnsureMember(b, cert.IssuerId)
 	if err != nil {
@@ -252,7 +252,7 @@ func (b *boltStorage) SaveInvitation(inv Invitation) error {
 	})
 }
 
-func (b *boltStorage) SaveCertificate(cert SignedCertificate, code TrustCode) error {
+func (b *boltStorage) SaveCertificate(cert SignedCertificate, code trustCode) error {
 	// FIXME: Move to rpc_server.go (Assuming transactional problems don't arise)
 	if code.MemberId != cert.TrusteeId || code.TrustId != cert.TrustId {
 		return errors.Wrapf(StorageInvariantError, "Inconsistent data")
@@ -329,7 +329,7 @@ func boltLoadMemberShard(tx *bolt.Tx, lookup []byte) (k memberAuth, o bool, e er
 	return
 }
 
-func boltStoreTrust(tx *bolt.Tx, core TrustCore) error {
+func boltStoreTrust(tx *bolt.Tx, core trustCore) error {
 	if err := boltEnsureEmpty(tx.Bucket(trustBucket), stash.UUID(core.Id)); err != nil {
 		return errors.Wrapf(err, "Trust already exists [%v]", core.Id)
 	}
@@ -347,12 +347,12 @@ func boltStoreTrust(tx *bolt.Tx, core TrustCore) error {
 	return nil
 }
 
-func boltLoadTrust(tx *bolt.Tx, id uuid.UUID) (d TrustCore, o bool, e error) {
+func boltLoadTrust(tx *bolt.Tx, id uuid.UUID) (d trustCore, o bool, e error) {
 	o, e = parseGobBytes(tx.Bucket(trustBucket).Get(stash.UUID(id)), &d)
 	return
 }
 
-func boltStoreTrustCode(tx *bolt.Tx, code TrustCode) error {
+func boltStoreTrustCode(tx *bolt.Tx, code trustCode) error {
 	key := stash.UUID(code.TrustId).ChildUUID(code.MemberId)
 
 	if err := boltEnsureEmpty(tx.Bucket(trustCodeBucket), key); err != nil {
@@ -371,7 +371,7 @@ func boltStoreTrustCode(tx *bolt.Tx, code TrustCode) error {
 	return nil
 }
 
-func boltLoadTrustCode(tx *bolt.Tx, trustId uuid.UUID, memberId uuid.UUID) (c TrustCode, o bool, e error) {
+func boltLoadTrustCode(tx *bolt.Tx, trustId uuid.UUID, memberId uuid.UUID) (c trustCode, o bool, e error) {
 	o, e = parseGobBytes(tx.Bucket(trustCodeBucket).Get(stash.UUID(trustId).ChildUUID(memberId)), &c)
 	return
 }

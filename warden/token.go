@@ -20,13 +20,15 @@ func (t SignedToken) Verify(key PublicKey) error {
 
 type Token struct {
 	MemberId uuid.UUID
+	SubId    uuid.UUID
 	Created  time.Time
 	Expires  time.Time
+	Args     Signable
 }
 
-func newToken(memberId uuid.UUID, ttl time.Duration) Token {
+func newToken(memberId, subId uuid.UUID, ttl time.Duration) Token {
 	now := time.Now()
-	return Token{memberId, time.Now(), now.Add(ttl)}
+	return Token{memberId, subId, time.Now(), now.Add(ttl), nil}
 }
 
 func (s Token) Expired(now time.Time) bool {
@@ -34,7 +36,12 @@ func (s Token) Expired(now time.Time) bool {
 }
 
 func (s Token) SigningFormat() ([]byte, error) {
-	fmt, err := gobBytes(s)
+	bodyFmt, err := s.Args.SigningFormat()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	fmt, err := gobBytes(tokenFmt{s.MemberId, s.SubId, s.Created, s.Expires, bodyFmt})
 	return fmt, errors.WithStack(err)
 }
 
@@ -44,4 +51,12 @@ func (s Token) Sign(rand io.Reader, signer Signer, hash Hash) (SignedToken, erro
 		return SignedToken{}, errors.WithStack(err)
 	}
 	return SignedToken{s, sig}, nil
+}
+
+type tokenFmt struct {
+	MemberId uuid.UUID
+	SubId    uuid.UUID
+	Created  time.Time
+	Expires  time.Time
+	Args     []byte
 }

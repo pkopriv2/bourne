@@ -11,9 +11,9 @@ type Transport interface {
 	io.Closer
 
 	// Registers a new subscriber.
-	Register(cancel <-chan struct{}, core memberCore, shard memberShard, auth []byte, tokenTTL time.Duration) (SignedToken, error)
+	Register(cancel <-chan struct{}, t SignedToken, core memberCore, shard memberShard, auth []byte, tokenTTL time.Duration) (SignedToken, error)
 
-	// Loads public key by subscriber
+	// Authenticates using
 	Authenticate(cancel <-chan struct{}, lookup []byte, auth []byte, ttl time.Duration) (SignedToken, error)
 
 	// Returns the subscriber of the given key.
@@ -31,6 +31,9 @@ type Transport interface {
 	// Loads invitations by subscriber
 	InvitationsByMember(cancel <-chan struct{}, t SignedToken, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
 
+	// Loads invitations by subscriber
+	InvitationsByTrust(cancel <-chan struct{}, t SignedToken, id uuid.UUID, opts PagingOptions) ([]Invitation, error)
+
 	// Registers an invitation with the trust service.
 	InvitationRegister(cancel <-chan struct{}, t SignedToken, i Invitation) error
 
@@ -44,7 +47,7 @@ type Transport interface {
 	CertsByTrust(cancel <-chan struct{}, t SignedToken, id uuid.UUID, opt PagingOptions) ([]SignedCertificate, error)
 
 	// Registers a certificate (and corresponding oracle key).
-	CertRegister(cancel <-chan struct{}, t SignedToken, c SignedCertificate, k TrustCode) error
+	CertRegister(cancel <-chan struct{}, t SignedToken, c SignedCertificate, k trustCode) error
 
 	// Revokes a certificate.
 	CertRevoke(cancel <-chan struct{}, t SignedToken, trusteeId, trustId uuid.UUID) error

@@ -18,10 +18,10 @@ func init() {
 // FIXME: This IS NOT shamir's algorithm - but should be enough to get going.
 type shamirSecret struct {
 	line line
-	opts SecretOptions
+	opts secretOptions
 }
 
-func generateShamirSecret(rand io.Reader, opts SecretOptions) (Secret, error) {
+func generateShamirSecret(rand io.Reader, opts secretOptions) (Secret, error) {
 	line, err := generateLine(rand, opts.ShardStrength)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -30,7 +30,7 @@ func generateShamirSecret(rand io.Reader, opts SecretOptions) (Secret, error) {
 	return &shamirSecret{line, opts}, nil
 }
 
-func (s *shamirSecret) Opts() SecretOptions {
+func (s *shamirSecret) Opts() secretOptions {
 	return s.opts
 }
 
@@ -57,7 +57,7 @@ func (s *shamirSecret) String() string {
 
 type shamirShard struct {
 	Pt      point
-	RawOpts SecretOptions
+	RawOpts secretOptions
 }
 
 func parseShamirShard(raw []byte) (s *shamirShard, e error) {
@@ -65,7 +65,7 @@ func parseShamirShard(raw []byte) (s *shamirShard, e error) {
 	return
 }
 
-func (s *shamirShard) Opts() SecretOptions {
+func (s *shamirShard) Opts() secretOptions {
 	return s.RawOpts
 }
 

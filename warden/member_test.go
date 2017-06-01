@@ -3,7 +3,9 @@ package warden
 import (
 	"crypto/rand"
 	"testing"
+	"time"
 
+	uuid "github.com/satori/go.uuid"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,21 +17,21 @@ func TestMember(t *testing.T) {
 	}
 
 	t.Run("ExtractCreds_NoCredential", func(t *testing.T) {
-		_, e := extractCreds(func(pad KeyPad) error {
+		_, e := extractCreds(func() credential {
 			return nil
 		})
 		assert.NotNil(t, e)
 	})
 
 	t.Run("NewMember_WithSigner", func(t *testing.T) {
-		login := func(pad KeyPad) error {
-			return pad.BySignature(owner)
+		login := func() credential {
+			return &signingCred{[]byte(owner.Public().Id()), owner, SHA256, 5 * time.Minute}
 		}
 
-		creds, e := extractCreds(login)
-		assert.Nil(t, e)
+		creds := login()
+		defer creds.Destroy()
 
-		sub, auth, e := newMember(rand.Reader, creds)
+		sub, auth, e := newMember(rand.Reader, uuid.NewV1(), uuid.NewV1(), creds)
 		assert.Nil(t, e)
 
 		secret, e := sub.secret(auth, login)
@@ -46,14 +48,14 @@ func TestMember(t *testing.T) {
 	})
 
 	t.Run("NewMember_WithPassword", func(t *testing.T) {
-		login := func(pad KeyPad) error {
-			return pad.ByPassword("user", "pass")
+		login := func() credential {
+			return &passCred{[]byte(owner.Public().Id()), []byte("pass")}
 		}
 
-		creds, e := extractCreds(login)
-		assert.Nil(t, e)
+		creds := login()
+		defer creds.Destroy()
 
-		sub, auth, e := newMember(rand.Reader, creds)
+		sub, auth, e := newMember(rand.Reader, uuid.NewV1(), uuid.NewV1(), creds)
 		assert.Nil(t, e)
 
 		secret, e := sub.secret(auth, login)
