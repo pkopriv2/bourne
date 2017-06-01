@@ -69,7 +69,7 @@ func TestSession(t *testing.T) {
 			return nil, nil, errors.WithStack(err)
 		}
 
-		sessionn, err := registrar.ByKey(owner.Public()).BySignature(owner)
+		sessionn, err := registrar.RegisterByKey(owner.Public()).AuthBySignature(owner)
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
@@ -87,7 +87,7 @@ func TestSession(t *testing.T) {
 			return nil, errors.WithStack(err)
 		}
 
-		sessionn, err := dir.LookupByKey(signer.Public()).BySignature(signer)
+		sessionn, err := dir.LookupByKey(signer.Public()).AuthBySignature(signer)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -165,7 +165,7 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		sessionn, err := registrar.ByEmail("user@example.com").ByPassphrase("pass")
+		sessionn, err := registrar.RegisterByEmail("user@example.com").AuthByPassphrase("pass")
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -178,7 +178,7 @@ func TestSession(t *testing.T) {
 				return
 			}
 
-			sub, err := dir.LookupByEmail("user@example.com").ByPassphrase("pass")
+			sub, err := dir.LookupByEmail("user@example.com").AuthByPassphrase("pass")
 			if !assert.Nil(t, err) {
 				return
 			}
@@ -192,7 +192,7 @@ func TestSession(t *testing.T) {
 				return
 			}
 
-			_, err = dir.LookupByEmail("noexist@example.com").ByPassphrase("pass")
+			_, err = dir.LookupByEmail("noexist@example.com").AuthByPassphrase("pass")
 			assert.NotNil(t, err)
 		})
 
@@ -202,7 +202,7 @@ func TestSession(t *testing.T) {
 				return
 			}
 
-			_, err = dir.LookupByEmail("user@example.com").ByPassphrase("badpass")
+			_, err = dir.LookupByEmail("user@example.com").AuthByPassphrase("badpass")
 			assert.NotNil(t, err)
 		})
 

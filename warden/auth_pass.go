@@ -6,9 +6,8 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Password based credentials
 
-// The server component
+// The server component (or the password based auth protocol)
 type passAuth struct {
 	Ver  authProtocol
 	Val  []byte

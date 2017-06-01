@@ -132,6 +132,7 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 	}
 
 	s.logger.Info("Generating a token for member [%v]", core.Id)
+
 	token, err := newToken(core.Id, core.SubId, r.Exp, nil).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))

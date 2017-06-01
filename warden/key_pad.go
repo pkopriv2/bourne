@@ -32,7 +32,7 @@ func (a keyPad) passphraseCreds(pass string) (func() credential, error) {
 	}, nil
 }
 
-func (a keyPad) BySignature(signer Signer, strength ...Strength) (s Session, e error) {
+func (a keyPad) AuthBySignature(signer Signer, strength ...Strength) (s Session, e error) {
 	login := a.signingCreds(signer, strength...)
 
 	if a.reg {
@@ -43,7 +43,7 @@ func (a keyPad) BySignature(signer Signer, strength ...Strength) (s Session, e e
 	return s, errors.WithStack(e)
 }
 
-func (a keyPad) ByPassphrase(phrase string) (s Session, e error) {
+func (a keyPad) AuthByPassphrase(phrase string) (s Session, e error) {
 	creds, e := a.passphraseCreds(phrase)
 	if e != nil {
 		return nil, errors.WithStack(e)

@@ -119,11 +119,11 @@ type Registrar interface {
 
 	// Registers an account under an email address. (Email really is a terrible mechanism
 	// for handling registration, but I don't think we can tackle that....)
-	ByEmail(email string) KeyPad
+	RegisterByEmail(email string) KeyPad
 
 	// Registers an account using a public key as the primary lookup mechanism.  An alternative
 	// lookup (e.g. email may be registered later, but is not required).
-	ByKey(key PublicKey) KeyPad
+	RegisterByKey(key PublicKey) KeyPad
 }
 
 // Membership lookup
@@ -140,10 +140,10 @@ type Directory interface {
 type KeyPad interface {
 
 	// Performs a signature based login/registration.
-	BySignature(signer Signer, strength ...Strength) (Session, error)
+	AuthBySignature(signer Signer, strength ...Strength) (Session, error)
 
 	// Performs a password based login/registration.
-	ByPassphrase(phrase string) (Session, error)
+	AuthByPassphrase(phrase string) (Session, error)
 }
 
 type Session interface {

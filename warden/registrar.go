@@ -8,10 +8,10 @@ type registrar struct {
 	token SignedToken
 }
 
-func (r *registrar) ByEmail(email string) KeyPad {
+func (r *registrar) RegisterByEmail(email string) KeyPad {
 	return &keyPad{r.ctx, r.opts, lookupByEmail(email), true, r.token}
 }
 
-func (r *registrar) ByKey(key PublicKey) KeyPad {
+func (r *registrar) RegisterByKey(key PublicKey) KeyPad {
 	return &keyPad{r.ctx, r.opts, lookupByKey(key), true, r.token}
 }
