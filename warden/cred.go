@@ -18,8 +18,12 @@ import (
 type credential interface {
 	Destroyer
 
-	// Account lookup (usually a reference to an authenticator)
-	Lookup() []byte
+	// Account lookup.
+	MemberLookup() []byte
+
+	// Auth identifier.  Usually associated to account lookup, but not necessary.
+	AuthId() []byte
+
 
 	// The protocol used to negotiate compatibility.
 	Protocol() authProtocol

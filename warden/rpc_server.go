@@ -42,8 +42,8 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 			return s.RegisterMember(body)
 		case rpcAuthReq:
 			return s.Authenticate(body)
-		case rpcMemberByLookupReq:
-			return s.MemberByLookup(body)
+		case rpcMemberByIdAndAuthReq:
+			return s.MemberByIdAndAuth(body)
 		case rpcMemberSigningKeyByIdReq:
 			return s.MemberSigningKeyById(body)
 		case rpcMemberInviteKeyByIdReq:
@@ -75,24 +75,28 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 	s.logger.Debug("Registering new member: %v", r.Core.Id)
 
-	// if err := s.authenticateToken(r.Token, time.Now()); err != nil {
-		// return micro.NewErrorResponse(errors.WithStack(err))
-	// }
-//
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if err := s.authorizeMemberUse(r.Token.MemberId, r.Core.Id); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
 	auth, err := newMemberAuth(s.rand, r.Core.Id, r.Shard, r.Auth)
 	if err != nil {
-		s.logger.Error("Error: :%+v", err)
+		s.logger.Error("Error generating member auth: %+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if err := s.storage.SaveMember(r.Core, auth); err != nil {
-		s.logger.Error("Error: :%+v", err)
+	if err := s.storage.SaveMember(r.Core, auth, r.Lookup); err != nil {
+		s.logger.Error("Error generating member auth: %+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newToken(r.Core.SubId, r.Core.Id, r.Expiration, nil).Sign(s.rand, s.sign, SHA256)
+	token, err := newToken(r.Core.Id, r.Core.SubId, r.Expiration, nil).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
-		s.logger.Error("Error: :%+v", err)
+		s.logger.Error("Error generating member auth: %+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -100,14 +104,26 @@ func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 }
 
 func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
-	core, auth, o, e := s.storage.LoadMemberByLookup(r.Lookup)
+	s.logger.Info("Attempting to authenticate: %v", string(r.Acct))
+
+	core, o, e := s.storage.LoadMemberByLookup(r.Acct)
 	if e != nil {
+		return micro.NewErrorResponse(errors.Wrap(e, "Error retrieving member"))
+	}
+
+	if !o {
+		s.logger.Error("No such member [%v]", string(r.Acct))
+		return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
+	}
+
+	auth, o, e := s.storage.LoadMemberAuth(core.Id, r.AuthId)
+	if e != nil {
+		s.logger.Error("Error retrieving memeber auth: %+v", e)
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 
-	s.logger.Error("Generating a token for member [%v]", core.Id)
 	if !o {
-		s.logger.Error("No member found by lookup [%v]", cryptoBytes(r.Lookup).Base64())
+		s.logger.Error("No such member authenticator [%v] for member [%v]", string(r.AuthId), core.Id)
 		return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
 	}
 
@@ -115,7 +131,8 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newToken(core.SubId, core.Id, r.Exp, nil).Sign(s.rand, s.sign, SHA256)
+	s.logger.Info("Generating a token for member [%v]", core.Id)
+	token, err := newToken(core.Id, core.SubId, r.Exp, nil).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -153,24 +170,34 @@ func (s *rpcServer) authorizeMemberUse(memberId, by uuid.UUID) error {
 	return nil
 }
 
-func (s *rpcServer) MemberByLookup(r rpcMemberByLookupReq) micro.Response {
+func (s *rpcServer) MemberByIdAndAuth(r rpcMemberByIdAndAuthReq) micro.Response {
 	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	// authorize the owner of the token to view the member.
-	mem, ac, o, e := s.storage.LoadMemberByLookup(r.Lookup)
+	mem, o, e := s.storage.LoadMemberById(r.Id)
+	if e != nil {
+		return micro.NewErrorResponse(errors.WithStack(e))
+	}
+
+	if !o {
+		return micro.NewStandardResponse(rpcMemberResponse{Found: false})
+	}
+
+	auth, o, e := s.storage.LoadMemberAuth(r.Id, r.AuthId)
 	if e != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 	if !o {
 		return micro.NewStandardResponse(rpcMemberResponse{Found: false})
 	}
+
 	if err := s.authorizeMemberUse(r.Token.MemberId, mem.Id); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(e))
 	}
 
-	return micro.NewStandardResponse(rpcMemberResponse{true, mem, ac.Shard})
+	return micro.NewStandardResponse(rpcMemberResponse{true, mem, auth.Shard})
 }
 
 func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Response {
@@ -435,9 +462,10 @@ type rpcToken struct {
 	Token SignedToken
 }
 
-type rpcMemberByLookupReq struct {
+type rpcMemberByIdAndAuthReq struct {
 	Token  SignedToken
-	Lookup []byte
+	Id     uuid.UUID
+	AuthId []byte
 }
 
 type rpcMemberSigningKeyByIdReq struct {
@@ -461,8 +489,10 @@ type rpcMemberResponse struct {
 	Access memberShard
 }
 
+// Returns a token response
 type rpcAuthReq struct {
-	Lookup []byte
+	Acct   []byte
+	AuthId []byte
 	Args   []byte
 	Exp    time.Duration
 }
@@ -471,6 +501,7 @@ type rpcRegisterMemberReq struct {
 	Token      SignedToken
 	Core       memberCore
 	Shard      memberShard
+	Lookup     []byte
 	Auth       []byte
 	Expiration time.Duration
 }
@@ -569,7 +600,7 @@ func init() {
 	gob.Register(rpcAuthReq{})
 	gob.Register(rpcToken{})
 
-	gob.Register(rpcMemberByLookupReq{})
+	gob.Register(rpcMemberByIdAndAuthReq{})
 	gob.Register(rpcMemberResponse{})
 	gob.Register(rpcMemberSigningKeyByIdReq{})
 	gob.Register(rpcMemberInviteKeyByIdReq{})

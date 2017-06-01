@@ -136,7 +136,7 @@ type Directory interface {
 	LookupByEmail(email string) KeyPad
 }
 
-// Key pad allows a user to register and
+// Key pad allows a user to register
 type KeyPad interface {
 
 	// Performs a signature based login/registration.
@@ -166,7 +166,7 @@ type Session interface {
 	// Trusts that have been created by the session owner.
 	MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error)
 
-	// Adds a login key.
+	// // Adds a login key.
 	// RotateSigner(cancel <-chan struct{}, old Signer, new Signer)
 
 	// // Adds a passphrase

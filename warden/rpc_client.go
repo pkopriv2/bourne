@@ -56,8 +56,8 @@ func (c *rpcClient) Close() error {
 	return c.raw.Close()
 }
 
-func (r *rpcClient) Register(cancel <-chan struct{}, token SignedToken, mem memberCore, code memberShard, auth []byte, ttl time.Duration) (SignedToken, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{token, mem, code, auth, ttl}))
+func (r *rpcClient) Register(cancel <-chan struct{}, token SignedToken, mem memberCore, code memberShard, acct []byte, auth []byte, ttl time.Duration) (SignedToken, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{token, mem, code, acct, auth, ttl}))
 	if err != nil || !raw.Ok {
 		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
 	}
@@ -70,8 +70,8 @@ func (r *rpcClient) Register(cancel <-chan struct{}, token SignedToken, mem memb
 	return resp.Token, nil
 }
 
-func (r *rpcClient) Authenticate(cancel <-chan struct{}, lookup []byte, auth []byte, ttl time.Duration) (SignedToken, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcAuthReq{lookup, auth, ttl}))
+func (r *rpcClient) Authenticate(cancel <-chan struct{}, acct,auth,args []byte, ttl time.Duration) (SignedToken, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcAuthReq{acct, auth, args, ttl}))
 	if err != nil || !raw.Ok {
 		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
 	}
@@ -84,8 +84,8 @@ func (r *rpcClient) Authenticate(cancel <-chan struct{}, lookup []byte, auth []b
 	return resp.Token, nil
 }
 
-func (r *rpcClient) MemberByLookup(cancel <-chan struct{}, token SignedToken, lookup []byte) (memberCore, memberShard, bool, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcMemberByLookupReq{token, lookup}))
+func (r *rpcClient) MemberByIdAndAuth(cancel <-chan struct{}, token SignedToken, id uuid.UUID, authId []byte) (memberCore, memberShard, bool, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcMemberByIdAndAuthReq{token, id, authId}))
 	if err != nil || !raw.Ok {
 		return memberCore{}, memberShard{}, false, errors.WithStack(common.Or(err, raw.Error()))
 	}

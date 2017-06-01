@@ -108,13 +108,14 @@ func (s *session) token(cancel <-chan struct{}) (SignedToken, error) {
 // Returns a *new* signed authentication token.  This forces a call to the server.
 func (s *session) auth(cancel <-chan struct{}) (SignedToken, error) {
 	creds := s.login()
+	defer creds.Destroy()
 
 	auth, err := creds.Auth(s.rand)
 	if err != nil {
 		return SignedToken{}, errors.WithStack(err)
 	}
 
-	token, err := s.net.Authenticate(cancel, creds.Lookup(), auth, s.opts.TokenTtl)
+	token, err := s.net.Authenticate(cancel, creds.MemberLookup(), creds.AuthId(), auth, s.opts.TokenTtl)
 	return token, errors.WithStack(err)
 }
 

@@ -20,20 +20,20 @@ func (t SignedToken) Verify(key PublicKey) error {
 }
 
 type Token struct {
-	MemberId uuid.UUID
-	SubId    uuid.UUID
-	Created  time.Time
-	Expires  time.Time
-	Args     Signable
+	MemberId     uuid.UUID
+	SubscriberId uuid.UUID
+	Created      time.Time
+	Expires      time.Time
+	Claims       Signable
 }
 
-func newToken(memberId, subId uuid.UUID, ttl time.Duration, args Signable) Token {
+func newToken(memberId, subscriberId uuid.UUID, ttl time.Duration, args Signable) Token {
 	now := time.Now()
-	return Token{memberId, subId, time.Now(), now.Add(ttl), args}
+	return Token{memberId, subscriberId, time.Now(), now.Add(ttl), args}
 }
 
 func (s Token) String() string {
-	return fmt.Sprintf("Token(m=%v,s=%v): %v", formatUUID(s.MemberId), formatUUID(s.SubId), s.Created)
+	return fmt.Sprintf("Token(m=%v,s=%v): %v", formatUUID(s.MemberId), formatUUID(s.SubscriberId), s.Created)
 }
 
 func (s Token) Expired(now time.Time) bool {
@@ -43,14 +43,14 @@ func (s Token) Expired(now time.Time) bool {
 func (s Token) SigningFormat() ([]byte, error) {
 	var bodyFmt []byte
 	var err error
-	if s.Args != nil {
-		bodyFmt, err = s.Args.SigningFormat()
+	if s.Claims != nil {
+		bodyFmt, err = s.Claims.SigningFormat()
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 	}
 
-	fmt, err := gobBytes(tokenFmt{s.MemberId, s.SubId, s.Created, s.Expires, bodyFmt})
+	fmt, err := gobBytes(tokenFmt{s.MemberId, s.SubscriberId, s.Created, s.Expires, bodyFmt})
 	return fmt, errors.WithStack(err)
 }
 
@@ -63,9 +63,9 @@ func (s Token) Sign(rand io.Reader, signer Signer, hash Hash) (SignedToken, erro
 }
 
 type tokenFmt struct {
-	MemberId uuid.UUID
-	SubId    uuid.UUID
-	Created  time.Time
-	Expires  time.Time
-	Args     []byte
+	MemberId     uuid.UUID
+	SubscriberId uuid.UUID
+	Created      time.Time
+	Expires      time.Time
+	Claims       []byte
 }

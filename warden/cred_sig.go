@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/pkopriv2/bourne/stash"
 )
 
 // internal only (never stored)
@@ -16,12 +17,16 @@ type signingCred struct {
 	Skew   time.Duration
 }
 
-func newSigningCred(lookup []byte, signer Signer, strength ... Strength) *signingCred {
+func newSigningCred(lookup []byte, signer Signer, strength ...Strength) *signingCred {
 	return &signingCred{lookup, signer, SHA256, 5 * time.Minute}
 }
 
-func (p *signingCred) Lookup() []byte {
+func (p *signingCred) MemberLookup() []byte {
 	return p.lookup
+}
+
+func (p *signingCred) AuthId() []byte {
+	return stash.String("Signer://").ChildString(p.Signer.Public().Id())
 }
 
 func (p *signingCred) Destroy() {
@@ -79,5 +84,5 @@ func (p *signingCred) EncryptShard(rand io.Reader, signer Signer, shard Shard) (
 		return memberShard{}, errors.WithStack(err)
 	}
 
-	return memberShard{p.Lookup(), SignV1, enc, nonce}, nil
+	return memberShard{p.AuthId(), SignV1, enc, nonce}, nil
 }

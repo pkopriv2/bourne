@@ -7,7 +7,7 @@ import (
 )
 
 func lookupByKey(key PublicKey) []byte {
-	return stash.String("Key://").ChildString(key.Id())
+	return stash.String("Signer://").ChildString(key.Id())
 }
 
 func lookupByEmail(email string) []byte {

@@ -21,7 +21,7 @@ func (a keyPad) signingCreds(signer Signer, strength ...Strength) func() credent
 
 func (a keyPad) passphraseCreds(pass string) (func() credential, error) {
 	// hash and immediately destroy the pass phrase
-	hash, err := SHA256.Hash([]byte(pass))
+	hash, err := hashN([]byte(pass), SHA256, 1)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -61,7 +61,7 @@ func (a keyPad) register(token SignedToken, login func() credential) (Session, e
 	creds := login()
 	defer creds.Destroy()
 
-	core, shard, err := newMember(a.opts.deps.Rand, token.MemberId, token.SubId, creds)
+	core, shard, err := newMember(a.opts.deps.Rand, token.MemberId, token.SubscriberId, creds)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -74,7 +74,7 @@ func (a keyPad) register(token SignedToken, login func() credential) (Session, e
 	timer := a.ctx.Timer(a.opts.Timeout)
 	defer timer.Closed()
 
-	token, err = a.opts.deps.Net.Register(timer.Closed(), token, core, shard, auth, a.opts.TokenTtl)
+	token, err = a.opts.deps.Net.Register(timer.Closed(), token, core, shard, creds.MemberLookup(), auth, a.opts.TokenTtl)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -95,20 +95,18 @@ func (a keyPad) authenticate(login func() credential) (Session, error) {
 	timer := a.ctx.Timer(a.opts.Timeout)
 	defer timer.Closed()
 
-	token, err := a.opts.deps.Net.Authenticate(timer.Closed(), creds.Lookup(), auth, a.opts.TokenTtl)
-	a.ctx.Logger().Info("AUTHENTICATED: %v", token)
+	token, err := a.opts.deps.Net.Authenticate(timer.Closed(), creds.MemberLookup(), creds.AuthId(), auth, a.opts.TokenTtl)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	core, code, found, err := a.opts.deps.Net.MemberByLookup(timer.Closed(), token, creds.Lookup())
-	a.ctx.Logger().Info("LOOKUP: %v", err)
+	core, code, found, err := a.opts.deps.Net.MemberByIdAndAuth(timer.Closed(), token, token.MemberId, creds.AuthId())
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	if !found {
-		return nil, errors.Wrapf(UnauthorizedError, "No such member.")
+		return nil, errors.Wrapf(UnauthorizedError, "No such member")
 	}
 
 	session, err := newSession(a.ctx, core, code, token, login, a.opts, *a.opts.deps)
