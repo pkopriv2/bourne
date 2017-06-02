@@ -23,9 +23,11 @@ const (
 type Role int
 
 const (
-	Basic Role = iota
-	Issuer
-	Admin
+	BasicMember Role = iota
+	ManagerMember
+	AdminMember
+	Subscriber
+	God
 )
 
 type memberOptions struct {

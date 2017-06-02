@@ -100,6 +100,12 @@ func (b *boltStorage) SaveMember(core memberCore, auth memberAuth, lookup []byte
 	})
 }
 
+func (b *boltStorage) SaveMemberAuth(auth memberAuth) error {
+	return b.Bolt().Update(func(tx *bolt.Tx) error {
+		return errors.WithStack(boltStoreMemberAuth(tx, auth))
+	})
+}
+
 func (b *boltStorage) LoadMemberById(id uuid.UUID) (m memberCore, o bool, e error) {
 	e = b.Bolt().View(func(tx *bolt.Tx) error {
 		m, o, e = boltLoadMemberCore(tx, id)

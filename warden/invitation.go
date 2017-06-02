@@ -15,7 +15,7 @@ type InvitationOptions struct {
 }
 
 func buildInvitationOptions(opts ...func(*InvitationOptions)) InvitationOptions {
-	def := InvitationOptions{Manager, 365 * 24 * time.Hour}
+	def := InvitationOptions{Manage, 365 * 24 * time.Hour}
 	for _, fn := range opts {
 		fn(&def)
 	}

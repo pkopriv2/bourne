@@ -11,62 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// The level of trust establishes the terms by which different actors
-// have agreed to act with respect to a shared resource.  Enforcing this
-// becomes the job of a third party.
-//
-// To affirm that consumers have indeed established a relationship, a
-// trusted third party is expected to enforce the distribution of the
-// shared resource based on the terms of their agreement.
-type LevelOfTrust int
-
-const (
-	None LevelOfTrust = iota
-
-	// A beneficiary is someone who receives the benefits of a trust.
-	// In more realistic terms, a beneficiary can view the data within
-	// a trust but cannot update it.
-	Beneficiary
-
-	// A manager has been entrusted to act on behalf of the trust - which
-	// means that a manager can both view and update the repository data.
-	// However, managers cannot invite others to manage in the trust.
-	Manager
-
-	// A director is a manager that may also appoint and remove any members
-	// at will.
-	Director
-
-	// The owner controls the trust.  The owner can appoint or remove members
-	// at will and is the only member than may destroy a trust.  Owners may
-	// also choose to transfer their owner status to other members.
-	Owner
-)
-
-func (l LevelOfTrust) MetBy(o LevelOfTrust) bool {
-	return o >= l
-}
-
-func (l LevelOfTrust) String() string {
-	switch l {
-	default:
-		return "unknown"
-	case None:
-		return "none"
-	case Beneficiary:
-		return "beneficiary"
-	case Manager:
-		return "manager"
-	case Director:
-		return "director"
-	case Owner:
-		return "owner"
-	}
-}
-
-func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
-	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
-}
 
 // A SignedCertificate is a proof that a specific level of trust has been
 // established by one party (the trustee), acting on behalf of a shared

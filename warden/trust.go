@@ -27,6 +27,74 @@ func buildTrustOptions(fns ...func(*trustOptions)) trustOptions {
 	return ret
 }
 
+// The level of trust establishes the terms by which different actors
+// have agreed to act with respect to a shared resource.  Enforcing this
+// becomes the job of a third party.
+//
+// To affirm that consumers have indeed established a relationship, a
+// trusted third party is expected to enforce the distribution of the
+// shared resource based on the terms of their agreement.
+type LevelOfTrust int
+
+const (
+	None LevelOfTrust = iota
+
+	// Verify level of trust means the public key can be accessed.
+	// All subscription managers are verify level trusted by default.
+	Verify
+
+	// Consume level trust means the data may be read.
+	Consume
+
+	// Produce level trust means that repository data may be written
+	// and signed, however, this is
+	Produce
+
+	// A manager has been entrusted to act on behalf of the trust - which
+	// means that a manager can both view and update the repository data.
+	//
+	// However, managers cannot invite others to manage in the trust.
+	Manage
+
+	// A director is a manager that may also appoint and remove any members
+	// at will.
+	Direct
+
+	// The owner controls the trust.  The owner can appoint or remove members
+	// at will and is the only member than may destroy a trust.  Owners may
+	// also choose to transfer their owner status to other members.
+	Own
+)
+
+func (l LevelOfTrust) MetBy(o LevelOfTrust) bool {
+	return o >= l
+}
+
+func (l LevelOfTrust) String() string {
+	switch l {
+	default:
+		return "unknown"
+	case None:
+		return "none"
+	case Verify:
+		return "verify"
+	case Consume:
+		return "read-only"
+	case Produce:
+		return "write-only"
+	case Manage:
+		return "manage"
+	case Direct:
+		return "direct"
+	case Own:
+		return "own"
+	}
+}
+
+func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
+	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
+}
+
 // A trust is a repository of data that has been entrusted to one or
 // many individuals.  For all intents and purposes, they behave very much
 // like a legal trust: someone wishes to outsource the management of a
@@ -115,7 +183,7 @@ func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Sign
 		return Trust{}, errors.WithStack(err)
 	}
 
-	myCert := newCertificate(uuid.NewV1(), myId, myId, Owner, OneHundredYears)
+	myCert := newCertificate(uuid.NewV1(), myId, myId, Own, OneHundredYears)
 
 	mySignedCert, err := signCertificate(
 		rand, myCert, trustSigningKey, mySigningKey, mySigningKey, opts.SigningHash)
@@ -136,7 +204,7 @@ func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Sign
 // String form of the trust.
 func (d Trust) String() string {
 	key := "<Unauthorized>"
-	if Beneficiary.MetBy(d.trusteeCert.Level) {
+	if Verify.MetBy(d.trusteeCert.Level) {
 		key = d.trustSigningKey.Pub.Id()
 	}
 
@@ -145,7 +213,7 @@ func (d Trust) String() string {
 
 // Rederives the trust secret.
 func (d Trust) deriveSecret(mySecret Secret) (Secret, error) {
-	if !Beneficiary.MetBy(d.trusteeCert.Level) {
+	if !Verify.MetBy(d.trusteeCert.Level) {
 		return nil, errors.WithStack(UnauthorizedError)
 	}
 
@@ -176,7 +244,7 @@ func (d Trust) trusteeCode() trustCode {
 }
 
 func (t Trust) unlockEncryptionSeed(secret Secret) ([]byte, error) {
-	if !Beneficiary.MetBy(t.trusteeCert.Level) {
+	if !Verify.MetBy(t.trusteeCert.Level) {
 		return nil, errors.WithStack(UnauthorizedError)
 	}
 
@@ -185,7 +253,7 @@ func (t Trust) unlockEncryptionSeed(secret Secret) ([]byte, error) {
 }
 
 func (t Trust) unlockSigningKey(secret Secret) (PrivateKey, error) {
-	if !Manager.MetBy(t.trusteeCert.Level) {
+	if !Manage.MetBy(t.trusteeCert.Level) {
 		return nil, errors.WithStack(UnauthorizedError)
 	}
 
@@ -268,7 +336,7 @@ func (t Trust) renewCertificate(cancel <-chan struct{}, s *session) (Trust, erro
 
 // Loads all the trust certificates that have been issued by this .
 func (t Trust) listCertificates(cancel <-chan struct{}, s session, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
-	if !Manager.MetBy(t.trusteeCert.Level) {
+	if !Manage.MetBy(t.trusteeCert.Level) {
 		return nil, errors.WithStack(UnauthorizedError)
 	}
 
@@ -283,7 +351,7 @@ func (t Trust) listCertificates(cancel <-chan struct{}, s session, fns ...func(*
 
 // Revokes all issued certificates by this  for the given subscriber.
 func (t Trust) revokeCertificate(cancel <-chan struct{}, s *session, trusteeId uuid.UUID) error {
-	if !Director.MetBy(t.trusteeCert.Level) {
+	if !Direct.MetBy(t.trusteeCert.Level) {
 		return errors.WithStack(UnauthorizedError)
 	}
 
@@ -297,7 +365,7 @@ func (t Trust) revokeCertificate(cancel <-chan struct{}, s *session, trusteeId u
 
 // Issues an invitation to the given key.
 func (t Trust) invite(cancel <-chan struct{}, s *session, trusteeId uuid.UUID, fns ...func(*InvitationOptions)) (Invitation, error) {
-	if !Director.MetBy(t.trusteeCert.Level) {
+	if !Direct.MetBy(t.trusteeCert.Level) {
 		return Invitation{}, errors.WithStack(UnauthorizedError)
 	}
 

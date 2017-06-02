@@ -13,11 +13,12 @@ type SessionOptions struct {
 	Timeout   time.Duration
 	TokenTtl  time.Duration
 	TokenHash Hash
+	Role      Role
 	deps      *Dependencies
 }
 
 func buildSessionOptions(fns ...func(*SessionOptions)) SessionOptions {
-	ret := SessionOptions{30 * time.Second, 30 * time.Second, SHA256, nil}
+	ret := SessionOptions{30 * time.Second, 30 * time.Second, SHA256, BasicMember, nil}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -154,14 +155,14 @@ func (s *session) start(t SignedToken) {
 	}()
 }
 
-// Returns the subscriber id associated with this session.  This uniquely identifies
-// an account to the world.  This may be shared over other (possibly unsecure) channels
-// in order to share with other users.
 func (s *session) MyId() uuid.UUID {
 	return s.core.Id
 }
 
-// Returns the session owner's public signing key.  This key and its id may be shared freely.
+func (s *session) MyRole() Role {
+	return s.core.Role
+}
+
 func (s *session) MyKey() PublicKey {
 	return s.core.SigningKey.Pub
 }
@@ -250,7 +251,7 @@ func (s *session) LoadInvitation(cancel <-chan struct{}, id uuid.UUID) (Invitati
 }
 
 // Loads the certificates for the given trust.
-func (s *session) LoadCertificatesByTrust(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
+func (s *session) LoadCertificates(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -261,7 +262,7 @@ func (s *session) LoadCertificatesByTrust(cancel <-chan struct{}, t Trust, fns .
 }
 
 // Loads the invitations for the given trust.
-func (s *session) LoadInvitationsByTrust(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]Invitation, error) {
+func (s *session) LoadInvitations(cancel <-chan struct{}, t Trust, fns ...func(*PagingOptions)) ([]Invitation, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -272,7 +273,7 @@ func (s *session) LoadInvitationsByTrust(cancel <-chan struct{}, t Trust, fns ..
 }
 
 // Generates a new trust.
-func (s *session) NewTrust(cancel <-chan struct{}, strength Strength) (Trust, error) {
+func (s *session) GenerateTrust(cancel <-chan struct{}, strength Strength) (Trust, error) {
 	token, err := s.token(cancel)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
@@ -329,7 +330,7 @@ func (s *session) Renew(cancel <-chan struct{}, t Trust) (Trust, error) {
 // the session owner's certificate
 func (s *session) Transfer(cancel <-chan struct{}, t Trust, recipientId uuid.UUID) error {
 	_, err := s.Invite(cancel, t, recipientId, func(o *InvitationOptions) {
-		o.Lvl = Owner
+		o.Lvl = Own
 		o.Exp = OneHundredYears
 	})
 	if err != nil {

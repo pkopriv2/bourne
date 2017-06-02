@@ -40,6 +40,8 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 			return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unknown request type: %v", reflect.TypeOf(body)))
 		case rpcRegisterMemberReq:
 			return s.RegisterMember(body)
+		case rpcRegisterMemberAuthReq:
+			return s.RegisterMemberAuth(body)
 		case rpcAuthReq:
 			return s.Authenticate(body)
 		case rpcMemberByIdAndAuthReq:
@@ -94,13 +96,39 @@ func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	token, err := newToken(r.Core.Id, r.Core.SubId, r.Expiration, nil).Sign(s.rand, s.sign, SHA256)
+	token, err := newToken(r.Core.Id, r.Core.SubId, r.TokenTtl, nil).Sign(s.rand, s.sign, SHA256)
 	if err != nil {
 		s.logger.Error("Error generating member auth: %+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	return micro.NewStandardResponse(rpcToken{token})
+}
+
+func (s *rpcServer) RegisterMemberAuth(r rpcRegisterMemberAuthReq) micro.Response {
+	s.logger.Debug("Registering new member authenticator: %v", r.Id)
+
+	if err := s.authenticateToken(r.Token, time.Now()); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if err := s.authorizeMemberUse(r.Token.MemberId, r.Id); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	auth, err := newMemberAuth(s.rand, r.Id, r.Shard, r.Auth)
+	if err != nil {
+		s.logger.Error("Error generating member auth: %+v", err)
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if err := s.storage.SaveMemberAuth(auth); err != nil {
+		s.logger.Error("Error generating member auth: %+v", err)
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	s.logger.Debug("Successfully registered new authenticator [%v] for member [%v]", string(auth.Shard.Id), r.Id)
+	return micro.NewEmptyResponse()
 }
 
 func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
@@ -272,7 +300,7 @@ func (s *rpcServer) LoadTrustById(r rpcTrustByIdReq) micro.Response {
 	}
 
 	// ensure the user of the token has been authorized to view the trust
-	cert, err := s.authorizeTrustUse(r.Token.MemberId, r.Id, Beneficiary, now)
+	cert, err := s.authorizeTrustUse(r.Token.MemberId, r.Id, Verify, now)
 	if err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to load trust [%v]: %v", r.Token.MemberId, r.Id, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
@@ -287,7 +315,7 @@ func (s *rpcServer) InvitationRegister(r rpcInviteRegisterReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if cert, err := s.authorizeTrustUse(r.Invite.Cert.IssuerId, r.Invite.Cert.TrustId, Director, now); err != nil {
+	if cert, err := s.authorizeTrustUse(r.Invite.Cert.IssuerId, r.Invite.Cert.TrustId, Direct, now); err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to register invitation [%v]: %v", r.Token.MemberId, r.Invite.Id, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -310,7 +338,7 @@ func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if cert, err := s.authorizeTrustUse(r.Token.MemberId, inv.Cert.TrustId, Manager, now); err != nil {
+	if cert, err := s.authorizeTrustUse(r.Token.MemberId, inv.Cert.TrustId, Manage, now); err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to view invitation [%v]: %v", r.Token.MemberId, r.Id, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -372,7 +400,7 @@ func (s *rpcServer) CertificatesByTrust(r rpcCertsByTrustReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if _, err := s.authorizeTrustUse(r.Token.MemberId, r.TrustId, Manager, now); err != nil {
+	if _, err := s.authorizeTrustUse(r.Token.MemberId, r.TrustId, Manage, now); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -390,7 +418,7 @@ func (s *rpcServer) CertRevoke(r rpcCertRevokeReq) micro.Response {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if cert, err := s.authorizeTrustUse(r.Token.MemberId, r.TrustId, Director, now); err != nil {
+	if cert, err := s.authorizeTrustUse(r.Token.MemberId, r.TrustId, Direct, now); err != nil {
 		s.logger.Error("Unauthorized attempt by member [%v] to revoke certificate from member [%v]: %v", r.Token.MemberId, r.TrusteeId, cert)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -499,12 +527,19 @@ type rpcAuthReq struct {
 }
 
 type rpcRegisterMemberReq struct {
-	Token      SignedToken
-	Core       memberCore
-	Shard      memberShard
-	Lookup     []byte
-	Auth       []byte
-	Expiration time.Duration
+	Token    SignedToken
+	Core     memberCore
+	Shard    memberShard
+	Lookup   []byte
+	Auth     []byte
+	TokenTtl time.Duration
+}
+
+type rpcRegisterMemberAuthReq struct {
+	Token SignedToken
+	Id    uuid.UUID
+	Shard memberShard
+	Auth  []byte
 }
 
 type rpcTrustRegisterReq struct {

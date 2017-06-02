@@ -69,7 +69,7 @@ func TestSession(t *testing.T) {
 			return nil, nil, errors.WithStack(err)
 		}
 
-		sessionn, err := registrar.RegisterByKey(owner.Public()).AuthBySignature(owner)
+		sessionn, err := registrar.RegisterByKey(owner.Public()).EnterSigner(owner)
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
@@ -87,7 +87,7 @@ func TestSession(t *testing.T) {
 			return nil, errors.WithStack(err)
 		}
 
-		sessionn, err := dir.LookupByKey(signer.Public()).AuthBySignature(signer)
+		sessionn, err := dir.LookupByKey(signer.Public()).EnterSigner(signer)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -165,7 +165,7 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		sessionn, err := registrar.RegisterByEmail("user@example.com").AuthByPassphrase("pass")
+		sessionn, err := registrar.RegisterByEmail("user@example.com").EnterPassphrase("pass")
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -178,7 +178,7 @@ func TestSession(t *testing.T) {
 				return
 			}
 
-			sub, err := dir.LookupByEmail("user@example.com").AuthByPassphrase("pass")
+			sub, err := dir.LookupByEmail("user@example.com").EnterPassphrase("pass")
 			if !assert.Nil(t, err) {
 				return
 			}
@@ -192,7 +192,7 @@ func TestSession(t *testing.T) {
 				return
 			}
 
-			_, err = dir.LookupByEmail("noexist@example.com").AuthByPassphrase("pass")
+			_, err = dir.LookupByEmail("noexist@example.com").EnterPassphrase("pass")
 			assert.NotNil(t, err)
 		})
 
@@ -202,7 +202,7 @@ func TestSession(t *testing.T) {
 				return
 			}
 
-			_, err = dir.LookupByEmail("user@example.com").AuthByPassphrase("badpass")
+			_, err = dir.LookupByEmail("user@example.com").EnterPassphrase("badpass")
 			assert.NotNil(t, err)
 		})
 
@@ -244,7 +244,7 @@ func TestSession(t *testing.T) {
 			return
 		}
 
-		trust, err := session.NewTrust(timer.Closed(), Minimal)
+		trust, err := session.GenerateTrust(timer.Closed(), Minimal)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -278,7 +278,7 @@ func TestSession(t *testing.T) {
 		})
 
 		t.Run("LoadCertificates", func(t *testing.T) {
-			certs, err := session.LoadCertificatesByTrust(timer.Closed(), trust)
+			certs, err := session.LoadCertificates(timer.Closed(), trust)
 			if !assert.Nil(t, err) {
 				return
 			}
@@ -288,7 +288,7 @@ func TestSession(t *testing.T) {
 		})
 
 		t.Run("LoadInvitations", func(t *testing.T) {
-			invites, err := session.LoadInvitationsByTrust(timer.Closed(), trust)
+			invites, err := session.LoadInvitations(timer.Closed(), trust)
 			if !assert.Nil(t, err) {
 				return
 			}

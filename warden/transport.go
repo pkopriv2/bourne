@@ -11,7 +11,10 @@ type Transport interface {
 	io.Closer
 
 	// Registers a new subscriber.
-	Register(cancel <-chan struct{}, t SignedToken, core memberCore, shard memberShard, acct []byte, auth []byte, tokenTTL time.Duration) (SignedToken, error)
+	MemberRegister(cancel <-chan struct{}, t SignedToken, core memberCore, shard memberShard, acct []byte, auth []byte, tokenTTL time.Duration) (SignedToken, error)
+
+	// // Registers a new subscriber.
+	MemberAuthRegister(cancel <-chan struct{}, t SignedToken, memberId uuid.UUID, shard memberShard, auth []byte) error
 
 	// Authenticates using
 	Authenticate(cancel <-chan struct{}, acctLookup, authId, authArgs []byte, ttl time.Duration) (SignedToken, error)

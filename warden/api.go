@@ -74,7 +74,7 @@ func (s Signature) String() string {
 }
 
 // A decrypter decrypts itself with the given key
-type Decrypter interface {
+type Encrypted interface {
 	Decrypt(key []byte) ([]byte, error)
 }
 
@@ -114,7 +114,7 @@ type PrivateKey interface {
 	format() []byte
 }
 
-// Membership lookup
+// Membership registration
 type Registrar interface {
 
 	// Registers an account under an email address. (Email really is a terrible mechanism
@@ -126,7 +126,7 @@ type Registrar interface {
 	RegisterByKey(key PublicKey) KeyPad
 }
 
-// Membership lookup
+// Membership lookup (Used during authentication)
 type Directory interface {
 
 	// Lookup a member account by public key
@@ -136,16 +136,20 @@ type Directory interface {
 	LookupByEmail(email string) KeyPad
 }
 
-// Key pad allows a user to register
+// KeyPad is used to provide a session with credential information.
 type KeyPad interface {
 
 	// Performs a signature based login/registration.
-	AuthBySignature(signer Signer, strength ...Strength) (Session, error)
+	EnterSigner(signer Signer, strength ...Strength) (Session, error)
 
-	// Performs a password based login/registration.
-	AuthByPassphrase(phrase string) (Session, error)
+	// Performs a passphrase based login/registration.  The passphrase is
+	// hashed and promptly destroyed.  The phrase will be protected even
+	// in the case that the machine is compromised.  However, a hashed
+	// form may be provided to the server.
+	EnterPassphrase(phrase string) (Session, error)
 }
 
+// Session
 type Session interface {
 	io.Closer
 
@@ -157,6 +161,9 @@ type Session interface {
 	// Returns the session owner's public signing key.  This key and its id may be shared freely.
 	MyKey() PublicKey
 
+	// Returns the session owner's current subscription role.
+	MyRole() Role
+
 	// Returns the session owner's unaccepted invitations.
 	MyInvitations(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Invitation, error)
 
@@ -166,28 +173,14 @@ type Session interface {
 	// Trusts that have been created by the session owner.
 	MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error)
 
-	// // Adds a login key.
-	// RotateSigner(cancel <-chan struct{}, old Signer, new Signer)
-
-	// // Adds a passphrase
-	// RotatePassphrase(cancel <-chan struct{}, old, new string)
-
-	// Loads the certificates for the given trust.
-	LoadCertificatesByTrust(cancel <-chan struct{}, trust Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error)
-
-	// Loads the invitations for the given trust.
-	LoadInvitationsByTrust(cancel <-chan struct{}, trust Trust, fns ...func(*PagingOptions)) ([]Invitation, error)
-
 	// Generates a new trust.
-	NewTrust(cancel <-chan struct{}, strength Strength) (Trust, error)
+	GenerateTrust(cancel <-chan struct{}, strength Strength) (Trust, error)
 
 	// Loads a trust by id.
 	LoadTrust(cancel <-chan struct{}, id uuid.UUID) (Trust, bool, error)
 
 	// Invites a member to join the trust.
-	// FIXME: Replace with below!
 	Invite(cancel <-chan struct{}, trust Trust, memberId uuid.UUID, opts ...func(*InvitationOptions)) (Invitation, error)
-	// Invite(cancel <-chan struct{}, trust Trust, memberId uuid.UUID, lvl LevelOfTrust, strength Strength) (Invitation, error)
 
 	// Accepts the invitation.  The invitation must be valid and must be addressed
 	// to the owner of the session, or the session owner must be acting as a proxy.
@@ -196,9 +189,18 @@ type Session interface {
 	// Revokes trust from the given subscriber for the given trust.
 	Revoke(cancel <-chan struct{}, trust Trust, memberId uuid.UUID) error
 
-	// Renew's the session owner's certificate with the trust.  Only members with Member of
-	// greater trust level may reissue a certificate.
+	// // Temporarily revokes trust from the given subscriber for the given trust.
+	// Disable(cancel <-chan struct{}, trust Trust, memberId uuid.UUID) error
+
+	// Renew's the session owner's certificate with the trust.
 	Renew(cancel <-chan struct{}, trust Trust) (Trust, error)
+
+	// Loads the certificates for the given trust.
+	LoadCertificates(cancel <-chan struct{}, trust Trust, fns ...func(*PagingOptions)) ([]SignedCertificate, error)
+
+	// Loads the invitations for the given trust.
+	LoadInvitations(cancel <-chan struct{}, trust Trust, fns ...func(*PagingOptions)) ([]Invitation, error)
+
 }
 
 // Registers a new subscription with the trust service.
@@ -211,7 +213,6 @@ func Register(ctx common.Context, addr string, token SignedToken, fns ...func(*S
 		}
 		opts.deps = &deps
 	}
-
 	return &registrar{ctx, opts, token}, nil
 }
 
@@ -225,7 +226,6 @@ func Connect(ctx common.Context, addr string, fns ...func(*SessionOptions)) (Dir
 		}
 		opts.deps = &deps
 	}
-
 	return &directory{ctx, opts}, nil
 }
 
@@ -268,7 +268,7 @@ func verify(obj Signable, key PublicKey, sig Signature) error {
 }
 
 // Decrypts the object with the key.
-func decrypt(obj Decrypter, key Signable) ([]byte, error) {
+func decrypt(obj Encrypted, key Signable) ([]byte, error) {
 	fmt, err := key.SigningFormat()
 	if err != nil {
 		return nil, errors.WithStack(err)

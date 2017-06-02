@@ -32,7 +32,7 @@ func (a keyPad) passphraseCreds(pass string) (func() credential, error) {
 	}, nil
 }
 
-func (a keyPad) AuthBySignature(signer Signer, strength ...Strength) (s Session, e error) {
+func (a keyPad) EnterSigner(signer Signer, strength ...Strength) (s Session, e error) {
 	login := a.signingCreds(signer, strength...)
 
 	if a.reg {
@@ -43,7 +43,7 @@ func (a keyPad) AuthBySignature(signer Signer, strength ...Strength) (s Session,
 	return s, errors.WithStack(e)
 }
 
-func (a keyPad) AuthByPassphrase(phrase string) (s Session, e error) {
+func (a keyPad) EnterPassphrase(phrase string) (s Session, e error) {
 	creds, e := a.passphraseCreds(phrase)
 	if e != nil {
 		return nil, errors.WithStack(e)
@@ -74,7 +74,7 @@ func (a keyPad) register(token SignedToken, login func() credential) (Session, e
 	timer := a.ctx.Timer(a.opts.Timeout)
 	defer timer.Closed()
 
-	token, err = a.opts.deps.Net.Register(timer.Closed(), token, core, shard, creds.MemberLookup(), auth, a.opts.TokenTtl)
+	token, err = a.opts.deps.Net.MemberRegister(timer.Closed(), token, core, shard, creds.MemberLookup(), auth, a.opts.TokenTtl)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
