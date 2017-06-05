@@ -75,8 +75,8 @@ func (r *rpcClient) MemberAuthRegister(cancel <-chan struct{}, token SignedToken
 	return errors.WithStack(common.Or(err, raw.Error()))
 }
 
-func (r *rpcClient) Authenticate(cancel <-chan struct{}, acct, auth, args []byte, ttl time.Duration) (SignedToken, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcAuthReq{acct, auth, args, ttl}))
+func (r *rpcClient) Authenticate(cancel <-chan struct{}, acct, auth, args []byte, role Role, ttl time.Duration) (SignedToken, error) {
+	raw, err := r.raw.Send(micro.NewRequest(rpcAuthReq{acct, auth, args, role, ttl}))
 	if err != nil || !raw.Ok {
 		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
 	}

@@ -16,14 +16,15 @@ import (
 // For security reasons, credentials are short-lived.
 //
 type credential interface {
-	Destroyer
 
 	// Account lookup.
 	MemberLookup() []byte
 
-	// Auth identifier.  Usually associated to account lookup, but not necessary.
+	// Auth identifier.  Usually associated to account lookup, but not necessarily.
 	AuthId() []byte
 
+	// Destroy the credential
+	Destroy()
 
 	// The protocol used to negotiate compatibility.
 	Protocol() authProtocol

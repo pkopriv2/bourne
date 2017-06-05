@@ -29,7 +29,8 @@ var (
 	certLatestBucket   = []byte("warden.certs.latest")
 	certMemberBucket   = []byte("warden.certs.member")
 	inviteBucket       = []byte("warden.invites")
-	memberCoreBucket   = []byte("warden.member")
+	memberCoreBucket   = []byte("warden.member.core")
+	memberAgreementBucket = []byte("warden.member.active")
 	memberLookupBucket = []byte("warden.member.lookup")
 	memberAuthBucket   = []byte("warden.member.auth")
 	memberCertBucket   = []byte("warden.member.certs")
@@ -52,6 +53,8 @@ func initBoltBuckets(db *bolt.DB) (err error) {
 		_, e = tx.CreateBucketIfNotExists(inviteBucket)
 		err = common.Or(err, e)
 		_, e = tx.CreateBucketIfNotExists(memberCoreBucket)
+		err = common.Or(err, e)
+		_, e = tx.CreateBucketIfNotExists(memberAgreementBucket)
 		err = common.Or(err, e)
 		_, e = tx.CreateBucketIfNotExists(memberLookupBucket)
 		err = common.Or(err, e)
@@ -85,7 +88,7 @@ func (b *boltStorage) Bolt() *bolt.DB {
 	return (*bolt.DB)(b)
 }
 
-func (b *boltStorage) SaveMember(core memberCore, auth memberAuth, lookup []byte) error {
+func (b *boltStorage) SaveMember(agreement MemberAgreement, core memberCore, auth memberAuth, lookup []byte) error {
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
 		if err := boltStoreMemberCore(tx, core); err != nil {
 			return errors.WithStack(err)
@@ -95,8 +98,11 @@ func (b *boltStorage) SaveMember(core memberCore, auth memberAuth, lookup []byte
 			return errors.WithStack(err)
 		}
 
-		return errors.WithStack(
-			boltStoreMemberIdByLookup(tx, lookup, core.Id))
+		if err := boltStoreMemberIdByLookup(tx, lookup, core.Id); err != nil {
+			return errors.WithStack(err)
+		}
+
+		return errors.WithStack(boltStoreMemberAgreement(tx, core.Id, agreement))
 	})
 }
 
@@ -104,6 +110,14 @@ func (b *boltStorage) SaveMemberAuth(auth memberAuth) error {
 	return b.Bolt().Update(func(tx *bolt.Tx) error {
 		return errors.WithStack(boltStoreMemberAuth(tx, auth))
 	})
+}
+
+func (b *boltStorage) LoadMemberAgreement(id uuid.UUID) (a MemberAgreement, o bool, e error) {
+	e = b.Bolt().View(func(tx *bolt.Tx) error {
+		a, o, e = boltLoadMemberAgreement(tx, id)
+		return errors.WithStack(e)
+	})
+	return
 }
 
 func (b *boltStorage) LoadMemberById(id uuid.UUID) (m memberCore, o bool, e error) {
@@ -350,6 +364,22 @@ func boltStoreMemberIdByLookup(tx *bolt.Tx, lookup []byte, id uuid.UUID) error {
 	return errors.WithStack(e)
 }
 
+func boltLoadMemberAgreement(tx *bolt.Tx, id uuid.UUID) (a MemberAgreement, o bool, e error) {
+	o, e = parseGobBytes(
+		tx.Bucket(memberAgreementBucket).Get(stash.UUID(id)), &a)
+	return
+}
+
+func boltStoreMemberAgreement(tx *bolt.Tx, id uuid.UUID, agreement MemberAgreement) error {
+	raw, e := gobBytes(agreement)
+	if e != nil {
+		return errors.WithStack(e)
+	}
+	return errors.WithStack(
+		tx.Bucket(memberAgreementBucket).Put(stash.UUID(id), raw))
+}
+
+
 func boltStoreMemberAuth(tx *bolt.Tx, a memberAuth) error {
 	if err := boltEnsureEmpty(
 		tx.Bucket(memberAuthBucket), a.Id()); err != nil {
@@ -463,7 +493,7 @@ func boltRevokeCert(tx *bolt.Tx, memberId, trustId uuid.UUID) error {
 	}
 
 	if !ok {
-		return errors.Wrapf(TrustError, "No certificate between trust [%v] and member [%v]", trustId, memberId)
+		return errors.Wrapf(UnauthorizedError, "No certificate between trust [%v] and member [%v]", trustId, memberId)
 	}
 
 	// update by member index

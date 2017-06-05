@@ -11,7 +11,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-
 // A SignedCertificate is a proof that a specific level of trust has been
 // established by one party (the trustee), acting on behalf of a shared
 // resource (i.e. the trust).  A valid certificate proves the following
@@ -22,6 +21,7 @@ import (
 //  * The trustee accepted the terms of the certificate.
 //
 // The creation of a signed certificate happens in three stages:
+//
 //  1. The issuance of the certificate.
 //  2. The signature of the certificate by the trustee.
 //  3. the registration of the certificate with the 3rd-party
@@ -71,14 +71,14 @@ func (s SignedCertificate) Verify(issuer, trust, trustee PublicKey) error {
 
 // A certificate is a receipt that trust has been established.
 type Certificate struct {
-	Fmt       int
-	Id        uuid.UUID
-	TrustId   uuid.UUID
-	IssuerId  uuid.UUID
-	TrusteeId uuid.UUID
-	Level     LevelOfTrust
-	IssuedAt  time.Time
-	ExpiresAt time.Time
+	Fmt            int
+	Id             uuid.UUID
+	TrustId        uuid.UUID
+	IssuerId       uuid.UUID
+	TrusteeId      uuid.UUID
+	Level          LevelOfTrust
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
 }
 
 func newCertificate(domain, issuer, trustee uuid.UUID, lvl LevelOfTrust, ttl time.Duration) Certificate {

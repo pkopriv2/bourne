@@ -47,6 +47,9 @@ type session struct {
 	// the access shard used for this session
 	shard memberShard
 
+	// the basic account details.
+	subId uuid.UUID
+
 	// the transport mechanism. (expected to be secure).
 	net Transport
 
@@ -80,6 +83,7 @@ func newSession(ctx common.Context, m memberCore, a memberShard, t SignedToken, 
 		login:  l,
 		core:   m,
 		shard:  a,
+		subId:  t.Agreement.SubscriberId,
 		net:    d.Net,
 		rand:   d.Rand,
 		tokens: make(chan SignedToken),
@@ -116,7 +120,7 @@ func (s *session) auth(cancel <-chan struct{}) (SignedToken, error) {
 		return SignedToken{}, errors.WithStack(err)
 	}
 
-	token, err := s.net.Authenticate(cancel, creds.MemberLookup(), creds.AuthId(), auth, s.opts.TokenTtl)
+	token, err := s.net.Authenticate(cancel, creds.MemberLookup(), creds.AuthId(), auth, s.opts.Role, s.opts.TokenTtl)
 	return token, errors.WithStack(err)
 }
 
@@ -159,8 +163,12 @@ func (s *session) MyId() uuid.UUID {
 	return s.core.Id
 }
 
+func (s *session) MySubscriptionId() uuid.UUID {
+	return s.subId
+}
+
 func (s *session) MyRole() Role {
-	return s.core.Role
+	return BasicMember
 }
 
 func (s *session) MyKey() PublicKey {
@@ -289,7 +297,7 @@ func (s *session) GenerateTrust(cancel <-chan struct{}, strength Strength) (Trus
 		return Trust{}, errors.WithStack(err)
 	}
 
-	trust, err := newTrust(s.rand, s.MyId(), mySecret, mySigningKey)
+	trust, err := newTrust(s.rand, s.MyId(), s.MySubscriptionId(), mySecret, mySigningKey)
 	if err != nil {
 		return Trust{}, errors.WithStack(err)
 	}

@@ -72,11 +72,11 @@ func (s *shamirShard) Opts() secretOptions {
 func (s *shamirShard) Derive(raw Shard) (Secret, error) {
 	sh, ok := raw.(*shamirShard)
 	if !ok {
-		return nil, errors.Wrap(TrustError, "Incompatible shards.")
+		return nil, errors.Wrap(UnauthorizedError, "Incompatible shards.")
 	}
 
 	if s.Opts() != sh.Opts() {
-		return nil, errors.Wrap(TrustError, "Incompatible shards.")
+		return nil, errors.Wrap(UnauthorizedError, "Incompatible shards.")
 	}
 
 	line, err := s.Pt.Derive(sh.Pt)

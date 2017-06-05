@@ -44,10 +44,12 @@ func TestStorage(t *testing.T) {
 		}
 		defer creds.Destroy()
 
-		mem, shard, e := newMember(rand.Reader, uuid.NewV1(), uuid.NewV1(), creds)
+		mem, shard, e := newMember(rand.Reader, uuid.NewV1(), creds)
 		if !assert.Nil(t, e) {
 			return
 		}
+
+		acct := newMemberAgreement(mem.Id, uuid.NewV1(), BasicMember)
 
 		args, e := creds.Auth(rand.Reader)
 		if !assert.Nil(t, e) {
@@ -59,7 +61,7 @@ func TestStorage(t *testing.T) {
 			return
 		}
 
-		if !assert.Nil(t, store.SaveMember(mem, auth, creds.MemberLookup())) {
+		if !assert.Nil(t, store.SaveMember(acct, mem, auth, creds.MemberLookup())) {
 			return
 		}
 

@@ -53,13 +53,15 @@ func TestSession(t *testing.T) {
 
 	addr := cl.Remote().String()
 
-	subscribeBySigner := func(ctx common.Context) (PrivateKey, *session, error) {
+	subscribeBySigner := func(ctx common.Context, role Role) (PrivateKey, *session, error) {
 		owner, err := GenRsaKey(rand.Reader, 1024)
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
 
-		token, err := newToken(uuid.NewV1(), uuid.NewV1(), 30*time.Second, nil).Sign(rand.Reader, serverKey, SHA256)
+		acct := newMemberAgreement(uuid.NewV1(), uuid.NewV1(), role)
+
+		token, err := newToken(acct, 30*time.Second, role, nil).Sign(rand.Reader, serverKey, SHA256)
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
@@ -69,7 +71,7 @@ func TestSession(t *testing.T) {
 			return nil, nil, errors.WithStack(err)
 		}
 
-		sessionn, err := registrar.RegisterByKey(owner.Public()).EnterSigner(owner)
+		sessionn, err := registrar.RegisterByKey(owner.Public()).EnterSignature(owner)
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
@@ -81,13 +83,56 @@ func TestSession(t *testing.T) {
 		return owner, sessionn.(*session), nil
 	}
 
+	subscribeByEmailAndPassword := func(ctx common.Context, email, pass string, role Role) (*session, error) {
+		acct := newMemberAgreement(uuid.NewV1(), uuid.NewV1(), role)
+
+		token, err := newToken(acct, 30*time.Second, role, nil).Sign(rand.Reader, serverKey, SHA256)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		registrar, err := Register(ctx, addr, token)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		sessionn, err := registrar.RegisterByEmail(email).EnterPassphrase(pass)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		ctx.Control().Defer(func(error) {
+			sessionn.Close()
+		})
+
+		return sessionn.(*session), nil
+	}
+
 	connectBySigner := func(ctx common.Context, signer Signer) (*session, error) {
 		dir, err := Connect(ctx, addr)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 
-		sessionn, err := dir.LookupByKey(signer.Public()).EnterSigner(signer)
+		sessionn, err := dir.LookupByKey(signer.Public()).EnterSignature(signer)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		ctx.Control().Defer(func(error) {
+			sessionn.Close()
+		})
+
+		return sessionn.(*session), nil
+	}
+
+	connectByEmailAndPassword := func(ctx common.Context, email, pass string) (*session, error) {
+		dir, err := Connect(ctx, addr)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		sessionn, err := dir.LookupByEmail(email).EnterPassphrase(pass)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -103,7 +148,7 @@ func TestSession(t *testing.T) {
 		ctx := common.NewEmptyContext()
 		defer ctx.Close()
 
-		key, session, err := subscribeBySigner(ctx)
+		key, session, err := subscribeBySigner(ctx, BasicMember)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -155,30 +200,16 @@ func TestSession(t *testing.T) {
 		ctx := common.NewEmptyContext()
 		defer ctx.Close()
 
-		token, err := newToken(uuid.NewV1(), uuid.NewV1(), 30*time.Second, nil).Sign(rand.Reader, serverKey, SHA256)
+		session, err := subscribeByEmailAndPassword(ctx, "user@example.com", "pass", BasicMember)
 		if !assert.Nil(t, err) {
 			return
 		}
-
-		registrar, err := Register(ctx, addr, token)
-		if !assert.Nil(t, err) {
-			return
-		}
-
-		sessionn, err := registrar.RegisterByEmail("user@example.com").EnterPassphrase("pass")
-		if !assert.Nil(t, err) {
-			return
-		}
-
-		session := sessionn.(*session)
 
 		t.Run("Connect", func(t *testing.T) {
-			dir, err := Connect(ctx, addr)
-			if !assert.Nil(t, err) {
-				return
-			}
+			ctx := common.NewEmptyContext()
+			defer ctx.Close()
 
-			sub, err := dir.LookupByEmail("user@example.com").EnterPassphrase("pass")
+			sub, err := connectByEmailAndPassword(ctx, "user@example.com", "pass")
 			if !assert.Nil(t, err) {
 				return
 			}
@@ -187,22 +218,18 @@ func TestSession(t *testing.T) {
 		})
 
 		t.Run("ConnectBadUser", func(t *testing.T) {
-			dir, err := Connect(ctx, addr)
-			if !assert.Nil(t, err) {
-				return
-			}
+			ctx := common.NewEmptyContext()
+			defer ctx.Close()
 
-			_, err = dir.LookupByEmail("noexist@example.com").EnterPassphrase("pass")
+			_, err := connectByEmailAndPassword(ctx, "noexist@example.com", "pass")
 			assert.NotNil(t, err)
 		})
 
 		t.Run("ConnectBadPass", func(t *testing.T) {
-			dir, err := Connect(ctx, addr)
-			if !assert.Nil(t, err) {
-				return
-			}
+			ctx := common.NewEmptyContext()
+			defer ctx.Close()
 
-			_, err = dir.LookupByEmail("user@example.com").EnterPassphrase("badpass")
+			_, err := connectByEmailAndPassword(ctx, "user@example.com", "badpass")
 			assert.NotNil(t, err)
 		})
 
@@ -239,7 +266,7 @@ func TestSession(t *testing.T) {
 		ctx := common.NewEmptyContext()
 		defer ctx.Close()
 
-		_, session, err := subscribeBySigner(ctx)
+		_, session, err := subscribeBySigner(ctx, BasicMember)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -315,7 +342,7 @@ func TestSession(t *testing.T) {
 			assert.Equal(t, trust, trusts[0])
 		})
 
-		_, recipient, err := subscribeBySigner(ctx)
+		_, recipient, err := subscribeBySigner(ctx, BasicMember)
 		if !assert.Nil(t, err) {
 			return
 		}

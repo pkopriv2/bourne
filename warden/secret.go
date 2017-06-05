@@ -30,7 +30,7 @@ const (
 func (s SecretAlgorithm) Parse(raw []byte) (ret Shard, err error) {
 	switch s {
 	default:
-		return nil, errors.Wrapf(TrustError, "Unknown sharding algorithm [%v]", s)
+		return nil, errors.Wrapf(UnauthorizedError, "Unknown sharding algorithm [%v]", s)
 	case ShamirAlpha:
 		return parseShamirShard(raw)
 	}
@@ -39,7 +39,7 @@ func (s SecretAlgorithm) Parse(raw []byte) (ret Shard, err error) {
 func (s SecretAlgorithm) RandomSecret(rand io.Reader, opts secretOptions) (Secret, error) {
 	switch s {
 	default:
-		return nil, errors.Wrapf(TrustError, "Unknown sharding algorithm [%v]", s)
+		return nil, errors.Wrapf(UnauthorizedError, "Unknown sharding algorithm [%v]", s)
 	case ShamirAlpha:
 		return generateShamirSecret(rand, opts)
 	}

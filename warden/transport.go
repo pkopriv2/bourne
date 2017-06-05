@@ -10,14 +10,14 @@ import (
 type Transport interface {
 	io.Closer
 
+	// Authenticates using
+	Authenticate(cancel <-chan struct{}, acctLookup, authId, authArgs []byte, role Role, ttl time.Duration) (SignedToken, error)
+
 	// Registers a new subscriber.
 	MemberRegister(cancel <-chan struct{}, t SignedToken, core memberCore, shard memberShard, acct []byte, auth []byte, tokenTTL time.Duration) (SignedToken, error)
 
 	// // Registers a new subscriber.
 	MemberAuthRegister(cancel <-chan struct{}, t SignedToken, memberId uuid.UUID, shard memberShard, auth []byte) error
-
-	// Authenticates using
-	Authenticate(cancel <-chan struct{}, acctLookup, authId, authArgs []byte, ttl time.Duration) (SignedToken, error)
 
 	// Returns the mmeber with the given id.  (only if authorized by token owner's membership)
 	MemberByIdAndAuth(cancel <-chan struct{}, t SignedToken, id uuid.UUID, authId []byte) (memberCore, memberShard, bool, error)

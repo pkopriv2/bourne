@@ -32,7 +32,7 @@ func (a keyPad) passphraseCreds(pass string) (func() credential, error) {
 	}, nil
 }
 
-func (a keyPad) EnterSigner(signer Signer, strength ...Strength) (s Session, e error) {
+func (a keyPad) EnterSignature(signer Signer, strength ...Strength) (s Session, e error) {
 	login := a.signingCreds(signer, strength...)
 
 	if a.reg {
@@ -61,7 +61,7 @@ func (a keyPad) register(token SignedToken, login func() credential) (Session, e
 	creds := login()
 	defer creds.Destroy()
 
-	core, shard, err := newMember(a.opts.deps.Rand, token.MemberId, token.SubscriberId, creds)
+	core, shard, err := newMember(a.opts.deps.Rand, token.Agreement.MemberId, creds)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -95,12 +95,12 @@ func (a keyPad) authenticate(login func() credential) (Session, error) {
 	timer := a.ctx.Timer(a.opts.Timeout)
 	defer timer.Closed()
 
-	token, err := a.opts.deps.Net.Authenticate(timer.Closed(), creds.MemberLookup(), creds.AuthId(), auth, a.opts.TokenTtl)
+	token, err := a.opts.deps.Net.Authenticate(timer.Closed(), creds.MemberLookup(), creds.AuthId(), auth, a.opts.Role, a.opts.TokenTtl)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	core, code, found, err := a.opts.deps.Net.MemberByIdAndAuth(timer.Closed(), token, token.MemberId, creds.AuthId())
+	core, code, found, err := a.opts.deps.Net.MemberByIdAndAuth(timer.Closed(), token, token.Agreement.MemberId, creds.AuthId())
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

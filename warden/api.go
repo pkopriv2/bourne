@@ -26,15 +26,14 @@ import (
 
 // Common errors
 var (
-	RpcError           = errors.New("Warden:RpcError")
-	TokenExpiredError  = errors.New("Warden:TokenExpired")
-	TokenInvalidError  = errors.New("Warden:TokenInvalid")
-	UnauthorizedError  = errors.New("Warden:Unauthorized")
-	InvariantError     = errors.New("Warden:InvariantError")
-	AuthError          = errors.New("Warden:AuthError")
-	TrustError         = errors.New("Warden:TrustError")
-	UnknownMemberError = errors.New("Warden:UnknownMember")
-	UnknownTrustError  = errors.New("Warden:UnknownTrust")
+	RpcError            = errors.New("Warden:RpcError")
+	TokenExpiredError   = errors.New("Warden:TokenExpired")
+	TokenInvalidError   = errors.New("Warden:TokenInvalid")
+	UnauthorizedError   = errors.New("Warden:Unauthorized")
+	AuthError           = errors.New("Warden:AuthError")
+	UnknownMemberError  = errors.New("Warden:UnknownMember")
+	UnknownTrustError   = errors.New("Warden:UnknownTrust")
+	MemberDisabledError = errors.New("Warden:MemberDisabled")
 )
 
 // A signer contains the knowledge necessary to digitally sign messages.
@@ -50,7 +49,8 @@ type Signer interface {
 
 // A a signable object is one that has a consistent format for signing and verifying.
 //
-// FIXME: Warden currently relies heavily on formats which should be language independent.
+// FIXME: Warden currently relies on gob encoding.  this is not consistent across platforms,
+// but needs to be!
 type Signable interface {
 	SigningFormat() ([]byte, error)
 }
@@ -78,11 +78,6 @@ type Encrypted interface {
 	Decrypt(key []byte) ([]byte, error)
 }
 
-// A destroyer simply destroys itself.
-type Destroyer interface {
-	Destroy()
-}
-
 // Public keys are the basis of identity within the trust ecosystem.  In plain english,
 // I don't trust your identity, I only trust your keys.  Therefore, risk planning starts
 // with limiting the exposure of your trusted keys.  The more trusted a key, the greater
@@ -107,11 +102,11 @@ type PublicKey interface {
 //
 type PrivateKey interface {
 	Signer
-	Destroyer
 
 	Algorithm() KeyAlgorithm
 	Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error)
 	format() []byte
+	Destroy()
 }
 
 // Membership registration
@@ -121,8 +116,10 @@ type Registrar interface {
 	// for handling registration, but I don't think we can tackle that....)
 	RegisterByEmail(email string) KeyPad
 
-	// Registers an account using a public key as the primary lookup mechanism.  An alternative
-	// lookup (e.g. email may be registered later, but is not required).
+	// Registers an account using a public key as the primary lookup mechanism.  This is especially
+	// useful for registering machines - who may not have access to email.
+	//
+	// An alternative lookup (e.g. email may be registered later, but is not required).
 	RegisterByKey(key PublicKey) KeyPad
 }
 
@@ -140,7 +137,7 @@ type Directory interface {
 type KeyPad interface {
 
 	// Performs a signature based login/registration.
-	EnterSigner(signer Signer, strength ...Strength) (Session, error)
+	EnterSignature(signer Signer, strength ...Strength) (Session, error)
 
 	// Performs a passphrase based login/registration.  The passphrase is
 	// hashed and promptly destroyed.  The phrase will be protected even
@@ -200,7 +197,6 @@ type Session interface {
 
 	// Loads the invitations for the given trust.
 	LoadInvitations(cancel <-chan struct{}, trust Trust, fns ...func(*PagingOptions)) ([]Invitation, error)
-
 }
 
 // Registers a new subscription with the trust service.

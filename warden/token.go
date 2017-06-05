@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	uuid "github.com/satori/go.uuid"
 )
 
 type SignedToken struct {
@@ -20,20 +19,20 @@ func (t SignedToken) Verify(key PublicKey) error {
 }
 
 type Token struct {
-	MemberId     uuid.UUID
-	SubscriberId uuid.UUID
-	Created      time.Time
-	Expires      time.Time
-	Claims       Signable
+	Role      Role
+	Created   time.Time
+	Expires   time.Time
+	Agreement MemberAgreement
+	Claims    Signable
 }
 
-func newToken(memberId, subscriberId uuid.UUID, ttl time.Duration, args Signable) Token {
+func newToken(agreement MemberAgreement, ttl time.Duration, role Role, args Signable) Token {
 	now := time.Now()
-	return Token{memberId, subscriberId, time.Now(), now.Add(ttl), args}
+	return Token{role, time.Now(), now.Add(ttl), agreement, args}
 }
 
 func (s Token) String() string {
-	return fmt.Sprintf("Token(m=%v,s=%v): %v", formatUUID(s.MemberId), formatUUID(s.SubscriberId), s.Created)
+	return fmt.Sprintf("Token(m=%v,s=%v): %v", formatUUID(s.Agreement.MemberId), formatUUID(s.Agreement.SubscriberId), s.Expires)
 }
 
 func (s Token) Expired(now time.Time) bool {
@@ -50,7 +49,7 @@ func (s Token) SigningFormat() ([]byte, error) {
 		}
 	}
 
-	fmt, err := gobBytes(tokenFmt{s.MemberId, s.SubscriberId, s.Created, s.Expires, bodyFmt})
+	fmt, err := gobBytes(tokenFmt{s.Agreement, s.Created, s.Expires, bodyFmt})
 	return fmt, errors.WithStack(err)
 }
 
@@ -63,9 +62,8 @@ func (s Token) Sign(rand io.Reader, signer Signer, hash Hash) (SignedToken, erro
 }
 
 type tokenFmt struct {
-	MemberId     uuid.UUID
-	SubscriberId uuid.UUID
-	Created      time.Time
-	Expires      time.Time
-	Claims       []byte
+	Agreement MemberAgreement
+	Created   time.Time
+	Expires   time.Time
+	Claims    []byte
 }

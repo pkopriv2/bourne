@@ -92,7 +92,7 @@ func (l LevelOfTrust) String() string {
 }
 
 func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
-	return errors.Wrapf(TrustError, "Expected level of trust [%v] got [%v]", expected, actual)
+	return errors.Wrapf(UnauthorizedError, "Expected level of trust [%v] got [%v]", expected, actual)
 }
 
 // A trust is a repository of data that has been entrusted to one or
@@ -107,6 +107,9 @@ func newLevelOfTrustError(expected LevelOfTrust, actual LevelOfTrust) error {
 //
 type Trust struct {
 	Id uuid.UUID
+
+	// the subscription id
+	subscriptionId uuid.UUID
 
 	// the options of the trust
 	opts trustOptions
@@ -125,7 +128,7 @@ type Trust struct {
 }
 
 // generates a trust, but has no server-side effects.
-func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Signer, fns ...func(s *trustOptions)) (Trust, error) {
+func newTrust(rand io.Reader, myId, subscriptionId uuid.UUID, mySecret Secret, mySigningKey Signer, fns ...func(s *trustOptions)) (Trust, error) {
 	opts := buildTrustOptions(fns...)
 
 	trustSigningKey, err := opts.SigningKey.Algorithm.Gen(rand, opts.SigningKey.Strength)
@@ -203,7 +206,7 @@ func newTrust(rand io.Reader, myId uuid.UUID, mySecret Secret, mySigningKey Sign
 
 // String form of the trust.
 func (d Trust) String() string {
-	key := "<Unauthorized>"
+	key := "<unauthorized>"
 	if Verify.MetBy(d.trusteeCert.Level) {
 		key = d.trustSigningKey.Pub.Id()
 	}
@@ -236,7 +239,7 @@ func (d Trust) deriveSecret(mySecret Secret) (Secret, error) {
 }
 
 func (d Trust) core() trustCore {
-	return trustCore{d.Id, d.opts, d.trustShard, d.trustSigningKey}
+	return trustCore{d.Id, d.subscriptionId, d.opts, d.trustShard, d.trustSigningKey}
 }
 
 func (d Trust) trusteeCode() trustCode {
@@ -435,18 +438,19 @@ func (t Trust) invite(cancel <-chan struct{}, s *session, trusteeId uuid.UUID, f
 
 // Only used for storage
 type trustCore struct {
-	Id         uuid.UUID
-	Opts       trustOptions
-	PubShard   SignedShard
-	SigningKey SignedKeyPair
+	Id             uuid.UUID
+	SubscriptionId uuid.UUID
+	Opts           trustOptions
+	PubShard       SignedShard
+	SigningKey     SignedKeyPair
 }
 
 func (t trustCore) privateTrust(code trustCode, cert SignedCertificate) Trust {
-	return Trust{t.Id, t.Opts, t.SigningKey, t.PubShard, cert, code.Shard}
+	return Trust{t.Id, t.SubscriptionId, t.Opts, t.SigningKey, t.PubShard, cert, code.Shard}
 }
 
 func (t trustCore) publicCore() trustCore {
-	return trustCore{t.Id, t.Opts, t.PubShard, SignedKeyPair{KeyPair: KeyPair{Pub: t.SigningKey.Pub}}}
+	return trustCore{t.Id, t.SubscriptionId, t.Opts, t.PubShard, SignedKeyPair{KeyPair: KeyPair{Pub: t.SigningKey.Pub}}}
 }
 
 func (t trustCore) String() string {
