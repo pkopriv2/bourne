@@ -31,7 +31,7 @@ func TestMember(t *testing.T) {
 		creds := login()
 		defer creds.Destroy()
 
-		sub, auth, e := newMember(rand.Reader, uuid.NewV1(), creds)
+		sub, auth, e := newMember(rand.Reader, uuid.NewV1(), uuid.NewV1(), creds)
 		assert.Nil(t, e)
 
 		secret, e := sub.secret(auth, login)
@@ -55,7 +55,7 @@ func TestMember(t *testing.T) {
 		creds := login()
 		defer creds.Destroy()
 
-		sub, auth, e := newMember(rand.Reader, uuid.NewV1(), creds)
+		sub, auth, e := newMember(rand.Reader, uuid.NewV1(), uuid.NewV1(), creds)
 		assert.Nil(t, e)
 
 		secret, e := sub.secret(auth, login)

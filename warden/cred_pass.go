@@ -35,7 +35,7 @@ func (p *passCred) Protocol() authProtocol {
 }
 
 // In order to avoid breaking the zero knowledge guarantees,
-// the authenticated value MUST not be able rederive the
+// the authenticated value MUST NOT be able rederive the
 // the encryption key of the member shard.
 func (p *passCred) Auth(rand io.Reader) ([]byte, error) {
 	hash, err := hashN(p.pass, SHA256, 2)

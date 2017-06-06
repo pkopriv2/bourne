@@ -18,7 +18,7 @@ type SessionOptions struct {
 }
 
 func buildSessionOptions(fns ...func(*SessionOptions)) SessionOptions {
-	ret := SessionOptions{30 * time.Second, 30 * time.Second, SHA256, BasicMember, nil}
+	ret := SessionOptions{30 * time.Second, 30 * time.Second, SHA256, Basic, nil}
 	for _, fn := range fns {
 		fn(&ret)
 	}
@@ -46,9 +46,6 @@ type session struct {
 
 	// the access shard used for this session
 	shard memberShard
-
-	// the basic account details.
-	subId uuid.UUID
 
 	// the transport mechanism. (expected to be secure).
 	net Transport
@@ -83,7 +80,6 @@ func newSession(ctx common.Context, m memberCore, a memberShard, t SignedToken, 
 		login:  l,
 		core:   m,
 		shard:  a,
-		subId:  t.Agreement.SubscriberId,
 		net:    d.Net,
 		rand:   d.Rand,
 		tokens: make(chan SignedToken),
@@ -164,11 +160,11 @@ func (s *session) MyId() uuid.UUID {
 }
 
 func (s *session) MySubscriptionId() uuid.UUID {
-	return s.subId
+	return s.core.SubscriptionId
 }
 
 func (s *session) MyRole() Role {
-	return BasicMember
+	return Basic
 }
 
 func (s *session) MyKey() PublicKey {
@@ -197,6 +193,47 @@ func (s *session) mySigningKey(secret Secret) (PrivateKey, error) {
 func (s *session) myInvitationKey(secret Secret) (PrivateKey, error) {
 	key, err := s.core.invitationKey(secret)
 	return key, errors.WithStack(err)
+}
+
+// Adds a signer to the list of signers that may be used to authenticate to this account.
+func (s *session) AddSigner(cancel <-chan struct{}, signer Signer) error {
+	token, err := s.token(cancel)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	secret, err := s.mySecret()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer secret.Destroy()
+
+	shard, err := secret.Shard(s.rand)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer shard.Destroy()
+
+	signingKey, err := s.mySigningKey(secret)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer signingKey.Destroy()
+
+	cred := newSigningCred(lookupByKey(signer.Public()), signer, Strongest)
+	defer cred.Destroy()
+
+	auth, err := cred.Auth(s.rand)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer cryptoBytes(auth).Destroy()
+
+	encShard, err := cred.EncryptShard(s.rand, signingKey, shard)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(s.net.MemberAuthRegister(cancel, token, s.MyId(), encShard, auth, cred.MemberLookup()))
 }
 
 // Lists the session owner's currently pending invitations.

@@ -61,7 +61,7 @@ func (a keyPad) register(token SignedToken, login func() credential) (Session, e
 	creds := login()
 	defer creds.Destroy()
 
-	core, shard, err := newMember(a.opts.deps.Rand, token.Agreement.MemberId, creds)
+	core, shard, err := newMember(a.opts.deps.Rand, token.Agreement.MemberId, token.Agreement.SubscriberId, creds)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

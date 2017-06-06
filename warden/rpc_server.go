@@ -15,51 +15,52 @@ import (
 
 // Security functions (these are extracted out for composability)
 
-func tokenIsActive(now time.Time) func(SignedToken) bool {
-	return func(act SignedToken) bool {
-		return ! act.Expired(now)
+func tokenIsActive(now time.Time) func(SignedToken) error {
+	return func(act SignedToken) error {
+		if !act.Expired(now) {
+			return nil
+		}
+		return errors.Wrapf(TokenExpiredError, "Token expired [%v]", act.Expires)
 	}
 }
 
-func tokenHasRole(role Role) func(SignedToken) bool {
-	return func(act SignedToken) bool {
-		return act.Role >= role
+func tokenHasRole(role Role) func(SignedToken) error {
+	return func(act SignedToken) error {
+		if act.Role >= role {
+			return nil
+		}
+		return errors.Wrapf(UnauthorizedError, "Token has role [%v]. Needed [%v]", act.Role, role)
 	}
 }
 
-func acctIs(acct MemberAgreement) func(MemberAgreement) bool {
-	return func(act MemberAgreement) bool {
-		return act == acct
+func acctIs(acct MemberAgreement) func(MemberAgreement) error {
+	return func(act MemberAgreement) error {
+		if act == acct {
+			return nil
+		}
+		return errors.Wrap(UnauthorizedError, "Unexpected agreement")
 	}
 }
 
-func acctIsEnabled() func(MemberAgreement) bool {
-	return func(act MemberAgreement) bool {
-		return act.Enabled
+func acctIsEnabled() func(MemberAgreement) error {
+	return func(act MemberAgreement) error {
+		if act.Enabled {
+			return nil
+		}
+		return errors.Wrapf(UnauthorizedError, "Account disabled [%v]")
 	}
 }
 
-func acctHasAll(all ...func(MemberAgreement) bool) func(MemberAgreement) bool {
-	return func(act MemberAgreement) bool {
+func acctHasAll(all ...func(MemberAgreement) error) func(MemberAgreement) error {
+	return func(act MemberAgreement) error {
 		for _, cur := range all {
-			if !cur(act) {
-				return false
+			if err := cur(act); err != nil {
+				return err
 			}
 		}
-		return true
+		return nil
 	}
 }
-
-// func acctHasOne(all ...func(MemberAgreement) bool) func(MemberAgreement) bool {
-	// return func(act MemberAgreement) bool {
-		// for _, cur := range all {
-			// if cur(act) {
-				// return true
-			// }
-		// }
-		// return false
-	// }
-// }
 
 func certHasAll(all ...func(SignedCertificate) bool) func(SignedCertificate) bool {
 	return func(act SignedCertificate) bool {
@@ -103,7 +104,7 @@ func certHasTrust(id uuid.UUID) func(SignedCertificate) bool {
 
 func certIsActive(now time.Time, skew time.Duration) func(SignedCertificate) bool {
 	return func(act SignedCertificate) bool {
-		return ! act.Expired(now, skew)
+		return !act.Expired(now, skew)
 	}
 }
 
@@ -112,10 +113,6 @@ func certHasLevel(lvl LevelOfTrust) func(SignedCertificate) bool {
 		return lvl.MetBy(act.Level)
 	}
 }
-
-// func isTrusted(lvl LevelOfTrust, now time.Time, skew time.Duration) func(SignedCertificate) bool {
-	// return certHasAll(certHasLevel(lvl), certIsExpired(now, skew))
-// }
 
 // Server endpoints
 type rpcServer struct {
@@ -143,9 +140,9 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 		switch body := req.Body.(type) {
 		default:
 			return micro.NewErrorResponse(errors.Wrapf(RpcError, "Unknown request type: %v", reflect.TypeOf(body)))
-		case rpcRegisterMemberReq:
+		case rpcMemberRegisterReq:
 			return s.RegisterMember(body)
-		case rpcRegisterMemberAuthReq:
+		case rpcMemberAuthRegisterReq:
 			return s.RegisterMemberAuth(body)
 		case rpcAuthReq:
 			return s.Authenticate(body)
@@ -179,10 +176,10 @@ func newServerHandler(s *rpcServer) func(micro.Request) micro.Response {
 	}
 }
 
-func (s *rpcServer) verifyToken(token SignedToken, fns ... func(SignedToken) bool) error {
+func (s *rpcServer) verifyToken(token SignedToken, fns ...func(SignedToken) error) error {
 	for _, fn := range fns {
-		if !fn(token) {
-			return errors.Wrapf(UnauthorizedError, "Unauthorized")
+		if err := fn(token); err != nil {
+			return errors.WithStack(err)
 		}
 	}
 
@@ -192,16 +189,19 @@ func (s *rpcServer) verifyToken(token SignedToken, fns ... func(SignedToken) boo
 	return nil
 }
 
-func (s *rpcServer) verifyAgreement(acct MemberAgreement, fns ... func(MemberAgreement) bool) error {
-	for _, fn := range fns {
-		if !fn(acct) {
-			return errors.Wrapf(UnauthorizedError, "Unauthorized")
-		}
+func (s *rpcServer) verifyAgreement(acct MemberAgreement, fns ...func(MemberAgreement) error) error {
+	err := acctHasAll(fns...)(acct)
+	return errors.WithStack(err)
+}
+
+func (s *rpcServer) verifyCertificate(cert SignedCertificate, fns ...func(SignedCertificate) bool) error {
+	if !certHasAll(fns...)(cert) {
+		return errors.Wrapf(UnauthorizedError, "Unauthorized")
 	}
 	return nil
 }
 
-func (s *rpcServer) authorize(memberId uuid.UUID, fns ... func(MemberAgreement) bool) (MemberAgreement, error) {
+func (s *rpcServer) authorize(memberId uuid.UUID, fns ...func(MemberAgreement) error) (MemberAgreement, error) {
 	acct, ok, err := s.storage.LoadMemberAgreement(memberId)
 	if err != nil {
 		return MemberAgreement{}, errors.WithStack(err)
@@ -209,13 +209,10 @@ func (s *rpcServer) authorize(memberId uuid.UUID, fns ... func(MemberAgreement) 
 	if !ok {
 		return MemberAgreement{}, errors.Wrapf(UnauthorizedError, "Unauthorized")
 	}
-	if ! acctHasAll(fns...)(acct) {
-		return MemberAgreement{}, errors.Wrapf(UnauthorizedError, "Unauthorized")
-	}
-	return acct, nil
+	return acct, s.verifyAgreement(acct, fns...)
 }
 
-func (s *rpcServer) certify(trusteeId, trustId uuid.UUID, fns ... func(SignedCertificate) bool) (SignedCertificate, error) {
+func (s *rpcServer) certify(trusteeId, trustId uuid.UUID, fns ...func(SignedCertificate) bool) (SignedCertificate, error) {
 	cert, ok, err := s.storage.LoadCertificateByMemberAndTrust(trusteeId, trustId)
 	if err != nil {
 		return SignedCertificate{}, errors.WithStack(err)
@@ -223,25 +220,22 @@ func (s *rpcServer) certify(trusteeId, trustId uuid.UUID, fns ... func(SignedCer
 	if !ok {
 		return SignedCertificate{}, errors.Wrapf(UnauthorizedError, "No cert [trustee=%v, trust=%v]", trusteeId, trustId)
 	}
-	if ! certHasAll(fns...)(cert) {
-		return SignedCertificate{}, errors.Wrapf(UnauthorizedError, "Unauthorized")
-	}
-	return cert, nil
+	return cert, s.verifyCertificate(cert, fns...)
 }
 
-func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
+func (s *rpcServer) RegisterMember(r rpcMemberRegisterReq) micro.Response {
 	s.logger.Debug("Registering new member: %v", r.Core.Id)
 
 	if r.Token.Agreement.MemberId != r.Core.Id {
-		return micro.NewErrorResponse(UnauthorizedError)
+		return micro.NewErrorResponse(RpcError)
 	}
 
 	now := time.Now()
-	if err := s.verifyToken(r.Token, tokenIsActive(now), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(now), tokenHasRole(Basic)); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if err := s.verifyAgreement(r.Token.Agreement, acctIsEnabled()) ; err != nil {
+	if err := s.verifyAgreement(r.Token.Agreement, acctIsEnabled()); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -265,10 +259,15 @@ func (s *rpcServer) RegisterMember(r rpcRegisterMemberReq) micro.Response {
 	return micro.NewStandardResponse(rpcToken{token})
 }
 
-func (s *rpcServer) RegisterMemberAuth(r rpcRegisterMemberAuthReq) micro.Response {
+func (s *rpcServer) RegisterMemberAuth(r rpcMemberAuthRegisterReq) micro.Response {
 	s.logger.Debug("Registering new member authenticator: %v", r.Id)
 
-	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(Manager)); err != nil {
+		return micro.NewErrorResponse(errors.WithStack(err))
+	}
+
+	if _, err := s.authorize(r.Token.Agreement.MemberId, acctIsEnabled(), acctIs(r.Token.Agreement)); err != nil {
+		s.logger.Error("Unauthorized: %+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -278,13 +277,8 @@ func (s *rpcServer) RegisterMemberAuth(r rpcRegisterMemberAuthReq) micro.Respons
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
-	if _, err := s.authorize(r.Token.Agreement.MemberId, acctIsEnabled(), acctIs(r.Token.Agreement)); err != nil {
-		s.logger.Error("Error generating member auth: %+v", err)
-		return micro.NewErrorResponse(errors.WithStack(err))
-	}
-
-	if err := s.storage.SaveMemberAuth(auth); err != nil {
-		s.logger.Error("Error generating member auth: %+v", err)
+	if err := s.storage.SaveMemberAuth(auth, r.Lookup); err != nil {
+		s.logger.Error("Error storing member auth: %+v", err)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -293,15 +287,15 @@ func (s *rpcServer) RegisterMemberAuth(r rpcRegisterMemberAuthReq) micro.Respons
 }
 
 func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
-	s.logger.Info("Attempting to verifyToken: %v", string(r.Acct))
+	s.logger.Info("Attempting to authenticate: %v", string(r.Lookup))
 
-	core, o, e := s.storage.LoadMemberByLookup(r.Acct)
+	core, o, e := s.storage.LoadMemberByLookup(r.Lookup)
 	if e != nil {
 		return micro.NewErrorResponse(errors.Wrap(e, "Error retrieving member"))
 	}
 
 	if !o {
-		s.logger.Error("No such member [%v]", string(r.Acct))
+		s.logger.Error("No such member [%v]", string(r.Lookup))
 		return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
 	}
 
@@ -311,7 +305,7 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 	}
 
 	if !o {
-		s.logger.Error("No member acct [%v]", string(r.Acct))
+		s.logger.Error("No member agreement [%v]", string(r.Lookup))
 		return micro.NewErrorResponse(errors.Wrap(UnauthorizedError, "No such member"))
 	}
 
@@ -327,6 +321,7 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 	}
 
 	if err := auth.authenticate(r.Args); err != nil {
+		s.logger.Error("Error authenticating [%v]", core.Id)
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -341,7 +336,7 @@ func (s *rpcServer) Authenticate(r rpcAuthReq) micro.Response {
 }
 
 func (s *rpcServer) MemberByIdAndAuth(r rpcMemberByIdAndAuthReq) micro.Response {
-	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(Basic)); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -370,7 +365,7 @@ func (s *rpcServer) MemberByIdAndAuth(r rpcMemberByIdAndAuthReq) micro.Response 
 }
 
 func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Response {
-	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(Basic)); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -386,7 +381,7 @@ func (s *rpcServer) MemberSigningKeyById(r rpcMemberSigningKeyByIdReq) micro.Res
 }
 
 func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Response {
-	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(Basic)); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -402,7 +397,7 @@ func (s *rpcServer) MemberInviteKeyById(r rpcMemberInviteKeyByIdReq) micro.Respo
 }
 
 func (s *rpcServer) RegisterTrust(r rpcTrustRegisterReq) micro.Response {
-	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(Basic)); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -414,14 +409,14 @@ func (s *rpcServer) RegisterTrust(r rpcTrustRegisterReq) micro.Response {
 }
 
 func (s *rpcServer) LoadTrustById(r rpcTrustByIdReq) micro.Response {
-	// now := time.Now()
+	now := time.Now()
 
-	if err := s.verifyToken(r.Token, tokenIsActive(time.Now()), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(now), tokenHasRole(Basic)); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
 	// ensure the user of the token has been authorized to view the trust
-	cert, err := s.certify(r.Token.Agreement.MemberId, r.Id, certIsActive(time.Now(), 5 * time.Minute))
+	cert, err := s.certify(r.Token.Agreement.MemberId, r.Id, certIsActive(now, 5*time.Minute))
 	if err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
@@ -467,7 +462,7 @@ func (s *rpcServer) InvitationRegister(r rpcInviteRegisterReq) micro.Response {
 func (s *rpcServer) InvitationById(r rpcInviteByIdReq) micro.Response {
 	now := time.Now()
 
-	if err := s.verifyToken(r.Token, tokenIsActive(now), tokenHasRole(BasicMember)); err != nil {
+	if err := s.verifyToken(r.Token, tokenIsActive(now), tokenHasRole(Basic)); err != nil {
 		return micro.NewErrorResponse(errors.WithStack(err))
 	}
 
@@ -612,14 +607,14 @@ type rpcMemberResponse struct {
 
 // Returns a token response
 type rpcAuthReq struct {
-	Acct   []byte
+	Lookup []byte
 	AuthId []byte
 	Args   []byte
 	Role   Role
 	Exp    time.Duration
 }
 
-type rpcRegisterMemberReq struct {
+type rpcMemberRegisterReq struct {
 	Token    SignedToken
 	Core     memberCore
 	Shard    memberShard
@@ -628,11 +623,12 @@ type rpcRegisterMemberReq struct {
 	TokenTtl time.Duration
 }
 
-type rpcRegisterMemberAuthReq struct {
-	Token SignedToken
-	Id    uuid.UUID
-	Shard memberShard
-	Auth  []byte
+type rpcMemberAuthRegisterReq struct {
+	Token  SignedToken
+	Id     uuid.UUID
+	Shard  memberShard
+	Auth   []byte
+	Lookup []byte
 }
 
 type rpcTrustRegisterReq struct {
@@ -725,15 +721,16 @@ type rpcTrustsResponse struct {
 
 // Register all the gob types.
 func init() {
-	gob.Register(rpcRegisterMemberReq{})
 	gob.Register(rpcAuthReq{})
 	gob.Register(rpcToken{})
 
+	gob.Register(rpcMemberRegisterReq{})
 	gob.Register(rpcMemberByIdAndAuthReq{})
 	gob.Register(rpcMemberResponse{})
 	gob.Register(rpcMemberSigningKeyByIdReq{})
 	gob.Register(rpcMemberInviteKeyByIdReq{})
 	gob.Register(rpcMemberKeyResponse{})
+	gob.Register(rpcMemberAuthRegisterReq{})
 
 	gob.Register(rpcTrustRegisterReq{})
 	gob.Register(rpcTrustByIdReq{})

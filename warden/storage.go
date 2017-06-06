@@ -21,7 +21,7 @@ type storage interface {
 	SaveMember(agreement MemberAgreement, core memberCore, auth memberAuth, lookup []byte) error
 
 	// Stores the
-	SaveMemberAuth(auth memberAuth) error
+	SaveMemberAuth(auth memberAuth, lookup []byte) error
 
 	// Loads a member by a code lookup.
 	LoadMemberByLookup(lookup []byte) (memberCore, bool, error)

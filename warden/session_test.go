@@ -148,13 +148,35 @@ func TestSession(t *testing.T) {
 		ctx := common.NewEmptyContext()
 		defer ctx.Close()
 
-		key, session, err := subscribeBySigner(ctx, BasicMember)
+		key, session, err := subscribeBySigner(ctx, Basic)
 		if !assert.Nil(t, err) {
 			return
 		}
 
 		t.Run("Connect", func(t *testing.T) {
 			sub, err := connectBySigner(ctx, key)
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			assert.Equal(t, session.MyId(), sub.MyId())
+		})
+
+		t.Run("AddSigner", func(t *testing.T) {
+			key2, err := GenRsaKey(rand.Reader, 1024)
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			timer := ctx.Timer(30* time.Second)
+			defer timer.Close()
+
+			err = session.AddSigner(timer.Closed(), key)
+			if !assert.Nil(t, err) {
+				return
+			}
+
+			sub, err := connectBySigner(ctx, key2)
 			if !assert.Nil(t, err) {
 				return
 			}
@@ -200,7 +222,7 @@ func TestSession(t *testing.T) {
 		ctx := common.NewEmptyContext()
 		defer ctx.Close()
 
-		session, err := subscribeByEmailAndPassword(ctx, "user@example.com", "pass", BasicMember)
+		session, err := subscribeByEmailAndPassword(ctx, "user@example.com", "pass", Basic)
 		if !assert.Nil(t, err) {
 			return
 		}
@@ -262,145 +284,145 @@ func TestSession(t *testing.T) {
 		})
 	})
 
-	t.Run("Trust", func(t *testing.T) {
-		ctx := common.NewEmptyContext()
-		defer ctx.Close()
-
-		_, session, err := subscribeBySigner(ctx, BasicMember)
-		if !assert.Nil(t, err) {
-			return
-		}
-
-		trust, err := session.GenerateTrust(timer.Closed(), Minimal)
-		if !assert.Nil(t, err) {
-			return
-		}
-
-		mySecret, err := session.mySecret()
-		if !assert.Nil(t, err) {
-			return
-		}
-
-		secret, err := trust.deriveSecret(mySecret)
-		if !assert.Nil(t, err) {
-			return
-		}
-
-		t.Run("Load", func(t *testing.T) {
-			loaded, found, err := session.LoadTrust(timer.Closed(), trust.Id)
-			if !assert.Nil(t, err) || !assert.NotNil(t, loaded) {
-				return
-			}
-
-			assert.True(t, found)
-			assert.Equal(t, trust.trusteeCert, loaded.trusteeCert)
-			assert.Equal(t, trust.trusteeShard, loaded.trusteeShard)
-
-			loadedSecret, err := trust.deriveSecret(mySecret)
-			if !assert.Nil(t, err) {
-				return
-			}
-
-			assert.Equal(t, secret, loadedSecret)
-		})
-
-		t.Run("LoadCertificates", func(t *testing.T) {
-			certs, err := session.LoadCertificates(timer.Closed(), trust)
-			if !assert.Nil(t, err) {
-				return
-			}
-
-			assert.Equal(t, 1, len(certs))
-			assert.Equal(t, trust.trusteeCert, certs[0])
-		})
-
-		t.Run("LoadInvitations", func(t *testing.T) {
-			invites, err := session.LoadInvitations(timer.Closed(), trust)
-			if !assert.Nil(t, err) {
-				return
-			}
-			assert.Empty(t, invites)
-		})
-
-		t.Run("MyCertificates", func(t *testing.T) {
-			certs, err := session.MyCertificates(timer.Closed())
-			if !assert.Nil(t, err) {
-				return
-			}
-
-			assert.Equal(t, 1, len(certs))
-			assert.Equal(t, trust.trusteeCert, certs[0])
-		})
-
-		t.Run("MyTrusts", func(t *testing.T) {
-			trusts, err := session.MyTrusts(timer.Closed())
-			if !assert.Nil(t, err) {
-				return
-			}
-
-			assert.Equal(t, 1, len(trusts))
-			assert.Equal(t, trust, trusts[0])
-		})
-
-		_, recipient, err := subscribeBySigner(ctx, BasicMember)
-		if !assert.Nil(t, err) {
-			return
-		}
-
-		t.Run("Invite", func(t *testing.T) {
-			invite, err := session.Invite(timer.Closed(), trust, recipient.MyId())
-			if !assert.Nil(t, err) {
-				return
-			}
-			assert.NotNil(t, invite)
-			assert.Equal(t, trust.Id, invite.Cert.TrustId)
-			assert.Equal(t, session.MyId(), invite.Cert.IssuerId)
-			assert.Equal(t, recipient.MyId(), invite.Cert.TrusteeId)
-
+	// t.Run("Trust", func(t *testing.T) {
+		// ctx := common.NewEmptyContext()
+		// defer ctx.Close()
+//
+		// _, session, err := subscribeBySigner(ctx, Basic)
+		// if !assert.Nil(t, err) {
+			// return
+		// }
+//
+		// trust, err := session.GenerateTrust(timer.Closed(), Minimal)
+		// if !assert.Nil(t, err) {
+			// return
+		// }
+//
+		// mySecret, err := session.mySecret()
+		// if !assert.Nil(t, err) {
+			// return
+		// }
+//
+		// secret, err := trust.deriveSecret(mySecret)
+		// if !assert.Nil(t, err) {
+			// return
+		// }
+//
+		// t.Run("Load", func(t *testing.T) {
+			// loaded, found, err := session.LoadTrust(timer.Closed(), trust.Id)
+			// if !assert.Nil(t, err) || !assert.NotNil(t, loaded) {
+				// return
+			// }
+//
+			// assert.True(t, found)
+			// assert.Equal(t, trust.trusteeCert, loaded.trusteeCert)
+			// assert.Equal(t, trust.trusteeShard, loaded.trusteeShard)
+//
+			// loadedSecret, err := trust.deriveSecret(mySecret)
+			// if !assert.Nil(t, err) {
+				// return
+			// }
+//
+			// assert.Equal(t, secret, loadedSecret)
+		// })
+//
+		// t.Run("LoadCertificates", func(t *testing.T) {
+			// certs, err := session.LoadCertificates(timer.Closed(), trust)
+			// if !assert.Nil(t, err) {
+				// return
+			// }
+//
+			// assert.Equal(t, 1, len(certs))
+			// assert.Equal(t, trust.trusteeCert, certs[0])
+		// })
+//
+		// t.Run("LoadInvitations", func(t *testing.T) {
 			// invites, err := session.LoadInvitations(timer.Closed(), trust)
 			// if !assert.Nil(t, err) {
-			// return
+				// return
 			// }
-			// if ! assert.Equal(t, 1, len(invites)) {
-			// return
+			// assert.Empty(t, invites)
+		// })
+//
+		// t.Run("MyCertificates", func(t *testing.T) {
+			// certs, err := session.MyCertificates(timer.Closed())
+			// if !assert.Nil(t, err) {
+				// return
 			// }
-			// assert.Equal(t, invite, invites[0])
-		})
-
-		t.Run("Accept", func(t *testing.T) {
-			invites, err := recipient.MyInvitations(timer.Closed())
-			if !assert.Nil(t, err) {
-				return
-			}
-			assert.Equal(t, 1, len(invites))
-			assert.Equal(t, trust.Id, invites[0].Cert.TrustId)
-			assert.Equal(t, session.MyId(), invites[0].Cert.IssuerId)
-			assert.Equal(t, recipient.MyId(), invites[0].Cert.TrusteeId)
-
-			if !assert.Nil(t, recipient.Accept(timer.Closed(), invites[0])) {
-				return
-			}
-
-			certs, err := recipient.MyCertificates(timer.Closed())
-			if !assert.Nil(t, err) {
-				return
-			}
-			assert.Equal(t, 1, len(certs))
-			assert.Equal(t, trust.Id, certs[0].TrustId)
-
-			trust, found, err := recipient.LoadTrust(timer.Closed(), invites[0].Cert.TrustId)
-			if !assert.Nil(t, err) || !assert.True(t, found) {
-				return
-			}
-			assert.Equal(t, trust.Id, certs[0].TrustId)
-		})
-
-		t.Run("Revoke", func(t *testing.T) {
-			assert.Nil(t, session.Revoke(timer.Closed(), trust, recipient.MyId()))
-
-			trusts, err := recipient.MyTrusts(timer.Closed())
-			assert.Nil(t, err)
-			assert.Empty(t, trusts)
-		})
-	})
+//
+			// assert.Equal(t, 1, len(certs))
+			// assert.Equal(t, trust.trusteeCert, certs[0])
+		// })
+//
+		// t.Run("MyTrusts", func(t *testing.T) {
+			// trusts, err := session.MyTrusts(timer.Closed())
+			// if !assert.Nil(t, err) {
+				// return
+			// }
+//
+			// assert.Equal(t, 1, len(trusts))
+			// assert.Equal(t, trust, trusts[0])
+		// })
+//
+		// _, recipient, err := subscribeBySigner(ctx, Basic)
+		// if !assert.Nil(t, err) {
+			// return
+		// }
+//
+		// t.Run("Invite", func(t *testing.T) {
+			// invite, err := session.Invite(timer.Closed(), trust, recipient.MyId())
+			// if !assert.Nil(t, err) {
+				// return
+			// }
+			// assert.NotNil(t, invite)
+			// assert.Equal(t, trust.Id, invite.Cert.TrustId)
+			// assert.Equal(t, session.MyId(), invite.Cert.IssuerId)
+			// assert.Equal(t, recipient.MyId(), invite.Cert.TrusteeId)
+//
+			// // invites, err := session.LoadInvitations(timer.Closed(), trust)
+			// // if !assert.Nil(t, err) {
+			// // return
+			// // }
+			// // if ! assert.Equal(t, 1, len(invites)) {
+			// // return
+			// // }
+			// // assert.Equal(t, invite, invites[0])
+		// })
+//
+		// t.Run("Accept", func(t *testing.T) {
+			// invites, err := recipient.MyInvitations(timer.Closed())
+			// if !assert.Nil(t, err) {
+				// return
+			// }
+			// assert.Equal(t, 1, len(invites))
+			// assert.Equal(t, trust.Id, invites[0].Cert.TrustId)
+			// assert.Equal(t, session.MyId(), invites[0].Cert.IssuerId)
+			// assert.Equal(t, recipient.MyId(), invites[0].Cert.TrusteeId)
+//
+			// if !assert.Nil(t, recipient.Accept(timer.Closed(), invites[0])) {
+				// return
+			// }
+//
+			// certs, err := recipient.MyCertificates(timer.Closed())
+			// if !assert.Nil(t, err) {
+				// return
+			// }
+			// assert.Equal(t, 1, len(certs))
+			// assert.Equal(t, trust.Id, certs[0].TrustId)
+//
+			// trust, found, err := recipient.LoadTrust(timer.Closed(), invites[0].Cert.TrustId)
+			// if !assert.Nil(t, err) || !assert.True(t, found) {
+				// return
+			// }
+			// assert.Equal(t, trust.Id, certs[0].TrustId)
+		// })
+//
+		// t.Run("Revoke", func(t *testing.T) {
+			// assert.Nil(t, session.Revoke(timer.Closed(), trust, recipient.MyId()))
+//
+			// trusts, err := recipient.MyTrusts(timer.Closed())
+			// assert.Nil(t, err)
+			// assert.Empty(t, trusts)
+		// })
+	// })
 }

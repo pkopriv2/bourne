@@ -57,7 +57,7 @@ func (c *rpcClient) Close() error {
 }
 
 func (r *rpcClient) MemberRegister(cancel <-chan struct{}, token SignedToken, mem memberCore, code memberShard, acct []byte, auth []byte, ttl time.Duration) (SignedToken, error) {
-	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberReq{token, mem, code, acct, auth, ttl}))
+	raw, err := r.raw.Send(micro.NewRequest(rpcMemberRegisterReq{token, mem, code, acct, auth, ttl}))
 	if err != nil || !raw.Ok {
 		return SignedToken{}, errors.WithStack(common.Or(err, raw.Error()))
 	}
@@ -70,8 +70,8 @@ func (r *rpcClient) MemberRegister(cancel <-chan struct{}, token SignedToken, me
 	return resp.Token, nil
 }
 
-func (r *rpcClient) MemberAuthRegister(cancel <-chan struct{}, token SignedToken, memberId uuid.UUID, shard memberShard, auth []byte) error {
-	raw, err := r.raw.Send(micro.NewRequest(rpcRegisterMemberAuthReq{token, memberId, shard, auth}))
+func (r *rpcClient) MemberAuthRegister(cancel <-chan struct{}, token SignedToken, memberId uuid.UUID, shard memberShard, auth, lookup []byte) error {
+	raw, err := r.raw.Send(micro.NewRequest(rpcMemberAuthRegisterReq{token, memberId, shard, auth, lookup}))
 	return errors.WithStack(common.Or(err, raw.Error()))
 }
 

@@ -170,6 +170,12 @@ type Session interface {
 	// Trusts that have been created by the session owner.
 	MyTrusts(cancel <-chan struct{}, fns ...func(*PagingOptions)) ([]Trust, error)
 
+	// Adds a signer to the account.  (Only allowed if session has manage role)
+	AddSigner(cancel <-chan struct{}, signer Signer) error
+
+	// // Sets the passphrase on the account. (Only allowed if session has manage role)
+	// SetPassphrase(cancel <-chan struct{}, pass string) error
+
 	// Generates a new trust.
 	GenerateTrust(cancel <-chan struct{}, strength Strength) (Trust, error)
 

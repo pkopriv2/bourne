@@ -17,7 +17,7 @@ type Transport interface {
 	MemberRegister(cancel <-chan struct{}, t SignedToken, core memberCore, shard memberShard, acct []byte, auth []byte, tokenTTL time.Duration) (SignedToken, error)
 
 	// // Registers a new subscriber.
-	MemberAuthRegister(cancel <-chan struct{}, t SignedToken, memberId uuid.UUID, shard memberShard, auth []byte) error
+	MemberAuthRegister(cancel <-chan struct{}, t SignedToken, memberId uuid.UUID, shard memberShard, auth, lookup []byte) error
 
 	// Returns the mmeber with the given id.  (only if authorized by token owner's membership)
 	MemberByIdAndAuth(cancel <-chan struct{}, t SignedToken, id uuid.UUID, authId []byte) (memberCore, memberShard, bool, error)

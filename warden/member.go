@@ -23,9 +23,9 @@ const (
 type Role int
 
 const (
-	BasicMember Role = iota
-	ManagerMember
-	AdminMember
+	Basic Role = iota
+	Manager
+	Issuer
 	Subscriber
 	God
 )
@@ -35,6 +35,8 @@ type MemberAgreement struct {
 	SubscriberId uuid.UUID
 	Role         Role
 	Enabled      bool
+	// Issued       time.Time
+	// Expires      time.Time
 }
 
 func newMemberAgreement(memberId, subscriberId uuid.UUID, role Role) MemberAgreement {
@@ -72,6 +74,7 @@ func buildMemberOptions(fns ...func(*memberOptions)) memberOptions {
 // A MemberCore contains all the membership details of a particular user.
 type memberCore struct {
 	Id             uuid.UUID
+	SubscriptionId uuid.UUID
 	Pub            SignedShard
 	SigningKey     SignedKeyPair
 	InviteKey      SignedKeyPair
@@ -79,7 +82,7 @@ type memberCore struct {
 }
 
 // Generates a new member.  Rand and creds must not be nil!
-func newMember(rand io.Reader, id uuid.UUID, creds credential, fns ...func(*memberOptions)) (memberCore, memberShard, error) {
+func newMember(rand io.Reader, id, subId uuid.UUID, creds credential, fns ...func(*memberOptions)) (memberCore, memberShard, error) {
 	opts := buildMemberOptions(fns...)
 	if rand == nil || creds == nil {
 		return memberCore{}, memberShard{}, errors.WithStack(common.ArgError)
@@ -145,11 +148,12 @@ func newMember(rand io.Reader, id uuid.UUID, creds credential, fns ...func(*memb
 	}
 
 	return memberCore{
-		Id:         id,
-		Pub:        sigPubShard,
-		SigningKey: encSigningKey,
-		InviteKey:  encInviteKey,
-		Opts:       opts,
+		Id:             id,
+		SubscriptionId: subId,
+		Pub:            sigPubShard,
+		SigningKey:     encSigningKey,
+		InviteKey:      encInviteKey,
+		Opts:           opts,
 	}, encShard, nil
 }
 

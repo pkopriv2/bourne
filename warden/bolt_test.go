@@ -44,12 +44,12 @@ func TestStorage(t *testing.T) {
 		}
 		defer creds.Destroy()
 
-		mem, shard, e := newMember(rand.Reader, uuid.NewV1(), creds)
+		mem, shard, e := newMember(rand.Reader, uuid.NewV1(), uuid.NewV1(), creds)
 		if !assert.Nil(t, e) {
 			return
 		}
 
-		acct := newMemberAgreement(mem.Id, uuid.NewV1(), BasicMember)
+		acct := newMemberAgreement(mem.Id, mem.SubscriptionId, Basic)
 
 		args, e := creds.Auth(rand.Reader)
 		if !assert.Nil(t, e) {
@@ -66,18 +66,18 @@ func TestStorage(t *testing.T) {
 		}
 
 		m, o, e := store.LoadMemberByLookup(creds.MemberLookup())
-		if !assert.Nil(t, e) || ! assert.True(t, o) {
+		if !assert.Nil(t, e) || !assert.True(t, o) {
 			return
 		}
 
 		m, o, e = store.LoadMemberById(m.Id)
-		if !assert.Nil(t, e) || ! assert.True(t, o) {
+		if !assert.Nil(t, e) || !assert.True(t, o) {
 			return
 		}
 		assert.Equal(t, mem, m)
 
 		a, o, e := store.LoadMemberAuth(m.Id, creds.AuthId())
-		if !assert.Nil(t, e) || ! assert.True(t, o) {
+		if !assert.Nil(t, e) || !assert.True(t, o) {
 			return
 		}
 		assert.Equal(t, mem.Id, a.MemberId)
