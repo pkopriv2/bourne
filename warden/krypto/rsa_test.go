@@ -37,47 +37,47 @@ func TestRsaKey(t *testing.T) {
 		assert.Equal(t, []byte("msg"), dec)
 	})
 
-	t.Run("PrivateKey_WriteParse", func(t *testing.T) {
-		fmt, err := key.SigningFormat()
-		if ! assert.Nil(t, err) {
-			return
-		}
-
-		priv, err := key.Algorithm().parsePrivateKey(fmt)
-		if ! assert.Nil(t, err) {
-			return
-		}
-
-		msg := []byte("msg")
-
-		privSig, err := priv.Sign(rand.Reader, SHA256, msg)
-		assert.Nil(t, err)
-		assert.Nil(t, key.Public().Verify(privSig.Hash, msg, privSig.Data))
-
-		keySig, err := key.Sign(rand.Reader, SHA256, msg)
-		assert.Nil(t, err)
-		assert.Nil(t, priv.Public().Verify(keySig.Hash, msg, keySig.Data))
-	})
-
-	t.Run("PublicKey_WriteParse", func(t *testing.T) {
-		fmt, err := key.SigningFormat()
-		if ! assert.Nil(t, err) {
-			return
-		}
-
-		pub, err := key.Algorithm().parsePublicKey(fmt)
-		if ! assert.Nil(t, err) {
-			return
-		}
-
-		msg := []byte("msg")
-
-		sig, err := key.Sign(rand.Reader, SHA256, msg)
-		if ! assert.Nil(t, err) {
-			return
-		}
-
-		assert.Nil(t, key.Public().Verify(sig.Hash, msg, sig.Data))
-		assert.Nil(t, pub.Verify(sig.Hash, msg, sig.Data))
-	})
+	// t.Run("PrivateKey_WriteParse", func(t *testing.T) {
+		// fmt, err := key.SigningFormat()
+		// if ! assert.Nil(t, err) {
+			// return
+		// }
+//
+		// priv, err := key.Algorithm().parsePrivateKey(fmt)
+		// if ! assert.Nil(t, err) {
+			// return
+		// }
+//
+		// msg := []byte("msg")
+//
+		// privSig, err := priv.Sign(rand.Reader, SHA256, msg)
+		// assert.Nil(t, err)
+		// assert.Nil(t, key.Public().Verify(privSig.Hash, msg, privSig.Data))
+//
+		// keySig, err := key.Sign(rand.Reader, SHA256, msg)
+		// assert.Nil(t, err)
+		// assert.Nil(t, priv.Public().Verify(keySig.Hash, msg, keySig.Data))
+	// })
+//
+	// t.Run("PublicKey_WriteParse", func(t *testing.T) {
+		// fmt, err := key.SigningFormat()
+		// if ! assert.Nil(t, err) {
+			// return
+		// }
+//
+		// pub, err := key.Algorithm().parsePublicKey(fmt)
+		// if ! assert.Nil(t, err) {
+			// return
+		// }
+//
+		// msg := []byte("msg")
+//
+		// sig, err := key.Sign(rand.Reader, SHA256, msg)
+		// if ! assert.Nil(t, err) {
+			// return
+		// }
+//
+		// assert.Nil(t, key.Public().Verify(sig.Hash, msg, sig.Data))
+		// assert.Nil(t, pub.Verify(sig.Hash, msg, sig.Data))
+	// })
 }

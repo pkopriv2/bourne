@@ -1,4 +1,4 @@
-package krypto
+package secret
 
 import (
 	"bytes"

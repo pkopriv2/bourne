@@ -12,6 +12,7 @@ import (
 // Register all the gob types.
 func init() {
 	gob.Register(&rsaPublicKey{})
+	gob.Register(&rsaPrivateKey{})
 }
 
 func GenRsaKey(rand io.Reader, bits int) (PrivateKey, error) {
@@ -72,6 +73,14 @@ func (r *rsaPublicKey) SigningFormat() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func (r *rsaPublicKey) UnmarshalBinary(data []byte) error {
+	panic("not implemented")
+}
+
+func (r *rsaPublicKey) MarshalBinary() (data []byte, err error) {
+	panic("not implemented")
+}
+
 func parseRsaPublicKey(raw []byte) (*rsaPublicKey, error) {
 	key := &rsa.PublicKey{}
 
@@ -84,6 +93,7 @@ func parseRsaPublicKey(raw []byte) (*rsaPublicKey, error) {
 
 // Private key implementation
 type rsaPrivateKey struct {
+
 	Raw *rsa.PrivateKey
 }
 
@@ -124,20 +134,15 @@ func (r *rsaPrivateKey) Destroy() {
 }
 
 func (r *rsaPrivateKey) SigningFormat() ([]byte, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(r.Raw); err != nil {
-		panic(err)
-	}
-	return buf.Bytes(), nil
+	return r.MarshalBinary()
 }
 
-func parseRsaPrivateKey(raw []byte) (*rsaPrivateKey, error) {
-	key := &rsa.PrivateKey{}
+func (r *rsaPrivateKey) MarshalBinary() ([]byte, error) {
+	ret, err := gobBytes(r)
+	return ret, errors.WithStack(err)
+}
 
-	dec := gob.NewDecoder(bytes.NewBuffer(raw))
-	if err := dec.Decode(&key); err != nil {
-		return nil, errors.WithStack(err)
-	}
-	return &rsaPrivateKey{key}, nil
+func (r *rsaPrivateKey) UnmarshalBinary(data []byte) error {
+	_, err := parseGobBytes(data, &r)
+	return errors.WithStack(err)
 }
