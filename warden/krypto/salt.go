@@ -13,6 +13,12 @@ type SaltOptions struct {
 	Size int
 }
 
+func (s *SaltOptions) Proto(opts SaltOptions) {
+	s.Hash = opts.Hash
+	s.Iter = opts.Iter
+	s.Size = opts.Size
+}
+
 func defaultSaltOptions() SaltOptions {
 	return SaltOptions{SHA256, 1024, 32}
 }
@@ -25,6 +31,8 @@ func buildSaltOptions(fns ...func(*SaltOptions)) SaltOptions {
 	return ret
 }
 
+// A salt is a source of randomness that may be used to inject randomness
+// into key derivations.
 type Salt struct {
 	Hash  Hash
 	Iter  int
@@ -46,8 +54,8 @@ func (s Salt) Apply(val Bytes, size int) Bytes {
 	return val.Pbkdf2(s.Nonce, s.Iter, size, s.Hash)
 }
 
-func (s Salt) Encrypt(rand io.Reader, cipher Cipher, key, msg Bytes) (SaltedCipherText, error) {
-	ciphertext, err := cipher.Apply(rand, s.Apply(key, cipher.KeySize()), msg)
+func (s Salt) Encrypt(rand io.Reader, cipher Cipher, key, msg Bytes, encoding ... string) (SaltedCipherText, error) {
+	ciphertext, err := cipher.Apply(rand, s.Apply(key, cipher.KeySize()), msg, encoding...)
 	if err != nil {
 		return SaltedCipherText{}, errors.WithStack(err)
 	}

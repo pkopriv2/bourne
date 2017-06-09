@@ -7,20 +7,26 @@ import (
 	"github.com/pkg/errors"
 )
 
-// This is currently VERY inefficient!
 var (
-	Gob = GobEncoder{}
+	Gob = &GobEncoder{}
 )
 
 type GobEncoder struct{}
 
-func (g *GobEncoder) Encode(v interface{}) ([]byte, error) {
-	ret, err := gobBytes(v)
-	return ret, errors.WithStack(err)
+func (g *GobEncoder) Protocol() string {
+	return "Gob/1.0.0"
 }
 
-func (g *GobEncoder) Decode(raw []byte, v interface{}) error {
-	_, err := parseGobBytes(raw, &v)
+func (g *GobEncoder) Encode(v interface{}) (Encoding, error) {
+	body, err := gobBytes(v)
+	if err != nil {
+		return Encoding{}, errors.WithStack(err)
+	}
+	return Encoding{g.Protocol(), body}, nil
+}
+
+func (g *GobEncoder) Decode(raw Encoding, v interface{}) error {
+	_, err := parseGobBytes(raw.Body, v)
 	return errors.WithStack(err)
 }
 

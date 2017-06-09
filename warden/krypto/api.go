@@ -11,13 +11,20 @@ import (
 // A universal wrapper over the gob/json encoders.  Messages can be encoded
 // onto streams of these formats for free.
 type Encoder interface {
-	Encode(interface{}) ([]byte, error)
+	Encode(interface{}) (Encoding, error)
 }
 
 // A universal wrapper over the gob/json decoders.  Messages can be decoded
 // onto streams of these formats for free.
 type Decoder interface {
-	Decode([]byte, interface{}) error
+	Decode(Encoding, interface{}) error
+}
+
+// An encoded message contains a message along with a header describing the format
+// This is extremely useful for providing backwards compatibility to encoded data.
+type Encoding struct {
+	Format string
+	Body   []byte
 }
 
 // A a signable object is one that has a consistent format for signing and verifying.
@@ -63,6 +70,10 @@ type PrivateKey interface {
 	Signer
 	Signable
 
+	// Implementations must eventually have platform independent encodings
+	encoding.BinaryMarshaler
+	encoding.BinaryUnmarshaler
+
 	Algorithm() KeyAlgorithm
 	Decrypt(rand io.Reader, hash Hash, ciphertext []byte) ([]byte, error)
 	Destroy()
@@ -79,10 +90,6 @@ type PrivateKey interface {
 //
 type PublicKey interface {
 	Signable
-
-	// Implementations must eventually have platform independent encodings
-	encoding.BinaryMarshaler
-	encoding.BinaryUnmarshaler
 
 	Id() string
 	Algorithm() KeyAlgorithm

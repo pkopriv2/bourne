@@ -49,6 +49,16 @@ func (b Bytes) Size() int {
 	return len(b)
 }
 
+// Returns the length of the underlying array
+func (b Bytes) Concat(other Bytes) Bytes {
+	return append(b, other...)
+}
+
+// Returns the length of the underlying array
+func (b Bytes) Encoding(fmt string) Encoding {
+	return Encoding{fmt, b}
+}
+
 // Returns a base64 representation of the array
 func (b Bytes) Base64() string {
 	return base64.StdEncoding.EncodeToString(b)
