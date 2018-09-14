@@ -171,9 +171,9 @@ func (h *host) Directory() (Directory, error) {
 	return &localDir{h.iface}, nil
 }
 
-func (h *host) Store() (Store, error) {
-	return &localDb{h.db}, nil
-}
+// func (h *host) Store() (Store, error) {
+// return &localDb{h.db}, nil
+// }
 
 func (h *host) epoch(ver int, peers []string) (*epoch, error) {
 	return initEpoch(h.iface, h.net, h.db, h.id, ver, h.addr, peers)
@@ -239,54 +239,42 @@ func (h *localDir) AllMembers(cancel <-chan struct{}) ([]Member, error) {
 	return nil, errors.WithStack(common.CanceledError)
 }
 
-func (h *localDir) FindByKey(cancel <-chan struct{}, key string) ([]Member, error) {
-	for !common.IsCanceled(cancel) {
-		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
-			found := dir.Search(func(i uuid.UUID, k string, v string) bool {
-				return k == key
-			})
-			return toMembers(found)
-		})
-		if err != nil {
-			continue
+func (h *localDir) GetIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key string) (val string, ver int, ok bool, err error) {
+	_, err = h.iface.DirView(cancel, func(dir *directory) interface{} {
+		item, _ := dir.GetItem(indexId, key)
+		if item.Del {
+			return nil
 		}
-		return raw.([]Member), nil
-	}
-	return nil, errors.WithStack(common.CanceledError)
+
+		val, ver, ok = item.Val, item.Ver, true
+		return nil
+	})
+	return
 }
 
-func (h *localDir) FindByValue(cancel <-chan struct{}, val string) ([]Member, error) {
-	for !common.IsCanceled(cancel) {
-		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
-			found := dir.Search(func(i uuid.UUID, k string, v string) bool {
-				return v == val
-			})
-			return toMembers(found)
-		})
+func (h *localDir) SetIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key, val string, ver int) (bool, error) {
+	ok, err := h.iface.DirUpdate(cancel, func(dir *directory) (interface{}, error) {
+		oks, err := dir.Apply([]event{item{indexId, GlobalVersion, key, val, ver, false, time.Now()}})
 		if err != nil {
-			continue
+			return false, err
 		}
-		return raw.([]Member), nil
-	}
-	return nil, errors.WithStack(common.CanceledError)
+
+		return oks[0], err
+	})
+	return ok.(bool), err
 }
 
-func (h *localDir) GetMemberValue(cancel <-chan struct{}, id uuid.UUID, key string) (string, bool, error) {
-	type item struct {
-		val string
-		ok  bool
-	}
-	for !common.IsCanceled(cancel) {
-		raw, err := h.iface.DirView(cancel, func(dir *directory) interface{} {
-			val, ok := dir.GetItem(id, key)
-			return item{val, ok}
-		})
-		if err != nil || raw == nil {
-			continue
+func (h *localDir) DelIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key, val string, ver int) (ok bool, err error) {
+	_, err = h.iface.DirUpdate(cancel, func(dir *directory) (ret interface{}, err error) {
+		oks, err := dir.Apply([]event{item{indexId, GlobalVersion, key, val, ver, true, time.Now()}})
+		if err != nil {
+			return nil, err
 		}
-		return raw.(item).val, raw.(item).ok, nil
-	}
-	return "", false, errors.WithStack(common.CanceledError)
+
+		ok = oks[0]
+		return
+	})
+	return
 }
 
 func (h *localDir) String() string {

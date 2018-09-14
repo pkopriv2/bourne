@@ -260,13 +260,9 @@ func (d *directory) Get(id uuid.UUID) (ret member, ok bool) {
 	return
 }
 
-func (d *directory) GetItem(id uuid.UUID, key string) (val string, ok bool) {
+func (d *directory) GetItem(id uuid.UUID, key string) (ret item, ok bool) {
 	d.Core.View(func(u *view) {
-		var item item
-		item, ok = u.GetActive(id, key)
-		if ok && !item.Del {
-			val = item.Val
-		}
+		ret, ok = u.GetActive(id, key)
 	})
 	return
 }

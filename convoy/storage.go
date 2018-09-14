@@ -12,6 +12,11 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+var (
+	GlobalIndex   = uuid.UUID{}
+	GlobalVersion = 0
+)
+
 // System reserved keys.  Consumers should consider the: /Convoy/ namespace off limits!
 const (
 	memberMembershipAttr = "Convoy.Member.Joined"
@@ -264,10 +269,7 @@ func (u *view) Time() time.Time {
 }
 
 func (u *view) GetLatest(id uuid.UUID, key string) (ret item, found bool) {
-	status, ok := u.Roster[id]
-	if !ok {
-		return
-	}
+	status, _ := u.Roster[id]
 
 	rawVal, rawFound := storageGet(u.raw, id, status.Version, key)
 	if !rawFound {
@@ -278,10 +280,10 @@ func (u *view) GetLatest(id uuid.UUID, key string) (ret item, found bool) {
 }
 
 func (u *view) GetActive(id uuid.UUID, key string) (ret item, found bool) {
-	status, ok := u.Roster[id]
-	if !ok || !status.Active {
-		return
-	}
+	status, _ := u.Roster[id]
+	// if !ok || !status.Active {
+	// return
+	// }
 
 	rawVal, rawFound := storageGet(u.raw, id, status.Version, key)
 	if !rawFound || rawVal.Del {

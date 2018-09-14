@@ -1,7 +1,6 @@
 package convoy
 
 import (
-	"strconv"
 	"testing"
 	"time"
 
@@ -56,7 +55,6 @@ func TestHost_Join_Many_Peers(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 16, len(hosts))
 }
-
 
 func TestHost_Fail_Manual(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{
@@ -147,68 +145,18 @@ func TestHost_Store_Put_Single(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts, err := StartTestCluster(ctx, 8)
+	hosts, err := StartTestCluster(ctx, 128)
 	assert.Nil(t, err)
 
-	self0, err := hosts[0].Self()
-	assert.Nil(t, err)
-
-	store0, err := hosts[0].Store()
+	dir, err := hosts[0].Directory()
 	assert.Nil(t, err)
 
 	timer := ctx.Timer(10 * time.Second)
 	defer timer.Close()
 
-	ok, item, err := store0.Put(timer.Closed(), "key", "val", 0)
-	assert.True(t, ok)
-	assert.Equal(t, Item{"val", 1, false}, item)
-	assert.Nil(t, err)
-
-	SyncCluster(timer.Closed(), hosts, func(h Host) bool {
-		dir, err := h.Directory()
-		if err != nil {
-			return false
-		}
-
-		val, ok, err := dir.GetMemberValue(timer.Closed(), self0.Id(), "key")
-		if !ok || err != nil {
-			return false
-		}
-
-		return val == "val"
-	})
-
-	assert.False(t, timer.IsClosed())
-}
-
-func TestHost_Store_Put_Multi(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	hosts, err := StartTestCluster(ctx, 32)
-	assert.Nil(t, err)
-
-	num := 100
-
-	timer := ctx.Timer(30 * time.Second)
-	defer timer.Closed()
-
-	for _, h := range hosts {
-		go func(h Host) {
-			store, err := h.Store()
-			if err != nil {
-				t.FailNow()
-			}
-
-			for i := 0; i < num; i++ {
-				h.(*host).logger.Info("Putting [%v, %v]", h.Id().String()[:8], i)
-				store.Put(timer.Closed(), strconv.Itoa(i), "val", 0)
-			}
-		}(h)
+	ok, err := dir.SetIndexValue(timer.Closed(), GlobalIndex, "key", "val", 0)
+	if !assert.True(t, ok) {
+		return
 	}
 
 	SyncCluster(timer.Closed(), hosts, func(h Host) bool {
@@ -217,20 +165,67 @@ func TestHost_Store_Put_Multi(t *testing.T) {
 			return false
 		}
 
-		for _, h := range hosts {
-			for i := 0; i < num; i++ {
-				_, ok, err := dir.GetMemberValue(timer.Closed(), h.Id(), strconv.Itoa(i))
-				if !ok || err != nil {
-					return false
-				}
-			}
+		val, ver, ok, err := dir.GetIndexValue(timer.Closed(), GlobalIndex, "key")
+		if !ok || err != nil {
+			return false
 		}
 
-		return true
+		return val == "val" && ver == 0
 	})
 
 	assert.False(t, timer.IsClosed())
 }
+
+// func TestHost_Store_Put_Multi(t *testing.T) {
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Debug),
+// })
+//
+// ctx := common.NewContext(conf)
+// defer ctx.Close()
+//
+// hosts, err := StartTestCluster(ctx, 32)
+// assert.Nil(t, err)
+//
+// num := 100
+//
+// timer := ctx.Timer(30 * time.Second)
+// defer timer.Closed()
+//
+// for _, h := range hosts {
+// go func(h Host) {
+// store, err := h.Store()
+// if err != nil {
+// t.FailNow()
+// }
+//
+// for i := 0; i < num; i++ {
+// h.(*host).logger.Info("Putting [%v, %v]", h.Id().String()[:8], i)
+// store.Put(timer.Closed(), strconv.Itoa(i), "val", 0)
+// }
+// }(h)
+// }
+//
+// SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+// dir, err := h.Directory()
+// if err != nil {
+// return false
+// }
+//
+// for _, h := range hosts {
+// for i := 0; i < num; i++ {
+// _, ok, err := dir.GetMemberValue(timer.Closed(), h.Id(), strconv.Itoa(i))
+// if !ok || err != nil {
+// return false
+// }
+// }
+// }
+//
+// return true
+// })
+//
+// assert.False(t, timer.IsClosed())
+// }
 
 func TestHost_ListenRoster_Join(t *testing.T) {
 	conf := common.NewConfig(map[string]interface{}{

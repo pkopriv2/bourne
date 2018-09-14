@@ -470,9 +470,9 @@ func (r *epoch) handlePushPull(req *common.Request) {
 		rpc := req.Body().(rpcPushPullRequest)
 
 		// for _, e := range rpc.events {
-		// // r.Logger.Info("Handling push: %v", e)
+		// r.Logger.Info("Handling push: %v", e)
 		// }
-
+		//
 		var unHealthy bool
 		r.Dir.Core.View(func(v *view) {
 			m, ok := v.Roster[rpc.id]
@@ -599,8 +599,7 @@ func replicaInitDir(ctx common.Context, db *database, self member) (*directory, 
 		listener.Close()
 	})
 	dirIndexEvents(
-		changeStreamToEventStream(
-			self, listener.ch), dir)
+		changeStreamToEventStream(self, listener.ch), dir)
 
 	// Grab all the changes from the database
 	chgs, err := db.Log().All()

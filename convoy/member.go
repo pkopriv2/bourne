@@ -79,10 +79,6 @@ func (m member) Client(ctx common.Context, network net.Network, timeout time.Dur
 	return connectMember(ctx, network, timeout, net.NewAddr(m.host, m.port))
 }
 
-func (m member) Store(net net.Network, timeout time.Duration) (Store, error) {
-	panic("not implemented")
-}
-
 func (m member) Directory(net net.Network, timeout time.Duration) (Directory, error) {
 	panic("not implemented")
 }
