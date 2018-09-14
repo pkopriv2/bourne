@@ -34,12 +34,7 @@ func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error)
 		return nil, errors.WithStack(err)
 	}
 
-	db, err := openDatabase(ctx, openChangeLog(ctx, opts.Storage))
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	host, err := newHost(ctx, db, opts.Network, addr, nil)
+	host, err := newHost(ctx, opts.Network, addr, nil)
 	if err == nil {
 		return host, nil
 	} else {
@@ -53,12 +48,7 @@ func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)
 		return nil, errors.WithStack(err)
 	}
 
-	db, err := openDatabase(ctx, openChangeLog(ctx, opts.Storage))
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	host, err := newHost(ctx, db, opts.Network, addr, peers)
+	host, err := newHost(ctx, opts.Network, addr, peers)
 	if err == nil {
 		return host, nil
 	} else {

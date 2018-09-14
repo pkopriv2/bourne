@@ -6,7 +6,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -14,17 +13,8 @@ import (
 // clusters, etc...
 
 func StartTestHost(ctx common.Context, addr string) (Host, error) {
-	raw, err := stash.OpenTransient(ctx)
-	if err != nil {
-		return nil, err
-	}
 
-	db, err := openDatabase(ctx, openChangeLog(ctx, raw))
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	host, err := newHost(ctx, db, net.NewTcpNetwork(), addr, nil)
+	host, err := newHost(ctx, net.NewTcpNetwork(), addr, nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -32,17 +22,8 @@ func StartTestHost(ctx common.Context, addr string) (Host, error) {
 }
 
 func JoinTestHost(ctx common.Context, addr string, peers []string) (Host, error) {
-	raw, err := stash.OpenTransient(ctx)
-	if err != nil {
-		return nil, err
-	}
 
-	db, err := openDatabase(ctx, openChangeLog(ctx, raw))
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	host, err := newHost(ctx, db, net.NewTcpNetwork(), addr, peers)
+	host, err := newHost(ctx, net.NewTcpNetwork(), addr, peers)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

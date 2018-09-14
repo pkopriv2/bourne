@@ -274,9 +274,6 @@ type epoch struct {
 	// the network abstraction
 	Net net.Network
 
-	// the db hosted by this instance.
-	Db *database
-
 	// the central directory - contains the local view of all replica's dbs
 	Dir *directory
 
@@ -290,13 +287,13 @@ type epoch struct {
 	Pool common.WorkPool
 }
 
-func initEpoch(iface *replica, net net.Network, db *database, id uuid.UUID, ver int, addr string, peers []string) (*epoch, error) {
+func initEpoch(iface *replica, net net.Network, id uuid.UUID, ver int, addr string, peers []string) (*epoch, error) {
 	self, err := replicaInitSelf(iface.ctx, net, id, ver, addr, peers)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	cur, err := newEpoch(iface, net, db, self)
+	cur, err := newEpoch(iface, net, self)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -311,7 +308,7 @@ func initEpoch(iface *replica, net net.Network, db *database, id uuid.UUID, ver 
 }
 
 // Initializes and returns a generic replica instance.
-func newEpoch(iface *replica, net net.Network, db *database, self member) (*epoch, error) {
+func newEpoch(iface *replica, net net.Network, self member) (*epoch, error) {
 	ctx := iface.ctx.Sub("Epoch(%v)", self.version)
 	ctx.Logger().Info("Starting epoch")
 
@@ -322,10 +319,11 @@ func newEpoch(iface *replica, net net.Network, db *database, self member) (*epoc
 		}
 	}()
 
-	dir, err := replicaInitDir(ctx, db, self)
-	if err != nil {
-		return nil, err
-	}
+	dir := newDirectory(ctx)
+	dir.Add(self)
+	ctx.Control().Defer(func(error) {
+		dir.Close()
+	})
 
 	diss, err := replicaInitDissem(ctx, net, self, dir)
 	if err != nil {
@@ -340,7 +338,6 @@ func newEpoch(iface *replica, net net.Network, db *database, self member) (*epoc
 		Ctrl:   ctx.Control(),
 		Logger: ctx.Logger(),
 		Dir:    dir,
-		Db:     db,
 		Dissem: diss,
 		Pool:   common.NewWorkPool(ctx.Control(), 50),
 	}
@@ -516,11 +513,15 @@ func (r *epoch) Join(peers []string) error {
 			return errors.WithStack(err)
 		}
 
+		r.Logger.Info("Trying to join peer [%v]", addr)
+
 		// Register self with the peer.  (Should result in realtime updates being delivered to self.)
-		_, err = peer.DirApply(r.Dir.Events())
+		oks, err := peer.DirApply(r.Dir.Events())
 		if err != nil {
 			return errors.Wrap(err, "Error registering self with peer")
 		}
+
+		r.Logger.Info("Joined peer [%v]", oks)
 
 		// Download the peer's directory.
 		events, err := peer.DirList()
@@ -576,40 +577,6 @@ func (r *epoch) leaveAndDrain() error {
 	}
 
 	return nil
-}
-
-// Helper functions
-
-// Returns a newly initialized directory that is populated with the given db and member
-// and is indexing realtime changes to the db.
-func replicaInitDir(ctx common.Context, db *database, self member) (*directory, error) {
-
-	dir := newDirectory(ctx)
-	ctx.Control().Defer(func(error) {
-		dir.Close()
-	})
-
-	// start indexing realtime changes.
-	// !!! MUST HAPPEN PRIOR TO BACKFILLING !!!
-	listener, err := db.Log().Listen()
-	if err != nil {
-		return nil, err
-	}
-	ctx.Control().Defer(func(error) {
-		listener.Close()
-	})
-	dirIndexEvents(
-		changeStreamToEventStream(self, listener.ch), dir)
-
-	// Grab all the changes from the database
-	chgs, err := db.Log().All()
-	if err != nil {
-		return nil, err
-	}
-
-	dir.Add(self)
-	dir.Apply(changesToEvents(self, chgs))
-	return dir, nil
 }
 
 // Returns a newly initialized disseminator.

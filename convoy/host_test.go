@@ -145,7 +145,7 @@ func TestHost_Store_Put_Single(t *testing.T) {
 	ctx := common.NewContext(conf)
 	defer ctx.Close()
 
-	hosts, err := StartTestCluster(ctx, 128)
+	hosts, err := StartTestCluster(ctx, 8)
 	assert.Nil(t, err)
 
 	dir, err := hosts[0].Directory()
@@ -176,7 +176,59 @@ func TestHost_Store_Put_Single(t *testing.T) {
 	assert.False(t, timer.IsClosed())
 }
 
-// func TestHost_Store_Put_Multi(t *testing.T) {
+//
+// // func TestHost_Store_Put_Multi(t *testing.T) {
+// // conf := common.NewConfig(map[string]interface{}{
+// // "bourne.log.level": int(common.Debug),
+// // })
+// //
+// // ctx := common.NewContext(conf)
+// // defer ctx.Close()
+// //
+// // hosts, err := StartTestCluster(ctx, 32)
+// // assert.Nil(t, err)
+// //
+// // num := 100
+// //
+// // timer := ctx.Timer(30 * time.Second)
+// // defer timer.Closed()
+// //
+// // for _, h := range hosts {
+// // go func(h Host) {
+// // store, err := h.Store()
+// // if err != nil {
+// // t.FailNow()
+// // }
+// //
+// // for i := 0; i < num; i++ {
+// // h.(*host).logger.Info("Putting [%v, %v]", h.Id().String()[:8], i)
+// // store.Put(timer.Closed(), strconv.Itoa(i), "val", 0)
+// // }
+// // }(h)
+// // }
+// //
+// // SyncCluster(timer.Closed(), hosts, func(h Host) bool {
+// // dir, err := h.Directory()
+// // if err != nil {
+// // return false
+// // }
+// //
+// // for _, h := range hosts {
+// // for i := 0; i < num; i++ {
+// // _, ok, err := dir.GetMemberValue(timer.Closed(), h.Id(), strconv.Itoa(i))
+// // if !ok || err != nil {
+// // return false
+// // }
+// // }
+// // }
+// //
+// // return true
+// // })
+// //
+// // assert.False(t, timer.IsClosed())
+// // }
+//
+// func TestHost_ListenRoster_Join(t *testing.T) {
 // conf := common.NewConfig(map[string]interface{}{
 // "bourne.log.level": int(common.Debug),
 // })
@@ -184,148 +236,97 @@ func TestHost_Store_Put_Single(t *testing.T) {
 // ctx := common.NewContext(conf)
 // defer ctx.Close()
 //
-// hosts, err := StartTestCluster(ctx, 32)
+// host1, err := StartTestHost(ctx, ":0")
 // assert.Nil(t, err)
 //
-// num := 100
+// self1, err := host1.Self()
+// assert.Nil(t, err)
 //
-// timer := ctx.Timer(30 * time.Second)
-// defer timer.Closed()
+// dir, err := host1.Directory()
+// assert.Nil(t, err)
 //
-// for _, h := range hosts {
-// go func(h Host) {
-// store, err := h.Store()
-// if err != nil {
-// t.FailNow()
-// }
+// roster, err := dir.ListenRoster()
+// assert.Nil(t, err)
 //
-// for i := 0; i < num; i++ {
-// h.(*host).logger.Info("Putting [%v, %v]", h.Id().String()[:8], i)
-// store.Put(timer.Closed(), strconv.Itoa(i), "val", 0)
-// }
-// }(h)
-// }
+// host2, err := JoinTestHost(ctx, ":0", []string{self1.Addr()})
+// assert.Nil(t, err)
 //
-// SyncCluster(timer.Closed(), hosts, func(h Host) bool {
-// dir, err := h.Directory()
-// if err != nil {
-// return false
-// }
-//
-// for _, h := range hosts {
-// for i := 0; i < num; i++ {
-// _, ok, err := dir.GetMemberValue(timer.Closed(), h.Id(), strconv.Itoa(i))
-// if !ok || err != nil {
-// return false
-// }
+// timer := ctx.Timer(5 * time.Second)
+// defer timer.Close()
+// select {
+// case <-timer.Closed():
+// assert.Fail(t, "Failed to receive join notification")
+// case m := <-roster.Data():
+// assert.Equal(t, host2.Id(), m.Id)
 // }
 // }
 //
-// return true
+// func TestHost_ListenRoster_Evict(t *testing.T) {
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Debug),
 // })
 //
-// assert.False(t, timer.IsClosed())
+// ctx := common.NewContext(conf)
+// defer ctx.Close()
+//
+// hosts, err := StartTestCluster(ctx, 3)
+// assert.Nil(t, err)
+//
+// self0, err := hosts[0].Self()
+// assert.Nil(t, err)
+//
+// dir1, err := hosts[1].Directory()
+// assert.Nil(t, err)
+//
+// dir2, err := hosts[2].Directory()
+// assert.Nil(t, err)
+//
+// roster2, err := dir2.ListenRoster()
+// assert.Nil(t, err)
+//
+// timer := ctx.Timer(10 * time.Second)
+// defer timer.Close()
+//
+// assert.Nil(t, dir1.EvictMember(timer.Closed(), self0))
+// select {
+// case <-timer.Closed():
+// assert.Fail(t, "Failed to receive join notification")
+// case m := <-roster2.Data():
+// assert.Equal(t, self0.Id(), m.Id)
 // }
-
-func TestHost_ListenRoster_Join(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	host1, err := StartTestHost(ctx, ":0")
-	assert.Nil(t, err)
-
-	self1, err := host1.Self()
-	assert.Nil(t, err)
-
-	dir, err := host1.Directory()
-	assert.Nil(t, err)
-
-	roster, err := dir.ListenRoster()
-	assert.Nil(t, err)
-
-	host2, err := JoinTestHost(ctx, ":0", []string{self1.Addr()})
-	assert.Nil(t, err)
-
-	timer := ctx.Timer(5 * time.Second)
-	defer timer.Close()
-	select {
-	case <-timer.Closed():
-		assert.Fail(t, "Failed to receive join notification")
-	case m := <-roster.Data():
-		assert.Equal(t, host2.Id(), m.Id)
-	}
-}
-
-func TestHost_ListenRoster_Evict(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	hosts, err := StartTestCluster(ctx, 3)
-	assert.Nil(t, err)
-
-	self0, err := hosts[0].Self()
-	assert.Nil(t, err)
-
-	dir1, err := hosts[1].Directory()
-	assert.Nil(t, err)
-
-	dir2, err := hosts[2].Directory()
-	assert.Nil(t, err)
-
-	roster2, err := dir2.ListenRoster()
-	assert.Nil(t, err)
-
-	timer := ctx.Timer(10 * time.Second)
-	defer timer.Close()
-
-	assert.Nil(t, dir1.EvictMember(timer.Closed(), self0))
-	select {
-	case <-timer.Closed():
-		assert.Fail(t, "Failed to receive join notification")
-	case m := <-roster2.Data():
-		assert.Equal(t, self0.Id(), m.Id)
-	}
-}
-
-func TestHost_ListenHealth_Fail(t *testing.T) {
-	conf := common.NewConfig(map[string]interface{}{
-		"bourne.log.level": int(common.Debug),
-	})
-
-	ctx := common.NewContext(conf)
-	defer ctx.Close()
-
-	hosts, err := StartTestCluster(ctx, 3)
-	assert.Nil(t, err)
-
-	self0, err := hosts[0].Self()
-	assert.Nil(t, err)
-
-	dir1, err := hosts[1].Directory()
-	assert.Nil(t, err)
-
-	dir2, err := hosts[2].Directory()
-	assert.Nil(t, err)
-
-	health2, err := dir2.ListenHealth()
-	assert.Nil(t, err)
-
-	timer := ctx.Timer(10 * time.Second)
-	defer timer.Close()
-
-	assert.Nil(t, dir1.FailMember(timer.Closed(), self0))
-	select {
-	case <-timer.Closed():
-		assert.Fail(t, "Failed to receive join notification")
-	case m := <-health2.Data():
-		assert.Equal(t, self0.Id(), m.Id)
-	}
-}
+// }
+//
+// func TestHost_ListenHealth_Fail(t *testing.T) {
+// conf := common.NewConfig(map[string]interface{}{
+// "bourne.log.level": int(common.Debug),
+// })
+//
+// ctx := common.NewContext(conf)
+// defer ctx.Close()
+//
+// hosts, err := StartTestCluster(ctx, 3)
+// assert.Nil(t, err)
+//
+// self0, err := hosts[0].Self()
+// assert.Nil(t, err)
+//
+// dir1, err := hosts[1].Directory()
+// assert.Nil(t, err)
+//
+// dir2, err := hosts[2].Directory()
+// assert.Nil(t, err)
+//
+// health2, err := dir2.ListenHealth()
+// assert.Nil(t, err)
+//
+// timer := ctx.Timer(10 * time.Second)
+// defer timer.Close()
+//
+// assert.Nil(t, dir1.FailMember(timer.Closed(), self0))
+// select {
+// case <-timer.Closed():
+// assert.Fail(t, "Failed to receive join notification")
+// case m := <-health2.Data():
+// assert.Equal(t, self0.Id(), m.Id)
+// }
+// }

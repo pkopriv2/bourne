@@ -32,9 +32,6 @@ type host struct {
 	// the
 	server net.Server
 
-	// the local store.
-	db *database
-
 	// request channels
 	iface *replica
 
@@ -45,13 +42,10 @@ type host struct {
 	inst chan *epoch
 }
 
-func newHost(ctx common.Context, db *database, network net.Network, addr string, peers []string) (*host, error) {
+func newHost(ctx common.Context, network net.Network, addr string, peers []string) (*host, error) {
 	// FIXME: Allow sub contexts without formatting
 
-	id, err := db.Log().Id()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+	id := uuid.NewV4()
 
 	ctx = ctx.Sub("Host(%v)", id.String()[:8])
 	ctx.Logger().Info("Starting")
@@ -80,7 +74,6 @@ func newHost(ctx common.Context, db *database, network net.Network, addr string,
 		id:     id,
 		net:    network,
 		server: server,
-		db:     db,
 		iface:  chs,
 		addr:   list.Addr().String(),
 		inst:   make(chan *epoch),
@@ -176,7 +169,7 @@ func (h *host) Directory() (Directory, error) {
 // }
 
 func (h *host) epoch(ver int, peers []string) (*epoch, error) {
-	return initEpoch(h.iface, h.net, h.db, h.id, ver, h.addr, peers)
+	return initEpoch(h.iface, h.net, h.id, ver, h.addr, peers)
 }
 
 type localDir struct {
@@ -288,29 +281,4 @@ func (h *localDir) String() string {
 		return "Dir"
 	}
 	return raw.(string)
-}
-
-// The host db simply manages access to the underlying local store.
-// Mostly it prevents consumers from erroneously disconnecting the
-// local database.
-
-// FIXME: wrong order of returns
-type localDb struct {
-	db *database
-}
-
-func (d *localDb) Close() error {
-	return nil
-}
-
-func (d *localDb) Get(cancel <-chan struct{}, key string) (bool, Item, error) {
-	return d.db.Get(key)
-}
-
-func (d *localDb) Put(cancel <-chan struct{}, key string, val string, expected int) (bool, Item, error) {
-	return d.db.Put(key, val, expected)
-}
-
-func (d *localDb) Del(cancel <-chan struct{}, key string, expected int) (bool, Item, error) {
-	return d.db.Del(key, expected)
 }
