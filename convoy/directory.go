@@ -262,7 +262,7 @@ func (d *directory) Get(id uuid.UUID) (ret member, ok bool) {
 
 func (d *directory) GetItem(id uuid.UUID, key string) (ret item, ok bool) {
 	d.Core.View(func(u *view) {
-		ret, ok = u.GetActive(id, key)
+		ret, ok = u.GetLatest(id, key)
 	})
 	return
 }

@@ -44,7 +44,7 @@ func TestStorage_Status_Enabled(t *testing.T) {
 		assert.True(t, s.Active)
 		assert.Equal(t, 0, s.Version)
 
-		i, ok := v.GetActive(id, memberMembershipAttr)
+		i, ok := v.GetLatest(id, memberMembershipAttr)
 		assert.Equal(t, true, ok)
 		assert.Equal(t, "true", i.Val)
 	})

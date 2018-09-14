@@ -257,9 +257,9 @@ func (h *localDir) SetIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key,
 	return ok.(bool), err
 }
 
-func (h *localDir) DelIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key, val string, ver int) (ok bool, err error) {
+func (h *localDir) DelIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key string, ver int) (ok bool, err error) {
 	_, err = h.iface.DirUpdate(cancel, func(dir *directory) (ret interface{}, err error) {
-		oks, err := dir.Apply([]event{item{indexId, GlobalVersion, key, val, ver, true, time.Now()}})
+		oks, err := dir.Apply([]event{item{indexId, GlobalVersion, key, "", ver, true, time.Now()}})
 		if err != nil {
 			return nil, err
 		}

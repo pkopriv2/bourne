@@ -5,11 +5,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	"github.com/pkopriv2/bourne/common"
 	"github.com/pkopriv2/bourne/net"
-	"github.com/pkopriv2/bourne/stash"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -23,16 +21,12 @@ var (
 
 type Options struct {
 	Network net.Network
-	Storage *bolt.DB
 }
 
 // Publishes the db to the given port.  This is the "first" member of the
 // cluster and will not discover anyone else until it is contacted.
 func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error) {
-	opts, err := buildOptions(ctx, fns)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+	opts := buildOptions(fns...)
 
 	host, err := newHost(ctx, opts.Network, addr, nil)
 	if err == nil {
@@ -43,10 +37,7 @@ func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error)
 }
 
 func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)) (Host, error) {
-	opts, err := buildOptions(ctx, fns)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+	opts := buildOptions(fns...)
 
 	host, err := newHost(ctx, opts.Network, addr, peers)
 	if err == nil {
@@ -128,7 +119,7 @@ type Directory interface {
 	SetIndexValue(cancel <-chan struct{}, id uuid.UUID, key, val string, ver int) (ok bool, err error)
 
 	// Sets a global value using latest wins semantics.
-	DelIndexValue(cancel <-chan struct{}, id uuid.UUID, key, val string, ver int) (ok bool, err error)
+	DelIndexValue(cancel <-chan struct{}, id uuid.UUID, key string, ver int) (ok bool, err error)
 }
 
 // membership status
@@ -187,29 +178,12 @@ type Item struct {
 	Del bool
 }
 
-func defaultOptions(ctx common.Context) (*Options, error) {
-	path := ctx.Config().Optional(Config.StoragePath, defaultStoragePath)
-
-	db, err := stash.Open(ctx, path)
-	if err != nil {
-		return nil, errors.Wrapf(err, "Error opening db [%v]", path)
-	}
-
-	return &Options{
-		Storage: db,
+func buildOptions(fns ...func(*Options)) (ret *Options) {
+	ret = &Options{
 		Network: net.NewTcpNetwork(),
-	}, nil
-}
-
-func buildOptions(ctx common.Context, fns []func(*Options)) (*Options, error) {
-	opts, err := defaultOptions(ctx)
-	if err != nil {
-		return nil, err
 	}
-
 	for _, fn := range fns {
-		fn(opts)
+		fn(ret)
 	}
-
-	return opts, nil
+	return
 }
