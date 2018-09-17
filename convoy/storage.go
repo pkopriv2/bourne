@@ -276,7 +276,7 @@ func (u *view) GetLatest(id uuid.UUID, key string) (ret item, found bool) {
 		return
 	}
 
-	return item{id, status.Version, key, rawVal.Val, rawVal.Ver, false, rawVal.Time}, true
+	return item{id, status.Version, key, rawVal.Val, rawVal.Ver, rawVal.Del, rawVal.Time}, true
 }
 
 func (u *view) GetActive(id uuid.UUID, key string) (ret item, found bool) {

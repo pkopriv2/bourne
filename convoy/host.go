@@ -164,10 +164,6 @@ func (h *host) Directory() (Directory, error) {
 	return &localDir{h.iface}, nil
 }
 
-// func (h *host) Store() (Store, error) {
-// return &localDb{h.db}, nil
-// }
-
 func (h *host) epoch(ver int, peers []string) (*epoch, error) {
 	return initEpoch(h.iface, h.net, h.id, ver, h.addr, peers)
 }

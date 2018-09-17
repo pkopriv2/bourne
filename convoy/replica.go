@@ -563,6 +563,11 @@ func (r *epoch) leaveAndDrain() error {
 		return errors.Wrap(err, "Error evicting self")
 	}
 
+	all := r.Dir.AllActive()
+	if len(all) == 0 {
+		return nil
+	}
+
 	timer := r.Ctx.Timer(30 * time.Second)
 	for size := r.Dissem.events.data.Size(); size > 0; size = r.Dissem.events.data.Size() {
 		select {

@@ -25,26 +25,16 @@ type Options struct {
 
 // Publishes the db to the given port.  This is the "first" member of the
 // cluster and will not discover anyone else until it is contacted.
-func Start(ctx common.Context, addr string, fns ...func(*Options)) (Host, error) {
+func Start(ctx common.Context, addr string, fns ...func(*Options)) (ret Host, err error) {
 	opts := buildOptions(fns...)
-
-	host, err := newHost(ctx, opts.Network, addr, nil)
-	if err == nil {
-		return host, nil
-	} else {
-		return nil, err
-	}
+	ret, err = newHost(ctx, opts.Network, addr, nil)
+	return
 }
 
-func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)) (Host, error) {
+func Join(ctx common.Context, addr string, peers []string, fns ...func(*Options)) (ret Host, err error) {
 	opts := buildOptions(fns...)
-
-	host, err := newHost(ctx, opts.Network, addr, peers)
-	if err == nil {
-		return host, nil
-	} else {
-		return nil, err
-	}
+	ret, err = newHost(ctx, opts.Network, addr, peers)
+	return
 }
 
 // A host is the local member participating in and disseminating a shared
