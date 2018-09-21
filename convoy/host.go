@@ -230,8 +230,8 @@ func (h *localDir) AllMembers(cancel <-chan struct{}) ([]Member, error) {
 
 func (h *localDir) GetIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key string) (val string, ver int, ok bool, err error) {
 	_, err = h.iface.DirView(cancel, func(dir *directory) interface{} {
-		item, _ := dir.GetItem(indexId, key)
-		if item.Del {
+		item, o := dir.GetItem(indexId, key)
+		if item.Del || !o {
 			return nil
 		}
 
