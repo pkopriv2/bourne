@@ -62,7 +62,7 @@ type standardLogger struct {
 }
 
 func NewStandardLogger(c Config) Logger {
-	return &standardLogger{LoggerLevel(c.OptionalInt(confLoggerLevel, int(Debug)))}
+	return &standardLogger{LoggerLevel(c.OptionalInt(confLoggerLevel, int(Error)))}
 }
 
 func (s *standardLogger) Level() LoggerLevel {

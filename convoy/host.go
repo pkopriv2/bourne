@@ -250,7 +250,11 @@ func (h *localDir) SetIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key,
 
 		return oks[0], err
 	})
-	return ok.(bool), err
+	if err != nil {
+		return false, err
+	} else {
+		return ok.(bool), nil
+	}
 }
 
 func (h *localDir) DelIndexValue(cancel <-chan struct{}, indexId uuid.UUID, key string, ver int) (ok bool, err error) {
